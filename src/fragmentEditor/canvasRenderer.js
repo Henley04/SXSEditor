@@ -2020,7 +2020,7 @@ function renderPitchCurve(c) {
         // 在选中锚点旁显示 数值 / 强度 / 平滑，便于右键拖拽时实时观察变化。
         const sm = Math.max(0, Math.min(100, Math.round(ap.smoothness ?? 0)));
         const pitchLabel = Number.isInteger(ap.pitch) ? String(ap.pitch) : ap.pitch.toFixed(2);
-        const label = `P${pitchLabel} 强${strength} 平${sm}`;
+        const label = `P${pitchLabel} ${t('fragment.abbrStrength')} ${strength} ${t('fragment.abbrSmoothing')} ${sm}`;
         ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
@@ -2160,7 +2160,7 @@ function renderTimbreLane(c, w, areaTop, areaBottom) {
     ctx.stroke();
 
     if (isSelected) {
-      const label = `${formatParamValue(paramId, kf.value, t)} 强${strength} 平${Math.round(kf.smoothness ?? 0)}`;
+      const label = `${formatParamValue(paramId, kf.value, t)} ${t('fragment.abbrStrength')} ${strength} ${t('fragment.abbrSmoothing')} ${Math.round(kf.smoothness ?? 0)}`;
       ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
@@ -2181,20 +2181,26 @@ function renderTimbreLane(c, w, areaTop, areaBottom) {
  * 右键按住锚点上下左右拖动会同时修改"强度"和"平滑过渡"，这里实时回显两者，
  * 加上正在拖动的数值本身，用户不必去看检查器。
  */
-function _drawAnchorDragHud(c, w, h) {
+export function _drawAnchorDragHud(c, w, h) {
   const hud = getAnchorDragHud();
   if (!hud) return;
+  // 每项带自己的颜色：数值用主前景色，操作提示（左右调强度 / 上下调平滑）用次级色，
+  // 免得"提示"和"读数"混成一片。
   const lines = [];
-  if (hud.title) lines.push(hud.title);
-  lines.push(`${hud.strengthLabel || '强度'} ${hud.strength}   ${hud.smoothnessLabel || '平滑'} ${hud.smoothness}`);
-  if (hud.valueLabel) lines.push(hud.valueLabel);
+  if (hud.title) lines.push({ text: hud.title, color: c.fgPrimary });
+  lines.push({
+    text: `${hud.strengthLabel || t('fragment.anchorStrength')} ${hud.strength}   ${hud.smoothnessLabel || t('fragment.smoothing')} ${hud.smoothness}`,
+    color: c.fgPrimary,
+  });
+  if (hud.valueLabel) lines.push({ text: hud.valueLabel, color: c.fgPrimary });
+  if (hud.hint) lines.push({ text: hud.hint, color: c.fgMuted || c.fgSecondary });
 
   ctx.save();
   ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   let maxW = 0;
-  for (const line of lines) maxW = Math.max(maxW, ctx.measureText(line).width);
+  for (const line of lines) maxW = Math.max(maxW, ctx.measureText(line.text).width);
   const padX = 8;
   const lineH = 14;
   const boxW = maxW + padX * 2;
@@ -2206,13 +2212,19 @@ function _drawAnchorDragHud(c, w, h) {
 
   // 主题表面色：浅色主题下不能画"深底 + 深字"（fgPrimary 在浅色主题是深色）
   ctx.fillStyle = c.hudBg;
-  ctx.fillRect(x, y, boxW, boxH);
   ctx.strokeStyle = c.hudBorder;
   ctx.lineWidth = 1;
-  ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
-  ctx.fillStyle = c.fgPrimary;
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1, 4);
+  } else {
+    ctx.rect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
+  }
+  ctx.fill();
+  ctx.stroke();
   for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], x + padX, y + 4 + lineH * (i + 0.5));
+    ctx.fillStyle = lines[i].color;
+    ctx.fillText(lines[i].text, x + padX, y + 4 + lineH * (i + 0.5));
   }
   ctx.restore();
 }

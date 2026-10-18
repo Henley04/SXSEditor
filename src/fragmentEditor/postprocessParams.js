@@ -11,8 +11,8 @@
  */
 
 export const POSTPROCESS_GROUPS = [
-  { id: 'f0', labelKey: 'fragment.ppGroupF0' },
-  { id: 'spec', labelKey: 'fragment.ppGroupSpec' },
+  { id: 'f0', labelKey: 'fragment.ppGroupF0', descKey: 'fragment.ppGroupF0Desc' },
+  { id: 'spec', labelKey: 'fragment.ppGroupSpec', descKey: 'fragment.ppGroupSpecDesc' },
 ];
 
 /**

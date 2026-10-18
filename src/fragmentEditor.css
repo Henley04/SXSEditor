@@ -1222,3 +1222,47 @@
   height: 24px;
 }
 .pp-select:hover { border-color: var(--accent); }
+
+/* ---- 音色参数悬浮提示卡 ----
+   替代原生 title：跟随主题、可排版、120ms 出现。刻意不加光晕
+   （不使用 --accent-glow / 彩色发光投影），只留 1px 描边 + 一层浅投影。 */
+.pp-tip {
+  position: fixed;
+  z-index: 3000;
+  max-width: 272px;
+  padding: 7px 10px 8px;
+  background: var(--tooltip-bg, var(--bg-elevated));
+  color: var(--tooltip-fg, var(--fg-primary));
+  border: 1px solid var(--border-strong);
+  border-color: color-mix(in srgb, var(--tooltip-fg, var(--fg-primary)) 18%, transparent);
+  border-radius: var(--radius-md);
+  font-size: 11.5px;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+.pp-tip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.pp-tip-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.pp-tip-meta {
+  margin-top: 2px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 10.5px;
+  opacity: 0.68;
+}
+.pp-tip-desc {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-strong);
+  border-top-color: color-mix(in srgb, var(--tooltip-fg, var(--fg-primary)) 14%, transparent);
+  opacity: 0.9;
+}

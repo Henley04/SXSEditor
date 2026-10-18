@@ -1,10 +1,16 @@
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
 import { buildF0PostprocessParams, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
 import { applyF0Postprocess } from '../fragmentEditor/f0Smoothing.js';
+// 锚点"强度 / 平滑"的唯一数学真源。该模块是无 DOM、无 state 的纯叶子模块，
+// 且本文件已依赖的 shared/postprocessCurves.js 同样 import 它 —— 渲染包早就
+// 包含它，这里直接复用而非再复刻一份（复刻正是强度被丢掉的根因，见
+// _getPitchAtTimeForFragment 注释）。
+import { buildEffectiveValues, evalSortedCurve } from '../fragmentEditor/automationCurve.js';
 
 // 复用分片编辑器 buildPitchCurveF0Data + getPitchAtTime + generateAutoPitchPoints 的逻辑，
 // 但接受 fragment 参数（不依赖分片编辑器全局 state）。
-// 主页面逐 fragment 合成时调用，确保与分片编辑器播放的 f0 轨迹完全一致。
+// 主页面逐 fragment 合成时调用，确保与分片编辑器播放的 f0 轨迹完全一致：
+// 锚点求值（强度 / 平滑）直接走 shared 真源 automationCurve.js，不再本地复刻。
 export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   if (!fragment || !fragment.pitchCurve || !fragment.pitchCurve.enabled) return null;
   const pc = fragment.pitchCurve;
@@ -25,6 +31,10 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
 
   // 预排序 anchor points（与分片编辑器 getSortedAnchorPoints 一致）
   const sortedAnchors = [...pc.anchorPoints].sort((a, b) => a.time - b.time);
+  // 强度生效后的数值序列：强度 < 100 的锚点被拉向前后邻居连线（强度语义见
+  // automationCurve.js）。缺省 / 100 时与原始值逐点相同，旧工程音频不变。
+  // 与分片编辑器 _getEffectivePitchValues 同一函数，保证两条路径逐位一致。
+  const effAnchors = buildEffectiveValues(sortedAnchors, 'pitch');
 
   // 预生成 autoPoints（与分片编辑器 generateAutoPitchPoints 一致），基于 clippedNotes
   // 起始点和末端都标记 breakAfter: true，note 内部不做线性插值，避免强制拟合 Midi 音高平线。
@@ -50,7 +60,7 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
       f0Array[i] = 0;
       continue;
     }
-    let pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat, autoPointsUsable);
+    let pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, effAnchors, autoPoints, frameBeat, autoPointsUsable);
     // 纯 MIDI 回退（与编辑器 getPitchAtTime 的 activeNote 回退一致）：
     // autoPoints 全部 breakAfter 时上面的函数恒返回 null，若无此回退，
     // "纯 MIDI 分片 + 开 F0 后处理"会产出全零 F0 → 整段静音。
@@ -74,48 +84,6 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
     }
   }
   return f0Array;
-}
-
-/**
- * 在按 time 升序排列的点数组中，二分查找包含 time 的区间左端索引。
- * 语义等价于线性 `for (i) if (time >= pts[i].time && time <= pts[i + 1].time) return i`：
- * 返回第一个满足该条件的 i；长度 < 2 或 time 落在 [pts[0].time, pts[last].time] 之外时返回 -1。
- * 等价性关键：取「首个 pts[j].time >= time」的 j 再减 1。对 i < j - 1 必有
- * pts[i + 1].time <= pts[j - 1].time < time，故 [j-1, j] 正是线性扫描命中的第一个区间；
- * 重复 time 时也一致（[0,1,1,2] 查 1：线性取 i=0，此处 j=1 返回 0）。
- * 若改用常见的 lower-bound（最后一个 <= time）写法，重复 time 时结果会不同。
- * 与 fragmentEditor/canvasRenderer.js 的 _bisectSegmentIndex 同构（此处刻意复制而非
- * 跨模块 import，避免渲染层模块被拉进 f0 计算路径）。
- *
- * NaN 等价性：NaN（以及 ±Infinity）参与任何 <、>、>= 比较结果都是 false，于是
- *   · 线性扫描：所有区间条件都不成立，循环走完自然返回 -1（不抛错）；
- *   · 二分（不早退时）：范围检查同样失效，j 保持初值 n，最终返回 n - 1，
- *     调用方再去取 pts[n] 就会 TypeError。
- * 因此这里对非有限 time 显式返回 -1，并在循环后兜住 j === n（pts 里混入 NaN
- * time 的唯一场景），保证新旧实现在 NaN 下都不抛错且返回同一个值。
- */
-function _bisectSegmentIndex(pts, time) {
-  const n = pts.length;
-  if (n < 2) return -1;
-  if (!Number.isFinite(time)) return -1;
-  if (time < pts[0].time || time > pts[n - 1].time) return -1;
-  let lo = 0;
-  let hi = n - 1;
-  let j = n;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (pts[mid].time >= time) { j = mid; hi = mid - 1; }
-    else lo = mid + 1;
-  }
-  // j === n 只在 pts 内含 NaN time 时出现（所有 >= 比较都为 false），与线性
-  // 扫描一致返回 -1，避免调用方访问 pts[n] 越界。
-  if (j === n) return -1;
-  const i = j === 0 ? 0 : j - 1;
-  // 用线性扫描的同一个条件复检命中区间：pts 里混入 NaN time 时，二分仍能算出
-  // 一个下标（比较结果全为 false），但线性扫描不会命中任何区间。复检失败就
-  // 返回 -1，保证两者一致且调用方不会越界。
-  if (!(time >= pts[i].time && time <= pts[i + 1].time)) return -1;
-  return i;
 }
 
 function _findNoteAtBeat(notes, beat) {
@@ -143,28 +111,23 @@ function _computeVibratoOffset(note, beat, bpm) {
   return (v.depth / 100) * Math.sin(2 * Math.PI * v.rate * seconds) * env;
 }
 
-// 等价于分片编辑器 getPitchAtTime，但不依赖全局 state
-function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time, autoPointsUsable) {
+// 等价于分片编辑器 getPitchAtTime，但不依赖全局 state。
+// 锚点分支直接委托 shared 真源 automationCurve.evalSortedCurve：
+//   · buildEffectiveValues 已把"强度 < 100 的锚点"拉向前后邻居连线；
+//   · evalSortedCurve 内部按左端锚点 smoothness 做 smoothstep 缓动。
+// 两者与分片编辑器 canvasRenderer.getPitchAtTime 走同一函数，因此主窗口
+// 播放 / 导出 / MCP 自动化与分片编辑器的 F0 逐位一致 —— 强度修改不再被
+// 静默丢弃（修复前这里只复刻了 smoothness，强度改了曲线完全不变）。
+function _getPitchAtTimeForFragment(pc, sortedAnchors, effAnchors, autoPoints, time, autoPointsUsable) {
   if (!pc.enabled) return null;
 
   if (sortedAnchors.length > 0) {
     if (time < sortedAnchors[0].time || time > sortedAnchors[sortedAnchors.length - 1].time) {
       // outside anchor range, fall through to brush/auto
     } else {
-      // 等价性：sortedAnchors 已按 time 升序（buildFragmentPitchCurveF0:22 显式 sort），
-      // _bisectSegmentIndex 与上面的线性扫描在区间内返回同一个 i（见其注释），
-      // 故 t / smoothness / 插值公式的输入逐位相同；未命中/长度不足时同样落到
-      // 下面的 return last.pitch（n===1 时线性循环不执行，二分返回 -1，行为一致）。
-      const i = _bisectSegmentIndex(sortedAnchors, time);
-      if (i >= 0) {
-        const t = (sortedAnchors[i + 1].time - sortedAnchors[i].time) > 0
-          ? (time - sortedAnchors[i].time) / (sortedAnchors[i + 1].time - sortedAnchors[i].time)
-          : 0;
-        const smoothness = (sortedAnchors[i].smoothness || 0) / 100;
-        const smoothStepT = t * t * (3 - 2 * t);
-        const smoothT = t + (smoothStepT - t) * smoothness;
-        return sortedAnchors[i].pitch + smoothT * (sortedAnchors[i + 1].pitch - sortedAnchors[i].pitch);
-      }
+      const v = evalSortedCurve(sortedAnchors, effAnchors, time);
+      // 非有限值（理论上只有 time 为 NaN 时出现）保持旧兜底：取末锚点音高
+      if (v !== null && Number.isFinite(v)) return v;
       return sortedAnchors[sortedAnchors.length - 1].pitch;
     }
   }
@@ -237,11 +200,15 @@ export function computePitchCurveF0(singerFragments, allNotes, bpm) {
   const totalFrames = Math.floor(totalSecondsAll * SAMPLE_RATE / SVS_HOP_SIZE);
   const f0Arr = new Float32Array(totalFrames);
 
+  // 每个分片缓存"已排序锚点 + 强度生效后数值"（与 buildFragmentPitchCurveF0 一致，
+  // 真源同为 automationCurve.buildEffectiveValues）——强度 < 100 的锚点在此被拉向
+  // 前后邻居连线，主窗口路径与分片编辑器逐位一致。
   const sortedAnchorsCache = new Map();
   for (const frag of pitchCurveFrags) {
     const pc = frag.pitchCurve;
     if (pc.anchorPoints.length > 0 && !sortedAnchorsCache.has(frag.id)) {
-      sortedAnchorsCache.set(frag.id, [...pc.anchorPoints].sort((a, b) => a.time - b.time));
+      const sorted = [...pc.anchorPoints].sort((a, b) => a.time - b.time);
+      sortedAnchorsCache.set(frag.id, { sorted, eff: buildEffectiveValues(sorted, 'pitch') });
     }
   }
 
@@ -273,25 +240,13 @@ export function computePitchCurveF0(singerFragments, allNotes, bpm) {
       const localBeat = frameBeat - fragStartBeat;
 
       if (pitch === null && pc.anchorPoints.length > 0) {
-        const sorted = sortedAnchorsCache.get(frag.id);
+        const { sorted, eff } = sortedAnchorsCache.get(frag.id);
         if (localBeat < sorted[0].time || localBeat > sorted[sorted.length - 1].time) {
           // outside anchor range, skip
         } else {
-          // Binary search for anchor point segment
-          let lo = 0, hi = sorted.length - 1;
-          while (lo < hi - 1) {
-            const mid = (lo + hi) >> 1;
-            if (sorted[mid].time <= localBeat) lo = mid;
-            else hi = mid;
-          }
-          if (localBeat >= sorted[lo].time && localBeat <= sorted[hi].time) {
-            const t = (sorted[hi].time - sorted[lo].time) > 0
-              ? (localBeat - sorted[lo].time) / (sorted[hi].time - sorted[lo].time) : 0;
-            const sm = (sorted[lo].smoothness || 0) / 100;
-            const smoothStepT = t * t * (3 - 2 * t);
-            const st = t + (smoothStepT - t) * sm;
-            pitch = sorted[lo].pitch + st * (sorted[hi].pitch - sorted[lo].pitch);
-          }
+          // 强度 + 平滑统一走 shared 真源（与分片编辑器 getPitchAtTime 同函数）
+          const v = evalSortedCurve(sorted, eff, localBeat);
+          if (v !== null && Number.isFinite(v)) pitch = v;
         }
       }
 

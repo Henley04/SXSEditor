@@ -46,7 +46,9 @@
       </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
-          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助" data-icon="keyboard" data-icon-class="icon-only"></button>
+          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助"
+                  data-icon="keyboard" data-icon-class="icon-only"
+                  data-i18n-title="fragment.shortcutHelpTitle" data-i18n-aria-label="fragment.shortcutHelpTitle"></button>
           <button id="btn-close" title="关闭窗口" data-i18n="fragment.close" data-icon="close">关闭</button>
         </div>
       </div>
@@ -85,17 +87,17 @@
           </div>
           <!-- Note properties -->
           <div class="insp-section" id="note-props-section">
-            <div class="insp-head"><span data-i18n="fragment.inspNote">音符属性</span> <span class="tag" id="note-select-tag">未选中</span></div>
+            <div class="insp-head"><span data-i18n="fragment.inspNote">音符属性</span> <span class="tag" id="note-select-tag" data-i18n="fragment.inspNoneSelected">未选中</span></div>
             <div class="insp-body">
-              <div class="field-row"><div class="lbl">音高</div><div class="ctrl"><input type="text" id="note-pitch" value="--" style="flex:0 0 50px;text-align:center" readonly><div class="chip" id="note-freq"><span class="d"></span>-- Hz</div></div></div>
-              <div class="field-row"><div class="lbl">起始</div><div class="ctrl"><input type="text" id="note-start" value="--" readonly></div></div>
-              <div class="field-row"><div class="lbl">时长</div><div class="ctrl"><input type="text" id="note-duration" value="--" readonly></div></div>
-              <div class="field-row"><div class="lbl">歌词</div><div class="ctrl"><input type="text" id="note-lyric" value="--"></div></div>
+              <div class="field-row"><div class="lbl" data-i18n="fragment.inspPitch">音高</div><div class="ctrl"><input type="text" id="note-pitch" value="--" style="flex:0 0 50px;text-align:center" readonly><div class="chip" id="note-freq"><span class="d"></span>-- Hz</div></div></div>
+              <div class="field-row"><div class="lbl" data-i18n="fragment.inspStart">起始</div><div class="ctrl"><input type="text" id="note-start" value="--" readonly></div></div>
+              <div class="field-row"><div class="lbl" data-i18n="fragment.inspDuration">时长</div><div class="ctrl"><input type="text" id="note-duration" value="--" readonly></div></div>
+              <div class="field-row"><div class="lbl" data-i18n="fragment.inspLyric">歌词</div><div class="ctrl"><input type="text" id="note-lyric" value="--"></div></div>
             </div>
           </div>
           <!-- Phoneme info -->
           <div class="insp-section" id="phoneme-section">
-            <div class="insp-head"><span data-i18n="fragment.inspPhoneme">音素</span> <span class="tag" id="phoneme-tag">自动</span></div>
+            <div class="insp-head"><span data-i18n="fragment.inspPhoneme">音素</span> <span class="tag" id="phoneme-tag" data-i18n="fragment.inspAuto">自动</span></div>
             <div class="insp-body">
               <div class="phoneme-preview" id="phoneme-preview">--</div>
               <div class="phoneme-grid" id="phoneme-grid"></div>
@@ -120,13 +122,15 @@
       <!-- Bottom panel: parameter lanes -->
       <div id="param-panel">
         <div id="param-panel-header" class="param-panel-header">
-          <button id="btn-param-toggle" class="btn-param-toggle" title="收起/展开参数面板" aria-label="收起/展开参数面板" data-icon="chevron-up" data-icon-class="icon-only"></button>
+          <button id="btn-param-toggle" class="btn-param-toggle" title="收起/展开参数面板" aria-label="收起/展开参数面板"
+                  data-icon="chevron-up" data-icon-class="icon-only"
+                  data-i18n-title="fragment.paramPanelToggle" data-i18n-aria-label="fragment.paramPanelToggle"></button>
           <!-- Hidden select kept for JS compatibility (uiControls.js reads/writes it) -->
           <select id="param-mode-select" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
             <option value="VOL">VOL</option>
             <option value="PAN">PAN</option>
             <option value="Phoneme">Phoneme</option>
-            <option value="Timbre">音色</option>
+            <option value="Timbre" data-i18n="fragment.laneTimbre">音色</option>
           </select>
           <div class="param-lane-tabs" id="param-lane-tabs">
             <button class="param-lane-tab active" data-lane="VOL">VOL</button>
@@ -148,7 +152,7 @@
         <div class="s-div"></div>
         <div class="s-item"><span data-i18n="fragment.statusSampleRate">采样率</span> <b>24kHz</b></div>
         <div class="s-right">
-          <div class="s-item" id="auto-save-indicator" title="" data-i18n-title="fragment.autoSaveHint">自动同步</div>
+          <div class="s-item" id="auto-save-indicator" title="" data-i18n="fragment.autoSaveIndicator" data-i18n-title="fragment.autoSaveHint">自动同步</div>
           <div class="s-item">Hop <b>480</b></div>
         </div>
       </div>
@@ -167,8 +171,8 @@
               <div class="shortcut-row"><kbd>Ctrl+Y</kbd><span data-i18n="fragment.shortcutRedo">重做</span></div>
               <div class="shortcut-row"><kbd>Ctrl+S</kbd><span data-i18n="fragment.shortcutSave">保存</span></div>
               <div class="shortcut-row"><kbd>Space</kbd><span data-i18n="fragment.shortcutPlayStop">播放/停止</span></div>
-              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><span>切换 MIDI/Pitch</span></div>
-              <div class="shortcut-row"><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd><span>切换 VOL/PAN/音素/音色 (展开参数面板)</span></div>
+              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><span data-i18n="fragment.shortcutSwitchTopMode">切换 MIDI/Pitch</span></div>
+              <div class="shortcut-row"><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd><span data-i18n="fragment.shortcutSwitchLanes">切换 VOL/PAN/音素/音色 (展开参数面板)</span></div>
               <div class="shortcut-row"><kbd>F1</kbd><span data-i18n="fragment.shortcutHelp">快捷键帮助</span></div>
             </div>
             <div class="shortcut-section">
@@ -207,6 +211,7 @@
               <div class="shortcut-row"><kbd data-i18n="fragment.kbdDragAnchor">拖拽锚点</kbd><span data-i18n="fragment.shortcutTimbreMoveAnchor">左右改时间 · 上下改数值</span></div>
               <div class="shortcut-row"><kbd data-i18n="fragment.kbdRightDragAnchor">右键按住拖动</kbd><span data-i18n="fragment.shortcutAnchorStrength">左右调强度 · 上下调平滑（实时显示数值）</span></div>
               <div class="shortcut-row"><kbd data-i18n="fragment.kbdShiftRightClick">Shift+右键</kbd><span data-i18n="fragment.shortcutTimbreDeleteAnchor">删除锚点</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdHover">悬浮</kbd><span data-i18n="fragment.shortcutTimbreHoverTip">悬浮参数名查看作用、取值范围与默认值</span></div>
             </div>
             <div class="shortcut-section">
               <div class="shortcut-section-title" data-i18n="fragment.shortcutPhonemeEdit">音素编辑</div>

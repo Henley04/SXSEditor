@@ -29,6 +29,7 @@ import {
   formatParamValue, quantizeParamValue,
 } from './postprocessParams.js';
 import { getTimbreDefault, getTimbreKeyframes } from './postprocessAccess.js';
+import { attachHoverTip, installHoverTipGlobalDismiss } from './paramTooltip.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
@@ -346,6 +347,23 @@ function _applyParamValue(paramId, rawValue) {
   scheduleAutoSave();
 }
 
+/**
+ * 悬浮提示卡的内容：参数名 + 分组/范围/默认值 + 作用说明 + 曲线操作提示。
+ * 用函数而不是快照，切语言或数值变化后重新悬浮就能拿到最新文案。
+ */
+function _paramTipContent(param) {
+  const group = POSTPROCESS_GROUPS.find(g => g.id === param.group);
+  const parts = [];
+  if (group) parts.push(t(group.labelKey));
+  parts.push(`${t('fragment.ppTipRange')} ${formatParamValue(param.id, param.min, t)}–${formatParamValue(param.id, param.max, t)}`);
+  parts.push(`${t('fragment.ppTipDefault')} ${formatParamValue(param.id, param.def, t)}`);
+  return {
+    title: t(param.labelKey),
+    meta: parts.join(' · '),
+    desc: `${t(param.descKey)}\n${t('fragment.ppTipAnchorHint')}`,
+  };
+}
+
 /** 生成音色 lane 的参数子标签（每个参数一条独立曲线）。 */
 function _buildParamSubtabs() {
   const host = document.getElementById('param-subtabs');
@@ -356,6 +374,7 @@ function _buildParamSubtabs() {
     const label = document.createElement('span');
     label.className = 'pp-group-label';
     label.textContent = t(group.labelKey);
+    attachHoverTip(label, () => ({ title: t(group.labelKey), desc: t(group.descKey) }));
     host.appendChild(label);
     for (const param of POSTPROCESS_PARAM_LIST.filter(p => p.group === group.id)) {
       const btn = document.createElement('button');
@@ -363,7 +382,8 @@ function _buildParamSubtabs() {
       btn.className = 'pp-chip';
       btn.dataset.param = param.id;
       btn.textContent = t(param.labelKey);
-      btn.title = t(param.descKey);
+      // 不用原生 title：延迟 ~1s 且不跟随主题，改为 .pp-tip 悬浮卡。
+      attachHoverTip(btn, () => _paramTipContent(param));
       btn.addEventListener('click', () => {
         setActiveTimbreParam(param.id);
         getSelectedTimbreAnchors().clear();
@@ -386,6 +406,7 @@ function _buildInspectorRows() {
     const title = document.createElement('div');
     title.className = 'pp-row-group';
     title.textContent = t(group.labelKey);
+    attachHoverTip(title, () => ({ title: t(group.labelKey), desc: t(group.descKey) }));
     host.appendChild(title);
 
     for (const param of POSTPROCESS_PARAM_LIST.filter(p => p.group === group.id)) {
@@ -396,8 +417,9 @@ function _buildInspectorRows() {
       const label = document.createElement('button');
       label.type = 'button';
       label.className = 'pp-row-label';
+      label.dataset.param = param.id;
       label.textContent = t(param.labelKey);
-      label.title = t(param.descKey);
+      attachHoverTip(label, () => _paramTipContent(param));
       label.addEventListener('click', () => {
         setActiveTimbreParam(param.id);
         getSelectedTimbreAnchors().clear();
@@ -414,6 +436,7 @@ function _buildInspectorRows() {
       slider.step = String(param.step);
       slider.value = String(param.def);
       slider.setAttribute('aria-label', t(param.labelKey));
+      attachHoverTip(slider, () => _paramTipContent(param));
       // 撤销：input 实时预览（第一次 input 时记快照），change（松手/失焦）提交
       // 一次历史，Ctrl+Z 可整体回退这次拖动 —— 与预设下拉、锚点编辑一致。
       let sliderSnapshot = null;
@@ -441,6 +464,7 @@ function _buildInspectorRows() {
       val.className = 'pp-row-val';
       val.dataset.param = param.id;
       val.textContent = formatParamValue(param.id, param.def, t);
+      attachHoverTip(val, () => _paramTipContent(param));
 
       row.appendChild(label);
       row.appendChild(slider);
@@ -466,6 +490,16 @@ export function setupPostprocessUi() {
   _buildParamSubtabs();
   _buildInspectorRows();
 
+  // 悬浮卡的兜底隐藏（滚动 / 失焦 / Esc / 改窗口大小）只注册一次。
+  installHoverTipGlobalDismiss();
+
+  // 底部 lane 的"音色"标签：说明这条 lane 的用法（每个参数一条曲线）。
+  const timbreTab = document.querySelector('.param-lane-tab[data-lane="Timbre"]');
+  attachHoverTip(timbreTab, () => ({
+    title: t('fragment.laneTimbre'),
+    desc: t('fragment.laneTimbreDesc'),
+  }));
+
   const presetSelect = document.getElementById('pp-preset-select');
   if (presetSelect && presetSelect.dataset.built !== '1') {
     presetSelect.dataset.built = '1';
@@ -477,6 +511,10 @@ export function setupPostprocessUi() {
       presetSelect.appendChild(opt);
     }
     presetSelect.value = 'off';
+    attachHoverTip(presetSelect, () => ({
+      title: t('fragment.ppPreset'),
+      desc: t('fragment.ppPresetDesc'),
+    }));
     presetSelect.addEventListener('change', () => {
       const preset = POSTPROCESS_PRESETS.find(p => p.id === presetSelect.value);
       if (!preset) return;

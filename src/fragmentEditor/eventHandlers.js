@@ -318,6 +318,32 @@ function _applyStrengthSmoothness(anchor, start, dx, dy) {
   anchor.smoothness = clampSmoothness((start.smoothness ?? 0) - dy);
 }
 
+/**
+ * 右键按住锚点时的浮层：立刻回显"强度 / 平滑"当前值 + 操作提示。
+ * 之前只有鼠标移动超过 2px 才出现 HUD，用户按住不动时看不出能调什么。
+ */
+function _showStrengthDragHud(pos, anchor, title) {
+  setAnchorDragHud({
+    x: pos.x,
+    y: pos.y,
+    title: title || '',
+    strength: Math.round(anchor?.strength ?? 100),
+    smoothness: Math.round(anchor?.smoothness ?? 0),
+    strengthLabel: t('fragment.anchorStrength'),
+    smoothnessLabel: t('fragment.smoothing'),
+    hint: t('fragment.hudRightDragHint'),
+  });
+}
+
+/** 音色 lane 的 HUD 标题：参数名 + 当前数值（量纲各不相同，必须带单位）。 */
+function _timbreHudTitle(idx) {
+  const paramId = getActiveTimbreParam();
+  const def = POSTPROCESS_PARAMS[paramId];
+  if (!def) return '';
+  const anchor = _getTimbreAnchors()[idx];
+  return `${t(def.labelKey)} ${formatParamValue(paramId, anchor?.value ?? 0, t)}`;
+}
+
 function applyPitchSmoothnessDrag(pos) {
   if (getDragMode() !== 'pitch-smoothness') return false;
   const starts = getPitchSmoothDragAnchorStarts();
@@ -350,6 +376,7 @@ function applyPitchSmoothnessDrag(pos) {
     smoothness: Math.round(lastSmooth),
     strengthLabel: t('fragment.anchorStrength'),
     smoothnessLabel: t('fragment.smoothing'),
+    hint: t('fragment.hudRightDragHint'),
   });
   render();
   return true;
@@ -1856,27 +1883,14 @@ function applyTimbreStrengthDrag(pos) {
   if (!getPitchSmoothDragMoved()) return true;
 
   const anchors = _getTimbreAnchors();
-  let lastStrength = 100;
-  let lastSmooth = 0;
   for (const [idx, start] of starts) {
     const anchor = anchors[idx];
     if (!anchor) continue;
     _applyStrengthSmoothness(anchor, start, dx, dy);
-    lastStrength = anchor.strength;
-    lastSmooth = anchor.smoothness;
   }
   invalidateTimbreCache();
-  const paramId = getActiveTimbreParam();
-  const def = POSTPROCESS_PARAMS[paramId];
-  setAnchorDragHud({
-    x: pos.x,
-    y: pos.y,
-    title: def ? `${t(def.labelKey)} ${formatParamValue(paramId, anchors[getTimbreDragAnchorIdx()]?.value ?? 0, t)}` : '',
-    strength: Math.round(lastStrength),
-    smoothness: Math.round(lastSmooth),
-    strengthLabel: t('fragment.anchorStrength'),
-    smoothnessLabel: t('fragment.smoothing'),
-  });
+  const dragIdx = getTimbreDragAnchorIdx();
+  _showStrengthDragHud(pos, anchors[dragIdx], _timbreHudTitle(dragIdx));
   render();
   return true;
 }
@@ -2193,6 +2207,8 @@ export function setupEventListeners() {
           setDragMode('pitch-smoothness');
           setActiveAnchorIdx(anchorIdx); // 按压反馈
           setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+          // 右键一按下就浮出读数 + 操作提示（左右调强度 / 上下调平滑）
+          _showStrengthDragHud(pos, pitchCurve.anchorPoints[anchorIdx], t('fragment.hudPitchAnchor'));
           render();
           return;
         }
@@ -2223,6 +2239,8 @@ export function setupEventListeners() {
             setDragStartX(pos.x);
             setDragStartY(pos.y);
             setDragMode('timbre-strength');
+            // 右键一按下就浮出读数 + 操作提示，不必等鼠标真的移动才知道能调什么。
+            _showStrengthDragHud(pos, anchor, _timbreHudTitle(tIdx));
             render();
             return;
           }

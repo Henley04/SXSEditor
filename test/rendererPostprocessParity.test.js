@@ -6,12 +6,19 @@
  * 完全不生效。修复后 f0Utils 应用同一套 F0 后处理、audioPlayback 逐 fragment
  * 下发 melPostprocess 载荷。这里钉死两条路径的行为。
  *
+ * 锚点强度回归：f0Utils 曾本地复刻音高曲线插值，但只抄了 smoothness、漏了
+ * strength —— 分片编辑器里把锚点强度从 100 调到 0，主窗口播放/导出的 F0
+ * 逐位不变（"修改后曲线完全一致"）。现在锚点分支委托 shared 真源
+ * fragmentEditor/automationCurve.js，下面钉死：强度生效、与真源逐点一致、
+ * 旧工程（无 strength 字段）行为不变。
+ *
  * 注意：后处理全关时 buildFragmentPitchCurveF0 仍返回 null（管线用原生 F0
  * 路径，与旧版本逐位一致）——只有开启后处理才需要编辑器构建 F0 曲线。
  */
 const { expect } = require('chai');
-const { buildFragmentPitchCurveF0 } = require('../src/renderer/f0Utils.js');
+const { buildFragmentPitchCurveF0, computePitchCurveF0 } = require('../src/renderer/f0Utils.js');
 const { buildMelPostprocessPayload } = require('../src/shared/postprocessCurves.js');
+const { sortAnchors, buildEffectiveValues, evalSortedCurve } = require('../src/fragmentEditor/automationCurve.js');
 
 const SAMPLE_RATE = 24000;
 const HOP = 480;
@@ -81,5 +88,126 @@ describe('主窗口 F0/频谱后处理接入', () => {
     expect(payload.sigmaT[0]).to.equal(1.0);
     // 第二个音符起点 = 2 拍 = 1s = 50 帧
     expect(Array.from(payload.boundaries)).to.deep.equal([50]);
+  });
+});
+
+/**
+ * 音高曲线"强度 / 平滑"在主窗口 F0 路径的回归。
+ *
+ * 这三个用例各自钉死修复前被破坏的一环：
+ *   ① 强度生效 —— 修复前强度 0/50/100 产出同一条 F0；
+ *   ② 与 shared 真源逐点一致 —— 防 f0Utils 再次本地复刻而分叉；
+ *   ③ 旧工程无 strength 字段 → 与 strength=100 逐位相同（向后兼容）。
+ */
+describe('主窗口 F0 的锚点强度 / 平滑', () => {
+  const BPM = 120;
+  const NOTES = [{ id: 'n1', start: 0, duration: 4, pitch: 60, lyric: 'a' }];
+
+  /** 三锚点音高曲线：中间锚点带可变强度 / 平滑，两端固定。 */
+  function makeAnchorFragment(strength, smoothness) {
+    return {
+      duration: 4,
+      pitchCurve: {
+        enabled: true,
+        anchorPoints: [
+          { time: 0, pitch: 60, strength: 100, smoothness: 0 },
+          { time: 1, pitch: 72, strength, smoothness },
+          { time: 2, pitch: 60, strength: 100, smoothness: 0 },
+        ],
+        brushSegments: [],
+      },
+      notes: NOTES,
+      postprocess: null,
+    };
+  }
+
+  it('锚点强度生效：100 过锚点 / 0 走邻居连线 / 50 半程', () => {
+    const clippedNotes = NOTES.map((n) => ({ ...n }));
+    const at = (strength, smoothness) =>
+      buildFragmentPitchCurveF0(makeAnchorFragment(strength, smoothness), clippedNotes, BPM)[25]; // 拍 1
+    // 强度 100：曲线精确经过锚点（72）
+    expect(at(100, 0)).to.be.closeTo(expectHz(72), 1e-3);
+    // 强度 0：锚点被完全忽略，退化为前后锚点（60/60）连线 → 60
+    expect(at(0, 0)).to.be.closeTo(expectHz(60), 1e-3);
+    // 强度 50：锚点只被拉走一半 → 66
+    expect(at(50, 0)).to.be.closeTo(expectHz(66), 1e-3);
+  });
+
+  it('与 shared automationCurve 真源逐点一致（强度 + 平滑 + 重复时间混合）', () => {
+    const anchors = [
+      { time: 0, pitch: 60, strength: 100, smoothness: 0 },
+      { time: 0.5, pitch: 64, strength: 0, smoothness: 100 },
+      { time: 1, pitch: 72, strength: 50, smoothness: 60 },
+      { time: 1, pitch: 74, strength: 30, smoothness: 0 }, // 重复时间
+      { time: 2, pitch: 60, strength: 100, smoothness: 100 },
+      { time: 3, pitch: 67, strength: 20, smoothness: 40 },
+    ];
+    const frag = {
+      duration: 4,
+      pitchCurve: { enabled: true, anchorPoints: anchors, brushSegments: [] },
+      notes: NOTES,
+      postprocess: null,
+    };
+    const f0 = buildFragmentPitchCurveF0(frag, NOTES.map((n) => ({ ...n })), BPM);
+    const totalFrames = Math.floor(((frag.duration / BPM) * 60) * SAMPLE_RATE / HOP);
+    expect(f0).to.have.length(totalFrames);
+
+    const first = anchors[0].time;
+    const last = anchors[anchors.length - 1].time;
+    // 真源参考：与分片编辑器 getPitchAtTime 同一函数、同一 valueKey('pitch')
+    const sorted = sortAnchors(anchors);
+    const eff = buildEffectiveValues(sorted, 'pitch');
+    for (let i = 0; i < f0.length; i++) {
+      const beat = (i * HOP) / SAMPLE_RATE / 60 * BPM;
+      // 锚点区间内必须与真源逐点一致；区间外回落到 note.pitch（60，
+      // 与末锚点同值，两条语义在这里自然重合）
+      const expected = beat >= first && beat <= last
+        ? expectHz(evalSortedCurve(sorted, eff, beat))
+        : expectHz(60);
+      expect(f0[i], `帧 ${i}（拍 ${beat.toFixed(2)}）`).to.be.closeTo(expected, 1e-3);
+    }
+  });
+
+  it('旧工程锚点（无 strength 字段）与 strength=100 逐位一致', () => {
+    const legacy = [
+      { time: 0, pitch: 60, smoothness: 0 },
+      { time: 1, pitch: 72, smoothness: 30 },
+      { time: 2, pitch: 60, smoothness: 0 },
+    ];
+    const withDefault = legacy.map((a) => ({ ...a, strength: 100 }));
+    const mk = (anchorPoints) => ({
+      duration: 2,
+      pitchCurve: { enabled: true, anchorPoints, brushSegments: [] },
+      notes: NOTES,
+      postprocess: null,
+    });
+    const clippedNotes = NOTES.map((n) => ({ ...n }));
+    const fLegacy = buildFragmentPitchCurveF0(mk(legacy), clippedNotes, BPM);
+    const fDefault = buildFragmentPitchCurveF0(mk(withDefault), clippedNotes, BPM);
+    for (let i = 0; i < fLegacy.length; i++) {
+      expect(fLegacy[i], `帧 ${i}`).to.equal(fDefault[i]);
+    }
+  });
+
+  it('computePitchCurveF0 同样应用锚点强度（同源复刻守护）', () => {
+    const mkFrag = (strength) => ({
+      id: 'f1',
+      startTime: 0,
+      duration: 2,
+      pitchCurve: {
+        enabled: true,
+        anchorPoints: [
+          { time: 0, pitch: 60, strength: 100, smoothness: 0 },
+          { time: 1, pitch: 72, strength, smoothness: 0 },
+          { time: 2, pitch: 60, strength: 100, smoothness: 0 },
+        ],
+        brushSegments: [],
+      },
+    });
+    const notes = [{ id: 'n1', start: 0, duration: 2, pitch: 60, lyric: 'a' }];
+    // 拍 1 = 帧 25（24k/480，bpm 120）
+    expect(computePitchCurveF0([mkFrag(100)], notes, BPM)[25]).to.be.closeTo(expectHz(72), 1e-3);
+    expect(computePitchCurveF0([mkFrag(0)], notes, BPM)[25]).to.be.closeTo(expectHz(60), 1e-3);
+    expect(computePitchCurveF0([mkFrag(50)], notes, BPM)[25]).to.be.closeTo(expectHz(66), 1e-3);
   });
 });

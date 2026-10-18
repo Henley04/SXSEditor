@@ -102,8 +102,65 @@ describe('分片编辑器 音色 / 后处理 lane 接线', () => {
     }
     for (const key of ['fragment.ppGroupF0', 'fragment.ppGroupSpec', 'fragment.inspPostprocess',
       'fragment.anchorStrength', 'fragment.hudPitchAnchor', 'fragment.ppPreset',
-      'fragment.kbdRightDragAnchor', 'fragment.shortcutTimbreEdit']) {
+      'fragment.kbdRightDragAnchor', 'fragment.shortcutTimbreEdit',
+      // 悬浮提示卡 / 右键拖拽 HUD 用到的新增键
+      'fragment.ppGroupF0Desc', 'fragment.ppGroupSpecDesc', 'fragment.ppTipRange',
+      'fragment.ppTipDefault', 'fragment.ppTipAnchorHint', 'fragment.ppPresetDesc',
+      'fragment.laneTimbreDesc', 'fragment.hudRightDragHint', 'fragment.abbrStrength',
+      'fragment.abbrSmoothing', 'fragment.paramPanelToggle', 'fragment.shortcutSwitchTopMode',
+      'fragment.shortcutSwitchLanes', 'fragment.kbdHover', 'fragment.shortcutTimbreHoverTip']) {
       expect(t(key), `${key} 缺翻译`).to.not.equal(key);
+    }
+  });
+
+  it('每个参数（子标签 + 检查器行）都挂了悬浮提示', () => {
+    for (const param of POSTPROCESS_PARAM_LIST) {
+      const chip = document.querySelector(`.pp-chip[data-param="${param.id}"]`);
+      const label = document.querySelector(`.pp-row-label[data-param="${param.id}"]`);
+      const slider = document.querySelector(`.pp-slider[data-param="${param.id}"]`);
+      // 不再用原生 title（延迟 ~1s 且不跟随主题），改为 .pp-tip 悬浮卡
+      expect(chip.hasAttribute('title'), `${param.id} chip 仍在用原生 title`).to.equal(false);
+      expect(label.hasAttribute('title'), `${param.id} 行标签仍在用原生 title`).to.equal(false);
+      expect(chip.getAttribute('aria-describedby')).to.equal('pp-hover-tip');
+      expect(label.getAttribute('aria-describedby')).to.equal('pp-hover-tip');
+      expect(slider.getAttribute('aria-describedby')).to.equal('pp-hover-tip');
+    }
+  });
+
+  it('悬浮提示内容含作用说明 + 取值范围/默认值', async () => {
+    const chip = document.querySelector('.pp-chip[data-param="f0Median"]');
+    chip.dispatchEvent(new window.MouseEvent('mouseenter'));
+    // 提示卡有 120ms 防抖延迟
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const tip = document.getElementById('pp-hover-tip');
+    expect(tip).to.not.equal(null);
+    expect(tip.querySelector('.pp-tip-title').textContent).to.equal(t('fragment.ppF0Median'));
+    expect(tip.querySelector('.pp-tip-meta').textContent).to.contain(t('fragment.ppTipRange'));
+    expect(tip.querySelector('.pp-tip-meta').textContent).to.contain(t('fragment.ppTipDefault'));
+    expect(tip.querySelector('.pp-tip-desc').textContent).to.contain(t('fragment.ppF0MedianDesc'));
+  });
+
+  it('右键按住锚点的 HUD 会画出操作提示行（左右调强度 · 上下调平滑）', () => {
+    const ctx = cr.ctx;
+    ctx.__reset();
+    const hint = t('fragment.hudRightDragHint');
+    state.setAnchorDragHud({
+      x: 40, y: 40,
+      title: 'X',
+      strength: 80, smoothness: 20,
+      strengthLabel: t('fragment.anchorStrength'),
+      smoothnessLabel: t('fragment.smoothing'),
+      hint,
+    });
+    try {
+      cr._drawAnchorDragHud({ hudBg: '#fff', hudBorder: '#000', fgPrimary: '#000', fgMuted: '#666' }, 600, 400);
+      const texts = ctx.__ops('fillText').map((call) => String(call.args[0]));
+      // 提示行必须真的画出来：以前只有"数值"两行，用户按住不动看不出能调什么
+      expect(texts.some((s) => s === hint), `HUD 未画出提示行：${JSON.stringify(texts)}`).to.equal(true);
+      expect(texts.some((s) => s.includes(String(80)))).to.equal(true);
+    } finally {
+      state.setAnchorDragHud(null);
     }
   });
 
