@@ -3,7 +3,8 @@ const { parentPort, workerData } = require('node:worker_threads');
 // Apply float16 type mapping patch (same as main process pipeline).
 // Safe to require: the patch file has internal try/catch and is a no-op if
 // Float16Array is unavailable or onnxruntime-common is not yet loaded.
-try { require('./pipeline/float16Patch'); } catch (_) {}
+// float16 补丁由 ortRuntime.getOrt() 在加载 ORT 后统一施加（幂等），这里不再需要
+// 单独的副作用式 require —— 那样反而会在 worker 启动时就把 ORT 拉起来。
 
 const { RmvpePitchDetector } = require('./rmvpePitchDetector');
 const { RosvotDetector } = require('./rosvotDetector');

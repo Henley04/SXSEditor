@@ -8,8 +8,9 @@ const crypto = require('node:crypto');
 // Load the patch before onnxruntime-node and before creating any Tensor. Without
 // this, Uint16Array FP16 buffers are exposed as empty buffers to ORT ("expected
 // N bytes, got 0") and the native bridge receives zero-valued inputs.
-require('../pipeline/float16Patch');
-const ort = require('onnxruntime-node');
+// float16 补丁由 ortRuntime.getOrt() 在加载 ORT 后统一施加（幂等），见 ortRuntime.js。
+// 惰性 ORT：见 ortRuntime.js。
+const { lazyOrt: ort } = require('../ortRuntime.js');
 const { float32ToF16Buffer } = require('../pipeline/utils');
 const provider = require('./winmlProvider');
 const bridge = require('./ortBridge');

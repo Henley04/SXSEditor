@@ -312,6 +312,16 @@ app.whenReady().then(() => {
   // deps, so registering it here eliminates the 200-500ms "v-" flicker
   // in the version badge that was introduced by the STEP 4 deferral.
   ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, async () => app.getVersion());
+
+  // 同样的理由适用于 get-locale：渲染进程首启（localStorage 里还没有值）会在
+  // initI18n() 里立即询问主进程语言设置（src/i18n/index.js:170）。该 handler 原本
+  // 住在 registerSettingsIpc()（STEP 4，因 settingsIpc 会传递到 onnxruntime-node
+  // 而被延后），于是首启经常打在"handler 尚未注册"上 —— invoke 被拒绝，异常又被
+  // i18n/index.js 的 catch(_){} 静默吞掉，界面退化成按 navigator.language 猜，
+  // 与用户实际选择不一致。这里直接读 STEP 2 已经载入的 loadMainLocale() 结果，
+  // 零重型依赖，适合提前注册。
+  ipcMain.handle(IPC_CHANNELS.GET_LOCALE, async () => require('./main/locale').getLocale());
+
   let resolveHeavyIpcReady;
   const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
   ipcMain.handle(IPC_CHANNELS.APP_WAIT_FOR_HEAVY_IPC, () => heavyIpcReady);
@@ -385,15 +395,16 @@ app.whenReady().then(() => {
   // is blocked by synchronous require() calls below.
   // ========================================================================
   const mainWindow = createWindow({ show: false });
-  startMcpBridge().catch(err => console.error('[MCP] start failed:', err));
+  // MCP bridge 的启动包含 http.createServer + 同步的 writeFileSync/renameSync
+  // （写端口文件），放在这里会直接压在首帧绘制之前。挪到 reveal 之后。
+  // registerMcpReplyIpc 已在 STEP 1.5 注册，渲染进程侧的 reply 通道不受影响。
 
   // Helper: reveal the main window (and close the splash if any). In
   // dev mode this runs immediately after did-finish-load; in packaged
   // mode it waits for the splash's minimum visible duration.
   let _revealed = false;
-  const revealMainWindow = () => {
-    if (_revealed) return;
-    _revealed = true;
+  /** 真正的 show()：关掉 splash、显示并聚焦主窗口，然后启动重型任务。 */
+  const doReveal = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show();
       mainWindow.focus();
@@ -401,7 +412,64 @@ app.whenReady().then(() => {
     if (showSplash) {
       closeSplashWindow();
     }
+    // 关键：重型模块加载必须在窗口**已经 show() 之后**才开始。
+    // 放在这里意味着用户此刻已经看到界面，后面的同步 require 只影响"多久能
+    // 点第一个按钮"，不再影响"多久能看到窗口"。
+    scheduleHeavyStartup();
+    // MCP bridge 同理（同步文件写入 + listen），与重型模块一起延后。
+    const { startMcpBridge } = require('./main/mcpBridge');
+    startMcpBridge().catch(err => console.error('[MCP] start failed:', err));
+    // 应用菜单：30+ 项的 buildFromTemplate + setApplicationMenu，同样移到显示之后
+    const { buildAppMenuDeferred } = require('./main/windowManager');
+    buildAppMenuDeferred();
   };
+
+  /**
+   * 统一的主窗口显示入口（ready-to-show 与 did-finish-load 都走这里）。
+   *
+   * 打包模式下先确保 splash 真的绘制过，再从绘制完成时刻起补足
+   * MIN_SPLASH_MS 的最短可见时长，避免 splash 只闪一帧。
+   */
+  const revealMainWindow = () => {
+    if (_revealed) return;
+    _revealed = true;
+    if (!showSplash) {
+      doReveal();
+      return;
+    }
+    (async () => {
+      try {
+        await waitForSplashReady();
+        const readyAt = getSplashReadyAt();
+        const referenceTime = readyAt || Date.now();
+        const elapsed = Date.now() - referenceTime;
+        const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
+        if (wait > 0) {
+          setTimeout(doReveal, wait);
+        } else {
+          doReveal();
+        }
+      } catch (err) {
+        console.warn('[Main] Splash reveal failed:', err.message);
+        doReveal();
+      }
+    })();
+  };
+
+  // 重型启动任务（原 STEP 4）只在 reveal 之后跑一次。
+  // 此前它包在 setImmediate() 里，意图是"让 did-finish-load 先投递"，但
+  // setImmediate 只在下一个事件循环 tick 执行，而渲染进程从 spawn 到
+  // did-finish-load 通常要 300–600ms —— 这个同步块必然跑在 reveal 之前。
+  // 更糟的是它阻塞主线程期间，did-finish-load / ready-to-show 这两个 IPC 事件
+  // 根本无法投递（要主线程空闲），于是 reveal 被它完整阻塞。
+  let _heavyScheduled = false;
+  function scheduleHeavyStartup() {
+    if (_heavyScheduled) return;
+    _heavyScheduled = true;
+    // setTimeout 而非 setImmediate：让 show() 触发的绘制与事件循环先跑一轮，
+    // 确保窗口真的已经呈现出来，再开始几百毫秒的同步加载。
+    setTimeout(runHeavyStartup, 0);
+  }
 
   // 主窗口渲染进程就绪后：先显示窗口，再后台完成硬件检测和设备校验
   // （此前此处 await detectAllHardware() 会阻塞主窗口显示，因为完整
@@ -418,42 +486,32 @@ app.whenReady().then(() => {
   // are assigned by Step 4's heavy require() calls.
   // ready-to-show 表示首帧已经绘制完成，通常不晚于 did-finish-load。
   // 两个信号谁先到就先用谁，避免为了等 load 事件多空转一帧。
+  //
+  // 重要：此前这里直接 `revealMainWindow()` 无条件立即显示，而 did-finish-load
+  // 分支才走 splash 等待逻辑。由于 ready-to-show 几乎总是先到，MIN_SPLASH_MS /
+  // waitForSplashReady() / getSplashReadyAt() 这一整套 splash 保护实际上从未生效
+  // （死代码）。现在两条路径都走同一个 revealMainWindow()（内部统一处理 splash）。
   mainWindow.once('ready-to-show', () => { revealMainWindow(); });
 
   mainWindow.webContents.once('did-finish-load', () => {
-    // 1. 立即显示主窗口（不等待 GPU/NPU 检测）
-    // In dev mode: reveal the main window immediately.
-    // In packaged mode: first guarantee the splash has actually
-    // painted (so it is visible before the main window appears),
-    // then enforce the splash's minimum visible duration measured
-    // from when the splash's SVG painted. With MIN_SPLASH_MS = 0
-    // the main window is revealed the moment the splash is visible.
-    if (!showSplash) {
-      revealMainWindow();
-    } else {
-      (async () => {
-        try {
-          await waitForSplashReady();
-          const readyAt = getSplashReadyAt();
-          const referenceTime = readyAt || Date.now();
-          const elapsed = Date.now() - referenceTime;
-          const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
-          if (wait > 0) {
-            setTimeout(revealMainWindow, wait);
-          } else {
-            revealMainWindow();
-          }
-        } catch (err) {
-          console.warn('[Main] Splash reveal failed:', err.message);
-          revealMainWindow();
-        }
-      })();
-    }
+    // 1. 显示主窗口（不等待 GPU/NPU 检测）
+    // revealMainWindow() 内部统一处理两种模式：
+    //   dev（无 splash）：立即显示；
+    //   packaged：先确保 splash 真的画出来了（保证用户先看到 splash 再看到主窗口），
+    //             再从 splash 绘制完成时刻起算 MIN_SPLASH_MS 的最短可见时长。
+    //             MIN_SPLASH_MS = 0 时，splash 一可见就切主窗口。
+    revealMainWindow();
 
     // 2. Auto update check (once per 24h, packaged only).
-    //    Independent of Step 4 modules — only uses updateChecker (light)
-    //    and windowManager (loaded in STEP 1.5).
-    (async () => {
+    //
+    //    注意：updateChecker.js 顶层 require 了 modelManager（82KB / 2334 行），
+    //    这个 require 是**同步**的。此前它紧跟在 revealMainWindow() 之后，而打包
+    //    模式下 reveal 走的是 `await waitForSplashReady()` 的 async 分支 —— 即
+    //    show() 被推入微任务，同步的 require 反而先跑，于是首帧绘制又被这 82KB
+    //    的解析阻塞了一次，把 STEP 4 对 modelManager 的延迟完全抵消。
+    //    这里整体推到下一个宏任务，确保窗口先出来。
+    setTimeout(() => {
+      (async () => {
       try {
         const { shouldAutoCheck, checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./main/updateChecker');
         const { openUpdateNotificationWindow } = require('./main/windowManager');
@@ -475,7 +533,8 @@ app.whenReady().then(() => {
       } catch (err) {
         console.warn('[Main] Auto update check failed:', err.message);
       }
-    })();
+      })();
+    }, 0);
   });
 
   // ========================================================================
@@ -484,20 +543,22 @@ app.whenReady().then(() => {
   // These require() calls load onnxruntime-node (a native addon) and its
   // transitive dependencies, which can take hundreds of milliseconds.
   //
-  // Wrapped in setImmediate so the did-finish-load event (which is queued
-  // when the renderer finishes loading) can be delivered to the listener
-  // above BEFORE this heavy synchronous block runs. Otherwise the heavy
-  // require() chain would block the event loop and delay did-finish-load
-  // delivery —推迟主窗口 show() 直到 Step 4 完成，浪费数百毫秒。
+  // 现在由 revealMainWindow() → scheduleHeavyStartup() 在**主窗口显示之后**
+  // 触发（见上方说明）。此前这里是 setImmediate()，注释声称"让 did-finish-load
+  // 先投递"，实际做不到：setImmediate 下一个 tick 就跑，而渲染进程加载要
+  // 300–600ms，期间主线程被这段同步代码占满，did-finish-load 的回调根本无法
+  // 投递，reveal 于是被整段阻塞。
   //
   // Safety: the renderer does not invoke any heavy IPC (svs:init,
   // settings:getDMLDevices, etc.) immediately after did-finish-load —
   // those calls are triggered by user interaction, which happens far
-  // later than this setImmediate. Verified in src/renderer/index.js:
-  // post-did-finish-load work is just getAppVersion + initWindowTheme +
-  // hydrateIcons + updateProjectSettings + refreshAll (all light IPC).
+  // later than this. Additionally, preload exposes APP_WAIT_FOR_HEAVY_IPC so
+  // any renderer call that does need a heavy handler awaits it explicitly.
+  // Verified in src/renderer/index.js: post-did-finish-load work is just
+  // getAppVersion + initWindowTheme + hydrateIcons + updateProjectSettings +
+  // refreshAll (all light IPC).
   // ========================================================================
-  setImmediate(() => {
+  function runHeavyStartup() {
     ({ enumerateDMLDevices } = require('./inference/pipeline'));
     ({
       registerSvsIpc,
@@ -660,7 +721,7 @@ app.whenReady().then(() => {
     checkAndDownloadModels().catch(err => {
       console.warn('[Main] Model check failed:', err.message);
     });
-  });
+  }
   } // end of initMainSteps()
 
   app.on('activate', () => {

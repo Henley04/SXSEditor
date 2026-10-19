@@ -1,4 +1,20 @@
-const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/pipeline');
+// 推理管线的 require 从模块顶层下沉。
+//
+// 冷启动审查：pipeline/index.js 是 5118 行且连带 diffusion / preprocessing /
+// postprocessing 等一整棵子树，require 它要解析并编译数万行 JS。此前它在
+// svsIpc.js 第 1 行，而 svsIpc 在启动的 STEP 4 被同步 require —— 于是这份解析
+// 成本落在主窗口显示之前。ORT native addon 本身已由 ortRuntime 惰性化，
+// 这里再把 JS 解析也推迟到首次真正要建管线（或首次查询采样率）时。
+//
+// SAMPLE_RATE 是纯常量，但它在同一模块里，只能一起惰性化；下面的
+// getSampleRate() 在拿值时触发加载，调用点语义不变（这些 handler 都在
+// 用户交互后才跑）。
+let _pipelineModule = null;
+function getPipelineModule() {
+  if (!_pipelineModule) _pipelineModule = require('../inference/pipeline');
+  return _pipelineModule;
+}
+function getSampleRate() { return getPipelineModule().getSampleRate(); }
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');
@@ -134,7 +150,7 @@ async function _createPipeline(languageOverride) {
       settingsSnapshot: settings,
     });
   }
-  return new OnnxSVSPipeline(modelPath, pipelineOptions);
+  return new (getPipelineModule().OnnxSVSPipeline)(modelPath, pipelineOptions);
 }
 
 const svsPipelineLazy = createLazyInitializer(async () => {
@@ -323,7 +339,7 @@ const MAX_PLUGIN_MIX_SECONDS = 30 * 60;
  * @returns {Promise<{ok:boolean, audio?:Float32Array, error?:string}>}
  */
 async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
-  const sr = Number.isFinite(sampleRate) ? sampleRate : SAMPLE_RATE;
+  const sr = Number.isFinite(sampleRate) ? sampleRate : getSampleRate();
   const maxSamples = Math.floor(MAX_PLUGIN_MIX_SECONDS * sr);
   // bpm 同样来自渲染进程：非正数 / 非有限值时退回 120（与旧实现的 `bpm || 120`
   // 一致），但极小值（如 1e-9）会把 offset 放大几个数量级，交给下面的上限兜住。
@@ -490,7 +506,7 @@ function registerSvsIpc() {
         bpm,
         options: opts,
         sender: win,
-        sampleRate: SAMPLE_RATE,
+        sampleRate: getSampleRate(),
       });
       if (!pluginResult.ok) {
         throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
@@ -596,7 +612,7 @@ function registerSvsIpc() {
           group,
           bpm,
           sender: win,
-          sampleRate: SAMPLE_RATE,
+          sampleRate: getSampleRate(),
         });
         if (!pluginResult.ok) {
           throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
@@ -654,7 +670,7 @@ function registerSvsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.FRAGMENT_SVS_GET_SAMPLE_RATE, async () => {
-    return SAMPLE_RATE;
+    return getSampleRate();
   });
 
   safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event) => {
@@ -724,7 +740,7 @@ function registerSvsIpc() {
         bpm,
         options: opts,
         sender: win,
-        sampleRate: SAMPLE_RATE,
+        sampleRate: getSampleRate(),
       });
       if (!pluginResult.ok) {
         return { error: `PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}` };

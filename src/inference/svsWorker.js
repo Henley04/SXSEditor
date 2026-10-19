@@ -1,6 +1,6 @@
 const { parentPort, workerData } = require('node:worker_threads');
 
-try { require('./pipeline/float16Patch'); } catch (_) {}
+// float16 补丁由 ortRuntime.getOrt() 在加载 ORT 后统一施加（幂等），见 ortRuntime.js。
 
 // Windows ML 快照注入：worker_threads 里 require('electron') 不可用（退化为
 // 路径字符串），settings 模块与 dynwinrt/catalog 在 worker 内都不可靠。

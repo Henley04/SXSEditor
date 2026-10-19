@@ -1,4 +1,6 @@
-const ort = require('onnxruntime-node');
+// 惰性 ORT：native addon 的加载推迟到首次真正用到 ort.* 时（见 ortRuntime.js）。
+// 此前这里是顶层 require，会在冷启动阶段就把 ORT 及 DML/WinML 依赖 DLL 拉起。
+const { lazyOrt: ort } = require('../ortRuntime.js');
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, outputToFloat32Into, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');

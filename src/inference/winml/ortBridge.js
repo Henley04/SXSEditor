@@ -28,7 +28,7 @@ const TYPED_ARRAY_BY_TYPE = {
 
 function _loadOrt() {
     try {
-        return require('onnxruntime-node');
+        return require('../ortRuntime.js').getOrt();
     } catch (_e) {
         return null; // tests may stub tensor creation
     }

@@ -301,8 +301,32 @@ function createWindow(opts = {}) {
     }
   });
 
-  buildAppMenu();
+  // 菜单构建从 createWindow() 挪出（见下方 buildAppMenuDeferred 的说明）：
+  // 30+ 个菜单项、每项走 t() 的逐级查表，此前压在主窗口 reveal 的关键路径上。
+  // 调用方（main.js）在窗口显示之后再补上，功能不变。
   return mainWindow;
+}
+
+/**
+ * 延后构建应用菜单。
+ *
+ * 为什么延后：Menu.buildFromTemplate + Menu.setApplicationMenu 要构造 30+ 个菜单
+ * 项，每项再走一次 t() 的 split('.').reduce() 逐级查表。这段同步工作原本在
+ * createWindow() 末尾，也就是在主窗口 show() 之前，直接加在冷启动的关键路径上。
+ * 菜单是用户交互才用到的东西，窗口先出来再补菜单完全无感。
+ *
+ * 幂等：重复调用不会重复 setApplicationMenu。
+ */
+let _appMenuBuilt = false;
+function buildAppMenuDeferred() {
+  if (_appMenuBuilt) return;
+  _appMenuBuilt = true;
+  try {
+    buildAppMenu();
+  } catch (err) {
+    // 菜单失败不能影响主窗口可用性
+    console.warn('[Menu] buildAppMenu failed:', err && err.message);
+  }
 }
 
 function openSettingsWindow() {
@@ -914,6 +938,7 @@ function registerWindowIpc() {
 
 module.exports = {
   createWindow,
+  buildAppMenuDeferred,
   openSettingsWindow,
   notifyRelayout,
   attachRelayoutListeners,

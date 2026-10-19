@@ -362,9 +362,9 @@ function registerSettingsIpc() {
     return { success: true };
   });
 
-  safeHandle(IPC_CHANNELS.GET_LOCALE, async () => {
-    return require('./locale').getLocale();
-  });
+  // GET_LOCALE 已上移到 main.js 的 STEP 1.5 单独注册（渲染进程首启的 initI18n()
+  // 会在 did-finish-load 之前就询问语言，等不到本文件所在的 STEP 4）。
+  // 注意 ipcMain.handle 对同一 channel 重复注册会抛错，所以这里必须移除而不是保留。
 
   safeHandle(IPC_CHANNELS.SETTINGS_RUN_TRTRTX_DIAGNOSTIC, async () => {
     try {

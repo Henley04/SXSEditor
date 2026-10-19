@@ -13,7 +13,8 @@
  *     sampleRate 时 24kHz 的音频会被当成 44.1kHz 解释，F0 时间轴偏快 1.8375 倍
  *     且不报任何错。provideSampleRate() 把这个默认值换成了显式报错。
  */
-const ort = require('onnxruntime-node');
+// 惰性 ORT：见 ortRuntime.js。
+const { lazyOrt: ort } = require('../ortRuntime.js');
 
 // ---- 单一真源：F0 后处理的目标网格（24kHz / hop 480 = 20ms） ----
 const TARGET_SAMPLE_RATE = 24000;

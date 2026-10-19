@@ -23,7 +23,7 @@ async function main() {
 
   // Mirror svsWorker startup order. The patch must be installed before the
   // diagnostic module imports onnxruntime-node.
-  require('../pipeline/float16Patch');
+  // float16 补丁由 ortRuntime.getOrt() 在加载 ORT 后统一施加（幂等），见 ortRuntime.js。
   const { runTrtDiagnostic } = require('./trtDiagnostic');
   const report = await runTrtDiagnostic(payload);
   if (process.send) process.send({ type: 'result', report });

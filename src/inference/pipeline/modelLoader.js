@@ -17,11 +17,24 @@ if (_ORT_DEBUG_ENABLED) {
 
 const path = require('node:path');
 const fs = require('node:fs');
-const ort = require('onnxruntime-node');
-// Set logLevel on the real module (ort.env is from the external onnxruntime-node's onnxruntime-common)
-if (!_IS_TEST_ENV) {
-    ort.env.logLevel = _ORT_DEBUG_ENABLED ? 'verbose' : 'warning';
-    ort.env.debug = _ORT_DEBUG_ENABLED;
+// 惰性 ORT：native addon 的加载推迟到首次真正访问 ort.* 时（见 ortRuntime.js）。
+// 此前这里是顶层 require —— 它位于 SVS 管线的必经路径上，冷启动时只要 require 了
+// pipeline 就等于把 ORT 及其 DML/WinML 依赖 DLL 全部拉起。
+const { lazyOrt: ort, getOrt } = require('../ortRuntime.js');
+
+// ORT 日志级别只能设在**真实模块**上（ort.env 来自 external 的 onnxruntime-node
+// 的 onnxruntime-common），而惰性化之后模块在这一刻还没加载。
+// 因此改为"首次真正建 session 之前"再设置，由 ensureOrtEnv() 保证只做一次。
+let _ortEnvConfigured = false;
+function ensureOrtEnv() {
+    const realOrt = getOrt();
+    if (_ortEnvConfigured) return realOrt;
+    _ortEnvConfigured = true;
+    if (!_IS_TEST_ENV) {
+        realOrt.env.logLevel = _ORT_DEBUG_ENABLED ? 'verbose' : 'warning';
+        realOrt.env.debug = _ORT_DEBUG_ENABLED;
+    }
+    return realOrt;
 }
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
@@ -610,6 +623,9 @@ const WINML_ELIGIBLE_KEYS = new Set([
 ]);
 
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
+    // 所有 session 都在这里创建：这是设置 ORT 日志级别最晚且最早的可靠时机
+    // （必须在 session 建立前，又不能早到模块加载期）。
+    ensureOrtEnv();
     const modelName = path.basename(modelPath);
     // Validation/warmup is a once-per-process action for each concrete model
     // file. Session recreation after VRAM release, language swaps, or model
@@ -957,6 +973,7 @@ module.exports = {
     buildModelDeviceMapping,
     detectBestDevice,
     createSessionWithValidation,
+    ensureOrtEnv,
     WebNNSessionProxy,
     DUMMY_TEST_INPUTS_FP32,
     DUMMY_TEST_INPUTS_FP16,

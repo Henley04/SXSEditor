@@ -1,4 +1,5 @@
-const ort = require('onnxruntime-node');
+// 惰性 ORT：见 ortRuntime.js。
+const { lazyOrt: ort } = require('../ortRuntime.js');
 const { SAMPLE_RATE, HOP_SIZE, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
 const durationStats = require('./durationStats');

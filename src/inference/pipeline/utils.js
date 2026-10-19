@@ -1,4 +1,5 @@
-const ort = require('onnxruntime-node');
+// 惰性 ORT：见 ortRuntime.js。
+const { lazyOrt: ort } = require('../ortRuntime.js');
 
 /**
  * Shared utility functions (tensor helpers, math, etc.)

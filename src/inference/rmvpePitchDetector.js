@@ -1,5 +1,6 @@
 const path = require('node:path');
-const ort = require('onnxruntime-node');
+// 惰性 ORT：见 ortRuntime.js。
+const { lazyOrt: ort } = require('./ortRuntime.js');
 const { resampleAudio } = require('../utils/resampleAudio');
 const { buildSessionOptions } = require('./shared/ortOptions');
 const {
