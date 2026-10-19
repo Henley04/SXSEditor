@@ -1784,6 +1784,15 @@ function _applyTimbreSnapshot(paramId, snapshot) {
   // 撤销/重做改的是曲线本身：检查器读数必须跟着回到新状态，
   // 否则滑块还停在旧的锚点值上（"面板和曲线对不上"）。
   syncTimbreParamValue(paramId);
+  // 必须自己重绘。此前依赖调用方（keydown 的 Ctrl+Z/Ctrl+Y）在 finally 里补
+  // render()，一旦新增撤销按钮 / 右键菜单入口就会画面与实际数据不同步。
+  // 与 _applyPostprocessSnapshot 保持一致。
+  //
+  // 注意：这里**不要**顺手收敛 getSelectedTimbreAnchors()。撤销会把曲线清空，
+  // 若此时把选中索引一并删掉，随后重做就恢复不回选中态，检查器读数会停在
+  // 默认值上（undo → redo 不再是可逆往返）。选中集合里的越界索引由
+  // _selectedTimbreAnchorIndex 的 anchors[idx] 存在性判断兜底，不会崩。
+  render();
 }
 
 function _deleteTimbreAnchor(anchorIdx) {
@@ -2713,23 +2722,31 @@ export function setupEventListeners() {
         seekFragmentPlayback(getFragmentPlayStartPosition());
       }
     }
+    // 下面各分支只改状态，最后统一重绘一次（避免同一帧内重复 render）。
+    let needsRender = false;
+
     if (getDragMode() === 'pitch-brush' && getIsBrushDrawing() && getCurrentBrushStroke()) {
       if (getCurrentBrushStroke().points.length >= 2) {
         convertBrushStrokeToAnchorPoints(getCurrentBrushStroke());
       }
       setCurrentBrushStroke(null);
       setIsBrushDrawing(false);
-      render();
+      needsRender = true;
     }
     // 右键 smoothness 拖拽期间鼠标离开 canvas → 提交当前修改并清理状态
     if (getDragMode() === 'pitch-smoothness') {
       const startSnapshot = getPitchCurveSnapshotBeforeDrag();
       const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
       _finalizePitchSmoothnessDrag(!!hadChange);
+      needsRender = true;
     }
     // 音色 lane 拖拽中离开 canvas → 同样提交并清理（含 HUD）
     if (getDragMode() === 'timbre-anchor' || getDragMode() === 'timbre-strength') {
       _finalizeTimbreCurveDrag(true);
+      // 必须无条件重绘：_finalizeTimbreCurveDrag 只清掉了 HUD 的**数据**，
+      // 不重绘的话强度/平滑浮层会一直残留在画布上，直到下一次无关的重绘。
+      // （此前只有 hoveredNote 非空时才 render，鼠标移出画布时通常为空 → 不刷。）
+      needsRender = true;
     }
     finalizeDragOperation();
     setDragMode(null);
@@ -2739,8 +2756,9 @@ export function setupEventListeners() {
     getDragNoteStarts().clear();
     if (getHoveredNoteId() !== null) {
       setHoveredNoteId(null);
-      render();
+      needsRender = true;
     }
+    if (needsRender) render();
   });
 
   canvas.addEventListener('contextmenu', (e) => {
@@ -2886,6 +2904,38 @@ export function setupEventListeners() {
         hideShortcutsPanel();
         return;
       }
+      // 取消进行中的曲线拖拽：回滚到拖拽前快照，且**不写入历史**。
+      // 此前 Esc 只清选中，dragMode 与 beforeDrag 快照都原样留着，松手后
+      // _finalizeXxxDrag(true) 照常把拖拽结果提交进历史 —— "拖拽中途按 Esc
+      // 取消"实际不可用。回滚后直接 return，不落到下面的"取消选中"分支。
+      const escDragMode = getDragMode();
+
+      if (escDragMode === 'timbre-anchor' || escDragMode === 'timbre-strength') {
+        const startSnapshot = getTimbreEnvelopeSnapshotBeforeDrag();
+        _finalizeTimbreCurveDrag(false); // 清 dragMode / HUD / 选中，不提交历史
+        if (startSnapshot) _applyTimbreSnapshot(getActiveTimbreParam(), startSnapshot); // 内含 render()
+        else render();
+        return;
+      }
+
+      if (escDragMode === 'pitch-smoothness' || escDragMode === 'pitch-anchor') {
+        const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+        if (escDragMode === 'pitch-smoothness') {
+          _finalizePitchSmoothnessDrag(false);
+        } else {
+          // pitch-anchor 没有独立的 finalize：手动清掉拖拽状态，
+          // 不走 mouseup 里的历史提交路径。
+          setDragMode(null);
+          setDragOperation(null);
+          getPitchDragAnchorStarts().clear();
+          setAnchorDragHud(null);
+          setPitchCurveSnapshotBeforeDrag(null);
+        }
+        if (startSnapshot) applyPitchCurveSnapshot(startSnapshot);
+        render();
+        return;
+      }
+
       getSelectedNoteIds().clear();
       getSelectedAnchorIndices().clear();
       getSelectedTimbreAnchors().clear();

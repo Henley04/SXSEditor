@@ -67,7 +67,7 @@ import {
   getTimbreDefault,
   getTimbreKeyframes,
 } from './postprocessAccess.js';
-import { POSTPROCESS_PARAMS, formatParamValue } from './postprocessParams.js';
+import { POSTPROCESS_PARAMS, formatParamValue, paramUnitText } from './postprocessParams.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -544,14 +544,36 @@ export function buildPitchCurveF0Data(options = {}) {
   const totalBeats = Math.min(lastNote.start + lastNote.duration, fragDuration);
   const totalSeconds = (totalBeats / bpm) * 60;
   const hopSize = 480;
-  const totalFrames = Math.floor(totalSeconds * getSampleRate() / hopSize);
+  const sampleRate = getSampleRate();
+  const totalFrames = Math.floor(totalSeconds * sampleRate / hopSize);
+
+  // 逐帧判断"这一帧是否落在某个音符内"。
+  //
+  // 原来是每帧对全部音符跑一次 some() → O(frames × notes)。60s / 300 音符的
+  // 分片约 9 万帧 × 300 ≈ 2700 万次比较，而本函数会被自动推理的签名轮询
+  // 每 400ms 调一次（autoInference），长分片下是实打实的卡顿源。
+  //
+  // frameBeat 随 i 单调递增，改成事件驱动扫描：音符按起点升序入列、按终点出列，
+  // 整体 O(frames + notes)，且天然支持音符重叠（原 some() 语义 = 命中任一音符）。
+  const sortedNotes = clippedNotes.slice().sort((a, b) => a.start - b.start);
+  let nextNote = 0;
+  const active = [];
 
   let f0Array = new Float32Array(totalFrames);
   for (let i = 0; i < totalFrames; i++) {
-    const frameTimeSec = (i * hopSize) / getSampleRate();
-    const frameBeat = (frameTimeSec / 60) * bpm;
-    const inNote = clippedNotes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
-    if (!inNote) {
+    const frameBeat = (i * hopSize / sampleRate / 60) * bpm;
+    while (nextNote < sortedNotes.length && sortedNotes[nextNote].start <= frameBeat) {
+      active.push(sortedNotes[nextNote++]);
+    }
+    // 原地压缩剔除已结束的音符，避免每帧 filter 产生新数组
+    if (active.length > 0) {
+      let w = 0;
+      for (let r = 0; r < active.length; r++) {
+        if (frameBeat < active[r].start + active[r].duration) active[w++] = active[r];
+      }
+      active.length = w;
+    }
+    if (active.length === 0) {
       f0Array[i] = 0;
       continue;
     }
@@ -2078,7 +2100,7 @@ function renderTimbreLane(c, w, areaTop, areaBottom) {
   ctx.fillText(formatParamValue(paramId, min, t), 4, areaBottom - 4);
   ctx.textAlign = 'right';
   ctx.fillStyle = color;
-  ctx.fillText(`${def.unit || ''}`, w - 4, areaTop + 12);
+  ctx.fillText(paramUnitText(def, t), w - 4, areaTop + 12);
 
   const startBeat = xToTime(0);
   const endBeat = xToTime(w);

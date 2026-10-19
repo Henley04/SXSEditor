@@ -172,17 +172,32 @@ export function isParamActive(id, value) {
 }
 
 /** 显示用格式化：百分比 / 帧 / 毫秒 / σ。 */
+/**
+ * 参数的本地化单位文本。
+ *
+ * 注册表的 `unit` 是中文兜底值（`f0Median` 的"帧"），`unitKey` 才是可翻译的键。
+ * 任何直接读 `def.unit` 的地方在英文界面下都会漏出中文，必须走这里。
+ * t() 缺键时会回退成键名本身，此时继续用中文单位兜底。
+ *
+ * @param {object} def POSTPROCESS_PARAMS 的条目
+ * @param {(key:string)=>string} [t] 翻译函数
+ * @returns {string}
+ */
+export function paramUnitText(def, t) {
+  if (!def) return '';
+  if (def.unitKey && typeof t === 'function') {
+    const localized = t(def.unitKey);
+    if (localized && localized !== def.unitKey) return localized;
+  }
+  return def.unit || '';
+}
+
 export function formatParamValue(id, value, t) {
   const def = POSTPROCESS_PARAMS[id];
   if (!def) return String(value);
   const n = Number(value);
   const fixed = Number.isFinite(n) ? n.toFixed(def.digits) : '0';
-  let unit = def.unit || '';
-  if (def.unitKey && typeof t === 'function') {
-    const localized = t(def.unitKey);
-    // t() 缺键时会回退成键名本身，此时继续用中文单位兜底
-    if (localized && localized !== def.unitKey) unit = localized;
-  }
+  const unit = paramUnitText(def, t);
   return unit ? `${fixed}${unit}` : fixed;
 }
 

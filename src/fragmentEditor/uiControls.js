@@ -536,6 +536,14 @@ export function setupPostprocessUi() {
       opt.textContent = t(preset.labelKey);
       presetSelect.appendChild(opt);
     }
+    // 「自定义」不是一个可套用的预设，只是"当前取值不属于任何预设"时的显示状态
+    // （此前不匹配时下拉保持上一次的高亮，面板显示"标准"但实际值已被改过）。
+    // disabled 使其不可被主动选中，change 处理器里的 find() 也会因此拿不到它而 return。
+    const customOpt = document.createElement('option');
+    customOpt.value = 'custom';
+    customOpt.textContent = t('fragment.ppPresetCustom');
+    customOpt.disabled = true;
+    presetSelect.appendChild(customOpt);
     presetSelect.value = 'off';
     attachHoverTip(presetSelect, () => ({
       title: t('fragment.ppPreset'),
@@ -637,13 +645,14 @@ export function syncPostprocessUi() {
 
   _syncModeTag(activeParam);
 
-  // 预设下拉：默认值恰好等于某个预设时高亮它
+  // 预设下拉：默认值恰好等于某个预设时高亮它，否则回落到「自定义」——
+  // 不回落的话选了预设再动任一滑块，下拉仍高亮该预设，面板与实际取值不符。
   const presetSelect = document.getElementById('pp-preset-select');
   if (presetSelect && document.activeElement !== presetSelect) {
     const defaults = getPostprocessDefaults();
     const match = POSTPROCESS_PRESETS.find(preset =>
       Object.entries(preset.values).every(([id, v]) => Math.abs((defaults[id] ?? 0) - v) < 1e-6));
-    if (match) presetSelect.value = match.id;
+    presetSelect.value = match ? match.id : 'custom';
   }
 }
 
