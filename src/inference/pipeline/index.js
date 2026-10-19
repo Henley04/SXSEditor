@@ -2,8 +2,9 @@ const { IPC_CHANNELS } = require('../../shared/ipcChannels');
 const path = require('node:path');
 const fs = require('node:fs');
 
-// Side effect: apply float16 patch on module load
-require('./float16Patch');
+// float16 patch 不再在模块加载时自执行（那会顺带把 ORT native addon 拉起）。
+// 改由 ortRuntime.getOrt() 在真正加载 ORT 之后调用，见 src/inference/ortRuntime.js。
+const { getOrt } = require('../ortRuntime.js');
 
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, DIFF_STEP_MAX_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
@@ -1508,7 +1509,7 @@ class OnnxSVSPipeline {
     async _detectModelPrecision(resolvedModelFiles) {
         try {
             const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow (~8MB)
-            const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath,
+            const probeSession = await getOrt().InferenceSession.create(probeModelPath,
                 buildSessionOptions({ executionProviders: ['cpu'] }));
             const probeInputType = probeSession.inputMetadata[0]?.type;
             this.isFP16 = probeInputType === 'float16';
@@ -1698,7 +1699,7 @@ class OnnxSVSPipeline {
 
         // 局部辅助：DML 优先、失败回退 CPU 加载 vocoder（跳过验证推理）
         const loadVocDmlOrCpu = async (vocFile) => {
-            const ort = require('onnxruntime-node');
+            const ort = getOrt();
             const vocPath = path.join(this.modelDir, vocFile);
             const dmlOpts = typeof this.dmlDeviceId === 'number'
                 ? { name: 'dml', deviceId: this.dmlDeviceId }
@@ -2019,7 +2020,7 @@ class OnnxSVSPipeline {
             // Last resort: probe with valid tensor shape [1, 500, 128]
             // For SiFiGAN, also feed 'f0' input (shape [1, seq, 1]) so session.run() does not fail on missing input.
             console.warn('[OnnxSVSPipeline] Probing vocoder with test inference...');
-            const ort = require('onnxruntime-node');
+            const ort = getOrt();
             const PROBE_FRAMES = 500;
             const buildFeed = (melTensor) => {
                 if (isSifigan) {
@@ -2809,7 +2810,11 @@ class OnnxSVSPipeline {
             // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
             // Vocoder 在主进程 DML 执行（支持 default + SiFiGAN）
-            const audioData = await this._runVocoderChunked(result.xtData, totalFrames, onChunkAudio, _melBaseOffset, { fullMel: result.xtData, totalFrames });
+            // melCtx 必须带 payloadBase/startFrame：_postprocessMel 走
+            // applyMelPostprocessWindow 分支时只认这两个字段，第 4 个形参
+            // frameOffset 会被忽略（缺字段 → 偏移按 0 处理，曲线时间轴回到
+            // 分片首音符）。见 _postprocessMel 的注释。
+            const audioData = await this._runVocoderChunked(result.xtData, totalFrames, onChunkAudio, _melBaseOffset, { fullMel: result.xtData, totalFrames, startFrame: 0, payloadBase: _melBaseOffset, rightFinal: true });
             const ms = performance.now() - t0;
             console.log(`[OnnxSVSPipeline] WebNN synthesis: ${totalFrames}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
             onProgress(Math.round(progressStart + progressRange));
@@ -2897,7 +2902,8 @@ class OnnxSVSPipeline {
         // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel after NPU/MAX_SAFE truncation. null when unavailable.
         this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
-        const audioData = await this._runVocoderChunked(xt.data, totalFrames, null, _melBaseOffset, { fullMel: xt.data, totalFrames });
+        // 同上：melCtx 需显式带 payloadBase/startFrame，否则 _melBaseOffset 被丢弃。
+        const audioData = await this._runVocoderChunked(xt.data, totalFrames, null, _melBaseOffset, { fullMel: xt.data, totalFrames, startFrame: 0, payloadBase: _melBaseOffset, rightFinal: true });
 
         return { audio: audioData, frames: totalFrames };
     }
@@ -3135,7 +3141,8 @@ class OnnxSVSPipeline {
             const seq = si === 0 ? seqA : seqB;
             this._currentF0Hz = seq.f0Hz ? seq.f0Hz.subarray(0, r.totalFrames) : null;
             const melBaseOffset = si === 0 ? _melBaseOffsetA : _melBaseOffsetB;
-            const audioData = await this._runVocoderChunked(r.xtData, r.totalFrames, null, melBaseOffset, { fullMel: r.xtData, totalFrames: r.totalFrames });
+            // 同上：各 segment 的载荷偏移必须经 payloadBase 传入。
+            const audioData = await this._runVocoderChunked(r.xtData, r.totalFrames, null, melBaseOffset, { fullMel: r.xtData, totalFrames: r.totalFrames, startFrame: 0, payloadBase: melBaseOffset, rightFinal: true });
             audioResults.push({ audio: audioData, frames: r.totalFrames });
         }
         return audioResults;
@@ -4457,7 +4464,8 @@ class OnnxSVSPipeline {
                 this._silenceNonVocalRegions(info.audio, filledNotes, bpm, chunkStartBeat);
                 singleSegOnChunk(info);
             } : null;
-            let audioData = await this._runVocoderChunked(xt.data, totalFrames, _silencingOnChunk, _melBaseOffset, { fullMel: xt.data, totalFrames });
+            // 同上：这段是整段一次性 vocoder，startFrame=0、rightFinal=true。
+            let audioData = await this._runVocoderChunked(xt.data, totalFrames, _silencingOnChunk, _melBaseOffset, { fullMel: xt.data, totalFrames, startFrame: 0, payloadBase: _melBaseOffset, rightFinal: true });
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
             // 注意：外部 totalFrames 始终是 50Hz 帧数（SVS mel 帧率），

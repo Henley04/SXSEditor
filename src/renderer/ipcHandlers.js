@@ -5,6 +5,7 @@ import { refreshAll, invalidateFragmentNoteSprites } from './timelineRenderer.js
 import { showAlertDialog } from '../alertDialog.js';
 // 2.2: 与主题管理共用同一份 token 注入实现，不再在本文件里复制一份。
 import { injectTokens } from '../themes/themeInit.js';
+import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 
 // int8 旧版 diff_step 模型不兼容弹窗（主进程在 svs:init 时检测并推送一次）
 if (window.electronAPI?.onSVSDiffStepIncompatible) {
@@ -56,8 +57,11 @@ if (window.electronAPI?.onFragmentSaved) {
       if (envelopes) fragment.envelopes = envelopes;
       if (pitchCurve) fragment.pitchCurve = pitchCurve;
       if (kanjiGroups) fragment.kanjiGroups = kanjiGroups;
-      // 音色 / 后处理曲线（F0 平滑、频谱后处理）：随分片保存，主窗口只做透传持久化
-      if (postprocess) fragment.postprocess = postprocess;
+      // 音色 / 后处理曲线（F0 平滑、频谱后处理）：随分片保存，主窗口只做透传持久化。
+      // 归一化后再存：手改工程或跨版本字段越界时，越界值不会随保存回填进工程
+      // 文件累积（消费侧 sampleParamAt 虽有 clamp 兜底不会崩，但读数与存档会
+      // 长期不一致）。分片编辑器侧已归一化，此处幂等。
+      if (postprocess) fragment.postprocess = normalizePostprocessState(postprocess);
       if (startTime !== undefined) fragment.startTime = startTime;
       if (duration !== undefined) fragment.duration = duration;
       // 音符内容可能已变（增删改），分片预览精灵必须重建，否则拖到主窗口

@@ -1,9 +1,10 @@
 import { state, trackManager, history } from './state.js';
-import { SAMPLE_RATE } from './constants.js';
+import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
 import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
+import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { buildProjectLrc, exportProjectLrc } from './lrcExport.js';
 import {
   playAll, pausePlayback, stopPlayback, seekPlayback, exportAll, runExportJob,
@@ -276,6 +277,15 @@ async function exportFragmentTo(p) {
       cfgScheduleKeyframes: o.cfgScheduleKeyframes,
       dynamicThresholdEnabled: o.dynamicThresholdEnabled,
       dynamicThresholdPercentile: o.dynamicThresholdPercentile,
+      // 频谱后处理（音色 → 频谱曲线）：与 playAll / 导出一致下发，
+      // 否则 MCP 导出的音频会丢掉 specBlend / specSmoothT / specSmoothF。
+      melPostprocess: buildMelPostprocessPayload(
+        f.postprocess || null,
+        clippedNotes,
+        state.project.bpm,
+        SAMPLE_RATE,
+        SVS_HOP_SIZE,
+      ),
     },
   });
   const { encodeWav } = require('../audio/wavEncoder.js');

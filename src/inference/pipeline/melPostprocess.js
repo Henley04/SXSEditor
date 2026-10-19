@@ -96,8 +96,13 @@ function _toFloatArray(v, max) {
 /**
  * 把"本次 vocoder 输入 mel 的首音符绝对拍"换算为载荷帧索引偏移。
  *
- * 载荷的第 i 帧对应绝对拍 startBeat + i·hop/采样率；本次 mel 的第 0 帧对应
- * absFirstNoteBeat。因此 frameOffset = (absFirstNoteBeat - startBeat) × fps。
+ * 载荷的第 i 帧对应绝对拍 startBeat + i·(bpm/60)/fps。本次 mel 的第 0 帧对应
+ * absFirstNoteBeat，因此先把拍差换算成秒（1 拍 = 60/bpm 秒），再换算成帧：
+ *
+ *   frameOffset = (absFirstNoteBeat - startBeat) × (60 / bpm) × fps
+ *
+ * 注意方向：拍 → 秒是 ×(60/bpm)，秒 → 拍才是 ×(bpm/60)。两者写反会让偏移按
+ * (bpm/60)² 缩放（bpm=120 时放大 4 倍，bpm=60 时恰好相等而被掩盖）。
  * 结果可能为负（如单音符 contextPadding 在音符前垫了 1 拍休止），applyMelPostprocess
  * 的 sample() 会向 0 夹紧，边界换算同样成立。
  *
@@ -109,13 +114,22 @@ function _toFloatArray(v, max) {
 function computeMelFrameOffset(opts, absFirstNoteBeat, fps) {
   if (!opts || !Number.isFinite(opts.startBeat) || !(opts.bpm > 0) || !(fps > 0)) return 0;
   if (!Number.isFinite(absFirstNoteBeat)) return 0;
-  return Math.round((absFirstNoteBeat - opts.startBeat) * (opts.bpm / 60) * fps);
+  return Math.round((absFirstNoteBeat - opts.startBeat) * (60 / opts.bpm) * fps);
 }
+
+// 高斯核缓存：σ 来自曲线采样，同一个分片内每帧都不同，但半径只由 ceil(3σ) 决定，
+// 逐帧重建核（含 exp() 与归一化）是纯浪费。按 σ 量化到 0.01 缓存复用 —— 该精度
+// 远低于听感可辨差异，不会改变输出。
+const _kernelCache = new Map();
+const _KERNEL_CACHE_MAX = 64;
 
 /** 一维归一化高斯核（半径 = ceil(3σ)，σ≤0 返回 null）。 */
 function gaussianKernel1D(sigma) {
   const s = Number(sigma);
   if (!(s > 0)) return null;
+  const key = Math.round(s * 100);
+  const hit = _kernelCache.get(key);
+  if (hit) return hit;
   const radius = Math.max(1, Math.ceil(s * 3));
   const kernel = new Float32Array(radius * 2 + 1);
   let sum = 0;
@@ -125,6 +139,10 @@ function gaussianKernel1D(sigma) {
     sum += w;
   }
   for (let i = 0; i < kernel.length; i++) kernel[i] /= sum;
+  // 简单 FIFO：满了就整体清空。缓存项很小（≤49 个 float），重建成本低于
+  // 维护 LRU 的复杂度。
+  if (_kernelCache.size >= _KERNEL_CACHE_MAX) _kernelCache.clear();
+  _kernelCache.set(key, kernel);
   return kernel;
 }
 
@@ -138,6 +156,35 @@ function _reflectIndex(i, len) {
   return idx;
 }
 
+// 镜像索引表缓存：模糊内层每帧每 bin 都要算 (2r+1) 次 _reflectIndex，
+// 40000 帧 × 128 bin × 49 taps ≈ 2.5 亿次调用。表化后变成一次查表。
+// 表本身 len × taps 个 int32，用条目数上限兜住内存（默认 ≤2M 条目 ≈ 8MB）。
+const _reflectTables = new Map();
+const _REFLECT_TABLE_MAX = 4;
+const _REFLECT_TABLE_MAX_ENTRIES = 2 * 1024 * 1024;
+
+/**
+ * 取 [len][tap] 的镜像索引表；过大时返回 null（调用方退回逐次 _reflectIndex）。
+ * @returns {Int32Array|null}
+ */
+function _reflectTable(len, radius) {
+  const taps = radius * 2 + 1;
+  if (len <= 0 || len * taps > _REFLECT_TABLE_MAX_ENTRIES) return null;
+  const key = `${len}:${radius}`;
+  const hit = _reflectTables.get(key);
+  if (hit) return hit;
+  const table = new Int32Array(len * taps);
+  for (let i = 0; i < len; i++) {
+    const base = i * taps;
+    for (let k = -radius; k <= radius; k++) {
+      table[base + (k + radius)] = _reflectIndex(i + k, len);
+    }
+  }
+  if (_reflectTables.size >= _REFLECT_TABLE_MAX) _reflectTables.clear();
+  _reflectTables.set(key, table);
+  return table;
+}
+
 /**
  * 沿时间轴高斯平滑（边界镜像延拓），返回新数组。
  * @param {Float32Array} mel [frame, bin] 展平
@@ -149,14 +196,23 @@ function blurAlongTime(mel, frames, dim, sigma) {
   const kernel = gaussianKernel1D(sigma);
   if (!kernel || frames <= 1) return new Float32Array(mel);
   const radius = (kernel.length - 1) / 2;
+  const taps = radius * 2 + 1;
+  const table = _reflectTable(frames, radius);
   const out = new Float32Array(mel.length);
   for (let f = 0; f < frames; f++) {
     const base = f * dim;
+    const tBase = table ? f * taps : 0;
     for (let b = 0; b < dim; b++) {
       let acc = 0;
-      for (let k = -radius; k <= radius; k++) {
-        const sf = _reflectIndex(f + k, frames);
-        acc += kernel[k + radius] * mel[sf * dim + b];
+      if (table) {
+        for (let k = 0; k < taps; k++) {
+          acc += kernel[k] * mel[table[tBase + k] * dim + b];
+        }
+      } else {
+        for (let k = -radius; k <= radius; k++) {
+          const sf = _reflectIndex(f + k, frames);
+          acc += kernel[k + radius] * mel[sf * dim + b];
+        }
       }
       out[base + b] = acc;
     }
@@ -169,14 +225,24 @@ function blurAlongFreq(mel, frames, dim, sigma) {
   const kernel = gaussianKernel1D(sigma);
   if (!kernel || dim <= 1) return new Float32Array(mel);
   const radius = (kernel.length - 1) / 2;
+  const taps = radius * 2 + 1;
+  // dim 固定 128，表一定建得出来，且帧间完全复用
+  const table = _reflectTable(dim, radius);
   const out = new Float32Array(mel.length);
   for (let f = 0; f < frames; f++) {
     const base = f * dim;
     for (let b = 0; b < dim; b++) {
       let acc = 0;
-      for (let k = -radius; k <= radius; k++) {
-        const sb = _reflectIndex(b + k, dim);
-        acc += kernel[k + radius] * mel[base + sb];
+      if (table) {
+        const tBase = b * taps;
+        for (let k = 0; k < taps; k++) {
+          acc += kernel[k] * mel[base + table[tBase + k]];
+        }
+      } else {
+        for (let k = -radius; k <= radius; k++) {
+          const sb = _reflectIndex(b + k, dim);
+          acc += kernel[k + radius] * mel[base + sb];
+        }
       }
       out[base + b] = acc;
     }
@@ -264,31 +330,34 @@ function applyMelPostprocess(mel, frameCount, dim, options, frameOffset = 0) {
 
   let out = mel;
 
+  // 混合阶段把结果**原地写回 blurred**，不再另开一份 mixed。
+  // 一份 mel = frameCount × dim × 4B，40000 帧 × 128 bin ≈ 20MB；原本时间/频率
+  // 两个方向各要多分配一份，长分片下是明显的 GC 压力。
+  // blurAlongTime/Freq 的返回值恒为新数组（即使 kernel 为 null 也返回
+  // new Float32Array(mel) 的拷贝），所以写回它不会动到入参 mel。
   if (options.maxSigmaT > 0 && options.sigmaT) {
     const blurred = blurAlongTime(mel, frameCount, dim, options.maxSigmaT);
-    const mixed = new Float32Array(mel.length);
     for (let f = 0; f < frameCount; f++) {
       const w = Math.max(0, Math.min(1, sample(options.sigmaT, frameOffset + f) / options.maxSigmaT));
       const base = f * dim;
       for (let b = 0; b < dim; b++) {
-        mixed[base + b] = mel[base + b] + (blurred[base + b] - mel[base + b]) * w;
+        blurred[base + b] = mel[base + b] + (blurred[base + b] - mel[base + b]) * w;
       }
     }
-    out = mixed;
+    out = blurred;
   }
 
   if (options.maxSigmaF > 0 && options.sigmaF) {
     const src = out;
     const blurred = blurAlongFreq(src, frameCount, dim, options.maxSigmaF);
-    const mixed = new Float32Array(src.length);
     for (let f = 0; f < frameCount; f++) {
       const w = Math.max(0, Math.min(1, sample(options.sigmaF, frameOffset + f) / options.maxSigmaF));
       const base = f * dim;
       for (let b = 0; b < dim; b++) {
-        mixed[base + b] = src[base + b] + (blurred[base + b] - src[base + b]) * w;
+        blurred[base + b] = src[base + b] + (blurred[base + b] - src[base + b]) * w;
       }
     }
-    out = mixed;
+    out = blurred;
   }
 
   if (options.maxBlend > 0 && options.boundaries && options.boundaries.length > 0) {

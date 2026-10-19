@@ -1543,6 +1543,16 @@ export async function runExportJob(opts) {
           cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
           dynamicThresholdEnabled: opts.dynamicThresholdEnabled,
           dynamicThresholdPercentile: opts.dynamicThresholdPercentile,
+          // 频谱后处理（音色 → 频谱曲线）：必须与 playAll 的两处一致下发，
+          // 否则「导出全部」会静默丢弃 specBlend / specSmoothT / specSmoothF，
+          // 导出音频与主窗口播放、分片编辑器预览听感不一致。
+          melPostprocess: buildMelPostprocessPayload(
+            fragment.postprocess || null,
+            clippedNotes,
+            state.project.bpm,
+            SAMPLE_RATE,
+            SVS_HOP_SIZE,
+          ),
         }, singer),
       });
 

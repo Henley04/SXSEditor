@@ -282,14 +282,28 @@ describe('melPostprocess 窗口化处理与参数钳制', () => {
 
   it('computeMelFrameOffset：绝对拍 → 载荷帧偏移（含负值与缺锚点回退 0）', () => {
     const opts = normalizeMelPostprocessOptions({ frames: 4, sigmaT: [1, 1, 1, 1], startBeat: 2, bpm: 120 });
-    // fps = 24000/480 = 50：(4-2)拍 × (120/60)s/拍 × 50帧/s = 200
-    expect(computeMelFrameOffset(opts, 4, 50)).to.equal(200);
+    // fps = 24000/480 = 50，120 bpm → 1 拍 = 60/120 = 0.5s：
+    // (4-2)拍 × 0.5s/拍 × 50帧/s = 50
+    expect(computeMelFrameOffset(opts, 4, 50)).to.equal(50);
     // 单音符 contextPadding：mel 从拍 0 开始（比锚点早 2 拍）→ 负偏移
-    expect(computeMelFrameOffset(opts, 0, 50)).to.equal(-200);
+    expect(computeMelFrameOffset(opts, 0, 50)).to.equal(-50);
     expect(computeMelFrameOffset(opts, 2, 50)).to.equal(0);
     // 旧载荷（无 startBeat/bpm）→ 0，行为不变
     const legacy = normalizeMelPostprocessOptions({ frames: 4, sigmaT: [1, 1, 1, 1] });
     expect(computeMelFrameOffset(legacy, 100, 50)).to.equal(0);
     expect(computeMelFrameOffset(null, 100, 50)).to.equal(0);
+  });
+
+  it('computeMelFrameOffset：拍→秒方向正确（bpm=60 与 bpm=120 的对照）', () => {
+    // 回归保护：拍→秒是 ×(60/bpm)，不是 ×(bpm/60)。
+    // bpm=60 时两者数值相等，正是这个 bug 长期未被发现的原因，因此必须
+    // 用一个 bpm≠60 的用例把方向钉住。
+    const slow = normalizeMelPostprocessOptions({ frames: 4, sigmaT: [1, 1, 1, 1], startBeat: 0, bpm: 60 });
+    const fast = normalizeMelPostprocessOptions({ frames: 4, sigmaT: [1, 1, 1, 1], startBeat: 0, bpm: 120 });
+    // 60 bpm：1 拍 = 1s → 2 拍 = 2s = 100 帧
+    expect(computeMelFrameOffset(slow, 2, 50)).to.equal(100);
+    // 120 bpm：1 拍 = 0.5s → 同样 2 拍只有一半时长 = 50 帧
+    // （若系数写反 ×(bpm/60)，这里会得到 200，即放大 (bpm/60)² = 4 倍）
+    expect(computeMelFrameOffset(fast, 2, 50)).to.equal(50);
   });
 });
