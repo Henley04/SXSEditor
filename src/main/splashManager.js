@@ -160,9 +160,20 @@ function createSplashWindow() {
   // No webContents exists on this window: no preload to compile, no HTML to
   // parse, no navigation to block. The renderer attack surface is gone rather
   // than configured away.
-  splashView = new ImageView();
-  splashView.setImage(image);
-  splashWindow.setContentView(splashView);
+  try {
+    splashView = new ImageView();
+    splashView.setImage(image);
+    splashWindow.setContentView(splashView);
+  } catch (err) {
+    // 视图构建失败必须仍然标记 ready 并放弃 splash，否则 waitForSplashReady()
+    // 的等待者会挂住（见该函数的超时说明）。这里直接把 splash 退化成"无 splash"。
+    console.warn('[splash] 启动画面视图创建失败，跳过:', err && err.message);
+    try { splashWindow.destroy(); } catch (_) {}
+    splashWindow = null;
+    splashView = null;
+    markSplashReady();
+    return null;
+  }
   splashWindow.on('closed', () => {
     splashWindow = null;
     splashView = null;
@@ -188,11 +199,27 @@ function getSplashReadyAt() {
 // main window is revealed, even when the minimum visible duration is 0.
 // Resolves immediately if the splash has already painted, was never created,
 // or has been destroyed.
-function waitForSplashReady() {
+function waitForSplashReady(timeoutMs = 1500) {
   if (splashReadyAt > 0) return Promise.resolve();
   if (!splashWindow || splashWindow.isDestroyed()) return Promise.resolve();
+  // 超时兜底（必需）：只有 createSplashWindow() 走到 markSplashReady() 时这个
+  // promise 才会被 resolve。若 new BaseWindow / new ImageView / setContentView
+  // 在中途抛错，splashWindow 已赋值但 ready 永远不会标记，这里就会永久挂起。
+  //
+  // 为什么以前没暴露：这条 await 原只存在于 did-finish-load 分支，而
+  // ready-to-show 几乎总是先到并直接显示窗口，等于死代码。现在 ready-to-show
+  // 也走同一路径，它就变成了主窗口显示的唯一闸门 —— 没有任何超时的话，
+  // splash 出一次异常就等于应用永远停在启动画面。
   return new Promise((resolve) => {
-    splashReadyResolvers.push(resolve);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    splashReadyResolvers.push(finish);
+    const timer = setTimeout(finish, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
   });
 }
 

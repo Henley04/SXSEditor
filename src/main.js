@@ -471,6 +471,27 @@ app.whenReady().then(() => {
     setTimeout(runHeavyStartup, 0);
   }
 
+  // 兜底（必需）：重型 IPC 的注册现在挂在"窗口已显示"这个事件之后，如果窗口
+  // 因为任何原因没有显示（渲染进程崩溃、加载卡住、splash 逻辑异常），
+  // runHeavyStartup 就永远不会跑 —— 而 preload 的 invokeHeavy 会一直 await
+  // APP_WAIT_FOR_HEAVY_IPC，表现为所有合成/设置类操作无声挂起。
+  // 此前用 setImmediate 时不存在这个风险（不管窗口如何都会执行），所以这条
+  // 兜底是本轮改动必须配套的。
+  // 5s 足以覆盖正常启动（正常路径下 reveal 远早于此，标志位会让兜底变成空操作）。
+  const HEAVY_STARTUP_FALLBACK_MS = 5000;
+  const heavyFallbackTimer = setTimeout(() => {
+    if (!_revealed) {
+      console.warn('[Main] Main window not revealed within timeout, forcing reveal');
+      revealMainWindow();
+    }
+    if (!_heavyScheduled) {
+      console.warn('[Main] Heavy IPC startup fallback triggered');
+      scheduleHeavyStartup();
+    }
+  }, HEAVY_STARTUP_FALLBACK_MS);
+  // 不要因为这个兜底定时器拖住进程退出（正常路径下它到点就是空操作）
+  if (typeof heavyFallbackTimer.unref === 'function') heavyFallbackTimer.unref();
+
   // 主窗口渲染进程就绪后：先显示窗口，再后台完成硬件检测和设备校验
   // （此前此处 await detectAllHardware() 会阻塞主窗口显示，因为完整
   //  systeminformation GPU 检测可能耗时数秒甚至 ~9s。现将窗口显示与

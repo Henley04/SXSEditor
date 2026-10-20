@@ -187,11 +187,15 @@ export function medianFilterFrames(f0, window, maxWindow) {
     // 锚点值经 quantizeParamValue 保证是奇数，但**曲线插值**会产生偶数或小数
     // （如 3→9 之间插出 4.4），这里统一奇数化，使实际窗口与注册表 odd:true
     // 的语义严格一致，也让面板读数等于真实窗口。
+    // 小于 3 的窗口无意义（1 帧就是原值，2 帧会退化成取端点）→ 不处理。
+    // 判据用**取整后**的值，与旧实现完全等价：
+    //   2.4 → round 2 → 跳过；2.5 → round 3 → 3 帧；4.4 → round 4 → 奇数化 5 → 5 帧。
+    // 奇数化只修正"偶数 size 被实现按 2·floor(size/2)+1 放大成 size+1"这一隐式
+    // 行为，使注册表里的 size 读数等于真实窗口，不改变任何一档实际窗口。
     let size = Math.round(n);
+    if (size < 3) return 0;
     if (size % 2 === 0) size += 1;
     const maxW = maxWindow ?? 9;
-    // 小于 3 的窗口无意义（1 帧就是原值，2 帧会退化成取端点）→ 不处理
-    if (size < 3) return 0;
     return Math.min(maxW, size);
   };
   const scratch = [];
