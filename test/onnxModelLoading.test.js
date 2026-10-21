@@ -12,6 +12,9 @@
 //
 // 运行方式:
 //   npx mocha --require ./test/setup.js "test/onnxModelLoading.test.js" --timeout 120000
+//
+// 注：DUMMY_TEST_INPUTS_FP32 的键名校验是纯 JS 用例、不需要 GPU/模型文件，已拆到
+//   test/modelLoaderDummyInputs.test.js，以便在 `npm run test:ci`（--ignore 本文件）中仍被执行。
 
 const { expect } = require('chai');
 const path = require('path');
@@ -499,33 +502,9 @@ describe('ONNX Model Loading and Validation (JS端)', function () {
     }
   });
 
-  // ========== 5. DUMMY_TEST_INPUTS 一致性验证 ==========
-  describe('5. DUMMY_TEST_INPUTS consistency', () => {
-    let DUMMY_TEST_INPUTS_FP32;
-
-    before(() => {
-      // modelLoader.js 依赖 electron 和 systeminformation，在测试环境中可能无法直接 require
-      // 用 try-catch 保护
-      try {
-        const mod = require('../src/inference/pipeline/modelLoader');
-        DUMMY_TEST_INPUTS_FP32 = mod.DUMMY_TEST_INPUTS_FP32;
-      } catch (_e) {
-        // electron 不可用时跳过此 describe
-        DUMMY_TEST_INPUTS_FP32 = null;
-      }
-    });
-
-    it('melTransform dummy input should use key "audio" (not "waveform")', function () {
-      if (!DUMMY_TEST_INPUTS_FP32) this.skip('modelLoader.js not loadable (electron dependency)');
-      expect(DUMMY_TEST_INPUTS_FP32.melTransform, 'melTransform should exist in DUMMY_TEST_INPUTS_FP32').to.exist;
-      expect(DUMMY_TEST_INPUTS_FP32.melTransform, 'melTransform should have "audio" key').to.have.property('audio');
-      expect(DUMMY_TEST_INPUTS_FP32.melTransform, 'melTransform should NOT have "waveform" key').to.not.have.property('waveform');
-    });
-  });
-
-  // ========== 6. 动态形状验证（seq_len 可变）==========
+  // ========== 5. 动态形状验证（seq_len 可变）==========
   // 验证模型接受不同 seq_len 输入（生产场景: 歌词 token 数 = 127）
-  describe('6. Dynamic Shape Validation (variable seq_len)', () => {
+  describe('5. Dynamic Shape Validation (variable seq_len)', () => {
     const testCases = [
       { name: 'note_text_encoder', file: 'note_text_encoder.onnx', seqLen: 127, inputKey: 'input_ids', outputKey: 'embeddings', embedDim: EMBED_DIM, dtype: 'int64' },
       { name: 'preflow', file: 'preflow.onnx', seqLen: 50, inputKey: 'features', outputKey: 'processed_features', embedDim: EMBED_DIM, dtype: 'float32' },

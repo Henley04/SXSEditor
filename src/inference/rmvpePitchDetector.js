@@ -185,12 +185,18 @@ class RmvpePitchDetector {
 
     const rawF0 = new Float32Array(timeFrames);
 
+    // P8: argmax 已经是单层循环（每帧只扫一遍 N_CLASS），但 timeFrames × 2560
+    // 次比较是纯同步的，长音频会在主进程里阻塞上百毫秒。这里按块让出事件循环：
+    // 不引入 worker（调用方在主进程 async 路径上），只 setImmediate 让 IPC /
+    // 渲染进程消息有机会执行。
+    const ARGMAX_CHUNK_FRAMES = 128;
     for (let t = 0; t < timeFrames; t++) {
       let maxProb = -Infinity;
       let maxIndex = 0;
+      const base = t * N_CLASS;
 
       for (let c = 0; c < N_CLASS; c++) {
-        const prob = pitchData[t * N_CLASS + c];
+        const prob = pitchData[base + c];
         if (prob > maxProb) {
           maxProb = prob;
           maxIndex = c;
@@ -198,6 +204,10 @@ class RmvpePitchDetector {
       }
 
       rawF0[t] = this._f0Lut[maxIndex];
+
+      if ((t & (ARGMAX_CHUNK_FRAMES - 1)) === ARGMAX_CHUNK_FRAMES - 1 && t + 1 < timeFrames) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
     }
 
     const interpolatedF0 = RmvpePitchDetector.interpolateF0(

@@ -22,7 +22,7 @@ import { createIcon } from '../icons/iconHelper.js';
 
 // ==================== 常量 ====================
 
-function resampleForExport(interleaved, sourceRate, targetRate, channels) {
+export function resampleForExport(interleaved, sourceRate, targetRate, channels) {
   if (sourceRate === targetRate) return interleaved;
   const sourceFrames = Math.floor(interleaved.length / channels);
   const targetFrames = Math.max(1, Math.round(sourceFrames * targetRate / sourceRate));
@@ -63,21 +63,30 @@ export async function openExportDialog() {
   const fullCleanup = () => {
     cleanupFns.forEach(fn => { try { fn(); } catch (_) {} });
     cleanupFns.length = 0;
+    if (overlay) {
+      // 进度视图的已用时计时器挂在节点上，必须显式停止，否则关窗后 interval 继续跑。
+      const progressView = overlay.querySelector('.export-dialog-progress');
+      if (progressView && typeof progressView._stopElapsedTimer === 'function') {
+        try { progressView._stopElapsedTimer(); } catch (_) {}
+      }
+    }
     if (overlay && overlay.parentElement) overlay.remove();
     overlay = null;
     _dialogOpen = false;
   };
 
   try {
-    // 早期检查：分片与音符
+    // 早期检查：既无分片又无伴奏轨才拒绝（仅伴奏轨工程可导出纯伴奏 WAV，
+    // runExportJob 已支持该路径）。
     const fragments = trackManager.getFragments();
-    if (fragments.length === 0) {
+    const hasAccompaniment = trackManager.getSingers().some(s => s.type === 'accompaniment');
+    if (fragments.length === 0 && !hasAccompaniment) {
       _dialogOpen = false;
       showAlertDialog(t('main.exportDialog.noFragments'));
       return;
     }
     const hasNotes = fragments.some(f => f.notes && f.notes.length > 0);
-    if (!hasNotes) {
+    if (!hasNotes && !hasAccompaniment) {
       _dialogOpen = false;
       showAlertDialog(t('main.exportDialog.noNotes'));
       return;
@@ -92,7 +101,7 @@ export async function openExportDialog() {
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
       exportCfgRescale: settings.exportCfgRescale ?? 0.7,
-      exportSampler: settings.exportSampler || 'euler',
+      exportSampler: settings.exportSampler || 'stork2',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : false,
       outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
       outputBitDepth: [16, 24, 32].includes(settings.exportBitDepth) ? settings.exportBitDepth : 32,
@@ -481,7 +490,7 @@ function buildParamsSection(form) {
   for (const opt of bitDepthOptions) {
     const option = document.createElement('option');
     option.value = String(opt.value);
-    option.textContent = `${t(opt.labelKey)}${opt.value === 32 ? ` (${t('main.exportDialog.sampleRateDefault')})` : ''}`;
+    option.textContent = `${t(opt.labelKey)}${opt.value === 32 ? ` (${t('main.exportDialog.bitDepthDefault')})` : ''}`;
     bitDepthSelect.appendChild(option);
   }
   bitDepthSelect.value = String(form.outputBitDepth);
@@ -1145,7 +1154,7 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
   timeEl.className = 'export-dialog-field-hint';
   timeEl.style.textAlign = 'center';
   timeEl.style.marginTop = '8px';
-  timeEl.textContent = t('main.exportDialog.elapsed', { time: '0.0s' }) || '已用时 0.0s';
+  timeEl.textContent = t('main.exportDialog.elapsed', { time: '0.0s' });
   progressView.appendChild(timeEl);
 
   // 调整 panel 高度以适应进度视图
@@ -1154,11 +1163,10 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
   const t0 = performance.now();
   let timerId = setInterval(() => {
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-    timeEl.textContent = (t('main.exportDialog.elapsed', { time: elapsed + 's' }) || `已用时 ${elapsed}s`);
+    timeEl.textContent = t('main.exportDialog.elapsed', { time: elapsed + 's' });
   }, 200);
   const stopTimer = () => { if (timerId) { clearInterval(timerId); timerId = null; } };
-  // 清理时需停表，避免泄漏
-  const _origRemove = progressView.remove.bind(progressView);
+  // 挂到进度视图节点上，由 fullCleanup 在关窗时统一停表，避免 interval 泄漏。
   progressView._stopElapsedTimer = stopTimer;
 
   const setProgress = (pct) => {
@@ -1295,7 +1303,7 @@ function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, f
   const metaEl = document.createElement('div');
   metaEl.className = 'export-dialog-field-hint';
   metaEl.style.textAlign = 'center';
-  metaEl.textContent = `${formatDuration(maxDuration)} · ${fragmentCount} fragments`;
+  metaEl.textContent = `${formatDuration(maxDuration)} · ${t('main.exportDialog.fragmentCount', { count: fragmentCount })}`;
   result.appendChild(metaEl);
 
   // Footer 按钮

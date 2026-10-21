@@ -110,6 +110,7 @@ function updatePitchToolButtons() {
 
 export function updateFragmentPlayButton() {
   const btnPlayFragment = document.getElementById('btn-play-fragment');
+  if (!btnPlayFragment) return;
   if (getFragmentIsSynthesizing()) {
     setLabel(btnPlayFragment, t('fragment.synthesizing'), { icon: 'play' });
     btnPlayFragment.disabled = true;
@@ -180,19 +181,22 @@ export function setupUiControls() {
     });
   }
 
-  document.getElementById('btn-pitch-reset').addEventListener('click', () => {
-    const oldSnapshot = clonePitchCurveState();
-    getPitchCurve().anchorPoints = [];
-    getPitchCurve().brushSegments = [];
-    invalidatePitchCurveCache();
-    const newSnapshot = clonePitchCurveState();
-    history.push({
-      undo() { applyPitchCurveSnapshot(oldSnapshot); },
-      redo() { applyPitchCurveSnapshot(newSnapshot); }
+  const btnPitchReset = document.getElementById('btn-pitch-reset');
+  if (btnPitchReset) {
+    btnPitchReset.addEventListener('click', () => {
+      const oldSnapshot = clonePitchCurveState();
+      getPitchCurve().anchorPoints = [];
+      getPitchCurve().brushSegments = [];
+      invalidatePitchCurveCache();
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(oldSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      render();
+      scheduleAutoSave();
     });
-    render();
-    scheduleAutoSave();
-  });
+  }
 
   const brushSmoothingSlider = document.getElementById('brush-smoothing');
   const brushSmoothingLabel = document.getElementById('brush-smoothing-label');
@@ -209,16 +213,19 @@ export function setupUiControls() {
   // 编辑后自动同步到主页面并触发主页面 autoSaveProject()，无需手动保存。
   // Ctrl+S 快捷键仍保留为"立即保存"（取消防抖立即推送），见 eventHandlers.js。
 
-  document.getElementById('btn-close').addEventListener('click', () => {
-    stopFragmentPlayback();
-    const autoSaveTimer = getAutoSaveTimer();
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      setAutoSaveTimer(null);
-    }
-    saveFragmentData();
-    window.close();
-  });
+  const btnClose = document.getElementById('btn-close');
+  if (btnClose) {
+    btnClose.addEventListener('click', () => {
+      stopFragmentPlayback();
+      const autoSaveTimer = getAutoSaveTimer();
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer);
+        setAutoSaveTimer(null);
+      }
+      saveFragmentData();
+      window.close();
+    });
+  }
 
   const shortcutsOverlay = document.getElementById('shortcuts-overlay');
   const btnShortcuts = document.getElementById('btn-shortcuts');
@@ -236,42 +243,47 @@ export function setupUiControls() {
   const btnExportFragment = document.getElementById('btn-export-fragment');
   const btnExportFragmentMidi = document.getElementById('btn-export-fragment-midi');
 
-  btnPlayFragment.addEventListener('click', async () => {
-    if (getNotes().length === 0) {
-      showAlertDialog(t('fragment.noNotesToPlay'));
-      return;
-    }
-    if (getFragmentIsSynthesizing()) return;
-    if (getFragmentIsPlaying()) {
-      stopFragmentPlayback();
-      setFragmentCurrentTime(0);
-      // 停止时重置播放起始位置，下次点击播放从头开始。
-      // 用户可再次拖拽 playhead 设置新的起始位置。
-      setFragmentPlayStartPosition(0);
-      render();
-      return;
-    }
-    await playFragment();
-  });
+  if (btnPlayFragment) {
+    btnPlayFragment.addEventListener('click', async () => {
+      if (getNotes().length === 0) {
+        showAlertDialog(t('fragment.noNotesToPlay'));
+        return;
+      }
+      if (getFragmentIsSynthesizing()) return;
+      if (getFragmentIsPlaying()) {
+        stopFragmentPlayback();
+        setFragmentCurrentTime(0);
+        // 停止时重置播放起始位置，下次点击播放从头开始。
+        // 用户可再次拖拽 playhead 设置新的起始位置。
+        setFragmentPlayStartPosition(0);
+        render();
+        return;
+      }
+      await playFragment();
+    });
+  }
 
-  btnExportFragment.addEventListener('click', async () => {
-    if (getNotes().length === 0) {
-      showAlertDialog(t('fragment.noNotesToExport'));
-      return;
-    }
-    await exportFragment();
-  });
+  if (btnExportFragment) {
+    btnExportFragment.addEventListener('click', async () => {
+      if (getNotes().length === 0) {
+        showAlertDialog(t('fragment.noNotesToExport'));
+        return;
+      }
+      await exportFragment();
+    });
+  }
 
   if (btnExportFragmentMidi) {
     btnExportFragmentMidi.addEventListener('click', exportFragmentMidi);
   }
 
-  document.getElementById('btn-import-midi').addEventListener('click', async () => {
+  const btnImportMidi = document.getElementById('btn-import-midi');
+  if (btnImportMidi) btnImportMidi.addEventListener('click', async () => {
     try {
       const result = await window.electronAPI.importMidi();
       if (!result.success) {
         if (!result.canceled) {
-          showAlertDialog(t('fragment.midiImportFailed') + ': ' + (result.error || '未知错误'));
+          showAlertDialog(t('fragment.midiImportFailed') + ': ' + (result.error || t('fragment.unknownError')));
         }
         return;
       }

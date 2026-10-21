@@ -657,7 +657,7 @@ When you press Play, SXSEditor:
 | Diffusion Steps | 16 (default) | 32 (default) |
 | CFG Strength | 3.0 | 3.0 |
 | CFG Rescale | 0.75 | 0.75 |
-| Sampler | Euler (default) | Euler (default) |
+| Sampler | STORK-2 (default) | STORK-2 (default) |
 
 Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings. The Sampler (diffusion ODE solver) is also configurable per path — see [Diffusion Sampler](#diffusion-sampler).
 
@@ -821,7 +821,7 @@ Used when playing back in the editor (fast preview):
 | Diffusion Steps | 16 | 4–64 | Fewer steps = faster, lower quality |
 | CFG Strength | 3.0 | 0–10 | Higher = more aligned with conditions. 0 = skip unconditional prediction (2x speed) |
 | CFG Rescale | 0.75 | 0–1 | Mitigates over-guidance artifacts |
-| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. See [Diffusion Sampler](#diffusion-sampler) below. |
+| Sampler | STORK-2 | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: STORK-2). See [Diffusion Sampler](#diffusion-sampler) below. |
 
 #### Export Inference Parameters
 
@@ -832,7 +832,7 @@ Used when exporting WAV files (high quality):
 | Diffusion Steps | 32 | 4–64 | More steps = higher quality |
 | CFG Strength | 3.0 | 0–10 | Same as preview |
 | CFG Rescale | 0.75 | 0–1 | Same as preview |
-| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. The export dialog also lets you override this per export. |
+| Sampler | STORK-2 | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: STORK-2). The export dialog also lets you override this per export. |
 
 #### Diffusion Sampler
 
@@ -840,10 +840,10 @@ The diffusion model iteratively denoises a mel spectrogram by integrating the fl
 
 | Sampler | NFE / step | Description |
 |---------|------------|-------------|
-| **Euler** (default) | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
+| **Euler** | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
 | **Heun** | 2 | Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating `t > 1`. |
 | **Extrapolated Euler** | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation. Not the full stabilized RK formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Falls back to Euler when extrapolation is unsafe (amplitude / sign-flip / NaN guards). |
-| **STORK-2** | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
+| **STORK-2** (default) | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
 
 > **Note**: Extrapolated Euler and STORK-2 carry cross-step velocity state. In **chunked preview inference** (long fragments split into chunks), this state resets at every chunk boundary, reducing their benefit — for chunked previews, Euler or Heun is usually the safer choice. The sampler setting is stored in `previewSampler` / `exportSampler`; the legacy value `stork` is silently mapped to `extrap` for backward compatibility.
 
@@ -893,25 +893,25 @@ Controls the number of overlapping frames used at vocoder chunk boundaries for s
 
 #### Output Mode
 - **Shared Mode** (WASAPI Shared): Standard Windows audio. Other apps can play audio simultaneously.
-- **Exclusive Mode** (WASAPI Exclusive): Direct hardware access. Lower latency (1–3ms), bit-perfect output, but blocks other apps from using the audio device.
+- **Exclusive Mode** (WASAPI Exclusive): Selectable in Settings for future support, but not implemented in the current version — the decibri backend ignores the exclusive-mode flag and always opens the device in shared mode.
 
 #### Output Device
 - **System Default** or a specific audio device.
-- Exclusive mode only supports WASAPI devices.
+- Playback currently always uses WASAPI shared mode.
 
 #### Sample Rate
 Options: 22050, 24000 (native), 44100, 48000 (default), 96000, 192000 Hz.
 - The default is 48 kHz (changed from 24 kHz in earlier versions). The SVS model runs at 24 kHz internally and the output is upsampled to the selected rate with a band-limited Kaiser windowed-sinc interpolator.
-- In exclusive mode, the device must support the selected rate or it falls back to shared mode.
+- Because playback always runs in shared mode, the app resamples the synthesized audio to the selected rate itself.
 
 #### Bit Depth
 Options: 32-bit Float (recommended), 32-bit Integer, 24-bit Integer, 16-bit Integer.
-- Only applies in exclusive mode.
+- Applies to the playback stream in shared mode too; the backend supports only int16 / float32, so 24-bit and 32-bit Integer fall back to 32-bit Float.
 
 #### Buffer Size
 Options: 64 to 4096 samples.
 - Smaller = lower latency but higher CPU load and risk of audio glitches.
-- Recommended: 256 or below in exclusive mode.
+- Currently not forwarded to the device (the decibri backend ignores buffer size).
 
 #### Master Volume
 Slider from 0% to 100%.

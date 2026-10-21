@@ -240,7 +240,6 @@ const IPC_CHANNELS = {
   SINGER_MARKET_DOWNLOAD: 'singer-market:download',
   SINGER_MARKET_DOWNLOAD_PROGRESS: 'singer-market:download-progress',
   SINGER_MARKET_FILE_DETAIL: 'singer-market:file-detail',
-  SINGER_MARKET_HEALTH: 'singer-market:health',
   SINGER_MARKET_LICENSES: 'singer-market:licenses',
   SINGER_MARKET_LIST: 'singer-market:list',
   SINGER_MARKET_LOGIN: 'singer-market:login',

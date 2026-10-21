@@ -114,16 +114,25 @@ if (typeof global.SVGElement === 'undefined') {
   global.SVGElement = dom.window.SVGElement;
 }
 
-// Mocha root hook 插件，提供 sinon sandbox 自动清理
-let _sinonSandbox;
+// Mocha root hook 插件：每个用例自动创建/销毁一个专用 sinon sandbox。
+//
+// 该 sandbox 挂在 global.__sinonSandbox 上，测试里可这样用：
+//   global.__sinonSandbox.stub(obj, 'fn')   // afterEach 自动 restore
+// 不挂到 global 的话外部拿不到这个对象，这个 hook 就等于死代码。
+//
+// 语义边界（与方案 sinon.restore() 的区别）：
+//   · 只 restore 通过 global.__sinonSandbox 创建的 stub；
+//   · 测试自己 sinon.createSandbox() 建的 sandbox 不受影响（需自行 restore）；
+//   · sinon.stub()/sinon.spy()（默认沙箱）也不受影响 —— 需要自动清理时
+//     请显式改用 global.__sinonSandbox。
 exports.mochaHooks = {
   beforeEach() {
-    _sinonSandbox = sinon.createSandbox();
+    global.__sinonSandbox = sinon.createSandbox();
   },
   afterEach() {
-    if (_sinonSandbox) {
-      _sinonSandbox.restore();
-      _sinonSandbox = null;
+    if (global.__sinonSandbox) {
+      global.__sinonSandbox.restore();
+      global.__sinonSandbox = null;
     }
   },
 };

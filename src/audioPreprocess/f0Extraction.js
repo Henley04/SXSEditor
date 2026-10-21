@@ -40,6 +40,8 @@ export async function extractF0AndPitch() {
 
     if (state.pianoRoll) {
       state.pianoRoll.f0Data = state.f0Data;
+      // 替换 f0 数据后必须失效静态缓存，否则首帧仍绘制旧的缓存层。
+      state.pianoRoll._staticCacheDirty = true;
       state.pianoRoll.render();
       updateMidiInfo();
     }
@@ -47,11 +49,16 @@ export async function extractF0AndPitch() {
     // RMVPE只提取F0，不生成MIDI音符
     const currentNotes = state.pianoRoll ? state.pianoRoll.notes : [];
     const fields = buildSingerFields(currentNotes);
+    // 音频可能被裁剪掉前导静音，singerData 需回到原始时间轴。
+    const trimOffsetMs = Math.floor((state.trimOffsetSec || 0) * 1000);
+    // duration 用面板/卷轴当前 BPM，避免与音符时间轴（已按 effectiveBpm 生成）错位。
+    const effectiveBpm = (state.pianoRoll && state.pianoRoll.bpm) || BPM;
     state.singerData = {
       index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
       language: 'Mandarin',
-      time: [0, Math.floor(state.wavDuration * 1000)],
-      duration: currentNotes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+      time: [trimOffsetMs, trimOffsetMs + Math.floor(state.wavDuration * 1000)],
+      trimOffsetSec: state.trimOffsetSec || 0,
+      duration: currentNotes.map((n) => (n.duration * (60 / effectiveBpm)).toFixed(2)).join(' '),
       text: fields.text,
       phoneme: fields.phoneme,
       note_pitch: currentNotes.map((n) => n.pitch).join(' '),

@@ -22,12 +22,25 @@ function safeName(value) {
   return String(value || 'fragment').replace(/[\\/:*?"<>|]/g, '_').trim() || 'fragment';
 }
 
-export function encodeFragmentMidi(notes, bpm, trackName = 'Fragment') {
+/**
+ * 拍号编码：[numerator, log2(denominator), 24, 8]（24 = MIDI clocks/click,
+ * 8 = 32nd notes per quarter）。缺省回退 4/4，分母取最近的 2 的幂。
+ */
+function timeSignatureBytes(timeSignature) {
+  const num = Number(timeSignature?.[0]);
+  const den = Number(timeSignature?.[1]);
+  const numerator = Number.isFinite(num) && num > 0 ? Math.max(1, Math.min(255, Math.round(num))) : 4;
+  const denominator = Number.isFinite(den) && den > 0 ? Math.round(den) : 4;
+  const dd = Math.max(0, Math.min(7, Math.round(Math.log2(denominator))));
+  return [numerator, dd, 24, 8];
+}
+
+export function encodeFragmentMidi(notes, bpm, trackName = 'Fragment', timeSignature = null) {
   const tempo = Math.max(1, Math.round(60000000 / Math.max(1, Number(bpm) || 120)));
   const events = [
     { tick: 0, order: 0, bytes: meta(0x03, utf8(trackName)) },
     { tick: 0, order: 1, bytes: meta(0x51, [(tempo >>> 16) & 0xff, (tempo >>> 8) & 0xff, tempo & 0xff]) },
-    { tick: 0, order: 2, bytes: meta(0x58, [4, 2, 24, 8]) },
+    { tick: 0, order: 2, bytes: meta(0x58, timeSignatureBytes(timeSignature)) },
   ];
 
   for (const note of notes || []) {
@@ -73,9 +86,9 @@ export async function exportFragmentMidi() {
       filters: [{ name: 'MIDI', extensions: ['mid', 'midi'] }],
     });
     if (result.canceled || !result.filePath) return;
-    const data = encodeFragmentMidi(notes, bpm, name);
+    const data = encodeFragmentMidi(notes, bpm, name, project?.timeSignature);
     const saved = await window.electronAPI.saveFile(result.filePath, data);
-    if (saved && saved.success === false) throw new Error(saved.error || 'Failed to save MIDI');
+    if (saved && saved.success === false) throw new Error(saved.error || t('fragment.midiSaveFailed'));
   } catch (error) {
     console.error('[Fragment MIDI Export]', error);
     showAlertDialog(t('fragment.exportMidiFailedDetail', { detail: error.message || String(error) }));

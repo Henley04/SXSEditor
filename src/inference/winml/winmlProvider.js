@@ -287,11 +287,6 @@ function _syncRegisteredFromDevices() {
         const devices = ortBridge.listDevices();
         for (const d of devices) {
             if (d.epName && !registeredEps.has(d.epName)) registeredEps.add(d.epName);
-            // Also handle vendor qualified names like OpenVINOExecutionProvider.AUTO
-            const base = String(d.epName).split('.')[0];
-            if (base && !registeredEps.has(base) && (base === 'OpenVINOExecutionProvider' || base === 'NvTensorRTRTXExecutionProvider')) {
-                // Do not auto-add base for AUTO variants, but devices list will contain base already when EP registered
-            }
         }
     } catch (_) {}
 }
@@ -374,8 +369,8 @@ async function ensureEpsRegistered(epNames) {
         return registeredEps.size > 0;
     }
     if (registrationAttempted && now - _lastAttemptAt < RETRY_COOLDOWN_MS) {
-        if (!_emptyReasonLogged) {
-            _emptyReasonLogged = true;
+        if (!_cooldownLogged) {
+            _cooldownLogged = true;
             console.log('[WinML] EP registration cooling down; models in this batch will use DML/CPU');
         }
         return registeredEps.size > 0;
@@ -459,11 +454,15 @@ async function ensureEpsRegistered(epNames) {
     return registeredEps.size > 0;
 }
 
+// R24: 拆成两个标志 —— 一个标志同时抑制"gate 关闭/无可用 EP"和"注册冷却中"
+// 两条完全不同的日志，先命中的那条会把另一条永久吞掉。
+let _emptyReasonLogged = false;
+let _cooldownLogged = false;
+
 /**
  * Ordered WinML EP candidates for this model kind.
  * @returns {Promise<Array<{epName:string, indices:number[]}>>}
  */
-let _emptyReasonLogged = false;
 async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
     if (!isWinmlEnabled()) {
         if (!_emptyReasonLogged) {
@@ -643,6 +642,7 @@ function __resetForTest() {
     registrationAttempted = false;
     _lastAttemptAt = 0;
     _emptyReasonLogged = false;
+    _cooldownLogged = false;
     _readyEpLibrariesPromise = null;
     _readyEpLibrariesCache = null;
 }

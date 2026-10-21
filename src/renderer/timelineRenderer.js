@@ -30,8 +30,59 @@ function formatAccompanimentDuration(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Grid is rendered directly into the viewport-sized canvas.
-export function invalidateGridCache() {}
+// 网格层离屏缓存：网格只依赖 zoom / 滚动位置 / 主题配色 / 视口尺寸 /
+// 拍号与 DPR，逐帧重绘纯属浪费。缓存一张视口大小的离屏 canvas，
+// 任一依赖变化即重建（键里全部覆盖；theme:changed 亦会显式置空）。
+let _gridCache = null;
+
+export function invalidateGridCache() {
+  _gridCache = null;
+}
+
+function _gridLayerKey(beatWidth, totalBeats, viewportWidth, viewportHeight, dpr, beatsPerMeasure, colors) {
+  return [
+    beatWidth, totalBeats, viewportWidth, viewportHeight, dpr, beatsPerMeasure,
+    state.fragmentScrollX, state.fragmentScrollY,
+    colors.bgApp, colors.gridLineMeasure, colors.gridLineMajor, colors.timeText,
+  ].join('|');
+}
+
+function _buildGridLayer(key, view) {
+  // 复用同一张离屏 canvas（滚动导致键变化时只重绘，不重新分配）。
+  const canvas = _gridCache?.canvas || document.createElement('canvas');
+  const pixelW = Math.max(1, Math.round(view.viewportWidth * view.dpr));
+  const pixelH = Math.max(1, Math.round(view.viewportHeight * view.dpr));
+  if (canvas.width !== pixelW) canvas.width = pixelW;
+  if (canvas.height !== pixelH) canvas.height = pixelH;
+  const g = canvas.getContext('2d');
+  if (!g) return { canvas, key };
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, pixelW, pixelH);
+  g.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  g.translate(-view.viewLeft, -view.viewTop);
+
+  g.fillStyle = view.colors.bgApp;
+  g.fillRect(view.viewLeft, view.viewTop, view.viewportWidth, view.viewportHeight);
+  g.lineWidth = 1;
+  const firstBeat = Math.max(0, Math.floor(view.viewLeft / view.beatWidth));
+  const lastBeat = Math.min(view.totalBeats, Math.ceil(view.viewRight / view.beatWidth));
+  for (let i = firstBeat; i <= lastBeat; i++) {
+    const x = i * view.beatWidth;
+    const isMeasureLine = (i % view.beatsPerMeasure === 0);
+    g.strokeStyle = isMeasureLine ? view.colors.gridLineMeasure : view.colors.gridLineMajor;
+    g.beginPath();
+    g.moveTo(x, view.viewTop);
+    g.lineTo(x, view.viewBottom);
+    g.stroke();
+    if (isMeasureLine && HEADER_HEIGHT >= view.viewTop) {
+      const measureNum = Math.floor(i / view.beatsPerMeasure) + 1;
+      g.fillStyle = view.colors.timeText;
+      g.font = '10px sans-serif';
+      g.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
+    }
+  }
+  return { canvas, key };
+}
 
 // ---------------------------------------------------------------------------
 // 渲染期复用缓存
@@ -315,10 +366,9 @@ function drawClippedText(ctx, text, x, y, maxWidth, clipRect) {
   ctx.restore();
 }
 
-export function syncFragmentScroll() {
-  const singers = trackManager.getSingers();
-  const fragments = trackManager.getFragments();
-  const beatWidth = getBeatWidth();
+// 时间轴尺寸的唯一计算入口：syncFragmentScroll 与 renderFragmentTimeline
+// 都需要 totalBeats / 虚拟宽度 / 内容高度，抽一次避免两处重复遍历与漂移。
+function _computeTimelineMetrics(singers, fragments, beatWidth) {
   const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
   const accompanimentMaxBeat = singers.reduce((max, singer) => {
     if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
@@ -328,20 +378,39 @@ export function syncFragmentScroll() {
   }, 0);
   const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
-  const canvasWidth = totalBeats * beatWidth;
-  const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-  const containerW = dom.fragmentContainer.clientWidth;
-  const containerH = dom.fragmentContainer.clientHeight;
+  return {
+    beatWidth,
+    totalBeats,
+    canvasWidth: totalBeats * beatWidth,
+    contentHeight: singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT,
+  };
+}
 
-  state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, canvasWidth - containerW));
-  state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, canvasHeight - containerH));
+let _lastCanvasTransform = '';
+
+export function syncFragmentScroll(metrics) {
+  let m = metrics;
+  if (!m) {
+    const singers = trackManager.getSingers();
+    const fragments = trackManager.getFragments();
+    m = _computeTimelineMetrics(singers, fragments, getBeatWidth());
+  }
+  const containerW = m.viewportWidth ?? dom.fragmentContainer.clientWidth;
+  const containerH = m.viewportHeight ?? dom.fragmentContainer.clientHeight;
+
+  state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, m.canvasWidth - containerW));
+  state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, m.contentHeight - containerH));
 
   // fragment canvas 应用 translate 变换以实现滚动；
   // playhead canvas 不再应用 translate，改为固定覆盖可视区域，
   // 绘制时由 drawPlayheadLine 自行减去 scrollX（避免大 canvas clearRect 卡顿）。
   // Canvas is viewport-sized. Scrolling is applied to the drawing transform,
   // never by moving or enlarging the backing store.
-  dom.fragmentCanvas.style.transform = 'none';
+  // 仅在值变化时写 style，避免每帧触发无意义的样式失效。
+  if (_lastCanvasTransform !== 'none') {
+    dom.fragmentCanvas.style.transform = 'none';
+    _lastCanvasTransform = 'none';
+  }
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
@@ -358,17 +427,10 @@ export function renderFragmentTimeline() {
   }));
 
   const beatWidth = getBeatWidth();
-  const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const accompanimentMaxBeat = singers.reduce((max, singer) => {
-    if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
-    const endBeat = (singer.accompanimentStartTime || 0)
-      + singer.audioDuration / 60 * state.project.bpm;
-    return Math.max(max, endBeat);
-  }, 0);
-  const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
-  const virtualWidth = totalBeats * beatWidth;
-  const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+  const metrics = _computeTimelineMetrics(singers, fragments, beatWidth);
+  const totalBeats = metrics.totalBeats;
+  const virtualWidth = metrics.canvasWidth;
+  const contentHeight = metrics.contentHeight;
   const viewportWidth = Math.max(1, dom.fragmentContainer.clientWidth || 1);
   const viewportHeight = Math.max(1, dom.fragmentContainer.clientHeight || contentHeight || 1);
 
@@ -379,7 +441,7 @@ export function renderFragmentTimeline() {
 
   state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, virtualWidth - viewportWidth));
   state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, contentHeight - viewportHeight));
-  syncFragmentScroll();
+  syncFragmentScroll({ ...metrics, viewportWidth, viewportHeight });
 
   // Clear in device-independent viewport coordinates, then translate the
   // world timeline into the viewport. Existing fragment drawing remains in
@@ -395,28 +457,25 @@ export function renderFragmentTimeline() {
   const _viewTop = state.fragmentScrollY;
   const _viewBottom = state.fragmentScrollY + viewportHeight;
 
-  // Draw only the visible grid. A full-width offscreen cache would recreate
-  // the same oversized-canvas failure as the main canvas.
-  ctx.fillStyle = c.bgApp;
-  ctx.fillRect(_viewLeft, _viewTop, viewportWidth, viewportHeight);
-  ctx.lineWidth = 1;
-  const firstBeat = Math.max(0, Math.floor(_viewLeft / beatWidth));
-  const lastBeat = Math.min(totalBeats, Math.ceil(_viewRight / beatWidth));
-  for (let i = firstBeat; i <= lastBeat; i++) {
-    const x = i * beatWidth;
-    const isMeasureLine = (i % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
-    ctx.beginPath();
-    ctx.moveTo(x, _viewTop);
-    ctx.lineTo(x, _viewBottom);
-    ctx.stroke();
-    if (isMeasureLine && HEADER_HEIGHT >= _viewTop) {
-      const measureNum = Math.floor(i / beatsPerMeasure) + 1;
-      ctx.fillStyle = c.timeText;
-      ctx.font = '10px sans-serif';
-      ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
-    }
+  // 网格层走离屏缓存（键见 _gridLayerKey）：命中时只 blit 一次，
+  // 不再逐帧重画所有可见分割线。
+  const gridKey = _gridLayerKey(beatWidth, totalBeats, viewportWidth, viewportHeight, dpr, beatsPerMeasure, c);
+  if (!_gridCache || _gridCache.key !== gridKey) {
+    _gridCache = _buildGridLayer(gridKey, {
+      colors: c,
+      beatWidth,
+      totalBeats,
+      beatsPerMeasure,
+      viewportWidth,
+      viewportHeight,
+      dpr,
+      viewLeft: _viewLeft,
+      viewRight: _viewRight,
+      viewTop: _viewTop,
+      viewBottom: _viewBottom,
+    });
   }
+  ctx.drawImage(_gridCache.canvas, _viewLeft, _viewTop, viewportWidth, viewportHeight);
 
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
@@ -1018,7 +1077,7 @@ export function renderSingerList() {
           volumeWrap.className = 'accompaniment-volume-control';
           const volumeText = document.createElement('span');
           const currentVolume = Number.isFinite(singer.accompanimentVolume) ? singer.accompanimentVolume : 1;
-          volumeText.textContent = `Vol ${Math.round(currentVolume * 100)}%`;
+          volumeText.textContent = t('main.accompanimentVolumeShort', { volume: Math.round(currentVolume * 100) });
           const volumeInput = document.createElement('input');
           volumeInput.type = 'range';
           volumeInput.min = '0';
@@ -1029,7 +1088,7 @@ export function renderSingerList() {
             e.stopPropagation();
             const value = Math.max(0, Math.min(2, Number(volumeInput.value)));
             singer.accompanimentVolume = value;
-            volumeText.textContent = `Vol ${Math.round(value * 100)}%`;
+            volumeText.textContent = t('main.accompanimentVolumeShort', { volume: Math.round(value * 100) });
           });
           volumeInput.addEventListener('click', e => e.stopPropagation());
           volumeWrap.append(volumeText, volumeInput);
@@ -1154,13 +1213,21 @@ export function renderSingerList() {
           e.stopPropagation();
           const singerId = delBtn.dataset.singerId;
           if (await showConfirmDialog(t('main.confirmDeleteSinger', { name: singer.trackName }))) {
-            const singerClone = JSON.parse(JSON.stringify(singer));
+            // structuredClone 保留 ArrayBuffer / Float32Array（wavBuffer、f0Data、
+            // midiNotes、audioChannels），JSON 序列化会把它们变成普通对象导致
+            // undo 后歌手无法合成。
+            const singerClone = structuredClone(singer);
             const singerFragments = trackManager.getFragments().filter(f => f.singerId === singerId);
             const fragmentsClone = singerFragments.map(f => JSON.parse(JSON.stringify(f)));
             trackManager.removeSinger(singerId);
             history.push({
               undo() {
-                const _restoredSinger = trackManager.addSinger(singerClone);
+                const restoredSinger = trackManager.addSinger(singerClone);
+                // createSinger 只收白名单字段；二进制/大字段不在其中，必须显式回填，
+                // 否则 undo 后歌手虽然回来了却缺少参考音频 / F0 / MIDI，无法合成。
+                for (const k of ['wavBuffer', 'midiNotes', 'f0Data', 'audioBuffer', 'audioChannels', 'singerData']) {
+                  if (singerClone[k] !== undefined) restoredSinger[k] = singerClone[k];
+                }
                 for (const fc of fragmentsClone) {
                   trackManager.addFragment(fc);
                 }
@@ -1180,6 +1247,11 @@ export function renderSingerList() {
 
     dom.singerListEl.appendChild(item);
   });
+}
+
+// 语言切换后动态文案必须重建：清空列表缓存键，让下一次 refreshAll 真正重建 DOM。
+export function invalidateSingerListCache() {
+  renderSingerList._cacheKey = null;
 }
 
 export function refreshAll() {

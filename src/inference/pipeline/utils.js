@@ -134,20 +134,23 @@ if (typeof Float16Array !== 'undefined') {
     };
 }
 
+// 模块级共享的 4 字节转换缓冲（P26）：FP16 CFG 每步要调用 float32ToFloat16
+// 两次，复用同一缓冲避免每次 new ArrayBuffer/两个视图。
+// 注意：仅限同步调用、不可重入 —— 若在 setFloat32 与 getUint32 之间发生重入
+// （await / 回调），共享缓冲会被覆盖，结果错误。
+const _f16ScalarView = new DataView(new ArrayBuffer(4));
+
 // Float32 → Float16 single-element conversion (returns Uint16 bit pattern).
 // Used for scalar values (e.g. t tensor with batch=1/2). Allocates no buffer.
 function float32ToFloat16(value) {
-    const buf = new ArrayBuffer(4);
-    const f32 = new Float32Array(buf);
-    const u32 = new Uint32Array(buf);
-    f32[0] = value;
-    const x = u32[0];
+    _f16ScalarView.setFloat32(0, value, true);
+    const x = _f16ScalarView.getUint32(0, true);
     const sign = (x >> 16) & 0x8000;
     const exponent = ((x >> 23) & 0xff) - 127;
     const mantissa = x & 0x7fffff;
     if (exponent >= 16) return sign | 0x7c00;
     if (exponent >= -14) return sign | ((exponent + 15) << 10) | (mantissa >> 13);
-    if (exponent >= -24) return sign | ((mantissa | 0x800000) >> (-exponent - 2));
+    if (exponent >= -24) return sign | ((mantissa | 0x800000) >> (-exponent - 1));
     return sign;
 }
 
@@ -179,7 +182,7 @@ function batchFloat32ToFloat16(f32Src, u16Dst, len) {
         } else if (exponent >= -14) {
             u16Dst[i] = sign | ((exponent + 15) << 10) | (mantissa >> 13);
         } else if (exponent >= -24) {
-            u16Dst[i] = sign | ((mantissa | 0x800000) >> (-exponent - 2));
+            u16Dst[i] = sign | ((mantissa | 0x800000) >> (-exponent - 1));
         } else {
             u16Dst[i] = sign;
         }
@@ -245,35 +248,26 @@ function disposeTensor(tensor) {
     } catch (_) { /* 忽略重复 dispose 或已释放 */ }
 }
 
-// GPU 排空等待：DML 后端的 GPU 资源由 ONNX Runtime 内部管理，JS 层的 Tensor.dispose() 无法立即释放。
-// 在阶段切换或连续推理间插入 50ms 等待，让 DML 内部资源池有机会回收上阶段的 GPU 缓冲区，
-// 防止累积导致 887A0005/887A0006 (GPU device hung/removed)。
-// 50ms 是经验值：太短（<10ms）DML 来不及回收，太长（>100ms）影响合成速度。
+// GPU 排空：仅让出一个事件循环轮次（setImmediate），不做墙钟等待。
+// DML 后端的资源回收顺序由 ONNX Runtime 内部负责；本函数只用于在阶段切换处
+// 给事件循环一次机会处理 pending 任务，并不保证任何固定的毫秒级排空时间。
 function gpuDrain() {
     return new Promise(resolve => setImmediate(resolve));
 }
 
-// 大模型 session.release() 后的长排空：DML 后端 session.release() 是同步 API，
-// 但底层 GPU 资源（模型权重 + 激活工作区，diffStep 合计 ~3-4GB）回收是异步的。
-// 普通 gpuDrain(50ms) 远不够，需要更长等待 + 多次轮询让 DML 资源池完成回收。
-// 否则紧接着的 vocoder 推理会因显存未释放而 OOM / 触发 0x887A0006 (TDR 黑屏)。
-//
-// 策略：总等待时间分多次 setTimeout（让事件循环处理 GC + DML 内部回收回调），
-// 比单次长 sleep 更有效——每次 setTimeout 回调间 V8 GC 能跑一轮，DML 也能处理一批 pending 释放。
+// 大模型 session.release() 后的排空：与 gpuDrain 相同，仅让出一个事件循环轮次，
+// 不做墙钟等待（历史注释中的 ~800ms 分轮 setTimeout 从未实现）。
+// session.release() 与 ORT 内部的同步语义负责资源顺序，JS 层不额外 sleep。
 async function gpuDrainLong() {
     // Never impose wall-clock sleeps. Session release and ORT synchronization
     // are responsible for resource ordering; this only yields one event turn.
     await new Promise(resolve => setImmediate(resolve));
 }
 
-// 自适应 GPU 排空：正常情况下跳过 50ms 等待，仅 setImmediate yield 让事件循环跑一轮
-// （DML 在无压力时不需要额外回收时间，跳过可节省每步/chunk 50ms 的累积开销）。
-// 当 markGpuOom() 被调用（vocoder/diffusion 捕获 OOM）后，下一次 gpuDrainAdaptive() 等待
-// 200ms 让 DML 资源池从 OOM 中恢复，然后自动清除标志恢复正常（无 OOM 压力）模式。
-// 既有 gpuDrain()（固定 50ms）与 gpuDrainLong()（~800ms 分轮）保留不变，供 diffStep 释放等
-// 长排空路径继续使用。
+// 自适应 GPU 排空：实际行为同样只是 setImmediate yield 让出事件循环一轮，
+// 不做墙钟等待。markGpuOom() 设置的标志只会在下一次调用时被消费（清除），
+// 不会延长等待时间；保留该标志是为了将来可能的差异化策略与外部观测。
 let _oomFlag = false;
-const GPU_DRAIN_ADAPTIVE_LONG_MS = 200;
 function markGpuOom() {
     _oomFlag = true;
 }

@@ -80,8 +80,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX model files</strong> in total. The model operates internally at <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. Playback now defaults to <strong>48000 Hz</strong> — the 24 kHz model output is linearly upsampled for playback. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
-          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型文件</strong>。模型内部以 <strong>24000 Hz</strong> 运行，hop size 为 <strong>480</strong>。播放默认采样率现在为 <strong>48000 Hz</strong>——24 kHz 模型输出经线性上采样后播放。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
+          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX model files</strong> in total. The model operates internally at <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. Playback now defaults to <strong>48000 Hz</strong> — the 24 kHz model output is resampled with a band-limited Kaiser-windowed sinc interpolator for playback. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
+          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型文件</strong>。模型内部以 <strong>24000 Hz</strong> 运行，hop size 为 <strong>480</strong>。播放默认采样率现在为 <strong>48000 Hz</strong>——24 kHz 模型输出经 Kaiser 窗带限 sinc 重采样后播放。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
         </div>
       </div>
 
@@ -144,8 +144,8 @@
           </tr>
           <tr>
             <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
-            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
-            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
+            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
             <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
           </tr>
         </tbody>
@@ -155,13 +155,13 @@
         <span data-lang="en">Diffusion Sampler</span>
         <span data-lang="zh">扩散求解器</span>
       </h2>
-      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; the preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
-      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
+      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; <strong>STORK-2</strong> is the default. The preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
+      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器，默认使用 <strong>STORK-2</strong>；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
       <ul>
-        <li><span data-lang="en"><strong>Euler</strong> (default) — 1 NFE/step. First-order explicit, midpoint time evaluation. Fastest, the original baseline.</span><span data-lang="zh"><strong>Euler</strong>（默认）— 每步 1 次推理。一阶显式，中点时间评估。最快，原始基线。</span></li>
+        <li><span data-lang="en"><strong>Euler</strong> — 1 NFE/step. First-order explicit, midpoint time evaluation. Fastest, the original baseline.</span><span data-lang="zh"><strong>Euler</strong> — 每步 1 次推理。一阶显式，中点时间评估。最快，原始基线。</span></li>
         <li><span data-lang="en"><strong>Heun</strong> — 2 NFE/step. Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Final step falls back to Euler to avoid <code>t &gt; 1</code>.</span><span data-lang="zh"><strong>Heun</strong> — 每步 2 次推理。二阶改进欧拉（梯形公式）。精度更高，推理时间约 2 倍。末步退化为 Euler 以避免 <code>t &gt; 1</code> 越界。</span></li>
         <li><span data-lang="en"><strong>Extrapolated Euler</strong> — 1 NFE/step. Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation; not the full stabilized RK formulation. Best when the velocity field changes smoothly; falls back to Euler when extrapolation is unsafe.</span><span data-lang="zh"><strong>Extrapolated Euler</strong> — 每步 1 次推理。受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度做线性外推；非论文完整 stabilized RK 格式。速度场缓变时效果最佳；外推不安全时退化为 Euler。</span></li>
-        <li><span data-lang="en"><strong>STORK-2</strong> — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong> — 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
+        <li><span data-lang="en"><strong>STORK-2</strong> (default) — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong>（默认）— 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
       </ul>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -304,7 +304,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Playback Sample Rate</span><span data-lang="zh">播放采样率</span></td>
-            <td><span data-lang="en">48000 Hz (default). 24 kHz model output is linearly upsampled.</span><span data-lang="zh">48000 Hz（默认）。24 kHz 模型输出经线性上采样。</span></td>
+            <td><span data-lang="en">48000 Hz (default). 24 kHz model output is resampled with a band-limited Kaiser-windowed sinc interpolator.</span><span data-lang="zh">48000 Hz（默认）。24 kHz 模型输出经 Kaiser 窗带限 sinc 重采样。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Bit Depth (export)</span><span data-lang="zh">位深度（导出）</span></td>
@@ -312,7 +312,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Export Sample Rate (selectable)</span><span data-lang="zh">导出采样率（可选）</span></td>
-            <td><span data-lang="en">24000, 44100, 48000 (default), 96000 Hz. Linear upsampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000（默认）、96000 Hz。从 24 kHz 模型率线性上采样。</span></td>
+            <td><span data-lang="en">24000, 44100, 48000 (default), 96000 Hz. Band-limited Kaiser-windowed sinc resampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000（默认）、96000 Hz。从 24 kHz 模型率做 Kaiser 窗带限 sinc 重采样。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Accompaniment Mixing</span><span data-lang="zh">伴奏混入</span></td>

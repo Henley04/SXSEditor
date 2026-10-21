@@ -2,16 +2,17 @@
 
 ## 概述
 
-本项目包含全面的自动化测试套件，共 **1628 个测试用例**（分布在 **66 个测试文件** 中），覆盖所有核心模块。测试分为单元测试、集成测试和属性/鲁棒性测试三层，旨在通过多维度覆盖全面保障应用质量。
+本项目包含自动化测试套件，共 **1840 个测试用例**（分布在 **86 个测试文件** 中），覆盖推理管线、工具函数与主题系统等核心计算模块；IPC/UI/WebNN/下载层暂未覆盖。测试分为单元测试、集成测试和属性/鲁棒性测试三层，旨在通过多维度覆盖保障应用质量。
 
 > 数量统计方式：`node scripts/count-tests.js`（等价于 `grep -rhoE "^\s*(it|test)\(" test/*.test.js | wc -l`）。
-> 注意 CI 流水线（`npm run test:ci`）会 `--ignore test/onnxModelLoading.test.js`（16 条），因此 CI 实际执行约 1612 条。
+> 注意 CI 流水线（`npm run test:ci`）会 `--ignore test/onnxModelLoading.test.js`（15 条，全部需要 GPU/DML EP + 本地 ONNX 模型），因此 CI 实际执行 1825 条。
+> 原先混在该文件里的 1 条纯 JS 用例（`DUMMY_TEST_INPUTS_FP32.melTransform` 的键名校验）已拆到 `test/modelLoaderDummyInputs.test.js`，不再受 `--ignore` 影响。
 
 ## 测试结构
 
 ```
 test/
-├── setup.js                      # 测试环境配置（Babel transpilation）
+├── setup.js                      # 测试环境配置（Babel/JSDOM/canvas 记录器/sinon sandbox）
 ├── test-helpers.js               # 通用测试辅助函数和 mock
 │
 ├── 单元测试
@@ -67,9 +68,12 @@ npm test
 npm run test:ci
 ```
 
-远程 CI 使用精简测试套件，跳过以下不适用于 CI 环境的测试：
+远程 CI 使用精简测试套件，跳过不适用于 CI 环境的测试：
 
-- `onnxModelLoading.test.js` — ONNX 模型加载与推理（需要本地 ONNX 模型文件和 DML EP）
+- `onnxModelLoading.test.js` — 15 条用例全部需要本地 ONNX 模型文件与 DML EP（GPU）：
+  模型加载、小/大模型推理、mel_transform DFT 数值验证、动态形状验证。
+
+纯 JS 的 `modelLoaderDummyInputs.test.js` 不在忽略列表内，CI 会正常执行。
 
 本地开发时仍应运行 `npm test` 执行完整测试套件。
 
@@ -97,7 +101,7 @@ npx mocha --require ./test/setup.js "test/robustness.test.js" --timeout 30000
 
 ### 单元测试
 
-覆盖所有核心模块的纯逻辑：
+覆盖以下核心计算模块的纯逻辑（注意：并非"所有核心模块"）：
 - **WAV 编码器**: 文件头格式、采样率、位深度、声道、空输入和大文件
 - **轨道管理**: 歌手/分片 CRUD、活动分片、颜色分配
 - **SVS Pipeline**: MIDI→频率、包络插值、F0 量化、帧序列、音符嵌入
@@ -112,7 +116,11 @@ npx mocha --require ./test/setup.js "test/robustness.test.js" --timeout 30000
 - **Float16 转换**: IEEE 754 半精度往返、subnormal、overflow
 - **主题系统**: colorUtils、themeManager、storage、tokens、validator
 - **撤销/重做**: 命令栈、maxSize、clear
-- **其他**: IPC、安全、MIDI 解析、模型路径、语言检测、批量处理
+- **其他**: IPC 通道常量、路径安全、MIDI 解析、模型路径、语言检测、批量处理
+
+**未覆盖范围**：约 63% 的 `src/` 模块从未被任何测试 require —— IPC 处理器实现、
+渲染进程 UI 组件、WebNN 后端、模型下载/版本网络层等。这部分依赖手工回归与端到端
+流程验证，尚未纳入本套件。
 
 ### 集成测试 (30+ tests)
 
@@ -202,6 +210,8 @@ npx mocha --require ./test/setup.js "test/robustness.test.js" --timeout 30000
 3. 使用 Chai 的 `expect` 进行断言
 4. 确保测试可以独立运行，不依赖顺序
 5. 鲁棒性测试使用 `makeRng(seed)` 保证可复现
+6. 需要 stub 时优先用 `global.__sinonSandbox.stub(obj, 'fn')`（setup.js 每个用例
+   自动创建、`afterEach` 自动 restore）；自定义 `sinon.createSandbox()` 需自行 restore
 
 示例：
 
@@ -218,7 +228,7 @@ describe('MyModule', () => {
 
 ## CI/CD 集成
 
-GitHub Actions CI 使用 `npm run test:ci` 运行精简测试套件（跳过网络功能和模型推理/加载测试）：
+GitHub Actions CI 使用 `npm run test:ci` 运行精简测试套件（1825 条，仅跳过 `onnxModelLoading.test.js` 的 15 条 GPU/DML 用例）：
 
 ```yaml
 # GitHub Actions 示例（实际配置见 .github/workflows/ci.yml）

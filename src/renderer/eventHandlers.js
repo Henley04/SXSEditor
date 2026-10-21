@@ -2,6 +2,7 @@ import { state, dom, trackManager, history } from './state.js';
 import {
   SINGER_ROW_HEIGHT,
   HEADER_HEIGHT,
+  SAMPLE_RATE,
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
@@ -24,6 +25,10 @@ let _isPlayheadDragging = false;
 let _wasPlayingBeforeDrag = false;
 // Playhead tooltip 元素（懒创建）
 let _playheadTooltip = null;
+// 非拖拽悬停 mousemove 的 rAF 合并：只保留最新一次坐标，
+// 每帧最多更新一次 tooltip / cursor，避免高频事件里反复做命中测试与样式写。
+let _hoverRaf = 0;
+let _hoverPending = null;
 
 // fragmentContainer 的 bounding rect 缓存。mousemove / wheel 是高频路径，
 // 每次都 getBoundingClientRect() 会强制同步 layout（reflow），造成明显掉帧。
@@ -96,6 +101,32 @@ function _getCurrentPlayheadX() {
 }
 
 /**
+ * 非拖拽悬停的合并刷新：读取最新一次 mousemove 坐标，更新光标 / tooltip。
+ * 拖拽或 playhead 拖拽开始后直接丢弃，避免与拖拽路径抢状态。
+ */
+function _processHoverMove() {
+  _hoverRaf = 0;
+  const pending = _hoverPending;
+  _hoverPending = null;
+  if (!pending || _isPlayheadDragging || state.dragState) return;
+
+  const x = _mouseToCanvasX(pending);
+  const y = _mouseToCanvasY(pending);
+  const playheadX = _getCurrentPlayheadX();
+  const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
+    && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+  const onHeader = y <= HEADER_HEIGHT;
+  if (onPlayhead || onHeader) {
+    dom.fragmentCanvas.style.cursor = 'ew-resize';
+    const tipSeconds = _canvasXToClampedSeconds(x);
+    _showPlayheadTooltip(pending.clientX, pending.clientY, tipSeconds);
+  } else {
+    dom.fragmentCanvas.style.cursor = 'default';
+    _hidePlayheadTooltip();
+  }
+}
+
+/**
  * 把鼠标事件的 clientX 转换为 fragment canvas 内部 X 坐标。
  * Canvas is viewport-sized, so convert viewport coordinates back to the
  * virtual timeline by adding the current scroll offset.
@@ -121,7 +152,7 @@ function _canvasXToClampedSeconds(x) {
   if (!audioData || audioData.length === 0) {
     return Math.max(0, seconds);
   }
-  const duration = audioData.length / 24000; // SAMPLE_RATE
+  const duration = audioData.length / SAMPLE_RATE;
   // 短音频 fallback：若音频本身不足 100ms，余量缩减到 duration / 2
   const margin = duration > 0.1 ? 0.05 : duration * 0.5;
   return Math.max(0, Math.min(duration - margin, seconds));
@@ -209,7 +240,9 @@ dom.timeSigDen.addEventListener('change', () => {
 // Transport controls
 dom.btnPlay.addEventListener('click', async () => {
   const fragments = trackManager.getFragments();
-  if (fragments.length === 0) {
+  // 仅伴奏轨、无分片的工程也必须能播放（playAll 已支持纯伴奏路径）。
+  const hasAccompaniment = trackManager.getSingers().some(s => s.type === 'accompaniment');
+  if (fragments.length === 0 && !hasAccompaniment) {
     const { showAlertDialog } = await import('../alertDialog.js');
     showAlertDialog(t('main.noFragmentsToPlay'));
     return;
@@ -373,23 +406,9 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
   if (_isPlayheadDragging) return;
 
   if (!state.dragState) {
-    // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
-    // 虚拟坐标系（与 mousedown/绘制侧一致），漏加 scrollX 会导致滚动后命中错位
-    const x = _mouseToCanvasX(e);
-    const y = _mouseToCanvasY(e);
-    const playheadX = _getCurrentPlayheadX();
-    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
-      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
-    const onHeader = y <= HEADER_HEIGHT;
-    if (onPlayhead || onHeader) {
-      dom.fragmentCanvas.style.cursor = 'ew-resize';
-      const tipSeconds = _canvasXToClampedSeconds(x);
-      _showPlayheadTooltip(e.clientX, e.clientY, tipSeconds);
-      return;
-    } else {
-      dom.fragmentCanvas.style.cursor = 'default';
-      _hidePlayheadTooltip();
-    }
+    // 非拖拽悬停：合并到下一帧统一处理，只保留最新坐标。
+    _hoverPending = { clientX: e.clientX, clientY: e.clientY };
+    if (!_hoverRaf) _hoverRaf = requestAnimationFrame(_processHoverMove);
     return;
   }
 
@@ -503,6 +522,12 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
   finishDrag();
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
+  // 丢弃尚未执行的悬停刷新，避免鼠标已离开后又被 rAF 重新弹出 tooltip。
+  if (_hoverRaf) {
+    cancelAnimationFrame(_hoverRaf);
+    _hoverRaf = 0;
+  }
+  _hoverPending = null;
   if (state.dragState?.type === 'move-accompaniment') {
     markDirty();
     state.dragState = null;

@@ -409,11 +409,17 @@ export async function saveSingerData() {
 
   // 始终根据当前pianoRoll音符和F0数据重新构建singerData，确保编辑后的变更被保存
   const fields = buildSingerFields(currentNotes);
+  // 音频可能被裁掉前导静音（audioLoader.trimLeadingSilence），保存时把偏移补回，
+  // 保证 singerData 的时间轴与原始音频一致。
+  const trimOffsetMs = Math.floor((state.trimOffsetSec || 0) * 1000);
+  // 音符时值是 beat，换算秒使用钢琴卷轴当前的 BPM（与提取/试听同源）。
+  const saveBpm = (state.pianoRoll && state.pianoRoll.bpm) || BPM;
   state.singerData = {
     index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
     language: 'Mandarin',
-    time: [0, Math.floor(state.wavDuration * 1000)],
-    duration: currentNotes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+    time: [trimOffsetMs, trimOffsetMs + Math.floor(state.wavDuration * 1000)],
+    trimOffsetSec: state.trimOffsetSec || 0,
+    duration: currentNotes.map((n) => (n.duration * (60 / saveBpm)).toFixed(2)).join(' '),
     text: fields.text,
     phoneme: fields.phoneme,
     note_pitch: currentNotes.map((n) => n.pitch).join(' '),

@@ -4,9 +4,14 @@ import { showAlertDialog } from '../alertDialog.js';
 
 function formatLrcTime(seconds) {
   const safe = Math.max(0, Number(seconds) || 0);
-  const minutes = Math.floor(safe / 60);
-  const secs = safe - minutes * 60;
-  return `[${String(minutes).padStart(2, '0')}:${secs.toFixed(2).padStart(5, '0')}]`;
+  // 先四舍五入到厘秒再拆分钟/秒：否则 59.999s 会得到 secs=60.00，
+  // 产出非法的 [00:60.00]；按 6000 厘秒进位可保证秒始终在 [00,59]。
+  const totalCentis = Math.round(safe * 100);
+  const minutes = Math.floor(totalCentis / 6000);
+  const remainder = totalCentis - minutes * 6000;
+  const secs = Math.floor(remainder / 100);
+  const centis = remainder % 100;
+  return `[${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(centis).padStart(2, '0')}]`;
 }
 
 function normalizeLyric(note, previousLyric) {

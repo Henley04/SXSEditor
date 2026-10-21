@@ -23,9 +23,11 @@
  * The override is read once per launch.
  *
  * Every request is bounded by timeouts: a 5s socket-idle timeout (covers the
- * TLS/connect stage and stalled transfers) and a 30s hard ceiling, so a
- * poisoned IP that drops packets can no longer leave the market window
- * loading forever. Failures surface a clear "network unreachable" message.
+ * TLS/connect stage and stalled transfers) and a hard per-request ceiling that
+ * scales with the payload size (30s floor, 30min cap), so a poisoned IP that
+ * drops packets can no longer leave the market window loading forever while a
+ * large upload is still allowed to finish. Failures surface a clear "network
+ * unreachable" message.
  */
 
 const { app } = require('electron');
@@ -44,11 +46,24 @@ const { isPathAllowed } = require('./security');
 const DEFAULT_API_BASE = 'https://singer-files.15240287482.workers.dev';
 // Socket idle timeout (connect + TLS handshake + stalled reads) and a hard
 // per-request ceiling so nothing can hang indefinitely.
+// 总超时按体积动态计算：MAX_UPLOAD_BYTES 允许 512MB，而固定 30s 意味着
+// 超过 ~30MB 的上传必然超时，两个常量互相矛盾。现在以 1MB/s 的保守下界
+// 估算传输时间，再加 30s 建连/服务端处理余量，并夹在 [30s, 30min] 区间内。
 const SOCKET_IDLE_TIMEOUT_MS = 5000;
 const TOTAL_TIMEOUT_MS = 30000;
+const MAX_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
+const MIN_TRANSFER_BYTES_PER_SEC = 1024 * 1024;
 // 单个歌姬包上传的字节上限。.sxssinger 通常只有几 MB，这里只是兜底，
 // 避免误选（或被诱导选中）一个大文件把机器上的数据无上限地流出。
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+
+/** 按请求体大小计算总超时：max(30s, size/1MBps + 30s)，上限 30 分钟。 */
+function computeTotalTimeoutMs(bodyLength) {
+  const size = Number(bodyLength) || 0;
+  if (size <= 0) return TOTAL_TIMEOUT_MS;
+  const transferMs = Math.ceil(size / MIN_TRANSFER_BYTES_PER_SEC) * 1000;
+  return Math.min(Math.max(TOTAL_TIMEOUT_MS, transferMs + TOTAL_TIMEOUT_MS), MAX_TOTAL_TIMEOUT_MS);
+}
 
 const MSG_UNREACHABLE =
   'Unable to connect to the singer market service. It may be blocked or unreachable from your network.';
@@ -182,8 +197,11 @@ function request(method, urlPath, { headers = {}, body = null, bodyStream = null
       reject(err);
     };
 
-    // Hard ceiling for the whole request lifecycle.
-    totalTimer = setTimeout(() => fail(new Error(MSG_TIMEOUT)), TOTAL_TIMEOUT_MS);
+    // Hard ceiling for the whole request lifecycle (scales with payload size).
+    totalTimer = setTimeout(
+      () => fail(new Error(MSG_TIMEOUT)),
+      computeTotalTimeoutMs(bodyLength != null ? bodyLength : (bodyBuf ? bodyBuf.length : 0))
+    );
 
     const req = lib.request(reqOptions, (res) => {
       const chunks = [];
@@ -201,6 +219,9 @@ function request(method, urlPath, { headers = {}, body = null, bodyStream = null
         settled = true;
         if (totalTimer) clearTimeout(totalTimer);
         const buf = Buffer.concat(chunks);
+        // 及时释放中间 chunk 引用：大文件下载时 chunks 与 concat 结果同时存活
+        // 会让峰值内存翻倍（P11）。concat 之后 chunks 不再有用。
+        chunks.length = 0;
         if (encoding === null) {
           resolve({ status: res.statusCode, headers: res.headers, body: buf });
         } else {
@@ -564,7 +585,7 @@ function formatDiagnostics(diag, err) {
   const sys = diag.apiDns.system ? diag.apiDns.system.join(', ') : fail;
   const ali = diag.apiDns.ali ? diag.apiDns.ali.join(', ') : fail;
   lines.push(`${t('singerMarket.diagDns')}: ${t('singerMarket.diagSystem')}=${sys}; AliDNS=${ali}`);
-  lines.push(`${t('singerMarket.diagTimeout')}: socket ${SOCKET_IDLE_TIMEOUT_MS / 1000}s / total ${TOTAL_TIMEOUT_MS / 1000}s`);
+  lines.push(`${t('singerMarket.diagTimeout')}: socket ${SOCKET_IDLE_TIMEOUT_MS / 1000}s / total ${TOTAL_TIMEOUT_MS / 1000}s~${MAX_TOTAL_TIMEOUT_MS / 60000}min`);
   if (diag.geo && diag.geo.ip) {
     lines.push(`${t('singerMarket.diagRegion')}: ${diag.geo.ip} (${diag.geo.countryName || diag.geo.country || '?'}, ${diag.geoSource})`);
   } else if (diag.geo) {
@@ -845,6 +866,11 @@ function registerSingerMarketIpc() {
   // responsible for prompting the user for a save location and writing the
   // file to disk via the existing file:saveFile IPC. Progress is streamed to
   // the sender via 'singer-market:download-progress' events.
+  //
+  // P11: 当前仍是"整文件进内存 + IPC 拷贝"（渲染侧 src/singerMarket.js 只认
+  // data.buffer），主进程侧已去掉一次多余的全量拷贝（Buffer#slice），并把
+  // 中间 chunks 及时释放。彻底解决需要渲染侧改为接收文件路径，接口约定见
+  // 交付报告。
   safeHandle(IPC_CHANNELS.SINGER_MARKET_DOWNLOAD, async (event, fileId) => {
     try {
       const res = await request('GET', `/api/files/${encodeURIComponent(fileId)}/download`, {
@@ -864,13 +890,16 @@ function registerSingerMarketIpc() {
         let filename = 'singer.sxssinger';
         const match = cd.match(/filename="?([^";]+)"?/i);
         if (match) filename = match[1];
+        const body = res.body;
+        // Buffer.concat 对大体积返回的 Buffer 独占其底层 ArrayBuffer（offset 0、
+        // 长度相等），此时直接复用，省掉一次整文件的 slice 拷贝（P11 峰值内存）。
+        const ab = body.byteOffset === 0 && body.byteLength === body.buffer.byteLength
+          ? body.buffer
+          : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
         return {
           success: true,
           data: {
-            buffer: res.body.buffer.slice(
-              res.body.byteOffset,
-              res.body.byteOffset + res.body.byteLength
-            ),
+            buffer: ab,
             filename,
             contentType: res.headers['content-type'] || 'application/octet-stream',
           },
@@ -927,18 +956,8 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Get server health -----
-  safeHandle(IPC_CHANNELS.SINGER_MARKET_HEALTH, async () => {
-    try {
-      const res = await request('GET', '/health');
-      const data = tryParseJson(res.body) || {};
-      if (res.status >= 200 && res.status < 300) {
-        return { success: true, data };
-      }
-      return { success: false, error: `Health check failed (HTTP ${res.status})` };
-    } catch (err) {
-      return await errorPayload(err);
-    }
-  });
+  // R23: 该 handler 已注册但 preload 未暴露、渲染侧（src/singerMarket.js）也没有
+  // 任何调用者，属于死代码，已删除。若将来需要，请在 preload 补 API 并在此重新注册。
 }
 
 module.exports = {

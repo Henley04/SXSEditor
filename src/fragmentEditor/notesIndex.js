@@ -51,6 +51,9 @@ export function createNotesIndex(notes) {
     // ensureSorted detects the mismatch and invalidates cached indices.
     notesLength: 0,
     version: 0,
+    // External mutation counter bookkeeping (see ensureSorted).
+    versioned: false,
+    externalVersion: -1,
   };
   ensureSorted(idx);
   return idx;
@@ -71,13 +74,16 @@ export function markDirty(idx) {
 
 /**
  * Sort notes array in place if dirty and rebuild pitch index.
- * O(n log n) when dirty, O(n) when clean (verification scan).
+ * O(n log n) when dirty, O(n) at most once per external version, O(1) otherwise.
  *
- * The O(n) verification scan catches in-place mutations performed outside
- * the index API (e.g. event handlers directly assigning note.start), so
- * callers do not need to call markDirty() after every such mutation.
+ * `externalVersion` (optional) is the caller's mutation counter (state.js
+ * bumpNotesVersion()). When provided, the O(n) order-verification scan runs
+ * only when the counter changed instead of on every read, so repeated queries
+ * (viewport culling / hit-test per frame) no longer degrade to O(n).
+ * Callers that mutate note.start/duration in place without bumping the counter
+ * must call markDirty() (or _markNotesIndexDirty in canvasRenderer).
  */
-export function ensureSorted(idx) {
+export function ensureSorted(idx, externalVersion) {
   // Detect array length changes (splice/push) that the sort-order check
   // below would miss. A length mismatch means indices stored in pitchIndex
   // are stale and must be rebuilt.
@@ -85,12 +91,15 @@ export function ensureSorted(idx) {
     idx.sorted = false;
   }
   if (idx.sorted) {
-    // Verify still sorted — handles external in-place mutations.
-    for (let i = 1; i < idx.notes.length; i++) {
-      if (compareNotes(idx.notes[i - 1], idx.notes[i]) > 0) {
-        idx.sorted = false;
-        break;
+    if (externalVersion !== undefined) {
+      idx.versioned = true;
+      if (idx.externalVersion !== externalVersion) {
+        idx.externalVersion = externalVersion;
+        _verifySorted(idx);
       }
+    } else if (!idx.versioned) {
+      // Legacy behaviour (no version supplied by anyone): verify every read.
+      _verifySorted(idx);
     }
   }
   if (idx.sorted) {
@@ -106,6 +115,16 @@ export function ensureSorted(idx) {
   idx.maxDurationVersion = -1;
   idx.version++;
   _ensureMaxDuration(idx);
+}
+
+/** Mark the index unsorted if the array is no longer ordered. */
+function _verifySorted(idx) {
+  for (let i = 1; i < idx.notes.length; i++) {
+    if (compareNotes(idx.notes[i - 1], idx.notes[i]) > 0) {
+      idx.sorted = false;
+      return;
+    }
+  }
 }
 
 /**

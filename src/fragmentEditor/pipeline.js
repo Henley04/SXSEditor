@@ -38,7 +38,8 @@ export function getFragmentPreviewInferenceOptions() {
     nSteps: settings?.previewDiffSteps ?? 16,
     cfg: settings?.previewCfgStrength ?? 3.0,
     cfgRescale: settings?.previewCfgRescale ?? 0.7,
-    sampler: settings?.previewSampler ?? 'euler',
+    // 兜底采样器与主窗口/管线默认值（samplers/index.js DEFAULT_SOLVER）保持一致。
+    sampler: settings?.previewSampler ?? 'stork2',
     qdrift: resolveQDriftDefault(settings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
@@ -54,7 +55,7 @@ export function getFragmentExportInferenceOptions() {
     nSteps: settings?.exportDiffSteps ?? 32,
     cfg: settings?.exportCfgStrength ?? 3.0,
     cfgRescale: settings?.exportCfgRescale ?? 0.7,
-    sampler: settings?.exportSampler ?? 'euler',
+    sampler: settings?.exportSampler ?? 'stork2',
     qdrift: resolveQDriftDefault(settings, 'exportEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,

@@ -661,7 +661,11 @@ export async function playAll() {
         }
 
         if (!streamingStarted) {
-          // 流式未启动（offset > 0 或无 chunk 到达）：回退到整段播放
+          // 流式未启动（offset > 0 或无 chunk 到达）：回退到整段播放。
+          // 必须复位 _streamingActive：否则 startPlayheadAnimation 的流式兜底块
+          // 仍会生效（_scheduler.inferenceDone 已为真、前沿为 0），播放头会在
+          // 0.5s 后被误判为“已播完”而停止，音频却仍在出声。
+          _streamingActive = false;
           dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
           if (state.playbackPauseOffset > 0) {
             drawPausedPlayheadAt(state.playbackPauseOffset);
@@ -879,7 +883,7 @@ export function getExportInferenceOptions() {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.7,
-    sampler: state.audioSettings?.exportSampler ?? 'euler',
+    sampler: state.audioSettings?.exportSampler ?? 'stork2',
     // Q-Drift 漂移校正（导出开关；未显式设置时按模型精度推断）
     qdrift: resolveQDriftDefault(state.audioSettings, 'exportEnableQDrift'),
     npuDiffBatchSize: 1,
@@ -1349,25 +1353,29 @@ export function startPlayheadAnimation() {
     // 0.5s 容差防止 chunk 边界抖动导致误停。
     // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
     // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
-    const totalFrontierSec = Math.max(_scheduler.bufferEndSec, _streamingAccEndSec);
-    if (_scheduler.inferenceDone && renderedElapsed >= totalFrontierSec + 0.5) {
-      if (!state.streamingFinished) {
-        state.streamingFinished = true;
-        state.isPlaying = false;
-        state.playbackPauseOffset = 0;
-        _streamingActive = false;
-        for (const src of (state.streamingSources || [])) {
-          if (!src) continue;
-          safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
+    // 仅在流式调度器存在时访问其字段；非流式路径（_scheduler === null）不进入此分支，
+    // 否则首帧会抛 TypeError 且 playheadRaf 残留，导致后续启动被幂等保护短路。
+    if (_streamingActive && _scheduler) {
+      const totalFrontierSec = Math.max(_scheduler.bufferEndSec, _streamingAccEndSec);
+      if (_scheduler.inferenceDone && renderedElapsed >= totalFrontierSec + 0.5) {
+        if (!state.streamingFinished) {
+          state.streamingFinished = true;
+          state.isPlaying = false;
+          state.playbackPauseOffset = 0;
+          _streamingActive = false;
+          for (const src of (state.streamingSources || [])) {
+            if (!src) continue;
+            safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
+          }
+          state.streamingSources = [];
+          stopPlayheadAnimation();
+          dom.timeDisplay.textContent = formatTime(0);
+          setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
+          dom.btnPlay.disabled = false;
+          clearPlayheadLine();
         }
-        state.streamingSources = [];
-        stopPlayheadAnimation();
-        dom.timeDisplay.textContent = formatTime(0);
-        setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
-        dom.btnPlay.disabled = false;
-        clearPlayheadLine();
+        return;
       }
-      return;
     }
 
     if (state.currentAudioBuffer) {
@@ -1543,6 +1551,11 @@ export async function runExportJob(opts) {
           cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
           dynamicThresholdEnabled: opts.dynamicThresholdEnabled,
           dynamicThresholdPercentile: opts.dynamicThresholdPercentile,
+          // qdrift 必须显式透传：exportDialog 已把 exportEnableQDrift 映射到 opts.qdrift，
+          // 逐字段列举时遗漏会让「导出全部」静默丢失 Q-Drift 校正。
+          // 这里不展开 ...opts，避免把 onFragmentProgress/onOverallProgress/onStatus
+          // 等函数字段经 IPC 传给推理层（不可结构化克隆）。
+          qdrift: opts.qdrift === true,
           // 频谱后处理（音色 → 频谱曲线）：必须与 playAll 的两处一致下发，
           // 否则「导出全部」会静默丢弃 specBlend / specSmoothT / specSmoothF，
           // 导出音频与主窗口播放、分片编辑器预览听感不一致。
@@ -1571,7 +1584,9 @@ export async function runExportJob(opts) {
         startTimeBeat: fragment.startTime,
       });
 
-      const fragEndSec = (fragDuration / state.project.bpm) * 60;
+      // 与 playAll 的 globalLastEnd 一致：结束位置 = 分片起点 + 相对时长，
+      // 否则起点靠后的分片会被静默截断丢弃。
+      const fragEndSec = ((fragment.startTime + fragDuration) / state.project.bpm) * 60;
       if (fragEndSec > maxDuration) maxDuration = fragEndSec;
 
       // 完成一个分片后更新总体进度（onSVSProgress 只在推理过程中触发，

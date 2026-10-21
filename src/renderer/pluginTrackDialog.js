@@ -128,7 +128,7 @@ export function createPluginBackendSection(options = {}) {
 
   // 异步拉清单：不阻塞对话框打开，失败也只退化成一条提示。
   ensurePluginCatalog().then(renderList).catch((err) => {
-    statusEl.textContent = t('main.plugin.loadFailed', { detail: err && err.message ? err.message : '' });
+    statusEl.textContent = t('main.plugin.loadFailedDetail', { detail: err && err.message ? err.message : '' });
     listWrap.replaceChildren(statusEl);
   });
 

@@ -306,6 +306,8 @@ export function setupEventHandlers() {
       } else {
         state.pianoRoll.scrollY += dy;
         state.pianoRoll.scrollY = Math.max(0, Math.min(getMaxScrollY(), state.pianoRoll.scrollY));
+        // 垂直滚动同样改变了可见内容，必须失效静态层（否则不会重绘/不会同步滚动条）。
+        state.pianoRoll._staticCacheDirty = true;
         state.pianoRoll.render();
       }
 

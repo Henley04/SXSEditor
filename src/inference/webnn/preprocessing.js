@@ -64,30 +64,34 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const encPaddedType = useStaticShapes ? padInt64ToLength(typeIds, encSeqLen) : typeIds;
     const encPaddedF0 = useStaticShapes ? padInt64ToLength(f0IdsArr, encF0Len) : f0IdsArr;
 
-    // Run 4 encoders in parallel (they are independent)
+    // Run 4 encoders sequentially (they are independent, but concurrency is
+    // forbidden: ORT WASM 的 stackAlloc/stackRestore 是共享的，跨 session 并发
+    // session.run() 会破坏栈指针 —— 见 sessionManager.js 的全局锁注释
+    // (onnxruntime Issue #19443)。DML/WebNN GPU 下串行同样符合该约束。
     const t4 = performance.now();
-    // W17: use allSettled so a rejection in one encoder doesn't leak the
-    // successfully-resolved output tensors of the others. With Promise.all,
-    // the first rejection discards the resolved results without disposing them.
-    const encoderSettled = await Promise.allSettled([
-        runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', encPaddedText, [1, encSeqLen]) }),
-        runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', encPaddedPitch, [1, encSeqLen]) }),
-        runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', encPaddedType, [1, encSeqLen]) }),
-        runSession('f0Encoder', { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) }),
-    ]);
-    const firstReject = encoderSettled.find(s => s.status === 'rejected');
-    if (firstReject) {
-        // Dispose all successfully-resolved output tensors to prevent NPU/GPU memory leak.
-        for (const s of encoderSettled) {
-            if (s.status === 'fulfilled' && s.value && s.value['embeddings']) {
-                disposeTensor(s.value['embeddings']);
-            }
+    // W17: 顺序执行时也要保证"某个 encoder 失败 → 已拿到的输出张量必须释放"，
+    // 否则 NPU/GPU 显存泄漏。这里先把成功的输出收集起来，异常时统一 dispose。
+    const encoderNames = ['noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder', 'f0Encoder'];
+    const encoderFeeds = [
+        { input_ids: new ort.Tensor('int64', encPaddedText, [1, encSeqLen]) },
+        { input_ids: new ort.Tensor('int64', encPaddedPitch, [1, encSeqLen]) },
+        { input_ids: new ort.Tensor('int64', encPaddedType, [1, encSeqLen]) },
+        { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) },
+    ];
+    const encoderOutputs = [];
+    try {
+        for (let i = 0; i < encoderNames.length; i++) {
+            encoderOutputs.push(await runSession(encoderNames[i], encoderFeeds[i]));
         }
-        throw firstReject.reason;
+    } catch (err) {
+        for (const out of encoderOutputs) {
+            if (out && out['embeddings']) disposeTensor(out['embeddings']);
+        }
+        throw err;
     }
-    const [textResults, pitchResults, typeResults, f0Results] = encoderSettled.map(s => s.value);
+    const [textResults, pitchResults, typeResults, f0Results] = encoderOutputs;
     const encInferMs = performance.now() - t4;
-    console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${combinedTokenCount}, f0Frames=${combinedFrames}${useStaticShapes ? ', NPU static' : ''}]`);
+    console.log(`[WebNN] 4 encoders (sequential): ${encInferMs.toFixed(0)}ms [tokens=${combinedTokenCount}, f0Frames=${combinedFrames}${useStaticShapes ? ', NPU static' : ''}]`);
     console.log(`[WebNN]   enc prep: ${(t4 - tEncPrep).toFixed(1)}ms, infer: ${encInferMs.toFixed(1)}ms`);
 
     const tEncPost = performance.now();

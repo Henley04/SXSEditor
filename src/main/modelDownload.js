@@ -227,6 +227,100 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
   }
 }
 
+/**
+ * 下载缺失的 JP 模型文件。
+ * C39: MODEL_DOWNLOAD_START_JP 与 MODEL_DOWNLOAD_UPDATE_JP 共用同一实现，
+ * 更新路径不再依赖渲染进程自行发起下载 —— 下载窗口未打开时也有执行路径。
+ */
+async function startJpModelDownload(precision, revision) {
+  const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
+  const modelDir = getModelDir();
+  const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+  // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope
+  let currentRevision = revision;
+  if (!currentRevision || currentRevision === 'latest') {
+    try {
+      const tags = await getJpModelTags(currentPrecision);
+      currentRevision = getLatestTag(tags);
+    } catch (err) {
+      return { success: false, error: `Failed to fetch JP model tags: ${err.message}` };
+    }
+  }
+  if (!currentRevision) {
+    return { success: false, error: 'No JP model tags available for download' };
+  }
+  const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
+  if (missing.length === 0) return { success: true };
+
+  // Check if JP model repo exists for this precision。不做 fp16 回退：
+  // 回退会让 fp32/int8 走进“每个文件都取不到 URL → 全部 continue”，
+  // 最后误报成功。这里直接明确失败，由调用方提示用户切换精度。
+  const jpModelId = JP_MODEL_IDS[currentPrecision];
+  if (!jpModelId) {
+    return { success: false, error: `JP models not available for precision: ${currentPrecision}` };
+  }
+
+  // W5: per-key AbortController so a concurrent main/SiFiGAN download
+  // cannot overwrite this download's cancel handle.
+  const jpDownloadKey = 'jp';
+  const downloadAbortController = new AbortController();
+  downloadAbortControllers.set(jpDownloadKey, downloadAbortController);
+  const abortSignal = downloadAbortController.signal;
+
+  let downloadedCount = 0;
+  try {
+    // Download JP files to the JP subdirectory
+    for (const file of missing) {
+      const destPath = getJpLocalFilePath(modelDir, file.filePath, currentPrecision);
+      const url = getJpFileDownloadUrl(file.filePath, currentPrecision, currentRevision);
+      if (!url) continue;
+
+      const { downloadFileWithRetry } = require('../modelManager');
+      // W5: serialize on the destination path so a concurrent download to
+      // the same file cannot interleave bytes.
+      await withDownloadPathMutex(destPath, () => downloadFileWithRetry(url, destPath, { abortSignal }));
+      downloadedCount++;
+
+      const win = getModelDownloadWindow();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_COMPLETE, { filePath: file.filePath });
+      }
+    }
+
+    // 一个文件都没下成（URL 缺失等）不能报成功：否则渲染侧会显示“已完成”，
+    // 并写下一份无意义的版本记录，用户下次合成才发现模型仍缺失。
+    if (downloadedCount === 0) {
+      return { success: false, error: `No downloadable JP files for precision: ${currentPrecision}` };
+    }
+
+    const win = getModelDownloadWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_COMPLETE);
+    }
+    // 失效 JP 模型存在性缓存，让下次合成重新检查文件
+    invalidateJpModelsCache(modelDir, currentPrecision);
+    // 保存 JP 模型版本信息
+    saveJpModelVersion(modelDir, currentPrecision, currentRevision);
+    console.log('[Main] JP model download complete');
+  } catch (err) {
+    if (err.message === 'Download cancelled') {
+      console.log('[Main] JP model download cancelled');
+    } else {
+      console.error('[Main] JP model download failed:', err);
+      const win = getModelDownloadWindow();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_ERROR, { message: err.message });
+      }
+    }
+    // 失败/取消必须如实返回，不能吞成 success（否则调用方无法重试或提示）。
+    return { success: false, error: err.message };
+  } finally {
+    downloadAbortControllers.delete(jpDownloadKey);
+  }
+
+  return { success: true };
+}
+
 async function checkAndDownloadModels() {
   if (require('electron').app.isPackaged) {
     const settings = loadSettings();
@@ -501,87 +595,8 @@ function registerModelDownloadIpc() {
   });
 
   safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_START_JP, async (event, precision, revision) => {
-    const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
-    const modelDir = getModelDir();
-    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope
-    let currentRevision = revision;
-    if (!currentRevision || currentRevision === 'latest') {
-      try {
-        const tags = await getJpModelTags(currentPrecision);
-        currentRevision = getLatestTag(tags);
-      } catch (err) {
-        return { success: false, error: `Failed to fetch JP model tags: ${err.message}` };
-      }
-    }
-    if (!currentRevision) {
-      return { success: false, error: 'No JP model tags available for download' };
-    }
-    const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
-    if (missing.length === 0) return { success: true };
-
-    // Check if JP model repo exists for this precision
-    const jpModelId = JP_MODEL_IDS[currentPrecision] || JP_MODEL_IDS['fp16'];
-    if (!jpModelId) {
-      return { success: false, error: `JP models not available for precision: ${currentPrecision}` };
-    }
-
-    // W5: per-key AbortController so a concurrent main/SiFiGAN download
-    // cannot overwrite this download's cancel handle.
-    const jpDownloadKey = 'jp';
-    const downloadAbortController = new AbortController();
-    downloadAbortControllers.set(jpDownloadKey, downloadAbortController);
-    const abortSignal = downloadAbortController.signal;
-    const _modelDownloadWindow = getModelDownloadWindow();
-
-    try {
-      // Download JP files to the JP subdirectory
-      const _jpMissingFiles = missing.map(f => ({
-        ...f,
-        _jpFilePath: getJpLocalFilePath(modelDir, f.filePath, currentPrecision),
-      }));
-
-      // Use custom download for JP files
-      for (const file of missing) {
-        const destPath = getJpLocalFilePath(modelDir, file.filePath, currentPrecision);
-        const url = getJpFileDownloadUrl(file.filePath, currentPrecision, currentRevision);
-        if (!url) continue;
-
-        const { downloadFileWithRetry } = require('../modelManager');
-        // W5: serialize on the destination path so a concurrent download to
-        // the same file cannot interleave bytes.
-        await withDownloadPathMutex(destPath, () => downloadFileWithRetry(url, destPath, { abortSignal }));
-
-        const win = getModelDownloadWindow();
-        if (win && !win.isDestroyed()) {
-          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_COMPLETE, { filePath: file.filePath });
-        }
-      }
-
-      const win = getModelDownloadWindow();
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_COMPLETE);
-      }
-      // 失效 JP 模型存在性缓存，让下次合成重新检查文件
-      invalidateJpModelsCache(modelDir, currentPrecision);
-      // 保存 JP 模型版本信息
-      saveJpModelVersion(modelDir, currentPrecision, currentRevision);
-      console.log('[Main] JP model download complete');
-    } catch (err) {
-      if (err.message === 'Download cancelled') {
-        console.log('[Main] JP model download cancelled');
-      } else {
-        console.error('[Main] JP model download failed:', err);
-        const win = getModelDownloadWindow();
-        if (win && !win.isDestroyed()) {
-          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_ERROR, { message: err.message });
-        }
-      }
-    } finally {
-      downloadAbortControllers.delete(jpDownloadKey);
-    }
-
-    return { success: true };
+    // C39: 实现已抽到 startJpModelDownload，与 MODEL_DOWNLOAD_UPDATE_JP 共用。
+    return startJpModelDownload(precision, revision);
   });
 
   safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_JP_EXISTS, async () => {
@@ -1219,7 +1234,8 @@ function registerModelDownloadIpc() {
     } catch (_) {}
     invalidateJpModelsCache(modelDir, currentPrecision);
 
-    // Re-check missing files and trigger download via the existing start-jp handler
+    // Re-check missing files after deletion; the shared startJpModelDownload
+    // below performs the actual download.
     const { checkMissingJpFiles } = require('../modelManager');
     const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
     if (missing.length === 0) {
@@ -1227,7 +1243,8 @@ function registerModelDownloadIpc() {
       return { success: true };
     }
 
-    // Trigger JP download through the existing start-jp IPC flow
+    // C39: 直接在主进程启动下载（原先只发事件让渲染进程自行下载，下载窗口
+    // 未打开时 JP 更新没有任何执行路径）。事件仍作为已开窗口的额外通知。
     const win = getModelDownloadWindow();
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missing);
@@ -1236,6 +1253,8 @@ function registerModelDownloadIpc() {
         win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_REVISION, currentRevision);
       }
     }
+    const result = await startJpModelDownload(currentPrecision, currentRevision);
+    if (!result || result.success === false) return result;
     return { success: true, missingCount: missing.length };
   });
 

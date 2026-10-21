@@ -2,6 +2,7 @@
 const { lazyOrt: ort } = require('../ortRuntime.js');
 const { SAMPLE_RATE, HOP_SIZE, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
+const { isRestNote } = require('./audioSegmentation');
 const durationStats = require('./durationStats');
 
 /**
@@ -50,32 +51,13 @@ class Preprocessing {
     }
 
     /**
-     * Rest predicate — MUST stay consistent with
-     * AudioSegmentation._isRestNote() and index.js _silenceNonVocalRegions().
-     *
-     * Rests are: explicit noteType 1, empty lyric (non-slur), the <SP>
-     * silence token, or any non-aspiration note with pitch <= 0 (the kind
-     * fillNoteGaps() synthesizes for timeline gaps).
-     * Slur/continuation notes are never rests even with an empty lyric, and
-     * <AP> is an audible aspiration token (kept voiced as a sung note).
+     * Rest predicate — delegates to audioSegmentation.isRestNote(), the single
+     * shared definition used by AudioSegmentation (region splitting) and
+     * index.js _silenceNonVocalRegions(). Keeping one implementation prevents
+     * the three call sites from disagreeing.
      */
     isRestNote(note) {
-        if (!note) return false;
-        if (note.isSlur || note.isContinuation || note.noteType === 3) return false;
-        const lyric = String(note.lyric || '').trim();
-        // <AP> is an audible aspiration token, never a rest.
-        if (lyric === '<AP>') return false;
-        // A pitch <= 0 note is always a rest (fillNoteGaps synthesizes them
-        // with pitch 0). An explicit empty lyric is a rest too (piano-roll
-        // convention), but a note object without a lyric field is not
-        // considered resting solely because of the missing field.
-        const explicitEmpty = note.lyric !== undefined
-            && note.lyric !== null
-            && lyric.length === 0;
-        return note.noteType === 1
-            || lyric === '<SP>'
-            || explicitEmpty
-            || note.pitch <= 0;
+        return isRestNote(note);
     }
 
     /**
@@ -880,12 +862,30 @@ class Preprocessing {
         const typeInput = new ort.Tensor('int64', encType, [1, encSeqLen]);
         const f0Input = new ort.Tensor('int64', encF0, [1, encF0Len]);
 
-        const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
-            sessions.noteTextEncoder.run({ input_ids: textInput }),
-            sessions.notePitchEncoder.run({ input_ids: pitchInput }),
-            sessions.noteTypeEncoder.run({ input_ids: typeInput }),
-            sessions.f0Encoder.run({ input_ids: f0Input }),
-        ]);
+        // 使用 allSettled：任一分支 reject 时，先释放所有已产生的输入/输出张量，
+        // 再抛出第一个错误，避免成功分支的 GPU 张量泄漏（Promise.all 无此机会）。
+        const _encoderInputs = [textInput, pitchInput, typeInput, f0Input];
+        let settled;
+        try {
+            settled = await Promise.allSettled([
+                sessions.noteTextEncoder.run({ input_ids: textInput }),
+                sessions.notePitchEncoder.run({ input_ids: pitchInput }),
+                sessions.noteTypeEncoder.run({ input_ids: typeInput }),
+                sessions.f0Encoder.run({ input_ids: f0Input }),
+            ]);
+        } finally {
+            // run 已全部结束，输入张量无论成功/失败都可释放。
+            for (const t of _encoderInputs) disposeTensor(t);
+        }
+        const _failed = settled.find(s => s.status === 'rejected');
+        if (_failed) {
+            for (const s of settled) {
+                if (s.status !== 'fulfilled' || !s.value) continue;
+                for (const k of Object.keys(s.value)) disposeTensor(s.value[k]);
+            }
+            throw _failed.reason;
+        }
+        const [textResults, pitchResults, typeResults, f0Results] = settled.map(s => s.value);
 
         // 输出名自适应：optimized_npu 输出 'embeddings'，plain int8 量化模型输出重命名为
         // 'output'。按候选顺序取第一个存在的 key，避免硬编码只匹配一种命名。
@@ -904,11 +904,8 @@ class Preprocessing {
         const pitchEmb = useStaticShapes ? outputToFloat32(pitchOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchOut);
         const typeEmb = useStaticShapes ? outputToFloat32(typeOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeOut);
         const f0Emb = useStaticShapes ? outputToFloat32(f0Out).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Out);
-        // 释放 4 个 encoder 的输入和输出张量（outputToFloat32 已拷贝数据）
-        disposeTensor(textInput);
-        disposeTensor(pitchInput);
-        disposeTensor(typeInput);
-        disposeTensor(f0Input);
+        // 释放 4 个 encoder 的输出张量（输入张量已在 finally 中释放；
+        // outputToFloat32 已拷贝数据）
         disposeTensor(textOut);
         disposeTensor(pitchOut);
         disposeTensor(typeOut);

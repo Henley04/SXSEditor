@@ -159,34 +159,10 @@ function _getPitchAtTimeForFragment(pc, sortedAnchors, effAnchors, autoPoints, t
   return null;
 }
 
-export function convertF0DataToPitchCurve(f0Data, totalSeconds) {
-  if (!f0Data || f0Data.length === 0) return null;
-  const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / SVS_HOP_SIZE);
-  const f0Arr = new Float32Array(totalFrames);
-  const frameDuration = SVS_HOP_SIZE / SAMPLE_RATE;
-  for (let i = 0; i < totalFrames; i++) {
-    const frameTime = i * frameDuration;
-    let lo = 0;
-    let hi = f0Data.length - 1;
-    while (lo < hi - 1) {
-      const mid = (lo + hi) >> 1;
-      if (f0Data[mid].time <= frameTime) lo = mid;
-      else hi = mid;
-    }
-    const f0Lo = f0Data[lo];
-    const f0Hi = f0Data[hi];
-    if (f0Lo && f0Hi && f0Lo.f0 > 0 && f0Hi.f0 > 0 && hi !== lo) {
-      const t = (frameTime - f0Lo.time) / (f0Hi.time - f0Lo.time);
-      f0Arr[i] = f0Lo.f0 + t * (f0Hi.f0 - f0Lo.f0);
-    } else if (f0Lo && f0Lo.f0 > 0) {
-      f0Arr[i] = f0Lo.f0;
-    } else {
-      f0Arr[i] = 0;
-    }
-  }
-  return f0Arr;
-}
-
+/**
+ * @internal 仅由 test/rendererPostprocessParity.test.js 引用（同源复刻守护），
+ * 生产代码请用 buildFragmentPitchCurveF0。
+ */
 export function computePitchCurveF0(singerFragments, allNotes, bpm) {
   const pitchCurveFrags = singerFragments.filter(f => f.pitchCurve && f.pitchCurve.enabled &&
     (f.pitchCurve.anchorPoints.length > 0 || f.pitchCurve.brushSegments.length > 0));

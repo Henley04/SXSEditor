@@ -112,7 +112,15 @@ const MODEL_GROUPS = [
         nameEn: 'SiFiGAN Vocoder',
         description: '可选替代声码器，基于 Source-Filter HiFi-GAN，支持音高可控',
         descriptionEn: 'Optional alternative vocoder based on Source-Filter HiFi-GAN with pitch controllability',
-        files: ['sifigan_vocoder_dml_fp16.onnx', 'sifigan_vocoder_dml.onnx', 'sifigan_stats.joblib'],
+        // C16: 两个 DML 声码器都是外部数据格式（.onnx + .onnx.data），
+        // 与 pipeline/constants.js 的 SIFIGAN_MODEL_FILES / MODEL_SIZES 注释一致。
+        files: [
+          'sifigan_vocoder_dml_fp16.onnx',
+          'sifigan_vocoder_dml_fp16.onnx.data',
+          'sifigan_vocoder_dml.onnx',
+          'sifigan_vocoder_dml.onnx.data',
+          'sifigan_stats.joblib',
+        ],
         sessionKey: 'sifigan',
       },
     ],
@@ -279,25 +287,9 @@ function getModelDef(groupId, modelId) {
   return group.models.find(m => m.id === modelId);
 }
 
-/**
- * 获取所有模型的文件列表（去重）
- */
-function getAllModelFiles() {
-  const files = new Set();
-  for (const group of MODEL_GROUPS) {
-    for (const model of group.models) {
-      for (const file of model.files) {
-        files.add(file);
-      }
-    }
-  }
-  return [...files];
-}
-
 module.exports = {
   MODEL_GROUPS,
   getModelGroups,
   getModelGroup,
   getModelDef,
-  getAllModelFiles,
 };

@@ -1,7 +1,7 @@
 import { state, trackManager } from './state.js';
 import { initI18n, applyLocale, getLocale, tOr } from '../i18n/index.js';
-import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog } from './projectManager.js';
-import { refreshAll, invalidateFragmentNoteSprites } from './timelineRenderer.js';
+import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog, cancelPendingAutoSave } from './projectManager.js';
+import { refreshAll, invalidateFragmentNoteSprites, invalidateSingerListCache } from './timelineRenderer.js';
 import { showAlertDialog } from '../alertDialog.js';
 // 2.2: 与主题管理共用同一份 token 注入实现，不再在本文件里复制一份。
 import { injectTokens } from '../themes/themeInit.js';
@@ -74,22 +74,27 @@ if (window.electronAPI?.onFragmentSaved) {
   if (cleanup) state._ipcCleanups.push(cleanup);
 }
 
-// i18n initialization
-initI18n().then(() => {
+// i18n 初始化统一由 index.js 负责（本文件不再重复 initI18n，避免重复读取
+// localStorage / 主进程 locale 的竞态）。
+
+// 语言切换后除了静态 [data-i18n] 文本，动态构建的歌手列表与 canvas 文案也必须
+// 重建：歌手列表有缓存键，需先失效再 refreshAll。
+function _refreshLocalizedUI() {
   applyLocale();
   document.documentElement.lang = getLocale();
-});
+  invalidateSingerListCache();
+  refreshAll();
+}
 
 document.addEventListener('localeChanged', () => {
-  applyLocale();
+  _refreshLocalizedUI();
 });
 
 // Locale changed IPC handler
 if (window.electronAPI?.onLocaleChanged) {
   const cleanup = window.electronAPI.onLocaleChanged(async () => {
     await initI18n();
-    applyLocale();
-    document.documentElement.lang = getLocale();
+    _refreshLocalizedUI();
   });
   if (cleanup) state._ipcCleanups.push(cleanup);
 }
@@ -103,6 +108,9 @@ if (window.electronAPI?.onCloseConfirm) {
   }
 
   const cleanupClose = window.electronAPI.onCloseConfirm(async () => {
+    // 关闭确认期间不得让后台自动保存落盘：用户可能在对话框里选择“不保存”，
+    // 若 pending 定时器此刻触发，会把用户明确要丢弃的改动写进文件。
+    cancelPendingAutoSave();
     try {
       const result = await showSaveBeforeCloseDialog();
       if (result === 'save') {
@@ -116,8 +124,16 @@ if (window.electronAPI?.onCloseConfirm) {
       }
       // result === 'cancel' -> do nothing, window stays open
     } catch (err) {
+      // 对话框/保存流程出错时绝不关窗：关闭会静默丢弃未保存改动。
+      // 保持窗口打开并明确告知失败原因。
       console.error('Close confirmation dialog error:', err);
-      doCloseConfirmed();
+      try {
+        showAlertDialog(tOr(
+          'main.closeConfirmFailed',
+          'Failed to confirm closing the window: {error}\n\nYour changes were not saved, so the window stays open.',
+          { error: err?.message || String(err) },
+        ));
+      } catch (_) {}
     }
   });
   if (cleanupClose) state._ipcCleanups.push(cleanupClose);

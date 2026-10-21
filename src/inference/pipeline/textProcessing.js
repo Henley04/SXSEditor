@@ -884,11 +884,23 @@ class TextProcessing {
             const baseWeight = JP_MORA_WEIGHTS[jpSrc] !== undefined
                 ? JP_MORA_WEIGHTS[jpSrc]
                 : JP_MORA_DEFAULT_WEIGHT;
-            // Count how many EN phonemes share this same JP source (consecutive)
-            let componentCount = 1;
-            for (let k = i + 1; k < phonemes.length && jpSources[k] === jpSrc; k++) {
-                componentCount++;
+            // Locate the whole contiguous group sharing this JP source: look
+            // backwards to the group start and forwards to the group end.
+            // Counting forward only would give the last component the full
+            // mora weight (e.g. ts→T+S produced [.., 0.55, 1.0]).
+            let groupStart = i;
+            while (groupStart > 0
+                && jpSources[groupStart - 1] === jpSrc
+                && !SPECIAL.has(phonemes[groupStart - 1].name || '')) {
+                groupStart--;
             }
+            let groupEnd = i;
+            while (groupEnd + 1 < phonemes.length
+                && jpSources[groupEnd + 1] === jpSrc
+                && !SPECIAL.has(phonemes[groupEnd + 1].name || '')) {
+                groupEnd++;
+            }
+            const componentCount = groupEnd - groupStart + 1;
             phonemes[i].weight = baseWeight / componentCount;
         }
         return phonemes;

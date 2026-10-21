@@ -32,6 +32,35 @@ function medianOf(arr) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+/**
+ * 增量中值（P1）：维护一个有序数组，push 用二分插入，median 为 O(1)。
+ *
+ * 音符切分时每来一帧都要"当前已收帧的中值"：原实现每帧 `medianOf(cur.map(...))`
+ * （slice + sort），单音符段整体 O(n² log n)。这里把排序摊到插入上，输出与
+ * medianOf 完全一致（偶数长度取中间两数的算术平均，奇数取中位）。
+ */
+function createIncrementalMedian() {
+  const sorted = [];
+  return {
+    push(value) {
+      let lo = 0;
+      let hi = sorted.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (sorted[mid] < value) lo = mid + 1;
+        else hi = mid;
+      }
+      sorted.splice(lo, 0, value);
+    },
+    value() {
+      const n = sorted.length;
+      if (n === 0) return 0;
+      const m = n >> 1;
+      return n % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+    },
+  };
+}
+
 // ==================== 1. 电平分析 / 归一化 ====================
 
 /**
@@ -220,21 +249,26 @@ function lookaheadStable(segment, startIdx, minNoteFrames, newMidi) {
 /**
  * 严格量化：所有音高强制对齐到半音。颤音（±0.5 半音内抖动）保留在同一音符。
  */
-function splitSegmentStrict(segment, frameDur, minNoteFrames) {
+function splitSegmentStrict(segment, minNoteFrames) {
   const sub = [];
   let cur = [];
+  let curMedian = createIncrementalMedian();
   for (let i = 0; i < segment.length; i++) {
     const f = segment[i];
-    if (cur.length === 0) { cur.push(f); continue; }
-    const curMed = medianOf(cur.map((c) => hzToMidi(c.f0)));
+    if (cur.length === 0) { cur.push(f); curMedian.push(hzToMidi(f.f0)); continue; }
+    const curMed = curMedian.value();
     const midi = hzToMidi(f.f0);
     if (Math.abs(midi - curMed) <= 0.5) {
       cur.push(f);
+      curMedian.push(midi);
     } else if (lookaheadStable(segment, i, minNoteFrames, midi)) {
       sub.push(cur);
       cur = [f];
+      curMedian = createIncrementalMedian();
+      curMedian.push(midi);
     } else {
       cur.push(f); // 短暂抖动，视为颤音的一部分
+      curMedian.push(midi);
     }
   }
   if (cur.length) sub.push(cur);
@@ -245,21 +279,26 @@ function splitSegmentStrict(segment, frameDur, minNoteFrames) {
  * 保留滑音/Pitch Bend：音符内允许更大滑移（slideTolerance 半音内），
  * 音符中心取中值，逐帧记录偏离中心的 cents 作为 Pitch Bend。
  */
-function splitSegmentPitchBend(segment, frameDur, minNoteFrames, slideToleranceSemitones) {
+function splitSegmentPitchBend(segment, minNoteFrames, slideToleranceSemitones) {
   const sub = [];
   let cur = [];
+  let curMedian = createIncrementalMedian();
   for (let i = 0; i < segment.length; i++) {
     const f = segment[i];
-    if (cur.length === 0) { cur.push(f); continue; }
-    const curMed = medianOf(cur.map((c) => hzToMidi(c.f0)));
+    if (cur.length === 0) { cur.push(f); curMedian.push(hzToMidi(f.f0)); continue; }
+    const curMed = curMedian.value();
     const midi = hzToMidi(f.f0);
     if (Math.abs(midi - curMed) <= slideToleranceSemitones) {
       cur.push(f);
+      curMedian.push(midi);
     } else if (lookaheadStable(segment, i, minNoteFrames, midi)) {
       sub.push(cur);
       cur = [f];
+      curMedian = createIncrementalMedian();
+      curMedian.push(midi);
     } else {
       cur.push(f);
+      curMedian.push(midi);
     }
   }
   if (cur.length) sub.push(cur);
@@ -299,8 +338,8 @@ function segmentNotes(f0Array, options) {
   const flush = () => {
     if (segment.length === 0) return;
     const subs = quantization === 'pitchbend'
-      ? splitSegmentPitchBend(segment, frameDur, minNoteFrames, slideToleranceSemitones)
-      : splitSegmentStrict(segment, frameDur, minNoteFrames);
+      ? splitSegmentPitchBend(segment, minNoteFrames, slideToleranceSemitones)
+      : splitSegmentStrict(segment, minNoteFrames);
     for (const sub of subs) {
       const note = subsegmentToNote(sub, frameDur, minNoteDuration, beatDur);
       if (!note) continue;
@@ -328,6 +367,8 @@ function segmentNotes(f0Array, options) {
   return { notes, pitchBends };
 }
 
+// ==================== 6. 音符生成 / 最短音符过滤 ====================
+
 function subsegmentToNote(sub, frameDur, minNoteDuration, beatDur) {
   const midis = sub.map((c) => hzToMidi(c.f0));
   const pitch = Math.round(medianOf(midis));
@@ -348,7 +389,7 @@ function subsegmentToNote(sub, frameDur, minNoteDuration, beatDur) {
 
 // ==================== 7. 有效人声检测 ====================
 
-function detectVoiceQuality(f0Array, _durationSec) {
+function detectVoiceQuality(f0Array) {
   let voiced = 0;
   let first3Voiced = 0;
   let first3Total = 0;

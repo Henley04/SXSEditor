@@ -7,8 +7,13 @@ import { createPluginBackendSection } from './pluginTrackDialog.js';
 import { ensurePluginCatalog, findTrackKind } from './pluginBackend.js';
 import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
 
+// 保存纪元：每次 markDirty 自增。异步写盘完成后只有纪元未变（期间没有新编辑）
+// 才允许 markClean，否则会把写盘期间产生的新改动误标为"已保存"。
+let _saveEpoch = 0;
+
 export function markDirty() {
   state.isDirty = true;
+  _saveEpoch++;
   if (window.electronAPI?.setDirty) {
     window.electronAPI.setDirty(true);
   }
@@ -571,17 +576,62 @@ export function updateProjectSettings(options = {}) {
 }
 
 let _lastAutoSaveAlertAt = 0;
+// 自动保存采用 trailing 防抖：分片编辑器连续编辑时避免每个事件都全量
+// JSON.stringify + 写盘（工程大时 stringify 是明显的主线程卡顿源）。
+const AUTOSAVE_DEBOUNCE_MS = 400;
+let _autoSaveTimer = null;
 
-export async function autoSaveProject() {
+/**
+ * 请求一次自动保存（防抖）。真正写盘由 _commitAutoSave 完成。
+ * 关闭窗口前需要立即落盘时调用 flushAutoSave()。
+ */
+export function autoSaveProject() {
   if (!state.currentProjectFilePath) return;
+  if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(() => {
+    _autoSaveTimer = null;
+    _commitAutoSave().catch(() => {});
+  }, AUTOSAVE_DEBOUNCE_MS);
+}
+
+/**
+ * 立即执行一次自动保存（取消 pending 防抖），供关闭前调用。
+ */
+export async function flushAutoSave() {
+  if (_autoSaveTimer) {
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
+  }
+  await _commitAutoSave();
+}
+
+/**
+ * 取消尚未触发的自动保存。用于两类场景：
+ *  - 手动保存成功后，避免 400ms 后再做一次全量序列化 + 写盘；
+ *  - 关闭确认对话框弹出时，避免用户在“是否保存”对话框停留期间，
+ *    后台定时器把用户稍后可能选择“不保存”的改动写入磁盘。
+ */
+export function cancelPendingAutoSave() {
+  if (_autoSaveTimer) {
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = null;
+  }
+}
+
+async function _commitAutoSave() {
+  if (!state.currentProjectFilePath) return;
+  // 捕获写入开始时的纪元：写盘（尤其大工程）期间可能又有新编辑。
+  const epoch = _saveEpoch;
+  const path = state.currentProjectFilePath;
   try {
     const data = await serializeProject(false);
     await _enqueueProjectWrite(async () => {
-      const res = await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+      const res = await window.electronAPI.saveFile(path, data);
       _checkSaveResult(res);
     });
-    markClean();
-    console.log('Project auto-saved to', state.currentProjectFilePath);
+    // 仅在写盘期间没有新编辑时清除脏标记。
+    if (epoch === _saveEpoch) markClean();
+    console.log('Project auto-saved to', path);
   } catch (err) {
     console.warn('Project auto-save failed:', err);
     // 自动保存失败必须让用户感知，否则"已保存"的假象会在关闭时丢数据。
@@ -736,8 +786,8 @@ export function showSaveBeforeCloseDialog() {
   });
 }
 
-// 写盘互斥：自动保存（分片编辑 500ms 防抖）与手动保存可能几乎同时触发，
-// 并发写同一文件有交错/竞争风险。所有真实写盘都串行排队。
+// 写盘互斥：自动保存（400ms trailing 防抖，见 AUTOSAVE_DEBOUNCE_MS）与手动保存
+// 可能几乎同时触发，并发写同一文件有交错/竞争风险。所有真实写盘都串行排队。
 let _projectWriteChain = Promise.resolve();
 function _enqueueProjectWrite(writeFn) {
   const run = _projectWriteChain.then(writeFn, writeFn);
@@ -755,16 +805,20 @@ function _checkSaveResult(res) {
 }
 
 export async function saveProject() {
+  // 手动保存优先：取消尚未触发的自动保存，避免保存完成后再全量写一次。
+  cancelPendingAutoSave();
   // Save in-place: if we already have a file path, write to it silently
   // without showing a dialog or the save-options popup.
   if (state.currentProjectFilePath) {
     try {
+      const epoch = _saveEpoch;
       const data = await serializeProject(false);
       await _enqueueProjectWrite(async () => {
         const res = await window.electronAPI.saveFile(state.currentProjectFilePath, data);
         _checkSaveResult(res);
       });
-      markClean();
+      // 写盘期间若有新编辑，不能清掉 dirty。
+      if (epoch === _saveEpoch) markClean();
       console.log('Project saved to', state.currentProjectFilePath);
       return { saved: true, canceled: false };
     } catch (err) {
@@ -777,6 +831,8 @@ export async function saveProject() {
 }
 
 export async function saveProjectAs() {
+  // 同 saveProject：另存为也会提交全部状态，无需再触发一次自动保存。
+  cancelPendingAutoSave();
   if (window.electronAPI?.showSaveDialog) {
     try {
       const saveOptions = await showSaveProjectOptionsDialog();
@@ -787,13 +843,15 @@ export async function saveProjectAs() {
         defaultPath: state.currentProjectFilePath || undefined,
       });
       if (!result.canceled && result.filePath) {
+        const epoch = _saveEpoch;
         const data = await serializeProject(saveOptions.embedSingerFiles, saveOptions.embedAccompanimentAudio);
         await _enqueueProjectWrite(async () => {
           const res = await window.electronAPI.saveFile(result.filePath, data);
           _checkSaveResult(res);
         });
         state.currentProjectFilePath = result.filePath;
-        markClean();
+        // 写盘期间若有新编辑，不能清掉 dirty。
+        if (epoch === _saveEpoch) markClean();
         console.log('Project saved to', result.filePath);
         return { saved: true, canceled: false };
       }

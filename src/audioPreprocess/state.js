@@ -18,6 +18,8 @@ const state = {
 
   f0Data: null,
   singerData: null,
+  // 加载时裁掉的前导静音秒数：保存 singerData 时要把时间轴补回原始位置
+  trimOffsetSec: 0,
 
   waveformScrollX: 0,
   waveformZoomX: 1,

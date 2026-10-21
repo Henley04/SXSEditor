@@ -259,14 +259,6 @@ function _rebuildDummyForSession(session, baseDummy, nonZero = false, dynamicSeq
     }
 }
 
-/** @deprecated Using classifyDevice 替代 */
-function isDiscreteGPUByName(name) {
-    const dt = classifyDevice(name, 0, undefined);
-    if (dt === 'discrete-gpu') return true;
-    if (dt === 'integrated-gpu' || dt === 'npu') return false;
-    return undefined;
-}
-
 function gpuCacheToDevices(controllers) {
     const devices = [];
     for (let i = 0; i < controllers.length; i++) {
@@ -652,7 +644,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     const _isTypeMismatchErr = (err) => {
         const msg = err && err.message ? err.message : '';
         // 例: "Unexpected input data type. Actual: (tensor(float16)) , expected: (tensor(float))"
-        return msg.includes('Unexpected input data type') && msg.includes('tensor(float');
+        // 必须精确区分 tensor(float) 与 tensor(float16)：用 includes('tensor(float')
+        // 会同时命中 tensor(float16)，把非精度错误也当成精度不匹配去重试。
+        if (!msg.includes('Unexpected input data type')) return false;
+        const types = msg.match(/tensor\((float16|float)\)/g);
+        return !!types && new Set(types).size > 1;
     };
     const _getAlternateDummy = () => {
         if (overrideDummyInputs || useStaticShapes) return null;
@@ -773,33 +769,30 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         // 现模型（FP16 权重版）已在真实校准数据上实测 DML 输出与 CPU 一致
         // （fp16-vs-cpu cos≈0.99996，fp32-vs-cpu cos=1.0）且约 2.3x 提速，
         // 故放开 diffStep 走 DML 优先，失败仍自动回退 CPU。
-        const tryDml = true;
         let npuDmlSession = null;
-        if (tryDml) {
-            try {
-                const dmlOpts = typeof dmlDeviceId === 'number'
-                    ? { name: 'dml', deviceId: dmlDeviceId }
-                    : 'dml';
-                npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
-                if (runValidation) {
-                    await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
-                    _validatedSessionModels.add(validationKey);
-                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
-                } else {
-                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
-                }
-                return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
-            } catch (dmlErr) {
-                if (npuDmlSession) {
-                    try { npuDmlSession.release(); } catch (e) {
-                        console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
-                    }
-                }
-                const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
-                    ? 'DML 不支持该静态形状算子'
-                    : dmlErr.message.substring(0, 60).split('\n')[0];
-                console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
+        try {
+            const dmlOpts = typeof dmlDeviceId === 'number'
+                ? { name: 'dml', deviceId: dmlDeviceId }
+                : 'dml';
+            npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
+            if (runValidation) {
+                await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
+            } else {
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
             }
+            return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
+        } catch (dmlErr) {
+            if (npuDmlSession) {
+                try { npuDmlSession.release(); } catch (e) {
+                    console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
+                }
+            }
+            const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
+                ? 'DML 不支持该静态形状算子'
+                : dmlErr.message.substring(0, 60).split('\n')[0];
+            console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
         }
         // DML 不适用或失败 → 回退 CPU（保持原有行为：跳过推导验证以加快大模型加载）
         const cpuSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts(['cpu']));
@@ -883,7 +876,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状不匹配。常见情况：
         //   1. *_dml.onnx 静态形状模型（diff_step seq_len=2048, vocoder seq_len=500）
         //      与动态 dummy（seq_len=3）不匹配 → "invalid dimensions"
-        //   2. mel_transform.onnx 形状为静态 [1,24000]，dummy 也是 [1,1440] → "invalid dimensions"
+        //   2. mel_transform.onnx 形状为静态 [1,24000]（SAMPLE_RATE），dummy 也是 [1,24000] → "invalid dimensions"
         // 模型已成功加载（create 成功），验证失败仅因 dummy 不匹配，
         // 跳过验证直接返回会话，首次实际推理时自然验证。动态形状的 fp16 模型不受影响。
         // 注：FP16/FP32 类型不匹配已由 _runWithPrecisionFallback 自动重试，到达此处说明
@@ -963,7 +956,6 @@ class WebNNSessionProxy {
 module.exports = {
     getMainWindowWebContents,
     classifyDevice,
-    isDiscreteGPUByName,
     gpuCacheToDevices,
     enumerateGPUsViaNodeGpuInfo,
     enumerateDMLDevicesInProcess,

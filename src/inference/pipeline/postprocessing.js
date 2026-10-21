@@ -558,6 +558,10 @@ function _resampleOneSample(s, i) {
     return weightSum > 1e-8 ? sum / weightSum : 0;
 }
 
+/**
+ * 名称沿用历史命名，实现为 Kaiser 窗带限 sinc 重采样（并非线性插值）。
+ * 同步版本；异步分块版本见 resampleLinearAsync。
+ */
 function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
     const ratio = srcSampleRate / dstSampleRate;
@@ -582,6 +586,7 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
 }
 
 /**
+ * 名称沿用历史命名，实现为 Kaiser 窗带限 sinc 重采样（并非线性插值）。
  * 异步分块版 resampleLinear：每 RESAMPLE_YIELD_EVERY 个样本 setImmediate yield 一次，
  * 避免长音频（分钟级）同步阻塞主线程导致 UI 无响应。
  * 与 resampleLinear 共用同一套 LUT 与单样本核，仅在外层循环插入 yield 点。
@@ -741,9 +746,14 @@ function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength
         }
     }
 
-    const window = new Float32Array(winLength);
-    for (let i = 0; i < winLength; i++) {
-        window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (winLength - 1)));
+    // 复用预计算的 Hann 窗（constants.HANN_WINDOW 长度 = N_FFT）；仅当窗长
+    // 与 N_FFT 不一致时才按需自建，避免每次重建都分配一份 Float32Array。
+    let window = HANN_WINDOW;
+    if (winLength !== HANN_WINDOW.length) {
+        window = new Float32Array(winLength);
+        for (let i = 0; i < winLength; i++) {
+            window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (winLength - 1)));
+        }
     }
 
     const outputLength = (numFrames - 1) * hopLength + winLength;
@@ -1277,7 +1287,14 @@ class Postprocessing {
         const _baseOverlapFrames = (Number.isFinite(overlapFramesOverride) && overlapFramesOverride >= 8 && overlapFramesOverride <= 96)
             ? Math.floor(overlapFramesOverride)
             : VOCODER_OVERLAP_FRAMES;
-        const overlapFrames = _baseOverlapFrames * SIFIGAN_UPSAMPLE_RATIO;
+        let overlapFrames = _baseOverlapFrames * SIFIGAN_UPSAMPLE_RATIO;
+        // 防死循环：overlap 必须小于 chunkSize，否则 framePos = chunkEnd 后
+        // 下一块 chunkStart = framePos - overlapFrames 无法前进（姊妹实现
+        // diffusion.js 的 _planChunks 有同样的钳制）。最坏情况 overlap 取
+        // chunkSize/2，保证每块至少前进 chunkSize/2 ≥ 1 帧。
+        if (overlapFrames >= chunkSize) {
+            overlapFrames = Math.floor(chunkSize / 2);
+        }
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
         const totalSamples = effectiveTotalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
@@ -1618,10 +1635,9 @@ class Postprocessing {
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             results = null;
-            // chunk 间 GPU 排空：非末尾 chunk 时使用自适应排空（正常 setImmediate yield，
-            // OOM 后 200ms 长等待）。自适应排空由 utils.gpuDrainAdaptive 实现，OOM 标志由
-            // pipeline/index.js 的 OOM catch 通过 markGpuOom() 设置。
-            // 旧版固定 50ms gpuDrain 在无 OOM 压力下浪费累积时间，已替换为自适应版本。
+            // chunk 间 GPU 排空：非末尾 chunk 时调用自适应排空（实际仅 setImmediate
+            // 让出一轮事件循环，不做墙钟等待）。OOM 标志由 pipeline/index.js 的
+            // OOM catch 通过 markGpuOom() 设置，下一次调用仅消费标志、不延长等待。
             if (i < totalChunkCount - 1) {
                 await gpuDrainAdaptive();
             } else {

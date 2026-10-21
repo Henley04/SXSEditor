@@ -433,6 +433,12 @@ function registerPitchMidiIpc() {
     }
   });
 
+  // P9（未迁移）: 这里直接在**主线程**跑 tfjs Basic Pitch，长音频会让所有窗口
+  // 冻结数秒（见本文件 :308 附近的同类说明）。RMVPE / FCPE 已经迁到
+  // pitchWorker；Basic Pitch 尚未迁移，原因是 worker 脚本位于
+  // src/inference/pitchWorker.js（本次修复范围之外），需要新增
+  // 'extract-basicpitch' 消息类型 + basicPitch 检测器的 worker 侧加载路径。
+  // 后续应迁入 worker，IPC 契约（{ success, f0Array, notes }）保持不变。
   safeHandle(IPC_CHANNELS.EXTRACT_F0_BASIC_PITCH, async (event, { audioData, sampleRate, bpm }) => {
     try {
       const detector = await basicPitchLazy.get();

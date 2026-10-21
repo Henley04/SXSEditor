@@ -1,7 +1,7 @@
 import { state, dom } from './state.js';
 import { BPM } from './constants.js';
 import { t } from '../i18n/index.js';
-import { showAlertDialog } from '../alertDialog.js';
+import { showAlertDialog, showConfirmDialog } from '../alertDialog.js';
 import { buildSingerFields, showLoading, hideLoading, updateMidiInfo } from './uiControls.js';
 import { collectOptions, setStatus } from './panel.js';
 import { saveOptions, resolveOptions } from './extractionOptions.js';
@@ -71,6 +71,13 @@ export async function importMidiFile() {
       noteType: n.noteType,
     }));
 
+    // 导入会整体覆盖当前音符：已有音符时先确认，避免误操作丢失编辑。
+    const existingCount = state.pianoRoll ? state.pianoRoll.notes.length : 0;
+    if (existingCount > 0) {
+      const ok = await showConfirmDialog(t('preprocess.midiImportOverwriteConfirm', { count: existingCount }));
+      if (!ok) return;
+    }
+
     if (state.pianoRoll) {
       state.pianoRoll.notes = notes;
       state.pianoRoll._staticCacheDirty = true;
@@ -79,10 +86,12 @@ export async function importMidiFile() {
     }
 
     const fields = buildSingerFields(notes);
+    const importTrimOffsetMs = Math.floor((state.trimOffsetSec || 0) * 1000);
     state.singerData = {
       index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
       language: 'Mandarin',
-      time: [0, Math.floor(state.wavDuration * 1000)],
+      time: [importTrimOffsetMs, importTrimOffsetMs + Math.floor(state.wavDuration * 1000)],
+      trimOffsetSec: state.trimOffsetSec || 0,
       duration: notes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
       text: fields.text,
       phoneme: fields.phoneme,
@@ -119,7 +128,10 @@ export async function extractF0BasicPitch() {
     const channelData = state.wavAudioBuffer.getChannelData(0);
     const audioData = channelData.buffer;
     const sampleRate = state.wavAudioBuffer.sampleRate;
-    const resolvedOptions = midiTool === 'fcpe' ? resolveOptions(collectOptions()) : null;
+    // 三种提取工具都使用面板/设置里的 BPM（原先硬编码 BPM=120，忽略用户设置）。
+    const resolvedOptions = resolveOptions(collectOptions());
+    // 实际生效的 BPM（自动测速回填后会更新），用于音符 beat→秒换算。
+    let effectiveBpm = resolvedOptions.bpm;
     paced = runPacedProgress(loading, loadingMsg);
 
     let result;
@@ -127,20 +139,20 @@ export async function extractF0BasicPitch() {
       result = await window.electronAPI.extractMidiRosvot({
         audioData: audioData,
         sampleRate,
-        bpm: BPM,
+        bpm: resolvedOptions.bpm,
       });
     } else if (midiTool === 'fcpe') {
       result = await window.electronAPI.extractMidiFcpe({
         audioData: audioData,
         sampleRate,
-        bpm: BPM,
+        bpm: resolvedOptions.bpm,
         options: resolvedOptions,
       });
     } else {
       result = await window.electronAPI.extractF0BasicPitch({
         audioData: audioData,
         sampleRate,
-        bpm: BPM,
+        bpm: resolvedOptions.bpm,
       });
     }
 
@@ -184,6 +196,12 @@ export async function extractF0BasicPitch() {
         if (dom.bpmInput) dom.bpmInput.value = result.bpm;
         saveOptions(opts);
         state.extractOptions = resolveOptions(opts);
+        // 主进程在本次提取里已经用检测到的 BPM 完成秒→beat 换算
+        // （pitchMidiIpc → segmentNotes({ bpm: useBpm })），因此 result.notes
+        // 无需再按新 BPM 重算；这里只需同步生效 BPM，让后续提取 / beat→秒
+        // 换算（singerData、试听、钢琴卷轴）都使用新值。
+        effectiveBpm = result.bpm;
+        if (state.pianoRoll) state.pianoRoll.bpm = result.bpm;
       }
       // UVR 分离质量提示
       showQualityWarnings(result.warnings);
@@ -213,21 +231,31 @@ export async function extractF0BasicPitch() {
     }
 
     if (state.pianoRoll) {
+      // beat↔秒换算（f0 曲线、播放头、试听）统一使用本次提取的 BPM，
+      // 否则面板 BPM ≠ 120 时音符与 f0 曲线在时间轴上错位。
+      state.pianoRoll.bpm = effectiveBpm;
       state.pianoRoll.notes = notes;
       if (state.f0Data) {
         state.pianoRoll.f0Data = state.f0Data;
       }
+      // 替换 notes/f0 后必须失效静态缓存，否则首帧仍绘制旧内容。
+      state.pianoRoll._staticCacheDirty = true;
       state.pianoRoll.render();
       updateMidiInfo();
     }
 
     const currentF0 = state.f0Data || [];
     const fields = buildSingerFields(notes);
+    // 音符时值是 beat，换算秒必须用本次提取的 BPM（而非常量 BPM）。
+    const activeBpm = (state.pianoRoll && state.pianoRoll.bpm) || BPM;
+    // 音频可能被裁剪掉前导静音，singerData 需回到原始时间轴。
+    const trimOffsetMs = Math.floor((state.trimOffsetSec || 0) * 1000);
     state.singerData = {
       index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
       language: 'Mandarin',
-      time: [0, Math.floor(state.wavDuration * 1000)],
-      duration: notes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+      time: [trimOffsetMs, trimOffsetMs + Math.floor(state.wavDuration * 1000)],
+      trimOffsetSec: state.trimOffsetSec || 0,
+      duration: notes.map((n) => (n.duration * (60 / activeBpm)).toFixed(2)).join(' '),
       text: fields.text,
       phoneme: fields.phoneme,
       note_pitch: notes.map((n) => n.pitch).join(' '),

@@ -18,8 +18,14 @@ const THROTTLE_MS = 500;
 /**
  * 更新一个 aria-live 容器的文本。
  *
+ * R20: 节流 + 重复文本重播。
+ * 节流：同一容器在 throttleMs 内最多写入一次（渲染循环里可能每帧都变）。
+ * 相同文本：超过节流间隔后仍会重新播报 —— 否则"选中音符 3"这类状态在用户
+ * 重复同一操作时完全静默。为了触发 aria-live 的 DOM 变更，重复文本会追加
+ * 一个交替的零宽哨兵（ZWSP / ZWNJ），屏幕阅读器读到的内容不变。
+ *
  * @param {string} id 容器元素 id
- * @param {string} text 要播报的文本；重复内容自动跳过
+ * @param {string} text 要播报的文本
  * @param {number} [throttleMs] 节流间隔
  * @returns {boolean} 是否真的写入了
  */
@@ -30,12 +36,17 @@ function announce(id, text, throttleMs = THROTTLE_MS) {
 
   const now = Date.now();
   const prev = _last.get(id);
-  // 相同内容不重复播报；不同内容也要受节流保护（渲染循环里可能每帧都变）
-  if (prev && prev.text === text) return false;
+  // 节流：窗口内不写（含相同内容）
   if (prev && now - prev.at < throttleMs) return false;
 
-  el.textContent = text;
-  _last.set(id, { text, at: now });
+  if (prev && prev.text === text) {
+    // 相同文本：交替零宽哨兵，保证内容确实变化从而触发播报
+    el.textContent = text + (prev.flip ? '\u200C' : '\u200B');
+    _last.set(id, { text, at: now, flip: !prev.flip });
+  } else {
+    el.textContent = text;
+    _last.set(id, { text, at: now, flip: false });
+  }
   return true;
 }
 

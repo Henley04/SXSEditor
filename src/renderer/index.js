@@ -29,10 +29,13 @@ const deferIdle = (fn) => {
 };
 
 // Locale first, then icons. applyLocale must not erase hydrated SVG children.
+// i18n 只在这里初始化一次（ipcHandlers.js 不再重复调用）。
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
   deferIdle(() => hydrateIcons(document));
+}).catch((err) => {
+  console.error('[Renderer] i18n initialization failed:', err);
 });
 
 // 任何祖先容器滚动都会让缓存的 getBoundingClientRect 失效（捕获阶段监听，

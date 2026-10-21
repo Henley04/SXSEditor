@@ -136,7 +136,7 @@ SXSEditor/
 │   │   │   ├── float16Patch.js
 │   │   │   ├── samplers/      # Pluggable diffusion ODE solvers
 │   │   │   │   ├── index.js   # Registry + factory (resolveSamplerName, createSampler)
-│   │   │   │   ├── euler.js   # Euler (1st-order, default baseline)
+│   │   │   │   ├── euler.js   # Euler (1st-order, original baseline)
 │   │   │   │   ├── heun.js    # Heun (2nd-order trapezoidal)
 │   │   │   │   ├── extrap.js  # Extrapolated Euler (STORK-inspired heuristic)
 │   │   │   │   └── stork2.js  # STORK-2 (paper-faithful, RKC 2nd-order)
@@ -183,7 +183,7 @@ SXSEditor/
 │   ├── settings.js            # Settings renderer
 │   ├── modelDownload.js       # Model download renderer
 │   └── alertDialog.js         # Custom alert dialog
-├── test/                      # Test suite (~1500 tests, 61 files)
+├── test/                      # Test suite (~1840 tests, 86 files)
 │   ├── setup.js               # JSDOM setup, mocks, sandbox cleanup
 │   └── *.test.js              # Test files
 ├── forge.config.js            # Electron Forge config
@@ -249,14 +249,14 @@ async step({ evalDiffStep, combine, step, totalSteps, xtData, buffers }) → { n
 
 | Solver | File | NFE / step | Algorithm |
 |--------|------|------------|-----------|
-| `euler` (default) | `euler.js` | 1 | First-order explicit, midpoint time `t = (step + 0.5) / totalSteps`. Equivalent to the pre-refactor loop. |
+| `euler` | `euler.js` | 1 | First-order explicit, midpoint time `t = (step + 0.5) / totalSteps`. Equivalent to the pre-refactor loop. |
 | `heun` | `heun.js` | 2 | RK2 trapezoidal: predict `x_pred = x + v1·dt`, then correct `delta = 0.5·(v1 + v2)·dt`. Final step degrades to Euler to avoid `t > 1`. |
 | `extrap` | `extrap.js` | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). `v2 = v1 + γ·(v1 − v_prev)` with γ=0.5; `delta = 0.5·dt·(v1 + v2)`. First step and unsafe extrapolation fall back to Euler. Stability guards: velocity-jump ratio > 2, `\|v2\|/\|v1\| > 3`, sign-flip with growing amplitude, NaN/Inf. |
-| `stork2` | `stork2.js` | 1 | Paper-faithful STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with `s=8` sub-stages and Taylor-expansion virtual NFE. First step bootstraps as Euler. `b(j)` coefficients via closed-form RKG formula. Designed for stiff ODEs (stability region ~2s² = 128×). |
+| `stork2` (default) | `stork2.js` | 1 | Paper-faithful STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with `s=8` sub-stages and Taylor-expansion virtual NFE. First step bootstraps as Euler. `b(j)` coefficients via closed-form RKG formula. Designed for stiff ODEs (stability region ~2s² = 128×). |
 
-**Registry & factory** — `samplers/index.js` exports `SOLVERS` (id → `{label, labelKey, descKey, create()}`), `DEFAULT_SOLVER='euler'`, `resolveSamplerName()` (validates + normalizes), and `createSampler()`. `LEGACY_ALIASES = { stork: 'extrap' }` keeps old user settings working. The dropdown options in `src/renderer/exportDialog.js` and the settings UI must stay aligned with `SOLVERS`.
+**Registry & factory** — `samplers/index.js` exports `SOLVERS` (id → `{label, labelKey, descKey, create()}`), `DEFAULT_SOLVER='stork2'`, `resolveSamplerName()` (validates + normalizes), and `createSampler()`. `LEGACY_ALIASES = { stork: 'extrap' }` keeps old user settings working. The dropdown options in `src/renderer/exportDialog.js` and the settings UI must stay aligned with `SOLVERS`.
 
-**Plumbing** — `runDiffusionLoop` / `runDiffusionLoopChunked` take a `samplerName` arg (default `'euler'`). The batch path (`runBatchDiffusionLoop`) keeps the `batch=4` optimization for Euler and falls back to sequential single-segment calls for non-Euler samplers. Both paths track `totalNFE` (number of function evaluations) in logs. `synthesize(notes, bpm, { sampler, ... })` threads the value through; settings keys are `previewSampler` / `exportSampler`.
+**Plumbing** — `runDiffusionLoop` / `runDiffusionLoopChunked` take a `samplerName` arg (default `'stork2'`). The batch path (`runBatchDiffusionLoop`) keeps the `batch=4` optimization for Euler and falls back to sequential single-segment calls for non-Euler samplers. Both paths track `totalNFE` (number of function evaluations) in logs. `synthesize(notes, bpm, { sampler, ... })` threads the value through; settings keys are `previewSampler` / `exportSampler`.
 
 > **Chunked inference caveat**: `extrap` and `stork2` keep cross-step velocity state (`_vPrev` / `_velPreds`). A fresh sampler instance is created per `runDiffusionLoop` call, so each vocoder chunk starts from Euler-equivalent behavior at its first step. For chunked previews this resets their advantage at every chunk boundary — prefer `euler` or `heun` there. `reset()` is provided for callers that reuse a sampler instance across runs.
 
@@ -438,7 +438,7 @@ npm run test:coverage    # With NYC coverage
 npm run test:watch       # Watch mode
 ```
 
-The test suite includes **~1500 test cases across 61 test files** covering:
+The test suite includes **~1840 test cases across 86 test files** covering:
 - WAV encoding/decoding
 - Track management (add, remove, move, resize fragments)
 - SVS pipeline logic (text processing, phoneme merging, note type detection)

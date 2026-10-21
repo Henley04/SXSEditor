@@ -10,6 +10,7 @@ import {
 import {
   createNotesIndex,
   ensureSorted as ensureNotesSorted,
+  markDirty as markNotesDirty,
   hasOverlapAtPitch,
   clampPosition as clampPositionIdx,
   findNoteAtBeat,
@@ -182,9 +183,10 @@ export function snapBeats(beats) {
 
 // --- Notes index (sorted array + pitch-bucketed binary search) -------------
 // Module-level cache wrapping the live notes array from state. The cache is
-// rebuilt automatically when getNotes() returns a new array reference, and
-// ensureSorted() also re-validates on every read so external in-place
-// mutations (note.start = ..., notes.push(...)) are picked up correctly.
+// rebuilt automatically when getNotes() returns a new array reference;
+// ensureSorted() re-validates only when notesVersion changed (see
+// notesIndex.ensureSorted) — in-place mutations that don't bump the version
+// must call _markNotesIndexDirty().
 let _notesIdx = null;
 
 /**
@@ -196,9 +198,17 @@ function _getNotesIdx() {
   if (!_notesIdx || _notesIdx.notes !== notes) {
     _notesIdx = createNotesIndex(notes);
   } else {
-    ensureNotesSorted(_notesIdx);
+    ensureNotesSorted(_notesIdx, getNotesVersion());
   }
   return _notesIdx;
+}
+
+/**
+ * 就地修改 note.start/pitch/duration 但不想 bump notesVersion（例如拖拽过程中
+ * 每帧都会变）时调用：只标记索引失效，避免整条 inactive/oob 缓存链路跟着失效。
+ */
+export function _markNotesIndexDirty() {
+  if (_notesIdx) markNotesDirty(_notesIdx);
 }
 
 /**
@@ -212,8 +222,8 @@ export function _getCanvasRendererNotesIndex() {
 /**
  * Reset the cached notes index. Call after setNotes() replaces the array
  * reference, or whenever notes are mutated in a way that changes ordering
- * (the O(n) verification scan in ensureSorted will catch most cases, but
- * explicitly resetting avoids the per-call scan cost).
+ * (markDirty/_markNotesIndexDirty covers the in-place case, this drops the
+ * whole cache).
  */
 export function _resetNotesIndex() {
   _notesIdx = null;

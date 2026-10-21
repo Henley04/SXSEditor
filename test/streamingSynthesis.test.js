@@ -612,12 +612,15 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       });
 
       it('onProgress 默认为 no-op（未提供时不抛错）', async () => {
-        await pipeline.synthesizeMultiStreaming(
+        const out = await pipeline.synthesizeMultiStreaming(
           [{ notes: makeNotes(1), startTimeBeat: 0, durationBeats: 4, options: { diffStepChunk: false } }],
           120,
           {}
         );
-        // 不抛错即通过
+        // 未传 onProgress 时内部走 `options.onProgress || (() => {})` 的默认空函数：
+        // 既不抛错，也不影响正常产出音频。
+        expect(out).to.be.instanceOf(Float32Array);
+        expect(out.length).to.be.greaterThan(0);
       });
     });
   });

@@ -428,6 +428,23 @@ function _mixTrackAudio(tracks) {
   return mixed;
 }
 
+// 进度节流发送器：100ms 最小间隔，且进度变化 <2% 时跳过；progress>=100 必发。
+// svs:synthesize / svs:synthesizeMultiStreaming / fragment-svs:synthesize 共用，
+// 避免 diffusion 每步回调直接 win.send 形成 IPC 风暴。
+function _makeThrottledSender(win, channel) {
+  let lastSentAt = 0;
+  let lastValue = -1;
+  return (progress) => {
+    const now = Date.now();
+    if (progress < 100 && now - lastSentAt < 100 && Math.abs(progress - lastValue) < 2) return;
+    lastSentAt = now;
+    lastValue = progress;
+    try {
+      if (win && !win.isDestroyed()) win.send(channel, { progress });
+    } catch (_) {}
+  };
+}
+
 function registerSvsIpc() {
   // 当 int8 目录下检测到旧版 diff_step 模型（cond≠1024）时，向触发初始化的窗口推送提示事件。
   // 由渲染进程用自身 i18n 渲染弹窗文案（主/渲染进程双语字典各自维护）。
@@ -472,17 +489,8 @@ function registerSvsIpc() {
     // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
     // 之前主页面合成无进度推送，导致推理预览百分比不显示。
     const win = event.sender;
-    let lastProgressSentAt = 0;
-    let lastProgressValue = -1;
-    opts.onProgress = (progress) => {
-      const now = Date.now();
-      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
-      lastProgressSentAt = now;
-      lastProgressValue = progress;
-      try {
-        if (win && !win.isDestroyed()) win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
-      } catch (_) {}
-    };
+    // 进度推送节流（100ms / 2% 阈值），与 fragment-svs:synthesize 共用同一实现。
+    opts.onProgress = _makeThrottledSender(win, IPC_CHANNELS.SVS_PROGRESS);
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
     // 插件路径下 RMVPE 往往压根没初始化（用户没装内置模型），这里容错处理：
     // 取不到就不注入，由插件自己的 F0 逻辑兜底，不能因为内置模型缺失而阻塞插件。
@@ -557,13 +565,7 @@ function registerSvsIpc() {
     // 参数装配与插件派发一律排在内置管线初始化之前（理由同 svs:synthesize）。
     const win = event.sender;
     const opts = {
-      onProgress: (progress) => {
-        try {
-          if (win && !win.isDestroyed()) {
-            win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
-          }
-        } catch (_) {}
-      },
+      onProgress: _makeThrottledSender(win, IPC_CHANNELS.SVS_PROGRESS),
       onChunkAudio: (chunkInfo) => {
         try {
           if (win && !win.isDestroyed()) {
@@ -694,22 +696,10 @@ function registerSvsIpc() {
     const win = event.sender;
     const opts = options || {};
     opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
-    // 进度推送节流：与 svs:synthesize 一致（100ms / 2% 变化阈值）。长合成时
-    // diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
-    // Float32Array 之外的序列化开销），拖慢主进程与渲染进程。
-    let lastProgressSentAt = 0;
-    let lastProgressValue = -1;
-    opts.onProgress = (progress) => {
-      const now = Date.now();
-      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
-      lastProgressSentAt = now;
-      lastProgressValue = progress;
-      try {
-        if (!win.isDestroyed()) {
-          win.send(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, { progress });
-        }
-      } catch (_) {}
-    };
+    // 进度推送节流：与 svs:synthesize 共用 _makeThrottledSender（100ms / 2% 变化阈值）。
+    // 长合成时 diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
+    // 序列化开销），拖慢主进程与渲染进程。
+    opts.onProgress = _makeThrottledSender(win, IPC_CHANNELS.FRAGMENT_SVS_PROGRESS);
     // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
     // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
     // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。

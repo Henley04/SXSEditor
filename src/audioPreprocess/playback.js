@@ -35,12 +35,14 @@ export async function startPlayback() {
 
     // 记录播放启动时刻，用于 onended 触发时判断是否"刚启动就结束"
     // （用户拖拽到接近末尾时 source 会几乎立即结束，此时不应重置位置到 0，
-    // 否则 playhead 会从拖拽位置跳回开头）
-    const playbackStartWallTime = performance.now();
+    // 否则 playhead 会从拖拽位置跳回开头）。
+    // 时钟基准必须取 audioContext.currentTime（与音频输出同一基准），
+    // 用 performance.now() 会随缓冲区/调度延迟与听到的声音漂移。
+    const playbackStartWallTime = state.audioContext.currentTime;
 
     source.onended = () => {
       if (!state.isPlaying) return;
-      const realElapsed = (performance.now() - playbackStartWallTime) / 1000;
+      const realElapsed = state.audioContext.currentTime - playbackStartWallTime;
       state.isPlaying = false;
       setLabel(dom.btnPlayPause, t('preprocess.play'), { icon: 'play' });
       stopPlaybackRaf();
@@ -61,7 +63,8 @@ export async function startPlayback() {
 
     state.audioSource = source;
     state.isPlaying = true;
-    state.playStartTime = performance.now();
+    // 同上：与音频输出共用 audioContext.currentTime 作为播放时钟基准。
+    state.playStartTime = state.audioContext.currentTime;
     setLabel(dom.btnPlayPause, t('preprocess.pause'), { icon: 'pause' });
 
     // 统一播放循环，确保waveform和pianoRoll使用同一个时间源
@@ -91,7 +94,8 @@ export function pausePlayback() {
     state.audioSource = null;
   }
 
-  const elapsed = (performance.now() - state.playStartTime) / 1000;
+  // playStartTime 现在是 audioContext.currentTime 基准，elapsed 也必须用它。
+  const elapsed = state.audioContext ? state.audioContext.currentTime - state.playStartTime : 0;
   state.playStartOffset += elapsed;
 
   if (state.playStartOffset >= state.wavAudioBuffer.duration) {
@@ -173,7 +177,8 @@ export function stopPlaybackRaf() {
 export function startPlaybackLoop() {
   if (!state.isPlaying) return;
 
-  const elapsed = (performance.now() - state.playStartTime) / 1000;
+  // 与 startPlayback 相同的时钟基准（audioContext.currentTime）。
+  const elapsed = state.audioContext ? state.audioContext.currentTime - state.playStartTime : 0;
   const currentTime = state.playStartOffset + elapsed;
 
   drawWaveformWithPlayhead(currentTime);

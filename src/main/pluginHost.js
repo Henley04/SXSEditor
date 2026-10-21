@@ -265,10 +265,6 @@ function isInside(base, child) {
 }
 
 /**
- * 读取并解析 manifest.json。
- * @param {string} manifestPath
- */
-/**
  * A1：插件 worker 的资源上限。
  *
  * worker_threads 与宿主共享进程地址空间（每个线程有独立 isolate，但共享进程
@@ -283,6 +279,10 @@ const PLUGIN_WORKER_RESOURCE_LIMITS = Object.freeze({
   stackSizeMb: 4,
 });
 
+/**
+ * 读取并解析 manifest.json。
+ * @param {string} manifestPath
+ */
 function readManifest(manifestPath) {
   const raw = fs.readFileSync(manifestPath, 'utf8');
   try {

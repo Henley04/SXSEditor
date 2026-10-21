@@ -292,7 +292,7 @@ function interpolateTransitionSpectra(mel, frames, dim, boundaries, weightAt, ha
     if (!_meanSpectrum(mel, dim, bFrom, bTo, bSpec)) continue;
 
     for (let f = aFrom; f < bTo; f++) {
-      // 升余弦窗：边界处权重 1，窗口边缘衰减到 0，避免插值区与外侧产生新的断层
+      // 升余弦窗：边界处约 0.87（w=3），边缘衰减到 0，避免插值区与外侧产生新的断层
       const d = Math.min(1, Math.abs(f + 0.5 - bnd) / w);
       const win = Math.cos(d * Math.PI * 0.5) ** 2;
       const mix = strength * win;

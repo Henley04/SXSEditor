@@ -61,8 +61,12 @@ const lazyOrt = new Proxy(Object.create(null), {
     target[prop] = value;
     return value;
   },
-  has(_target, prop) {
-    return prop in getOrt();
+  has(target, prop) {
+    // P16: 不能在这里调 getOrt() —— 任何 `prop in lazyOrt` 探测（工具链/调试器/
+    // 特性检测）都会把 native addon 拉起来，惰性化完全失效。只在已缓存或
+    // addon 已加载时透传。
+    if (prop in target) return true;
+    return _ort !== null && prop in _ort;
   },
 });
 

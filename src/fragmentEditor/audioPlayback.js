@@ -589,8 +589,9 @@ async function playFragmentShared() {
   const volumeEnv = envelopes.volume;
   const panEnv = envelopes.pan;
 
-  // 播放起始位置（秒），由用户拖拽 playhead 设置
-  const startOffset = Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01);
+  // 播放起始位置（秒），由用户拖拽 playhead 设置。加下界 0：
+  // audioDuration - 0.01 可能为负（极短音频），会得到负的 start offset。
+  const startOffset = Math.max(0, Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01));
 
   if (volumeEnv && volumeEnv.keyframes && volumeEnv.keyframes.length > 0) {
     const now = ctx.currentTime;

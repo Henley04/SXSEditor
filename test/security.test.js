@@ -120,15 +120,22 @@ describe('Security Module', function () {
     });
 
     it('should handle empty string gracefully', function () {
-      authorizePath('');
+      // 契约：非字符串或空串直接忽略（不抛错、不写入白名单、无返回值）
+      let ret;
+      expect(() => { ret = authorizePath(''); }).to.not.throw();
+      expect(ret, 'authorizePath 对无效输入应无返回值').to.be.undefined;
     });
 
     it('should handle null gracefully', function () {
-      authorizePath(null);
+      let ret;
+      expect(() => { ret = authorizePath(null); }).to.not.throw();
+      expect(ret, 'authorizePath 对 null 应无返回值').to.be.undefined;
     });
 
     it('should handle undefined gracefully', function () {
-      authorizePath(undefined);
+      let ret;
+      expect(() => { ret = authorizePath(undefined); }).to.not.throw();
+      expect(ret, 'authorizePath 对 undefined 应无返回值').to.be.undefined;
     });
 
     it('should evict old entries when exceeding 1000', function () {

@@ -8,6 +8,42 @@ const LONG_REST_SEC = 1.5;
 const REST_CONTEXT_SEC = 0.15;
 
 /**
+ * 唯一休止判据（rest = 不参与演唱内容的音符）。
+ *
+ * 供 AudioSegmentation、Preprocessing 与 index.js 的静音处理共用，避免三处
+ * 判据分叉导致"切分排除了它、静音阶段又保留它"的不一致。
+ *
+ * - pitch <= 0 的音符（fillNoteGaps 合成、MIDI 导入的 0 号音）**始终**是休止，
+ *   即使带有 slur/continuation 标记——旧 AudioSegmentation 的判据就是 pitch 优先，
+ *   否则 MIDI 导入把 lyric '-' 记为 noteType=3 时会漏掉这类静音段；
+ * - slur/continuation（noteType 3 / isSlur / isContinuation）在 pitch>0 时即使
+ *   歌词为空也不是休止；
+ * - <AP> 是可听见的吸气 token，不是休止；
+ * - 显式空歌词（字段存在且为 ''）是休止；缺少 lyric 字段本身不构成休止。
+ *
+ * @param {Object} note
+ * @returns {boolean}
+ */
+function isRestNote(note) {
+    if (!note) return false;
+    const lyric = String(note.lyric || '').trim();
+    // <AP> 是可听见的吸气 token（phone_set.json），必须优先于 pitch 判定：
+    // 它常与 pitch<=0 一起出现，但仍要作为演唱帧送进模型。
+    if (lyric === '<AP>') return false;
+    // 无音高优先判休止（保留旧 AudioSegmentation 的优先序，含延音音符）。
+    const pitchNum = Number(note.pitch);
+    if (Number.isFinite(pitchNum) && pitchNum <= 0) return true;
+    const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
+    if (continuation) return false;
+    const explicitEmpty = note.lyric !== undefined
+        && note.lyric !== null
+        && lyric.length === 0;
+    return note.noteType === 1
+        || lyric === '<SP>'
+        || explicitEmpty;
+}
+
+/**
  * Long audio segmentation and stitching logic
  */
 class AudioSegmentation {
@@ -46,18 +82,11 @@ class AudioSegmentation {
     }
 
     /**
-     * Shared rest-note predicate (rest = excluded from vocal content).
-     * slur/continuation notes (noteType 3) are NOT rests even when their
-     * lyric is empty.
+     * Shared rest-note predicate — delegates to the module-level isRestNote()
+     * so every caller (segmentation / preprocessing / index.js) agrees.
      */
     _isRestNote(note) {
-        const lyric = String(note.lyric || '').trim();
-        const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
-        // <AP> is an audible aspiration token in phone_set.json, not a rest.
-        if (lyric === '<AP>') return false;
-        return note.pitch <= 0 || note.noteType === 1
-            || lyric === '<SP>'
-            || (lyric === '' && !continuation);
+        return isRestNote(note);
     }
 
     /**
@@ -498,4 +527,4 @@ class AudioSegmentation {
     }
 }
 
-module.exports = { AudioSegmentation };
+module.exports = { AudioSegmentation, isRestNote };

@@ -701,7 +701,10 @@ function renderJpCard() {
     case 'installed': {
       downloadBtn.style.display = 'none';
       unloadBtn.style.display = 'inline-block';
-      unloadBtn.disabled = false;
+      // 前端卸载暂未实现（见 jpUnloadNotSupported）：按钮置灰并给出原因，
+      // 避免点击后只弹一个"死路"提示。
+      unloadBtn.disabled = true;
+      unloadBtn.title = t('modelDownload.jpUnloadNotSupported');
       downloadBtn.disabled = false;
       setJpStatusIndicator('installed');
       setJpStatusText(t('modelDownload.jpInstalled'));
@@ -803,11 +806,8 @@ document.getElementById('jpDownloadBtn').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('jpUnloadBtn').addEventListener('click', async () => {
-  if (jpState.isDownloading) return;
-  // Inform user that frontend unloading is not supported in this version
-  await showConfirmDialog(t('modelDownload.jpUnloadNotSupported'));
-});
+// 卸载按钮在 installed 状态下由 renderJpCard 置灰并带 title 说明，
+// 不再注册点击处理器（此前只能弹一个"不支持"的死路提示）。
 
 document.getElementById('jpUpdateBtn').addEventListener('click', async () => {
   if (jpState.isDownloading) return;
@@ -1230,7 +1230,7 @@ function renderFcpeCard() {
       if (fcpeState.versionInfo && versionText) {
         const v = fcpeState.versionInfo;
         const localStr = v.localVersion || t('modelDownload.legacyVersion');
-        versionText.textContent = t('modelDownload.versionDisplay', { local: localStr, latest: 'master' });
+        versionText.textContent = t('modelDownload.versionDisplay', { local: localStr, latest: v.latestVersion || '—' });
         if (v.updateAvailable && updateBtn) {
           updateBtn.style.display = 'inline-block';
         }

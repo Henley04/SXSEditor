@@ -550,39 +550,98 @@ function _extractTags(data) {
     .filter((t) => typeof t === 'string' && t.length > 0);
 }
 
+// ===== P14: 版本检查缓存 =====
+// checkModelVersion 会被资源管理器/更新检查反复调用，每次都要：
+//   1. 实时请求 ModelScope revisions API（跨网络，~100ms~数秒）；
+//   2. 同步 stat 整个 precision 的 manifest（10+ 次 fs.statSync 阻塞主线程）。
+// 这里加两层缓存：
+//   · tags 缓存：按 modelId 缓存 TTL 3 分钟（1~5 分钟区间）；请求失败不缓存，
+//     避免一次网络抖动把"看起来没有新版本"钉住。
+//   · 文件存在性缓存：按 `${modelDir}|${precision}` 缓存 checkMissingFiles 结果，
+//     失效条件是相关目录的 mtime 变化（下载/删除都会更新目录 mtime），因此
+//     下载完成后无需显式失效也能自愈；invalidateModelCache() 用于强制刷新。
+const TAGS_CACHE_TTL_MS = 3 * 60 * 1000;
+const _tagsCache = new Map(); // modelId → { at, tags }
+const _modelFilesCache = new Map(); // `${modelDir}|${precision}` → { sig, result }
+
+async function _fetchTagsCached(modelId) {
+  if (!modelId) return [];
+  const now = Date.now();
+  const hit = _tagsCache.get(modelId);
+  if (hit && now - hit.at < TAGS_CACHE_TTL_MS) {
+    return hit.tags;
+  }
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
+  const data = await _fetchModelScopeJson(url);
+  const tags = _extractTags(data);
+  // 仅缓存成功响应；失败（data === null）保持原语义：下次调用重试。
+  if (data) _tagsCache.set(modelId, { at: now, tags });
+  return tags;
+}
+
+/**
+ * 精度目录的 mtime 签名。下载/删除文件会改变所在目录的 mtime，因此它足以
+ * 判断"文件集合可能变了"。只 stat 若干目录，而不是整个 manifest。
+ */
+function _modelDirsSignature(modelDir, precision) {
+  const manifest = getManifestForPrecision(precision);
+  const dirs = new Set();
+  for (const file of manifest) {
+    if (!file.required) continue;
+    dirs.add(path.dirname(getLocalFilePath(modelDir, file.filePath, precision)));
+  }
+  let sig = '';
+  for (const dir of [...dirs].sort()) {
+    try {
+      sig += `${dir}:${fs.statSync(dir).mtimeMs};`;
+    } catch (_) {
+      sig += `${dir}:-;`;
+    }
+  }
+  return sig;
+}
+
+/** checkMissingFiles 的缓存版本，仅在 checkModelVersion 中使用（下载流程必须走实时版本）。 */
+function _checkMissingFilesCached(modelDir, precision) {
+  const key = `${modelDir}|${precision}`;
+  const sig = _modelDirsSignature(modelDir, precision);
+  const hit = _modelFilesCache.get(key);
+  if (hit && hit.sig === sig) return hit.result;
+  const result = checkMissingFiles(modelDir, precision);
+  _modelFilesCache.set(key, { sig, result });
+  return result;
+}
+
+/**
+ * 清空版本检查缓存。下载完成/删除模型后可调用；不调用也会因目录 mtime
+ * 变化而自然失效。
+ */
+function invalidateModelCache() {
+  _tagsCache.clear();
+  _modelFilesCache.clear();
+}
+
 /**
  * Fetch available tags (versions) for a main model precision from ModelScope.
  * Returns an array of tag names, e.g. ['v2', 'v1.0']. On failure returns [].
  * The default (latest, no tag) is represented separately as 'master'.
  */
 async function getModelTags(precision) {
-  const modelId = getModelId(precision);
-  if (!modelId) return [];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
-  const data = await _fetchModelScopeJson(url);
-  return _extractTags(data);
+  return _fetchTagsCached(getModelId(precision));
 }
 
 /**
  * Fetch available tags for a JP model precision from ModelScope.
  */
 async function getJpModelTags(precision) {
-  const modelId = getJpModelId(precision);
-  if (!modelId) return [];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
-  const data = await _fetchModelScopeJson(url);
-  return _extractTags(data);
+  return _fetchTagsCached(getJpModelId(precision));
 }
 
 /**
  * Fetch available tags for the SiFiGAN model from ModelScope.
  */
 async function getSifiganTags() {
-  const modelId = MODEL_IDS.sifigan;
-  if (!modelId) return [];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
-  const data = await _fetchModelScopeJson(url);
-  return _extractTags(data);
+  return _fetchTagsCached(MODEL_IDS.sifigan);
 }
 
 /**
@@ -601,11 +660,7 @@ async function getFcpeRevision() {
  * Currently the FCPE repo publishes no tags, so this typically returns [].
  */
 async function getFcpeTags() {
-  const modelId = MODEL_IDS.fcpe;
-  if (!modelId) return [];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
-  const data = await _fetchModelScopeJson(url);
-  return _extractTags(data);
+  return _fetchTagsCached(MODEL_IDS.fcpe);
 }
 
 // ===== Version management functions =====
@@ -734,7 +789,8 @@ function getLocalModelRevision(modelDir, precision) {
 async function checkModelVersion(modelDir, precision) {
   const localVersion = getLocalModelVersion(modelDir, precision);
   const localRevision = getLocalModelRevision(modelDir, precision);
-  const { existing } = checkMissingFiles(modelDir, precision);
+  // P14: 走缓存（目录 mtime 签名失效），避免每次版本检查都同步 stat 整个 manifest。
+  const { existing } = _checkMissingFilesCached(modelDir, precision);
   const hasModelFiles = existing.length > 0;
 
   let updateAvailable = false;
@@ -1779,20 +1835,41 @@ async function downloadFileChunked(url, destPath, fileSize, options = {}) {
   } catch (_) {}
 
   // 保存元数据
-  const saveMeta = () => {
-    const meta = {
-      fileSize,
-      numChunks,
-      chunks: chunks.map(c => ({
-        index: c.index,
-        start: c.start,
-        end: c.end,
-        completed: c.completed,
-      })),
-    };
-    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  // P15: 两个问题 —— (1) writeFileSync 直接写 metaPath，崩溃/断电会留下半截 JSON，
+  // 下次续传 JSON.parse 失败 → 全部分片进度丢失；(2) 每个分片完成都同步写一次，
+  // 并发分片多时是小写入风暴。改为 _atomicWriteJsonSync（tmp + rename）+ 500ms
+  // 节流：分片完成走节流写入，下载结束强制 flush。崩溃后 meta 要么是旧的完整
+  // 快照、要么是新的完整快照（最多丢掉 500ms 内的少量完成标记，重下即可）。
+  const META_FLUSH_INTERVAL_MS = 500;
+  let lastMetaFlushAt = 0;
+
+  const buildMeta = () => ({
+    fileSize,
+    numChunks,
+    chunks: chunks.map(c => ({
+      index: c.index,
+      start: c.start,
+      end: c.end,
+      completed: c.completed,
+    })),
+  });
+
+  const flushMeta = (force) => {
+    const now = Date.now();
+    if (!force && now - lastMetaFlushAt < META_FLUSH_INTERVAL_MS) {
+      return;
+    }
+    lastMetaFlushAt = now;
+    try {
+      _atomicWriteJsonSync(metaPath, buildMeta());
+    } catch (err) {
+      // 续传元数据写失败不应中断下载本身
+      console.warn('[ModelManager] Failed to write chunk meta:', err.message);
+    }
   };
-  saveMeta();
+
+  const saveMeta = () => flushMeta(false);
+  flushMeta(true);
 
   // 跟踪每个分片的下载进度
   const chunkDownloaded = new Array(numChunks).fill(0);
@@ -1829,7 +1906,7 @@ async function downloadFileChunked(url, destPath, fileSize, options = {}) {
           });
           chunk.completed = true;
           chunkDownloaded[chunk.index] = chunk.end - chunk.start + 1;
-          saveMeta();
+          saveMeta(); // 节流写入（≤2 次/秒）
           reportProgress();
           return;
         } finally {
@@ -1864,6 +1941,9 @@ async function downloadFileChunked(url, destPath, fileSize, options = {}) {
     }
     throw err;
   }
+
+  // 下载结束：强制落盘最后一个完整快照（节流窗口内跳过的写入在这里补齐）
+  flushMeta(true);
 
   // 合并分片
   await mergeChunks(destPath, numChunks);
@@ -2271,6 +2351,7 @@ module.exports = {
   checkMissingJpFiles,
   checkJpModelsExist,
   invalidateJpModelsCache,
+  invalidateModelCache,
   deleteModelFiles,
   downloadMissingFiles,
   downloadFileWithResume,

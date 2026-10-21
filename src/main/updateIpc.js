@@ -78,34 +78,35 @@ function _sendError(payload) {
  *   (used on app startup to reclaim disk from forgotten downloads).
  *
  * Files currently being written or locked by the installer are skipped
- * silently — fs.unlinkSync errors are swallowed because the OS will reap
- * them later, and we never want cleanup to break a running download.
+ * silently — unlink errors are swallowed because the OS will reap them later,
+ * and we never want cleanup to break a running download.
+ *
+ * P13: 全部改用 fs.promises，避免启动路径上的同步 IO 阻塞主进程。
+ * 调用方在启动期用 fire-and-forget（.catch 兜底），下载前则 await。
  */
-function cleanupInstallerTempFiles(mode) {
+async function cleanupInstallerTempFiles(mode) {
+  let entries;
   try {
-    if (!fs.existsSync(UPDATE_TMP_DIR)) return;
-    const entries = fs.readdirSync(UPDATE_TMP_DIR);
-    const now = Date.now();
-    for (const name of entries) {
-      if (!name.toLowerCase().endsWith('.exe')) continue;
-      const filePath = path.join(UPDATE_TMP_DIR, name);
-      // Never touch the file currently being downloaded.
-      if (currentDownload && currentDownload.filePath === filePath) continue;
-      try {
-        const stat = fs.statSync(filePath);
-        if (mode === 'all') {
-          try { fs.unlinkSync(filePath); } catch (_) {}
-        } else if (mode === 'stale') {
-          if (now - stat.mtimeMs > STALE_INSTALLER_TTL_MS) {
-            try { fs.unlinkSync(filePath); } catch (_) {}
-          }
-        }
-      } catch (_) {
-        // stat failed (file vanished or locked) — skip
-      }
-    }
+    entries = await fs.promises.readdir(UPDATE_TMP_DIR);
   } catch (_) {
-    // readdirSync failed — temp dir inaccessible, nothing to clean
+    // 目录不存在或不可读 —— 没有可清理的内容
+    return;
+  }
+  const now = Date.now();
+  for (const name of entries) {
+    if (!name.toLowerCase().endsWith('.exe')) continue;
+    const filePath = path.join(UPDATE_TMP_DIR, name);
+    // Never touch the file currently being downloaded.
+    if (currentDownload && currentDownload.filePath === filePath) continue;
+    try {
+      if (mode !== 'all') {
+        const stat = await fs.promises.stat(filePath);
+        if (mode !== 'stale' || now - stat.mtimeMs <= STALE_INSTALLER_TTL_MS) continue;
+      }
+      await fs.promises.unlink(filePath);
+    } catch (_) {
+      // stat/unlink failed (file vanished or locked) — skip
+    }
   }
 }
 
@@ -332,7 +333,7 @@ function registerUpdateIpc() {
     }
     // Purge any previous installers so we don't accumulate stale .exe files
     // across versions (the InnoSetup installer has already run for those).
-    cleanupInstallerTempFiles('all');
+    await cleanupInstallerTempFiles('all');
 
     const safeVersion = (version || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_');
     const fileName = `sxsinstaller-${safeVersion}.exe`;

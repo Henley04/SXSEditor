@@ -89,13 +89,15 @@ import {
   render, resizeCanvases,
   getParentHeightCached,
   _getCanvasRendererNotesIndex,
+  _markNotesIndexDirty,
   ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
 } from './canvasRenderer.js';
-import { computeMultiDragResult, findAdjacentBoundary } from './notesIndex.js';
+import { computeMultiDragResult, findAdjacentBoundary, notesInRange } from './notesIndex.js';
 import {
   autoDetectKanjiGroups, cleanupKanjiGroups,
   findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
   isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
+  invalidateKanjiGroupIndex,
 } from './kanjiGroupUtils.js';
 import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
@@ -201,6 +203,9 @@ function applyNoteDrag(pos) {
         p.note.start = newStart;
         p.note.pitch = p.newPitch;
       }
+      // 就地改了 start/pitch：标记 notes 索引失效（不必 bump notesVersion，
+      // 避免每帧连带失效 inactive/oob 缓存）。
+      _markNotesIndexDirty();
     }
     render();
     return true;
@@ -229,6 +234,7 @@ function applyNoteDrag(pos) {
     if (isGroupedKana) {
       note.start = newStart;
       note.pitch = newPitch;
+      _markNotesIndexDirty();
     } else {
       // Magnetic boundary snap: if newStart is within 4px of an adjacent
       // note's start or end at this pitch, snap to that boundary. Lets the
@@ -246,6 +252,7 @@ function applyNoteDrag(pos) {
       if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
         note.start = newStart;
         note.pitch = newPitch;
+        _markNotesIndexDirty();
       }
     }
   } else if (dragMode === 'resize') {
@@ -272,6 +279,7 @@ function applyNoteDrag(pos) {
         }
       }
       note.duration = newDuration;
+      _markNotesIndexDirty();
     }
   }
   render();
@@ -730,43 +738,60 @@ function _applySetKanjiChinese(groupId, rightClickedNoteId) {
   const result = mergeKanaGroupToKanji(group, notes, rightClickedNoteId, genNoteId);
   if (!result) return;
 
-  // Capture old state for undo
-  const oldNotes = deepClone(notes);
-  const oldGroups = deepClone(groups);
-
-  // Remove kana notes
+  // 只快照本次真正被改动的对象（被合并掉的假名音符 + 新建的汉字音符 +
+  // 被移除的分组），不再深拷整条 notes / kanjiGroups。
   const idsToRemove = new Set(result.kanaNoteIds);
+  const removedNotes = [];
   for (let i = notes.length - 1; i >= 0; i--) {
-    if (idsToRemove.has(notes[i].id)) notes.splice(i, 1);
+    if (idsToRemove.has(notes[i].id)) {
+      removedNotes.push({ index: i, note: { ...notes[i] } });
+    }
+  }
+  removedNotes.sort((a, b) => a.index - b.index);
+  for (let i = removedNotes.length - 1; i >= 0; i--) {
+    notes.splice(removedNotes[i].index, 1);
   }
   // Add the new kanji note at the correct position (sorted by start time)
   const insertIdx = notes.findIndex(n => n.start > result.newNote.start);
-  if (insertIdx === -1) {
-    notes.push(result.newNote);
-  } else {
-    notes.splice(insertIdx, 0, result.newNote);
-  }
+  const newNoteIndex = insertIdx === -1 ? notes.length : insertIdx;
+  notes.splice(newNoteIndex, 0, result.newNote);
   // Remove the group
   const groupIdx = groups.findIndex(g => g.id === groupId);
   if (groupIdx !== -1) groups.splice(groupIdx, 1);
+  invalidateKanjiGroupIndex();
+
+  const newNoteSnapshot = { ...result.newNote };
+  const groupSnapshot = group;
+  const kanaNoteIds = result.kanaNoteIds.slice();
 
   history.push({
     undo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(oldNotes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(oldGroups));
+      const ni = curNotes.findIndex(n => n.id === newNoteSnapshot.id);
+      if (ni !== -1) curNotes.splice(ni, 1);
+      for (const r of removedNotes) {
+        curNotes.splice(Math.max(0, Math.min(r.index, curNotes.length)), 0, { ...r.note });
+      }
+      if (!curGroups.some(g => g.id === groupSnapshot.id)) {
+        curGroups.splice(Math.max(0, Math.min(groupIdx, curGroups.length)), 0, deepClone(groupSnapshot));
+      }
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     },
     redo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(notes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(groups));
+      for (const id of kanaNoteIds) {
+        const idx = curNotes.findIndex(n => n.id === id);
+        if (idx !== -1) curNotes.splice(idx, 1);
+      }
+      curNotes.splice(Math.max(0, Math.min(newNoteIndex, curNotes.length)), 0, { ...newNoteSnapshot });
+      const gi = curGroups.findIndex(g => g.id === groupSnapshot.id);
+      if (gi !== -1) curGroups.splice(gi, 1);
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     }
   });
@@ -790,36 +815,49 @@ function _applySetKanjiJapanese(noteId) {
     return;
   }
 
-  // Capture old state for undo
-  const oldNotes = deepClone(notes);
-  const oldGroups = deepClone(groups);
+  const noteIdx = notes.findIndex(n => n.id === noteId);
+  if (noteIdx === -1) return;
+
+  // 只快照被替换的汉字音符与新增的分组，不深拷整条 notes / kanjiGroups。
+  const oldNote = { ...note };
+  const kanaNotes = result.kanaNotes;
+  const kanaIds = kanaNotes.map(n => n.id);
+  const kanaSnapshots = kanaNotes.map(n => ({ ...n }));
+  const groupSnapshot = result.group;
 
   // Replace the kanji note with kana notes
-  const noteIdx = notes.findIndex(n => n.id === noteId);
-  if (noteIdx !== -1) {
-    notes.splice(noteIdx, 1, ...result.kanaNotes);
-  }
+  notes.splice(noteIdx, 1, ...kanaNotes);
   // Clear kanjiForceChinese flag if set (it's now Japanese)
   // (the old note is gone, new kana notes don't have the flag)
   groups.push(result.group);
+  invalidateKanjiGroupIndex();
 
   history.push({
     undo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(oldNotes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(oldGroups));
+      for (const id of kanaIds) {
+        const idx = curNotes.findIndex(n => n.id === id);
+        if (idx !== -1) curNotes.splice(idx, 1);
+      }
+      curNotes.splice(Math.min(noteIdx, curNotes.length), 0, { ...oldNote });
+      const gi = curGroups.findIndex(g => g.id === groupSnapshot.id);
+      if (gi !== -1) curGroups.splice(gi, 1);
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     },
     redo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(notes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(groups));
+      const ni = curNotes.findIndex(n => n.id === oldNote.id);
+      if (ni !== -1) curNotes.splice(ni, 1);
+      curNotes.splice(Math.min(noteIdx, curNotes.length), 0, ...kanaSnapshots.map(n => ({ ...n })));
+      if (!curGroups.some(g => g.id === groupSnapshot.id)) {
+        curGroups.push(deepClone(groupSnapshot));
+      }
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     }
   });
@@ -965,8 +1003,8 @@ function _syncNoteCtxMenuFromNotes() {
   if (info) {
     const count = _getCtxNoteIds().length;
     info.textContent = count === 1
-      ? (window.i18n?.t?.('fragment.noteCtxTargetSingle') ?? '1 note selected')
-      : (window.i18n?.t?.('fragment.noteCtxTargetMulti', { count }) ?? `${count} notes selected`);
+      ? t('fragment.noteCtxTargetSingle')
+      : t('fragment.noteCtxTargetMulti', { count });
   }
 }
 
@@ -2100,6 +2138,7 @@ function startInlineEdit(note, hit) {
               curNotes.push(...deepClone(beforeNotes));
               curGroups.length = 0;
               curGroups.push(...deepClone(beforeGroups));
+              invalidateKanjiGroupIndex();
               render();
             },
             redo() {
@@ -2109,6 +2148,7 @@ function startInlineEdit(note, hit) {
               curNotes.push(...deepClone(notes));
               curGroups.length = 0;
               curGroups.push(...deepClone(kanjiGroups));
+              invalidateKanjiGroupIndex();
               render();
             }
           });
@@ -2376,7 +2416,8 @@ export function setupEventListeners() {
       const beats = snapBeats(xToTime(pos.x));
       const pitch = yToPitch(pos.y);
       const clampedPitch = Math.max(0, Math.min(127, pitch));
-      const newDuration = 1 / 4;
+      // 新建音符默认 1/4 拍，但不得小于当前吸附网格（网格更粗时以网格为准）。
+      const newDuration = Math.max(getSnapGrid(), 1 / 4);
       if (hasNoteOverlap(null, clampedPitch, beats, beats + newDuration)) {
         render();
         return;
@@ -2515,8 +2556,12 @@ export function setupEventListeners() {
         const areaBottom = _getParamCurveAreaBottom();
         if (pos.y >= areaTop && pos.y <= areaBottom) {
           const BOUNDARY_ZONE = 10;
-          const notes = getNotes();
-          for (const note of notes) {
+          // 先用 notesIndex 按 x 视口裁剪候选（原实现每次 mousemove 线性遍历
+          // 全部音符），只对落在 ±BOUNDARY_ZONE 内的音符查音素边界。
+          const hoverStart = xToTime(pos.x - BOUNDARY_ZONE);
+          const hoverEnd = xToTime(pos.x + BOUNDARY_ZONE);
+          const candidates = notesInRange(_getCanvasRendererNotesIndex(), hoverStart, hoverEnd);
+          for (const note of candidates) {
             const noteStartX = timeToX(note.start);
             const noteEndX = timeToX(note.start + note.duration);
             if (pos.x < noteStartX - BOUNDARY_ZONE || pos.x > noteEndX + BOUNDARY_ZONE) continue;
@@ -2796,6 +2841,7 @@ export function setupEventListeners() {
           console.error('[FragmentEditor] Undo failed:', err && err.message ? err.message : err);
         } finally {
           bumpNotesVersion(); // undo 就地改了 notes，失效 inactive/oob 缓存
+          _markNotesIndexDirty(); // 双保险：即使版本机制失效，也强制下次查询重排
           render();
           scheduleAutoSave();
         }
@@ -2813,6 +2859,7 @@ export function setupEventListeners() {
           console.error('[FragmentEditor] Redo failed:', err && err.message ? err.message : err);
         } finally {
           bumpNotesVersion(); // redo 就地改了 notes，失效 inactive/oob 缓存
+          _markNotesIndexDirty(); // 双保险：即使版本机制失效，也强制下次查询重排
           render();
           scheduleAutoSave();
         }
@@ -2865,10 +2912,19 @@ export function setupEventListeners() {
           }
         }
         for (const oldNote of oldNotes) {
+          // 复制到原音符末尾；若目标区间已被占用，顺延一个网格，仍冲突则跳过该音符。
+          const grid = getSnapGrid();
+          let targetStart = oldNote.start + oldNote.duration;
+          if (hasNoteOverlap(null, oldNote.pitch, targetStart, targetStart + oldNote.duration)) {
+            targetStart += grid;
+            if (hasNoteOverlap(null, oldNote.pitch, targetStart, targetStart + oldNote.duration)) {
+              continue;
+            }
+          }
           const newNote = {
             ...oldNote,
             id: genNoteId(),
-            start: oldNote.start + oldNote.duration,
+            start: targetStart,
           };
           notes.push(newNote);
           newIds.add(newNote.id);
@@ -2928,6 +2984,11 @@ export function setupEventListeners() {
           setDragMode(null);
           setDragOperation(null);
           getPitchDragAnchorStarts().clear();
+          // 与正常结束（mouseup/mouseleave）路径一致：同时复位正在拖动的
+          // 锚点下标与选中集合，否则 Esc 后锚点仍显示为拖拽/选中态。
+          setPitchDragAnchorIdx(-1);
+          setActiveAnchorIdx(-1);
+          getSelectedAnchorIndices().clear();
           setAnchorDragHud(null);
           setPitchCurveSnapshotBeforeDrag(null);
         }
@@ -3095,6 +3156,7 @@ export function setupEventListeners() {
             return g ? { group: deepClone(g), index: idx } : null;
           })
           .filter(Boolean);
+        invalidateKanjiGroupIndex();
         const oldSelectedIds = new Set(selectedNoteIds);
         selectedNoteIds.clear();
         const undoOrder = deletedIndices
@@ -3113,6 +3175,7 @@ export function setupEventListeners() {
                 kanjiGroups.push(deepClone(dg.group));
               }
             }
+            invalidateKanjiGroupIndex();
             setSelectedNoteIds(new Set(oldSelectedIds));
             render();
           },
@@ -3125,6 +3188,7 @@ export function setupEventListeners() {
               const idx = kanjiGroups.findIndex(g => g.id === dg.group.id);
               if (idx !== -1) kanjiGroups.splice(idx, 1);
             }
+            invalidateKanjiGroupIndex();
             selectedNoteIds.clear();
             render();
           }
@@ -3200,6 +3264,8 @@ export function setupEventListeners() {
             p.note.pitch = p.newPitch;
             moveData.push({ noteId: p.note.id, oldStart: p.oldStart, oldPitch: p.oldPitch, newStart: p.newStart, newPitch: p.newPitch });
           }
+          // 就地改了 start/pitch，且此处不 bump notesVersion：手动失效索引。
+          _markNotesIndexDirty();
         }
         history.push({
           undo() {

@@ -274,6 +274,7 @@ export function autoDetectKanjiGroups(notes, kanjiGroups, genNoteId) {
         changed = true;
     }
 
+    if (changed) invalidateKanjiGroupIndex();
     return changed;
 }
 
@@ -293,19 +294,51 @@ export function cleanupKanjiGroups(notes, kanjiGroups) {
             kanjiGroups.splice(i, 1);
         }
     }
+    invalidateKanjiGroupIndex();
 }
 
 /**
  * Find the kanji group that a note belongs to.
+ *
+ * 拖拽时每次 mousemove 都会调用（eventHandlers.applyNoteDrag），原来的线性
+ * 双重扫描在长分段上是 O(groups × noteIds) 的热点。这里缓存 noteId → group
+ * 的 Map：数组引用或长度变化时自动重建；长度不变的就地修改（splice 掉旧组
+ * 同时 push 新组、noteIds 被过滤等）由调用方显式 invalidateKanjiGroupIndex()。
+ *
  * @param {number} noteId - The note ID to look up
  * @param {object[]} kanjiGroups - The kanji groups array
  * @returns {object | null} - The group, or null if the note is not in any group
  */
-export function findGroupByNoteId(noteId, kanjiGroups) {
-    for (const group of kanjiGroups) {
-        if (group.noteIds.includes(noteId)) return group;
+let _groupIndex = null;
+let _groupIndexRef = null;
+let _groupIndexLength = -1;
+
+/** Drop the cached noteId → group map (call after mutating kanjiGroups). */
+export function invalidateKanjiGroupIndex() {
+    _groupIndex = null;
+    _groupIndexRef = null;
+    _groupIndexLength = -1;
+}
+
+function _getGroupIndex(kanjiGroups) {
+    if (_groupIndex && _groupIndexRef === kanjiGroups && _groupIndexLength === kanjiGroups.length) {
+        return _groupIndex;
     }
-    return null;
+    const map = new Map();
+    for (const group of kanjiGroups) {
+        for (const id of group.noteIds) {
+            map.set(id, group);
+        }
+    }
+    _groupIndex = map;
+    _groupIndexRef = kanjiGroups;
+    _groupIndexLength = kanjiGroups.length;
+    return map;
+}
+
+export function findGroupByNoteId(noteId, kanjiGroups) {
+    if (!kanjiGroups || kanjiGroups.length === 0) return null;
+    return _getGroupIndex(kanjiGroups).get(noteId) || null;
 }
 
 /**

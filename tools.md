@@ -1,12 +1,12 @@
 # SXSEditor Tools — Quantization / Export / Optimization Scripts
 
-All commands are PowerShell one-liners, run from the project root `d:\Document\electron\SXSEditor`.
+All commands are PowerShell one-liners, run from the project root. Export/quantization/optimization scripts live in `tools/` (some precision-check helpers live in `scripts/`), so each command carries its directory prefix.
 
 ---
 
 ## 0. FP32 Opset 20 Main Path Export (Default)
 
-**Script:** `export_pipeline.py`
+**Script:** `tools/export_pipeline.py`
 One-shot FP32 opset 20 ONNX export pipeline (DML-compatible). Exports all 9 base models + 4 JP models in isolated subprocesses to avoid memory leaks. This is the **default main path** used by SXSEditor.
 
 **Output:**
@@ -22,13 +22,13 @@ One-shot FP32 opset 20 ONNX export pipeline (DML-compatible). Exports all 9 base
 
 ```powershell
 # Full export (all 13 models, ~5 min)
-python export_pipeline.py
+python tools/export_pipeline.py
 
 # Individual steps (run in isolated processes)
-python export_step1_diffstep.py    # diff_step_dml.onnx
-python export_step2_vocoder.py     # vocoder_dml.onnx (full ISTFT)
-python export_step3_postprocess.py # other 7 base models
-python export_step4_jp.py          # 4 JP models
+python tools/export_step1_diffstep.py    # diff_step_dml.onnx
+python tools/export_step2_vocoder.py     # vocoder_dml.onnx (full ISTFT)
+python tools/export_step3_postprocess.py # other 7 base models
+python tools/export_step4_jp.py          # 4 JP models
 ```
 
 ### Precision Verification
@@ -55,7 +55,7 @@ python scripts/verify_e2e_precision.py --verbose
 
 ## 1. W8A8 INT8 Quantization v2 (Recommended)
 
-**Script:** `quantize_w8a8_v2.py`
+**Script:** `tools/quantize_w8a8_v2.py`
 Full pipeline with pre-processing + pipeline-based real calibration.
 Exports both INT8 (ORT CPU) and NPU-optimized (WebNN) versions.
 
@@ -67,134 +67,138 @@ Exports both INT8 (ORT CPU) and NPU-optimized (WebNN) versions.
 
 ```powershell
 # Quantize all models with default model path
-python quantize_w8a8_v2.py
+python tools/quantize_w8a8_v2.py
 
 # Quantize with custom model path
-python quantize_w8a8_v2.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt"
+python tools/quantize_w8a8_v2.py --model-path "SoulX-Singer\pretrained_models\SoulX-Singer\model.pt"
 
 # Quantize specific models only
-python quantize_w8a8_v2.py --models diff_step,vocoder,preflow
+python tools/quantize_w8a8_v2.py --models diff_step,vocoder,preflow
 ```
 
 ---
 
 ## 2. W8A8 NPU Export Pipeline
 
-**Script:** `export_w8a8_npu.py`
-W8A8 PTQ pipeline: load PyTorch → export FP32 ONNX → calibrate → quantize → NPU optimize.
+There is no separate `export_w8a8_npu.py`. The W8A8 pipeline in §1 (`tools/quantize_w8a8_v2.py`) already covers
+the whole NPU branch: load PyTorch → export FP32 ONNX → calibrate → quantize → write the WebNN-compatible variant.
+Run it, then harden the graphs with the NPU optimizer from §7.
+
+**Output:** `onnx_models/int8/` (ORT CPU) and `onnx_models/int8/optimized_npu/` (WebNN NPU)
 
 ```powershell
-python export_w8a8_npu.py
+python tools/quantize_w8a8_v2.py
+python tools/optimize_npu_int8.py
 ```
 
 ---
 
 ## 3. W8A8 Accuracy Verification
 
-**Script:** `verify_w8a8_accuracy.py`
+**Script:** `tools/verify_w8a8_accuracy.py`
 Verify W8A8 INT8 vs FP32 ONNX model accuracy (MSE, cosine similarity, max diff).
 
 ```powershell
-python verify_w8a8_accuracy.py
+python tools/verify_w8a8_accuracy.py
 ```
 
 ---
 
 ## 4. Compare FP32 vs W8A8 Accuracy
 
-**Script:** `compare_w8a8_fp32.py`
+**Script:** `tools/compare_w8a8_fp32.py`
 Compares FP32 models from `onnx_models/` with W8A8 models from `onnx_models/int8/optimized_npu/`.
 
 ```powershell
-python compare_w8a8_fp32.py
+python tools/compare_w8a8_fp32.py
 ```
 
 ---
 
 ## 5. Full INT8 Export Pipeline (4 Isolated Processes)
 
-**Script:** `export_int8_pipeline.py`
+**Script:** `tools/export_int8_pipeline.py`
 Runs each step in a separate process for complete memory isolation.
 
 ```powershell
 # Full pipeline with default paths
-python export_int8_pipeline.py
+python tools/export_int8_pipeline.py
 
 # With custom model path and output directory
-python export_int8_pipeline.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "D:\Document\electron\SXSEditor\onnx_models\int8\from_pytorch"
+python tools/export_int8_pipeline.py --model-path "SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "onnx_models\int8\from_pytorch"
 ```
 
 ### Step 1: Export diff_step FP32 ONNX
-**Script:** `export_step1_diffstep.py`
+**Script:** `tools/export_step1_diffstep.py`
 ```powershell
-python export_step1_diffstep.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "D:\Document\electron\SXSEditor\onnx_models\int8\from_pytorch"
+python tools/export_step1_diffstep.py --model-path "SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "onnx_models\int8\from_pytorch"
 ```
 
 ### Step 2: Export vocoder FP32 ONNX
-**Script:** `export_step2_vocoder.py` (FP32 main path, uses `VocosFullWrapper` with full ISTFT reconstruction)
+**Script:** `tools/export_step2_vocoder.py` (FP32 main path, uses `VocosFullWrapper` with full ISTFT reconstruction)
 ```powershell
-python export_step2_vocoder.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "D:\Document\electron\SXSEditor\onnx_models"
+python tools/export_step2_vocoder.py --model-path "SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "onnx_models"
 ```
 
 **W16A32 variant:** `export_step2_vocoder_w16a32.py` (FP16 weights + FP32 activations, based on FP32 production model)
 ```powershell
-python export_step2_vocoder_w16a32.py
+python tools/export_step2_vocoder_w16a32.py
 ```
 
 ### Step 3: Post-process FP32 ONNX (STFT replacement, onnxsim)
-**Script:** `export_step3_postprocess.py`
+**Script:** `tools/export_step3_postprocess.py`
 ```powershell
-python export_step3_postprocess.py --output-dir "D:\Document\electron\SXSEditor\onnx_models\int8\from_pytorch"
+python tools/export_step3_postprocess.py --output-dir "onnx_models\int8\from_pytorch"
 ```
 
 ### Step 4: Quantize to INT8 (QDQ format)
-**Script:** `export_step4_quantize.py`
+**Script:** `tools/export_step4_quantize.py`
 ```powershell
-python export_step4_quantize.py --output-dir "D:\Document\electron\SXSEditor\onnx_models\int8\from_pytorch"
+python tools/export_step4_quantize.py --output-dir "onnx_models\int8\from_pytorch"
 ```
 
 ---
 
 ## 6. INT8 ONNX Export (Single Script)
 
-**Script:** `export_int8_onnx.py`
-Export diff_step and vocoder sub-models to ONNX, then quantize to INT8 (single process).
+**Script:** `scripts/quantize_export.py`
+Q-DiT W8A8 for diff_step + AWQ W8A32 for the vocoder: quantize in PyTorch → export ONNX → ORT INT8 QDQ quantization → Olive DML optimization → copy into `onnx_models/int8/`.
 
 ```powershell
-python export_int8_onnx.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "D:\Document\electron\SXSEditor\onnx_models\int8"
+python scripts/quantize_export.py --model "SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --out "onnx_models\int8"
 ```
 
 ---
 
 ## 7. NPU INT8 Optimization
 
-**Script:** `optimize_npu_int8.py`
+**Script:** `tools/optimize_npu_int8.py`
 Optimize INT8 models for WebNN NPU deployment.
 Replaces unsupported ops (STFT, ReduceL2, Range, etc.), fixes DQL scale rank, and validates NPU compatibility.
 
 ```powershell
-python optimize_npu_int8.py
+python tools/optimize_npu_int8.py
 ```
 
 ---
 
 ## 8. NPU FP16 Optimization
 
-**Script:** `optimize_npu.py`
+**Script:** `tools/optimize_npu.py`
 Convert FP32 ONNX models to FP16 for WebNN NPU inference.
 FP16 uses standard operators (MatMul, Conv, Gemm) which are all NPU-compatible.
 
 **Output:** `onnx_models/fp16/optimized_npu/`
 
 ```powershell
-python optimize_npu.py
+python tools/optimize_npu.py
 ```
 
 ---
 
 ## 9. ONNX Optimization (Olive-based)
 
-**Script:** `optimize_onnx.py`
+**Script:** `tools/optimize_onnx.py`
 Uses Olive + onnxruntime to optimize all ONNX models.
 Produces both INT8 (dynamic quantization) and FP16 versions.
 
@@ -203,28 +207,28 @@ Produces both INT8 (dynamic quantization) and FP16 versions.
 - FP16: `onnx_models/fp16/`
 
 ```powershell
-python optimize_onnx.py
+python tools/optimize_onnx.py
 ```
 
 ---
 
 ## 10. Vocoder DML Optimization
 
-**Script:** `optimize_vocoder_dml.py`
+**Script:** `tools/optimize_vocoder_dml.py`
 Optimizes vocoder model for DirectML compatibility.
 Decomposes ConvTranspose(stride=480) into DML-compatible ops (Reshape + Pad + Conv1D + Slice).
 
 **Output:** `onnx_models/vocoder_dml.onnx`
 
 ```powershell
-python optimize_vocoder_dml.py
+python tools/optimize_vocoder_dml.py
 ```
 
 ---
 
 ## 11. Shared Utilities (Library — Not Run Directly)
 
-**Script:** `export_shared.py`
+**Script:** `tools/export_shared.py`
 Shared utilities for export/quantization pipelines: model loading, wrappers, post-processing, quantization helpers.
 Not meant to be run directly.
 
@@ -243,7 +247,7 @@ Runs all 8 steps sequentially: phoneme mapping → init embeddings → 3-phase t
 
 ```powershell
 # Full pipeline (run from SoulX-Singer directory)
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/run_pipeline.py
+cd SoulX-Singer ; python train/lora_jp/run_pipeline.py
 ```
 
 ### 13.2 Dataset Preparation
@@ -251,7 +255,7 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/run_pipeli
 Converts PJS Corpus (lab + wav + MIDI) to training metadata JSON format.
 
 ```powershell
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/prepare_dataset.py --corpus_dir "pretrained_models/SoulX-Singer/assets/LoRA-JP/PJS_corpus_ver1.1" --output_dir "train/lora_jp/dataset" --sample_rate 24000
+cd SoulX-Singer ; python train/lora_jp/prepare_dataset.py --corpus_dir "pretrained_models/SoulX-Singer/assets/LoRA-JP/PJS_corpus_ver1.1" --output_dir "train/lora_jp/dataset" --sample_rate 24000
 ```
 
 ### 13.3 Embedding Initialization
@@ -259,7 +263,7 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/prepare_da
 Extends the embedding table with Japanese phonemes, initialized from Chinese+English phoneme mapping with L2 normalization and std calibration.
 
 ```powershell
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/init_embeddings.py --model_path "pretrained_models/SoulX-Singer/model.pt" --mapping "train/lora_jp/jp_phoneme_mapping.json" --phoneset "train/lora_jp/jp_phone_set.json" --output "outputs/lora_jp/init_embed.pt" --target_std 0.9
+cd SoulX-Singer ; python train/lora_jp/init_embeddings.py --model_path "pretrained_models/SoulX-Singer/model.pt" --mapping "train/lora_jp/jp_phoneme_mapping.json" --phoneset "train/lora_jp/jp_phone_set.json" --output "outputs/lora_jp/init_embed.pt" --target_std 0.9
 ```
 
 ### 13.4 Staged Training (3 Phases)
@@ -272,13 +276,13 @@ Three-phase training strategy:
 
 ```powershell
 # Phase 1 — Warmup (frozen embedding)
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/train_staged.py --phase 1 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --init_embed "outputs/lora_jp/init_embed.pt" --batch_size 2 --lr 5e-5 --device cuda
+cd SoulX-Singer ; python train/lora_jp/train_staged.py --phase 1 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --init_embed "outputs/lora_jp/init_embed.pt" --batch_size 2 --lr 5e-5 --device cuda
 
 # Phase 2 — Embedding fine-tuning
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/train_staged.py --phase 2 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --resume "outputs/lora_jp/stage1/best.pt" --batch_size 2 --lr 5e-5 --device cuda
+cd SoulX-Singer ; python train/lora_jp/train_staged.py --phase 2 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --resume "outputs/lora_jp/stage1/best.pt" --batch_size 2 --lr 5e-5 --device cuda
 
 # Phase 3 — Joint fine-tuning
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/train_staged.py --phase 3 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --resume "outputs/lora_jp/stage2/best.pt" --batch_size 2 --lr 5e-5 --device cuda
+cd SoulX-Singer ; python train/lora_jp/train_staged.py --phase 3 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --resume "outputs/lora_jp/stage2/best.pt" --batch_size 2 --lr 5e-5 --device cuda
 ```
 
 ### 13.5 Validation & Auto-Rollback
@@ -288,10 +292,10 @@ Triggers automatic rollback if danger thresholds are crossed. Optionally synthes
 
 ```powershell
 # Validate phase 1 checkpoint
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/validate_and_rollback.py --checkpoint "outputs/lora_jp/stage1/best.pt" --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --device cuda
+cd SoulX-Singer ; python train/lora_jp/validate_and_rollback.py --checkpoint "outputs/lora_jp/stage1/best.pt" --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --device cuda
 
 # Final validation with synthesis check
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/validate_and_rollback.py --checkpoint "outputs/lora_jp/stage3/best.pt" --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --device cuda --synthesize
+cd SoulX-Singer ; python train/lora_jp/validate_and_rollback.py --checkpoint "outputs/lora_jp/stage3/best.pt" --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --device cuda --synthesize
 ```
 
 ### 13.6 ONNX Export (for SXSEditor)
@@ -300,7 +304,7 @@ Exports fine-tuned preflow + JP embedding as ONNX files compatible with SXSEdito
 Generates `note_text_encoder.onnx` (extended embedding) and `preflow.onnx` (fine-tuned preflow).
 
 ```powershell
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/export_onnx.py --checkpoint "outputs/lora_jp/stage3/best.pt" --base_model "pretrained_models/SoulX-Singer/model.pt" --output_dir "onnx_models/fp16/JP"
+cd SoulX-Singer ; python train/lora_jp/export_onnx.py --checkpoint "outputs/lora_jp/stage3/best.pt" --base_model "pretrained_models/SoulX-Singer/model.pt" --output_dir "onnx_models/fp16/JP"
 ```
 
 ### 13.7 LoRA Training (Legacy single-phase)
@@ -308,7 +312,7 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/export_onn
 Older single-phase fine-tuning script (preflow + JP embedding). Use `train_staged.py` for better results.
 
 ```powershell
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/train_lora.py --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --output_dir "outputs/lora_jp" --epochs 50 --batch_size 4 --use_amp
+cd SoulX-Singer ; python train/lora_jp/train_lora.py --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --output_dir "outputs/lora_jp" --epochs 50 --batch_size 4 --use_amp
 ```
 
 ### 13.8 Phoneme Mapping Generation
@@ -316,7 +320,7 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/train_lora
 Generates Japanese-to-source phoneme mapping JSON used for embedding initialization.
 
 ```powershell
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/phoneme_mapping.py
+cd SoulX-Singer ; python train/lora_jp/phoneme_mapping.py
 ```
 
 ### 13.9 PyTorch Inference Verification
@@ -324,7 +328,7 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/phoneme_ma
 Runs PyTorch inference with fine-tuned model to verify Japanese singing voice synthesis quality.
 
 ```powershell
-cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/infer_lora.py
+cd SoulX-Singer ; python train/lora_jp/infer_lora.py
 ```
 
 ---
@@ -333,14 +337,14 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/infer_lora
 
 | Path | Description |
 |------|-------------|
-| `d:\Document\electron\SXSEditor\` | Project root |
-| `d:\Document\electron\SXSEditor\onnx_models\` | Base ONNX models directory |
-| `d:\Document\electron\SXSEditor\onnx_models\fp16\` | FP16 models |
-| `d:\Document\electron\SXSEditor\onnx_models\fp16\JP\` | Japanese fine-tuned FP16 models |
-| `d:\Document\electron\SXSEditor\onnx_models\int8\` | INT8 models (ORT CPU compatible) |
-| `d:\Document\electron\SXSEditor\onnx_models\int8\optimized_npu\` | NPU-optimized INT8 models |
-| `d:\Document\electron\SXSEditor\SoulX-Singer\` | SoulX-Singer sub-project root |
-| `d:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt` | PyTorch source model |
-| `d:\Document\electron\SXSEditor\SoulX-Singer\train\lora_jp\` | Japanese LoRA fine-tuning scripts |
-| `d:\Document\electron\SXSEditor\SoulX-Singer\train\lora_jp\dataset\wavs\` | Training dataset WAV files |
-| `d:\Document\electron\SXSEditor\SoulX-Singer\outputs\lora_jp\` | Training output checkpoints |
+| `<project root>\` | Project root (all relative paths below are resolved from here) |
+| `onnx_models\` | Base ONNX models directory |
+| `onnx_models\fp16\` | FP16 models |
+| `onnx_models\fp16\JP\` | Japanese fine-tuned FP16 models |
+| `onnx_models\int8\` | INT8 models (ORT CPU compatible) |
+| `onnx_models\int8\optimized_npu\` | NPU-optimized INT8 models |
+| `SoulX-Singer\` | SoulX-Singer sub-project root |
+| `SoulX-Singer\pretrained_models\SoulX-Singer\model.pt` | PyTorch source model |
+| `SoulX-Singer\train\lora_jp\` | Japanese LoRA fine-tuning scripts |
+| `SoulX-Singer\train\lora_jp\dataset\wavs\` | Training dataset WAV files |
+| `SoulX-Singer\outputs\lora_jp\` | Training output checkpoints |

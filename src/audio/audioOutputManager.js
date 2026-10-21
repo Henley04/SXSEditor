@@ -248,7 +248,10 @@ class AudioOutputManager {
     this._playbackOffset = offset;
     this._isPlaying = false;
     this._lastPosition = offset;
-    this._duration = audioData.length / (options.sampleRate || 24000);
+    // C14: 时长必须按源采样率换算。audioData 是源采样率下的样本，worker 会先
+    // resample 到 options.sampleRate 再播放（见 audioWorker.js handleStart 的
+    // sourceDuration）。用目标采样率除源长度会在 24k→48k 时把时长减半。
+    this._duration = audioData.length / (options.sourceSampleRate || options.sampleRate || 24000);
 
     const audioArray = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
 

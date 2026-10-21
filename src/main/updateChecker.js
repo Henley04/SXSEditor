@@ -44,7 +44,12 @@ function _fetchGithubJson(url) {
         ) {
           redirectCount++;
           res.resume(); // drain
-          doRequest(res.headers.location);
+          // 按当前 URL 解析相对 Location（GitHub 偶发返回相对路径）。
+          let nextUrl = res.headers.location;
+          try {
+            nextUrl = new URL(res.headers.location, targetUrl).href;
+          } catch (_) { /* 解析失败时保持原样，由 https.request 报错 */ }
+          doRequest(nextUrl);
           return;
         }
         if (status === 403) {
@@ -152,7 +157,22 @@ async function checkAppUpdate(channel) {
   try {
     if (channel === 'nightly') {
       const release = await _fetchGithubJson(`${GITHUB_API_BASE}/releases/tags/nightly`);
-      latestVersion = 'nightly';
+      // C40: nightly 的 tag 恒为 'nightly'，若把它当作 skip key，
+      // "跳过本次更新" 之后每次检查都会命中旧 key（或者永远对不上）。
+      // 改用 publishedAt 时间戳（缺失时退回 commit sha）构造每次构建唯一的
+      // skip key；渲染侧本来就是拿 latestVersion 存 skip 值，
+      // 因此这里直接让它承载这个 key。
+      const sha = typeof release.target_commitish === 'string' ? release.target_commitish.trim() : '';
+      const publishedKeyMs = release.published_at ? Date.parse(release.published_at) : NaN;
+      // publishedAt 每次 nightly 构建都不同，是首选 skip key；
+      // target_commitish 可能只是分支名（如 'main'），只有形如 sha 时才用它。
+      if (!isNaN(publishedKeyMs)) {
+        latestVersion = `nightly-${publishedKeyMs}`;
+      } else if (/^[0-9a-f]{7,40}$/i.test(sha)) {
+        latestVersion = `nightly-${sha.slice(0, 12)}`;
+      } else {
+        latestVersion = 'nightly';
+      }
       publishedAt = release.published_at || null;
       releaseUrl = release.html_url || null;
       downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/nightly/${INSTALLER_ASSET}`;
@@ -285,11 +305,12 @@ async function recordCheckTime() {
  * Manual checks ignore dontRemindAppUpdates; auto checks respect it.
  */
 function shouldShowNotification(appResult, modelsResult, settings, isManual) {
-  const appUpdateToShow = appResult.updateAvailable && appResult.latestVersion !== settings.skippedAppVersion;
+  const s = settings || {};
+  // C40: 自动检查要尊重"不再提醒"；手动检查（用户主动点检查更新）忽略它。
+  const appUpdateToShow = appResult.updateAvailable
+    && appResult.latestVersion !== s.skippedAppVersion
+    && (isManual || !s.dontRemindAppUpdates);
   const modelUpdateToShow = modelsResult.anyUpdateAvailable;
-  if (isManual) {
-    return appUpdateToShow || modelUpdateToShow;
-  }
   return appUpdateToShow || modelUpdateToShow;
 }
 
@@ -300,4 +321,6 @@ module.exports = {
   shouldAutoCheck,
   recordCheckTime,
   shouldShowNotification,
+  // R23: cli.js 的 `--version` 复用同一套双候选读取逻辑。
+  _readBuildInfo,
 };

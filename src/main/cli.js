@@ -133,10 +133,17 @@ function cmdHelp() {
 }
 
 function cmdVersion() {
-  // webpack 打包后 build-info.json 被 CopyPlugin 复制到 .webpack/main/build-info.json
-  // （与 main bundle 同目录），所以用 __dirname 直接定位
-  const buildInfoPath = path.join(__dirname, 'build-info.json');
-  const buildInfo = readJsonSafe(buildInfoPath, {});
+  // R23: 复用 updateChecker._readBuildInfo 的双候选（打包后 main 目录 /
+  // 源码运行的 src 目录），避免只读单一路径在源码运行时拿不到 build-info。
+  let buildInfo = null;
+  try {
+    buildInfo = require('./updateChecker')._readBuildInfo();
+  } catch (_) { /* 加载失败时退回单路径读取 */ }
+  if (!buildInfo) {
+    // webpack 打包后 build-info.json 被 CopyPlugin 复制到 .webpack/main/build-info.json
+    // （与 main bundle 同目录），所以用 __dirname 直接定位
+    buildInfo = readJsonSafe(path.join(__dirname, 'build-info.json'), {});
+  }
   section('Build Info');
   log(JSON.stringify(buildInfo, null, 2));
   return 0;
@@ -940,7 +947,6 @@ function parseArgs(argv) {
     if (a === '--seed') { opts.seed = parseInt(rest[++i], 10); continue; }
     if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
     if (a === '--no-winml') { opts.noWinml = true; continue; }
-    if (a === '--max-prompt-frames') { opts.maxPromptFrames = parseInt(rest[++i], 10); continue; }
     if (a === '--diffstep-chunk') {
       opts.diffStepChunk = true;
       const v = parseInt(rest[i + 1], 10);

@@ -11,7 +11,9 @@ function centsToMult(cents) {
   return Math.pow(2, cents / 1200);
 }
 
-function schedulePianoNote(ctx, dest, note, beatDur, filter) {
+// 注意：调用处只传 (ctx, note, beatDur, filter)。此前多出的 dest 形参让实参
+// 整体错位（note 实为 number、filter 为 undefined），filter.type 直接抛 TypeError。
+function schedulePianoNote(ctx, note, beatDur, filter) {
   const startSec = note.start * beatDur;
   const durSec = Math.max(0.05, note.duration * beatDur);
 
@@ -92,7 +94,10 @@ export async function startSynth() {
   if (!notes || notes.length === 0) {
     return false;
   }
-  const beatDur = 60 / ((state.extractOptions && state.extractOptions.bpm) || 120);
+  // 试听的 1 beat 时长必须与钢琴卷轴的时间映射使用同一 BPM（pianoRoll.bpm），
+  // 否则同一批音符在卷轴上画的位置和听到的节奏对不上。
+  const beatBpm = (state.pianoRoll && state.pianoRoll.bpm) || 120;
+  const beatDur = 60 / beatBpm;
 
   try {
     if (!state.synthContext || state.synthContext.state === 'closed') {

@@ -138,9 +138,9 @@ class RosvotDetector {
    * @param {number} sampleRate - 音频采样率
    * @param {Array} f0Array - RMVPE 提取的 F0 数组
    * @param {number} bpm - 节拍速度
-   * @returns {Array} MIDI 音符数组
+   * @returns {Promise<Array>} MIDI 音符数组（实际推理在异步的 _runInference 中）
    */
-  extractNotes(audioData, sampleRate, f0Array, bpm = 120) {
+  async extractNotes(audioData, sampleRate, f0Array, bpm = 120) {
     if (!this.initialized) {
       throw new Error('RosvotDetector not initialized');
     }
@@ -151,10 +151,15 @@ class RosvotDetector {
       : audioData;
 
     // 2. 计算实际帧数和需要的填充
-    const actualFrames = Math.min(
-      Math.floor(resampledAudio.length / ROSVOT_HOP_SIZE),
-      ROSVOT_MAX_FRAMES
-    );
+    const wantedFrames = Math.floor(resampledAudio.length / ROSVOT_HOP_SIZE);
+    const actualFrames = Math.min(wantedFrames, ROSVOT_MAX_FRAMES);
+    // C31: 模型输入帧数固定为 ROSVOT_MAX_FRAMES，超出部分此前被静默丢弃。
+    if (wantedFrames > ROSVOT_MAX_FRAMES) {
+      console.warn(
+        `[RosvotDetector] audio too long, tail truncated: ${wantedFrames} frames > ${ROSVOT_MAX_FRAMES} ` +
+        `(${(resampledAudio.length / ROSVOT_SAMPLE_RATE).toFixed(1)}s -> ${(actualFrames * ROSVOT_HOP_SIZE / ROSVOT_SAMPLE_RATE).toFixed(1)}s)`
+      );
+    }
     const actualSamples = actualFrames * ROSVOT_HOP_SIZE;
 
     // 3. 填充音频到固定长度
@@ -177,7 +182,7 @@ class RosvotDetector {
       word_bd: new ort.Tensor('int64', word_bd, [1, ROSVOT_MAX_FRAMES]),
     };
 
-    // 同步运行（在 async 方法中需要用 run）
+    // 推理 + 结果解析（异步，DML 失败时回退 CPU）
     return this._runInference(feeds, actualFrames, bpm);
   }
 

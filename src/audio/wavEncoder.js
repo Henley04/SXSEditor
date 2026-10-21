@@ -1,6 +1,6 @@
 /**
  * WAV 编码工具
- * 将 Float32Array 音频数据编码为 32-bit float PCM WAV 文件
+ * 支持 16/24/32-bit PCM 与 32-bit IEEE float WAV 编码
  */
 
 // B2: use CommonJS require to match the rest of src/audio (audioWorker.js is
@@ -164,8 +164,38 @@ function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEn
   return stereoData;
 }
 
+/**
+ * 建立包络插值游标。
+ * C15: 关键帧不保证按时间递增（编辑器拖拽/撤销后可能乱序），也可能出现相邻
+ * 同时间的关键帧。游标的"只前进"假设与插值分母都要求时间严格递增，否则
+ * 同时间相邻帧会让分母为 0 → t=NaN → 整个输出段变成 NaN。这里先排序，
+ * 再把同时间的关键帧折叠成一个（保留排序后最后一个，语义上等价于"后写覆盖"）。
+ */
 function _createEnvCursor(envelope) {
-  return { kfs: envelope.keyframes, len: envelope.keyframes.length, seg: 0 };
+  const raw = envelope.keyframes;
+  let sorted = true;
+  let hasDup = false;
+  for (let i = 1; i < raw.length; i++) {
+    if (raw[i].time < raw[i - 1].time) { sorted = false; }
+    if (raw[i].time === raw[i - 1].time) { hasDup = true; }
+  }
+  let kfs = raw;
+  if (!sorted) {
+    kfs = raw.slice().sort((a, b) => a.time - b.time);
+    hasDup = false;
+    for (let i = 1; i < kfs.length; i++) {
+      if (kfs[i].time === kfs[i - 1].time) { hasDup = true; break; }
+    }
+  }
+  if (hasDup) {
+    const dedup = [];
+    for (let i = 0; i < kfs.length; i++) {
+      if (i + 1 < kfs.length && kfs[i + 1].time === kfs[i].time) continue;
+      dedup.push(kfs[i]);
+    }
+    kfs = dedup;
+  }
+  return { kfs, len: kfs.length, seg: 0 };
 }
 
 // Interpolate envelope value at a monotonically non-decreasing `time`.
@@ -183,7 +213,9 @@ function _interpEnvAt(cursor, time) {
   while (seg < len - 2 && kfs[seg + 1].time <= time) seg++;
   cursor.seg = seg;
 
-  const t = (time - kfs[seg].time) / (kfs[seg + 1].time - kfs[seg].time);
+  // C15: 兜底 —— 即使上游送进同时间或 NaN 的关键帧，分母也不会是 0。
+  const span = kfs[seg + 1].time - kfs[seg].time;
+  const t = (time - kfs[seg].time) / (span || 1e-9);
   const smoothness = (kfs[seg].smoothness || 0) / 100;
   const smoothT = smoothstep(t, smoothness);
   return kfs[seg].value + smoothT * (kfs[seg + 1].value - kfs[seg].value);

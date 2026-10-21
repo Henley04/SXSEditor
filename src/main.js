@@ -731,11 +731,12 @@ app.whenReady().then(() => {
     // By the time the app launches again, the previous install flow has
     // finished (success or cancel), so the temp installer is no longer needed.
     // Using 'all' here reclaims disk immediately instead of waiting 7 days.
-    try {
-      cleanupInstallerTempFiles('all');
-    } catch (err) {
-      console.warn('[Main] Installer temp cleanup failed:', err.message);
-    }
+    // P13: 异步清理，fire-and-forget，不阻塞启动路径（错误只记日志）。
+    Promise.resolve()
+      .then(() => cleanupInstallerTempFiles('all'))
+      .catch((err) => {
+        console.warn('[Main] Installer temp cleanup failed:', err.message);
+      });
 
     // GPU 硬件探测已合并到上方 setImmediate 内（应用完全启动后一次性执行并缓存复用）。
     // Model检查延后执行，不阻塞窗口显示

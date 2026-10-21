@@ -6,6 +6,7 @@ import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { buildProjectLrc, exportProjectLrc } from './lrcExport.js';
+import { resampleForExport } from './exportDialog.js';
 import {
   playAll, pausePlayback, stopPlayback, seekPlayback, exportAll, runExportJob,
   getCurrentPlaybackSeconds, ensurePipelineInitialized, loadAudioSettings,
@@ -71,52 +72,62 @@ async function authorize(path) {
 function apply(ops) {
   if (!Array.isArray(ops)) throw new Error('operations must be an array');
   const out = [];
-  for (const op of ops) {
-    switch (op.op) {
-      case 'set_project':
-        state.project = { ...state.project, ...op.value };
-        out.push(state.project);
-        break;
-      case 'add_singer':
-        out.push(trackManager.addSinger(op.value || {}));
-        break;
-      case 'update_singer':
-        if (!trackManager.updateSinger(op.id, op.value || {})) throw new Error(`Unknown singer ${op.id}`);
-        out.push(trackManager.getSinger(op.id));
-        break;
-      case 'remove_singer':
-        if (!trackManager.removeSinger(op.id)) throw new Error(`Unable to remove singer ${op.id}`);
-        out.push({ removed: op.id });
-        break;
-      case 'add_fragment':
-        out.push(trackManager.addFragment(fragment(op.value || {})));
-        break;
-      case 'update_fragment':
-        if (!trackManager.updateFragment(op.id, op.value || {})) throw new Error(`Unknown fragment ${op.id}`);
-        out.push(trackManager.getFragment(op.id));
-        break;
-      case 'remove_fragment':
-        if (!trackManager.removeFragment(op.id)) throw new Error(`Unknown fragment ${op.id}`);
-        out.push({ removed: op.id });
-        break;
-      case 'replace_notes': {
-        const f = trackManager.getFragment(op.fragmentId);
-        if (!f) throw new Error(`Unknown fragment ${op.fragmentId}`);
-        f.notes = (op.notes || []).map(note);
-        out.push({ fragmentId: f.id, noteCount: f.notes.length });
-        break;
+  try {
+    for (const op of ops) {
+      switch (op.op) {
+        case 'set_project':
+          state.project = { ...state.project, ...op.value };
+          out.push(state.project);
+          break;
+        case 'add_singer':
+          out.push(trackManager.addSinger(op.value || {}));
+          break;
+        case 'update_singer':
+          if (!trackManager.updateSinger(op.id, op.value || {})) throw new Error(`Unknown singer ${op.id}`);
+          out.push(trackManager.getSinger(op.id));
+          break;
+        case 'remove_singer':
+          if (!trackManager.removeSinger(op.id)) throw new Error(`Unable to remove singer ${op.id}`);
+          out.push({ removed: op.id });
+          break;
+        case 'add_fragment':
+          out.push(trackManager.addFragment(fragment(op.value || {})));
+          break;
+        case 'update_fragment':
+          if (!trackManager.updateFragment(op.id, op.value || {})) throw new Error(`Unknown fragment ${op.id}`);
+          out.push(trackManager.getFragment(op.id));
+          break;
+        case 'remove_fragment':
+          if (!trackManager.removeFragment(op.id)) throw new Error(`Unknown fragment ${op.id}`);
+          out.push({ removed: op.id });
+          break;
+        case 'replace_notes': {
+          const f = trackManager.getFragment(op.fragmentId);
+          if (!f) throw new Error(`Unknown fragment ${op.fragmentId}`);
+          f.notes = (op.notes || []).map(note);
+          out.push({ fragmentId: f.id, noteCount: f.notes.length });
+          break;
+        }
+        case 'set_selection':
+          if (op.singerId !== undefined) state.selectedSingerId = op.singerId;
+          if (op.fragmentId !== undefined) state.selectedFragmentId = op.fragmentId;
+          break;
+        case 'clear_project':
+          trackManager.clearAll();
+          state.project = { bpm: 120, timeSignature: [4, 4] };
+          break;
+        default:
+          throw new Error(`Unsupported operation ${op.op}`);
       }
-      case 'set_selection':
-        if (op.singerId !== undefined) state.selectedSingerId = op.singerId;
-        if (op.fragmentId !== undefined) state.selectedFragmentId = op.fragmentId;
-        break;
-      case 'clear_project':
-        trackManager.clearAll();
-        state.project = { bpm: 120, timeSignature: [4, 4] };
-        break;
-      default:
-        throw new Error(`Unsupported operation ${op.op}`);
     }
+  } catch (err) {
+    // 中途失败时前面的 op 已经生效，不能把工程留在"改了但没标脏/没刷新"的状态。
+    // 不做整体回滚，但必须让 UI 与脏标记跟上，并把已应用数量报给调用方。
+    markDirty();
+    refreshAll();
+    const e = new Error(`${err.message || String(err)} (applied ${out.length}/${ops.length} operations)`);
+    e.appliedOps = out.length;
+    throw e;
   }
   markDirty();
   refreshAll();
@@ -290,11 +301,13 @@ async function exportFragmentTo(p) {
   });
   const { encodeWav } = require('../audio/wavEncoder.js');
   const sr = p.options?.sampleRate || 24000;
-  const wav = encodeWav(audioData, sr, 1);
+  // 推理输出固定为 SAMPLE_RATE（24k）；只改 WAV 头会变速变调，必须先重采样。
+  const outputAudio = resampleForExport(audioData, SAMPLE_RATE, sr, 1);
+  const wav = encodeWav(outputAudio, sr, 1);
   await authorize(p.path);
   const saved = await window.electronAPI.saveFile(p.path, wav);
   if (!saved?.success) throw new Error(saved?.error || 'Export failed');
-  return { path: p.path, sampleRate: sr, duration: audioData.length / sr };
+  return { path: p.path, sampleRate: sr, duration: outputAudio.length / sr };
 }
 
 async function execute(m, p = {}) {
@@ -433,8 +446,10 @@ async function execute(m, p = {}) {
       const r = await runExportJob({ ...settings, ...p.options });
       const { encodeWav } = require('../audio/wavEncoder.js');
       const sr = p.options?.sampleRate || 24000;
+      // 同上：mixedAudio 处于 SAMPLE_RATE，编码前重采样到目标采样率。
+      const outputAudio = resampleForExport(r.mixedAudio, SAMPLE_RATE, sr, r.numChannels || 1);
       await authorize(p.path);
-      const saved = await window.electronAPI.saveFile(p.path, encodeWav(r.mixedAudio, sr, r.numChannels || 1));
+      const saved = await window.electronAPI.saveFile(p.path, encodeWav(outputAudio, sr, r.numChannels || 1));
       if (!saved?.success) throw new Error(saved?.error || 'Export failed');
       return { path: p.path, sampleRate: sr, duration: r.maxDuration };
     }

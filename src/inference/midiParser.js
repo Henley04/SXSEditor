@@ -158,7 +158,7 @@ function _extractRawLyrics(buffer) {
  * Output note shape:
  *   { pitch, start (beats), duration (beats), lyric, noteType }
  */
-function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, secondsToTicks) {
+function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds) {
   if (rawNotes.length === 0) return [];
 
   for (const n of rawNotes) {
@@ -296,7 +296,6 @@ function parseMidiFile(buffer) {
         midi: note.midi,
         startTicks: note.ticks,
         durationTicks: note.durationTicks,
-        velocity: Math.round(note.velocity * 127),
         lyric: '',
       });
     }
@@ -324,9 +323,8 @@ function parseMidiFile(buffer) {
   const lyrics = [...rawLyrics, ...headerLyrics];
 
   const ticksToSeconds = (t) => midi.header.ticksToSeconds(t);
-  const secondsToTicks = (s) => midi.header.secondsToTicks(s);
 
-  return _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, secondsToTicks);
+  return _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds);
 }
 
 /**
@@ -348,7 +346,6 @@ function parseMidiFileMultiTrack(buffer) {
   const midi = new Midi(buffer);
   const ticksPerBeat = midi.header.ppq;
   const ticksToSeconds = (t) => midi.header.ticksToSeconds(t);
-  const secondsToTicks = (s) => midi.header.secondsToTicks(s);
 
   // @tonejs/midi drops track-level lyric meta events. Extract them from the
   // raw bytes and bucket by channel so each virtual track can recover its
@@ -374,7 +371,6 @@ function parseMidiFileMultiTrack(buffer) {
       midi: note.midi,
       startTicks: note.ticks,
       durationTicks: note.durationTicks,
-      velocity: Math.round(note.velocity * 127),
       lyric: '',
     }));
 
@@ -393,7 +389,6 @@ function parseMidiFileMultiTrack(buffer) {
       trackLyrics,
       ticksPerBeat,
       ticksToSeconds,
-      secondsToTicks,
     );
 
     if (notes.length === 0) continue;

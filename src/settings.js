@@ -379,7 +379,7 @@ function applySavedSettingsToUI(currentSetting) {
     const pSteps = currentSetting.previewDiffSteps ?? 16;
     const pCfg = currentSetting.previewCfgStrength ?? 3.0;
     const pRescale = currentSetting.previewCfgRescale ?? 0.7;
-    const pSampler = currentSetting.previewSampler || 'euler';
+    const pSampler = currentSetting.previewSampler || 'stork2';
     previewDiffStepsSlider.value = pSteps;
     previewDiffStepsValue.textContent = pSteps;
     if (previewSamplerSelect) previewSamplerSelect.value = pSampler;
@@ -428,7 +428,7 @@ function applySavedSettingsToUI(currentSetting) {
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
     const eRescale = currentSetting.exportCfgRescale ?? 0.7;
-    const eSampler = currentSetting.exportSampler || 'euler';
+    const eSampler = currentSetting.exportSampler || 'stork2';
     exportDiffStepsSlider.value = eSteps;
     exportDiffStepsValue.textContent = eSteps;
     if (exportSamplerSelect) exportSamplerSelect.value = eSampler;
@@ -1417,7 +1417,7 @@ function collectSettings() {
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
-        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'euler',
+        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'stork2',
         previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'linear',
         previewCfgStrengthStart: previewCfgStrengthStartInput ? (() => {
             const v = parseFloat(previewCfgStrengthStartInput.value);
@@ -1433,7 +1433,7 @@ function collectSettings() {
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
-        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'euler',
+        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'stork2',
         exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'linear',
         exportCfgStrengthStart: exportCfgStrengthStartInput ? (() => {
             const v = parseFloat(exportCfgStrengthStartInput.value);

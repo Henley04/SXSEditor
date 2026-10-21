@@ -205,7 +205,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
-            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
             <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
             <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。</span></td>
           </tr>
@@ -248,7 +248,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
-            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
             <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
             <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below. The export dialog also lets you override this per export.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。导出对话框也支持每次导出单独覆盖。</span></td>
           </tr>
@@ -259,8 +259,8 @@
         <span data-lang="en">Diffusion Sampler</span>
         <span data-lang="zh">扩散求解器</span>
       </h3>
-      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity field ODE. The <strong>sampler</strong> decides how each denoising step combines model evaluations into the state update. SXSEditor exposes four samplers, selectable independently for preview and export:</p>
-      <p data-lang="zh">扩散模型通过积分 flow-matching 速度场 ODE 迭代去噪 mel 频谱。<strong>求解器</strong>决定每个去噪步如何将模型推理组合为状态更新。SXSEditor 提供四种求解器，预览与导出可独立选择：</p>
+      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity field ODE. The <strong>sampler</strong> decides how each denoising step combines model evaluations into the state update. SXSEditor exposes four samplers, selectable independently for preview and export. <strong>STORK-2</strong> is the default; Euler and Heun remain available as lighter alternatives.</p>
+      <p data-lang="zh">扩散模型通过积分 flow-matching 速度场 ODE 迭代去噪 mel 频谱。<strong>求解器</strong>决定每个去噪步如何将模型推理组合为状态更新。SXSEditor 提供四种求解器，预览与导出可独立选择。默认使用 <strong>STORK-2</strong>；Euler 与 Heun 作为更轻量的备选仍然可选。</p>
       <table class="doc-table">
         <thead>
           <tr>
@@ -271,7 +271,7 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>Euler</strong> (default)</span><span data-lang="zh"><strong>Euler</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>Euler</strong></span><span data-lang="zh"><strong>Euler</strong></span></td>
             <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
             <td><span data-lang="en">First-order explicit Euler, midpoint time evaluation. The original baseline implementation; fastest and most predictable.</span><span data-lang="zh">一阶显式欧拉法，中点时间评估。原始基线实现，最快且最稳定。</span></td>
           </tr>
@@ -286,7 +286,7 @@
             <td><span data-lang="en">Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity to linearly extrapolate the next velocity — 1 inference/step. Not the full stabilized Runge-Kutta formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Includes numerical-stability guards (amplitude / sign-flip / NaN) that fall back to Euler when extrapolation is unsafe.</span><span data-lang="zh">受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度线性外推下一步速度——每步 1 次推理。并非论文完整的 stabilized Runge-Kutta 格式；收益为启发式，速度场缓变时效果最佳。含数值稳定性保护（幅度 / 符号翻转 / NaN），外推不安全时退化为 Euler。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en"><strong>STORK-2</strong></span><span data-lang="zh"><strong>STORK-2</strong></span></td>
+            <td><span data-lang="en"><strong>STORK-2</strong> (default)</span><span data-lang="zh"><strong>STORK-2</strong>（默认）</span></td>
             <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
             <td><span data-lang="en">Paper-faithful implementation of STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE — only 1 model inference per step despite the 8 sub-stages. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost (8 full-array passes) than Euler.</span><span data-lang="zh">STORK-2 论文原版实现（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE——尽管 8 个 sub-stage，每步仅 1 次模型推理。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍。代价：每步代数运算开销高于 Euler（8 趟全数组遍历）。</span></td>
           </tr>
@@ -418,8 +418,8 @@
         <span data-lang="en">Japanese Vocalization</span>
         <span data-lang="zh">日语发声方式</span>
       </h3>
-      <p data-lang="en">Japanese lyrics can be synthesized on the base multilingual model (no extra download) or via a dedicated JP LoRA model (in development). Three modes are available:</p>
-      <p data-lang="zh">日语歌词可在基础多语言模型上合成（无需额外下载），或通过专用日语 LoRA 模型合成（开发中）。提供三种模式：</p>
+      <p data-lang="en">Japanese lyrics can be synthesized on the base multilingual model (no extra download) or via a dedicated JP LoRA model (requires the optional JP model pack). Three modes are available:</p>
+      <p data-lang="zh">日语歌词可在基础多语言模型上合成（无需额外下载），或通过专用日语 LoRA 模型合成（需下载可选 JP 模型包）。提供三种模式：</p>
       <table class="doc-table">
         <thead>
           <tr>
@@ -442,7 +442,7 @@
           <tr>
             <td><span data-lang="en"><strong>Japanese LoRA Model</strong></span><span data-lang="zh"><strong>日语 LoRA 模型</strong></span></td>
             <td><span data-lang="en">Dedicated Japanese fine-tuned model with native jp_ phonemes for best quality.</span><span data-lang="zh">专用日语微调模型，使用原生 jp_ 音素，音质最佳。</span></td>
-            <td><span data-lang="en">Required (in development)</span><span data-lang="zh">需下载（开发中）</span></td>
+            <td><span data-lang="en">Required (optional JP model pack)</span><span data-lang="zh">需下载（可选 JP 模型包）</span></td>
           </tr>
         </tbody>
       </table>
@@ -469,27 +469,27 @@
         <tbody>
           <tr>
             <td><span data-lang="en">Output Mode</span><span data-lang="zh">输出模式</span></td>
-            <td><span data-lang="en"><strong>Shared</strong> (WASAPI Shared, other apps can play audio) / <strong>Exclusive</strong> (WASAPI Exclusive, lower latency 1–3ms, bit-perfect, blocks other apps)</span><span data-lang="zh"><strong>Shared</strong>（WASAPI 共享，其他应用可同时播放）/ <strong>Exclusive</strong>（WASAPI 独占，延迟更低 1–3ms，位完美，会阻止其他应用）</span></td>
+            <td><span data-lang="en"><strong>Shared</strong> (WASAPI Shared, other apps can play audio) / <strong>Exclusive</strong> (listed for future support — not implemented in the current version: the decibri backend always opens the device in shared mode, so the advertised low-latency / bit-perfect behaviour does not apply)</span><span data-lang="zh"><strong>Shared</strong>（WASAPI 共享，其他应用可同时播放）/ <strong>Exclusive</strong>（为将来支持保留的选项，当前版本未实现：decibri 后端始终以共享模式打开设备，所描述的低延迟 / 位完美特性不会生效）</span></td>
             <td><span data-lang="en">Shared</span><span data-lang="zh">Shared</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Output Device</span><span data-lang="zh">输出设备</span></td>
-            <td><span data-lang="en">System Default or a specific audio device. Exclusive mode only supports WASAPI devices.</span><span data-lang="zh">系统默认或指定音频设备。独占模式仅支持 WASAPI 设备。</span></td>
+            <td><span data-lang="en">System Default or a specific audio device. Playback currently always uses WASAPI shared mode.</span><span data-lang="zh">系统默认或指定音频设备。当前播放始终使用 WASAPI 共享模式。</span></td>
             <td><span data-lang="en">System Default</span><span data-lang="zh">系统默认</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Sample Rate</span><span data-lang="zh">采样率</span></td>
-            <td><span data-lang="en">22050, 24000 (native), 44100 (CD), 48000 (standard), 96000 (high), 192000 (studio) Hz. The default is now 48000 Hz (was 24000 Hz); the model still operates internally at 24 kHz and the output is linearly upsampled.</span><span data-lang="zh">22050、24000（原生）、44100（CD）、48000（标准）、96000（高）、192000（录音棚）Hz。默认现在为 48000 Hz（原为 24000 Hz）；模型仍以 24 kHz 内部运行，输出经线性上采样。</span></td>
+            <td><span data-lang="en">22050, 24000 (native), 44100 (CD), 48000 (standard), 96000 (high), 192000 (studio) Hz. The default is now 48000 Hz (was 24000 Hz); the model still operates internally at 24 kHz and the output is resampled with a band-limited Kaiser-windowed sinc interpolator.</span><span data-lang="zh">22050、24000（原生）、44100（CD）、48000（标准）、96000（高）、192000（录音棚）Hz。默认现在为 48000 Hz（原为 24000 Hz）；模型仍以 24 kHz 内部运行，输出经 Kaiser 窗带限 sinc 插值重采样。</span></td>
             <td><span data-lang="en">48000 Hz</span><span data-lang="zh">48000 Hz</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Export Sample Rate</span><span data-lang="zh">导出采样率</span></td>
-            <td><span data-lang="en">24000, 44100, 48000, 96000 Hz. Selectable per export. Linear upsampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000、96000 Hz。每次导出可选。从 24 kHz 模型率线性上采样。</span></td>
+            <td><span data-lang="en">24000, 44100, 48000, 96000 Hz. Selectable per export. Band-limited Kaiser-windowed sinc resampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000、96000 Hz。每次导出可选。从 24 kHz 模型率做 Kaiser 窗带限 sinc 重采样。</span></td>
             <td><span data-lang="en">48000 Hz</span><span data-lang="zh">48000 Hz</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Bit Depth</span><span data-lang="zh">位深度</span></td>
-            <td><span data-lang="en">32-bit Float (recommended), 32-bit Integer, 24-bit Integer, 16-bit Integer. Only applies in exclusive mode.</span><span data-lang="zh">32-bit Float（推荐）、32-bit Integer、24-bit Integer、16-bit Integer。仅独占模式生效。</span></td>
+            <td><span data-lang="en">32-bit Float (recommended), 32-bit Integer, 24-bit Integer, 16-bit Integer. Applies to the playback stream in shared mode too; the backend only supports int16 / float32, so 24-bit and 32-bit Integer fall back to 32-bit Float.</span><span data-lang="zh">32-bit Float（推荐）、32-bit Integer、24-bit Integer、16-bit Integer。共享模式下同样生效；后端仅支持 int16 / float32，因此 24-bit 与 32-bit Integer 会回退为 32-bit Float。</span></td>
             <td><span data-lang="en">32-bit Float</span><span data-lang="zh">32-bit Float</span></td>
           </tr>
           <tr>
@@ -507,8 +507,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">In exclusive mode, if the device doesn't support the selected sample rate/bit depth, SXSEditor automatically falls back to shared mode. Recommended buffer size in exclusive mode: 256 or below.</p>
-          <p data-lang="zh">独占模式下，如果设备不支持所选采样率/位深度，SXSEditor 会自动回退到共享模式。独占模式推荐缓冲区大小：256 或更低。</p>
+          <p data-lang="en">Playback always runs in WASAPI shared mode in the current version — exclusive-mode output is not implemented (the decibri backend ignores the flag), and the buffer-size setting is not forwarded to the device. The app resamples the synthesized audio to the selected sample rate itself.</p>
+          <p data-lang="zh">当前版本的播放始终运行在 WASAPI 共享模式——独占模式输出尚未实现（decibri 后端会忽略该标志），缓冲区大小设置也不会传给设备。合成音频由应用自行重采样到所选采样率。</p>
         </div>
       </div>
       <div class="callout note">

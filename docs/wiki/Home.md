@@ -14,7 +14,7 @@ You write notes on a piano roll, type lyrics, and SXSEditor generates a singing 
 |----------|--------|-------------|
 | Chinese (Mandarin) | Supported | Chinese characters (optional tone digit 1–5) |
 | English | Supported | English words (auto-converted to phonemes) |
-| Japanese | In Development | — |
+| Japanese | Supported | Hiragana/katakana (hybrid phoneme mapping by default; optional JP model pack for jp-lora models) |
 
 ---
 

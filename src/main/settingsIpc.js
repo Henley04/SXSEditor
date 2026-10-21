@@ -72,6 +72,14 @@ function isValidSettingValue(key, value) {
 
 let cachedDMLDevices = null;
 
+// P12: SETTINGS_CHECK_MODELS 会同步扫描 4 个精度目录下的全部模型文件，
+// 设置页每次打开/切精度都会调用。以 modelDir 为键做 30s TTL 缓存，
+// 避免重复的同步 IO 阻塞主进程；返回结构保持不变。
+const MODEL_CHECK_CACHE_TTL_MS = 30000;
+// 存在缺失文件时的短 TTL：下载完成后用户会立刻回到设置页。
+const MODEL_CHECK_MISSING_TTL_MS = 3000;
+let _modelCheckCache = { key: null, at: 0, result: null };
+
 function setCachedDMLDevices(devices) {
   cachedDMLDevices = devices;
 }
@@ -298,6 +306,9 @@ function registerSettingsIpc() {
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
+      // R23: 设备/精度相关设置已变，旧的 DML 设备列表缓存不再可信（原先该函数
+      // 定义并导出但全仓无调用），下次 SETTINGS_GET_DML_DEVICES 重新枚举。
+      invalidateDMLDevices();
       // Windows ML 开启时后台预热：立即解析/下载兼容 EP 的 MSIX 运行库，
       // 下一次合成 spawn worker 时 getReadyEpLibraries() 即可拿到就绪列表。
       if (merged.winmlEnabled === true && current.winmlEnabled !== true) {
@@ -356,8 +367,10 @@ function registerSettingsIpc() {
     }
 
     // 硬件探测仅在应用启动后执行一次并缓存复用，
-    // 保存设置时不再失效 GPU/DML 缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
+    // 保存设置时不再失效 GPU 探测缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
     // 同时规避检测与推理并发提交命令流导致 DXGI_ERROR_DEVICE_REMOVED 的风险）。
+    // 注意：上面 needsPipelineReset 分支里的 invalidateDMLDevices() 只清空
+    // 设备列表缓存，下一次 SETTINGS_GET_DML_DEVICES 才会重新枚举，本身不触发探测。
 
     return { success: true };
   });
@@ -475,14 +488,30 @@ function registerSettingsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.SETTINGS_CHECK_MODELS, async () => {
-    const { checkMissingFiles } = require('../modelManager');
     const modelDir = getModelDir();
+    const cacheKey = modelDir || '';
+    const now = Date.now();
+    if (_modelCheckCache.key === cacheKey
+      && _modelCheckCache.result
+      && now - _modelCheckCache.at < (_modelCheckCache.ttl || MODEL_CHECK_CACHE_TTL_MS)) {
+      return _modelCheckCache.result;
+    }
+    const { checkMissingFiles } = require('../modelManager');
     const precisions = ['fp32', 'fp16', 'int8', 'int8-npu'];
     const result = {};
     for (const p of precisions) {
       const { missing, existing } = checkMissingFiles(modelDir, p);
       result[p] = { ready: missing.length === 0, missing: missing.length, total: missing.length + existing.length };
     }
+    // 全量就绪时缓存 30s；存在缺失时只缓存 3s —— 用户刚下载完模型返回设置页
+    // 必须立刻看到“已就绪”，30s 的陈旧负结果会被误读成下载失败。
+    const allReady = precisions.every((p) => result[p].ready);
+    _modelCheckCache = {
+      key: cacheKey,
+      at: now,
+      result,
+      ttl: allReady ? MODEL_CHECK_CACHE_TTL_MS : MODEL_CHECK_MISSING_TTL_MS,
+    };
     return result;
   });
 

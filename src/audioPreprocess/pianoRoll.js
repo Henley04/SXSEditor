@@ -65,6 +65,12 @@ export function initPianoRoll() {
     _staticCache: null,
     _staticCacheDirty: true,
 
+    // 命中测试用的「按 start 排序」视图缓存：避免每次 mousemove 反向线性扫描。
+    // notes 数组被替换 / 长度变化 / 音符被就地移动时置空（见 _invalidateSortedNotes）。
+    _sortedNoteEntries: null,
+    _sortedNotesRef: null,
+    _sortedNotesLen: -1,
+
     _initEvents() {
       this._boundResize = debounce(() => this._resize(), 100);
       this._boundMouseUp = () => this._onMouseUp();
@@ -199,8 +205,26 @@ export function initPianoRoll() {
       // as empty space and the legacy create-note path fired below the note.
       const verticalTolerancePx = 2;
       const resizeHotZonePx = Math.max(4, Math.min(12, this.snapGrid * BEAT_WIDTH * this.zoomX / 2));
-      for (let i = this.notes.length - 1; i >= 0; i--) {
-        const note = this.notes[i];
+      const entries = this._getSortedNoteEntries();
+      if (entries.length === 0) return null;
+      // 候选区间：只有 start ∈ [xBeat - maxDuration, xBeat] 的音符可能覆盖 x。
+      // 先二分定位下界再顺序扫描，取代原先每次 mousemove 的反向线性扫描。
+      const xBeat = this._xToTime(x);
+      const lowerBound = xBeat - (this._sortedMaxDuration || 0) - 1e-9;
+      let lo = 0;
+      let hi = entries.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (entries[mid].start < lowerBound) lo = mid + 1;
+        else hi = mid;
+      }
+      let best = null;
+      for (let i = lo; i < entries.length; i++) {
+        const entry = entries[i];
+        if (entry.start > xBeat + 1e-9) break;
+        // 命中优先级与原实现一致：数组里越靠后（越晚加入）的音符越优先。
+        if (best && entry.order < best.order) continue;
+        const note = entry.note;
         const nx = this._timeToX(note.start);
         const ny = this._pitchToY(note.pitch);
         const nw = Math.max(1, note.duration * BEAT_WIDTH * this.zoomX);
@@ -208,9 +232,39 @@ export function initPianoRoll() {
         if (x < nx || x > nx + nw) continue;
         if (y < ny - verticalTolerancePx || y > ny + nh + verticalTolerancePx) continue;
         const onResizeEdge = x >= nx + nw - resizeHotZonePx;
-        return { note, nx, ny, nw, nh, onResizeEdge };
+        best = { note, nx, ny, nw, nh, onResizeEdge, order: entry.order };
       }
-      return null;
+      if (!best) return null;
+      return { note: best.note, nx: best.nx, ny: best.ny, nw: best.nw, nh: best.nh, onResizeEdge: best.onResizeEdge };
+    },
+
+    /** 命中测试用排序视图（按 start 升序，附带原数组下标用于保持既有优先级）。 */
+    _getSortedNoteEntries() {
+      if (this._sortedNoteEntries &&
+        this._sortedNotesRef === this.notes &&
+        this._sortedNotesLen === this.notes.length) {
+        return this._sortedNoteEntries;
+      }
+      const entries = new Array(this.notes.length);
+      let maxDuration = 0;
+      for (let i = 0; i < this.notes.length; i++) {
+        const note = this.notes[i];
+        entries[i] = { note, order: i, start: note.start };
+        if (note.duration > maxDuration) maxDuration = note.duration;
+      }
+      entries.sort((a, b) => a.start - b.start || b.note.duration - a.note.duration);
+      this._sortedNoteEntries = entries;
+      this._sortedNotesRef = this.notes;
+      this._sortedNotesLen = this.notes.length;
+      this._sortedMaxDuration = maxDuration;
+      return entries;
+    },
+
+    /** 音符被就地移动/改长度后调用，下一次命中测试重建排序视图。 */
+    _invalidateSortedNotes() {
+      this._sortedNoteEntries = null;
+      this._sortedNotesRef = null;
+      this._sortedNotesLen = -1;
     },
 
     _onMouseDown(e) {
@@ -273,6 +327,7 @@ export function initPianoRoll() {
         newPitch = Math.max(0, Math.min(127, newPitch));
         note.start = newStart;
         note.pitch = newPitch;
+        this._invalidateSortedNotes();
       } else if (this.dragMode === 'resize') {
         const dxBeats = (x - this.dragStartX) / (BEAT_WIDTH * this.zoomX);
         let newDuration = this.dragNoteStart.duration + dxBeats;
@@ -280,6 +335,7 @@ export function initPianoRoll() {
         // a grid line.
         newDuration = Math.max(this.snapGrid, this._snapBeats(newDuration));
         note.duration = newDuration;
+        this._invalidateSortedNotes();
       }
       this._staticCacheDirty = true;
       this.render();
@@ -295,6 +351,7 @@ export function initPianoRoll() {
           note.start = this.dragNoteStart.start;
           note.pitch = this.dragNoteStart.pitch;
           note.duration = this.dragNoteStart.duration;
+          this._invalidateSortedNotes();
           this._staticCacheDirty = true;
           this.render();
         }
@@ -326,6 +383,7 @@ export function initPianoRoll() {
         };
         this.notes.push(newNote);
         this.selectedNoteId = newNote.id;
+        this._invalidateSortedNotes();
         this._staticCacheDirty = true;
         this.render();
         updateMidiInfo();
@@ -393,11 +451,20 @@ export function initPianoRoll() {
       return (seconds / 60) * this.bpm;
     },
 
+    // 播放时钟基准：优先用 audioContext.currentTime（与音频输出同一时钟，
+    // 见 fragmentEditor/audioPlayback.js 的做法），避免 performance.now()
+    // 与音频缓冲区调度之间的漂移。
+    _clockNow() {
+      const audioCtx = state.audioContext;
+      if (audioCtx && audioCtx.state !== 'closed') return audioCtx.currentTime;
+      return performance.now() / 1000;
+    },
+
     startPlayback() {
       _ensureVisibilityHandler();
       if (this.isPlaying) return;
       this.isPlaying = true;
-      this.playStartTime = performance.now();
+      this.playStartTime = this._clockNow();
       this.playStartOffset = this.currentTime;
       this._tickPlayback();
     },
@@ -409,7 +476,7 @@ export function initPianoRoll() {
         cancelAnimationFrame(this.playbackRaf);
         this.playbackRaf = null;
       }
-      const elapsed = (performance.now() - this.playStartTime) / 1000;
+      const elapsed = this._clockNow() - this.playStartTime;
       this.currentTime = this.playStartOffset + elapsed;
     },
 
@@ -425,7 +492,7 @@ export function initPianoRoll() {
 
     _tickPlayback() {
       if (!this.isPlaying) return;
-      const elapsed = (performance.now() - this.playStartTime) / 1000;
+      const elapsed = this._clockNow() - this.playStartTime;
       this.currentTime = this.playStartOffset + elapsed;
       this.render();
       drawWaveformWithPlayhead(this.getCurrentTime());
@@ -439,7 +506,7 @@ export function initPianoRoll() {
 
     getCurrentTime() {
       if (this.isPlaying) {
-        return this.playStartOffset + (performance.now() - this.playStartTime) / 1000;
+        return this.playStartOffset + (this._clockNow() - this.playStartTime);
       }
       return this.currentTime;
     },
@@ -449,6 +516,7 @@ export function initPianoRoll() {
       if (idx !== -1) {
         this.notes.splice(idx, 1);
         if (this.selectedNoteId === noteId) this.selectedNoteId = null;
+        this._invalidateSortedNotes();
         this._staticCacheDirty = true;
         this.render();
       }
@@ -463,8 +531,11 @@ export function initPianoRoll() {
       const c = getCanvasColors();
       const pixelW = Math.floor(w * this.dpr);
       const pixelH = Math.floor(h * this.dpr);
+      // 静态层命中 = 自上次全量重绘以来没有发生 scroll/zoom/内容/尺寸变化。
+      const staticCacheHit = !this._staticCacheDirty && this._staticCache &&
+        this._staticCache.width === pixelW && this._staticCache.height === pixelH;
 
-      if (!this._staticCacheDirty && this._staticCache && this._staticCache.width === pixelW && this._staticCache.height === pixelH) {
+      if (staticCacheHit) {
         // Use cached static layer (background/grid/f0/notes/keys)
         ctx.clearRect(0, 0, w, h);
         ctx.drawImage(this._staticCache, 0, 0, w, h);
@@ -493,8 +564,9 @@ export function initPianoRoll() {
       // Always draw playhead on top
       this._drawPlayhead(ctx, h, c);
       updateInlineInputPosition(this);
-      // 同步底部和右侧滚动条滑块位置（在所有视口/内容变化后）
-      updateScrollbars();
+      // 只在此前发生了 scroll/zoom/内容/尺寸变化（静态层未命中）时同步滚动条：
+      // 播放头推进、悬停高亮等纯重绘不再每帧做 O(n) 内容扫描 + DOM 写入。
+      if (!staticCacheHit) updateScrollbars();
     },
 
     _drawBackground(ctx, w, h, c) {

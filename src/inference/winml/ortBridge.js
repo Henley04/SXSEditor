@@ -245,23 +245,6 @@ function loadAddon() {
     );
 }
 
-/** 将 asar.unpacked 内的二进制复制到无 ".asar" 字样的缓存路径并返回路径。 */
-function _cachedCopy(src) {
-    try {
-        const os = require('node:os');
-        const crypto = require('node:crypto');
-        const st = fs.statSync(src);
-        const key = crypto.createHash('sha1').update(`${src}:${st.size}:${Math.floor(st.mtimeMs)}`).digest('hex').slice(0, 12);
-        const dir = path.join(os.tmpdir(), 'sxs-ort-bridge-cache');
-        fs.mkdirSync(dir, { recursive: true });
-        const dst = path.join(dir, `ort_bridge_${key}.node`);
-        if (!fs.existsSync(dst)) fs.copyFileSync(src, dst);
-        return dst;
-    } catch (_e) {
-        return null;
-    }
-}
-
 function getAddon() {
     return _addon;
 }
@@ -294,11 +277,6 @@ function listDevices() {
     } catch (_) {
         return [];
     }
-}
-
-/** Pick device indices by predicate over listDevices(). */
-function pickDeviceIndices(pred) {
-    return listDevices().filter(pred).map((d) => d.index);
 }
 
 function _tensorFromDescriptor(v) {
@@ -608,7 +586,6 @@ module.exports = {
     registerEp,
     canLoadLibrary,
     listDevices,
-    pickDeviceIndices,
     createSessionWithEps,
     validateTRTOutput,
     isTrtEngineFailure,

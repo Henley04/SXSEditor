@@ -105,7 +105,7 @@
         <tbody>
           <tr><td><span data-lang="en">Chinese (Mandarin)</span><span data-lang="zh">中文（普通话）</span></td><td><span data-lang="en">Supported — Chinese characters with optional tone digit (1–5)</span><span data-lang="zh">支持——汉字，可附加声调数字（1–5）</span></td></tr>
           <tr><td><span data-lang="en">English</span><span data-lang="zh">英语</span></td><td><span data-lang="en">Supported — English words, auto-converted to phonemes</span><span data-lang="zh">支持——英文单词，自动转换为音素</span></td></tr>
-          <tr><td><span data-lang="en">Japanese</span><span data-lang="zh">日语</span></td><td><span data-lang="en">Supported — hiragana/katakana, auto-converted to phonemes via Hybrid Phonemes (default, per-kana ARPAbet/Cantonese selection) or English Phoneme Migration; JP LoRA model in development</span><span data-lang="zh">支持——平假名/片假名，通过混合音素（默认，按假名在 ARPAbet/粤语间挑选）或英语音素迁移自动转换为音素；日语 LoRA 模型开发中</span></td></tr>
+          <tr><td><span data-lang="en">Japanese</span><span data-lang="zh">日语</span></td><td><span data-lang="en">Supported — hiragana/katakana, auto-converted to phonemes via Hybrid Phonemes (default, per-kana ARPAbet/Cantonese selection) or English Phoneme Migration; jp-lora mode requires the optional JP model pack</span><span data-lang="zh">支持——平假名/片假名，通过混合音素（默认，按假名在 ARPAbet/粤语间挑选）或英语音素迁移自动转换为音素；jp-lora 模式需下载可选 JP 模型包</span></td></tr>
         </tbody>
       </table>
 
@@ -350,22 +350,22 @@
       </h3>
       <ul>
         <li><span data-lang="en"><strong>Shared Mode</strong> (WASAPI Shared): Standard Windows audio. Other apps can play audio simultaneously. Default mode.</span><span data-lang="zh"><strong>共享模式</strong>（WASAPI Shared）：标准 Windows 音频。其他应用可同时播放。默认模式。</span></li>
-        <li><span data-lang="en"><strong>Exclusive Mode</strong> (WASAPI Exclusive): Direct hardware access with lower latency (1–3ms). Blocks other apps from using the audio device. Falls back to shared mode if the device doesn't support the selected settings.</span><span data-lang="zh"><strong>独占模式</strong>（WASAPI Exclusive）：直接硬件访问，延迟更低（1–3ms）。会阻止其他应用使用音频设备。如设备不支持所选设置，则回退到共享模式。</span></li>
+        <li><span data-lang="en"><strong>Exclusive Mode</strong> (WASAPI Exclusive): Selectable in Settings for future support, but not implemented in the current version — the decibri backend ignores the exclusive-mode flag and always opens the device in shared mode, so the low-latency / bit-perfect behaviour does not apply.</span><span data-lang="zh"><strong>独占模式</strong>（WASAPI Exclusive）：在设置中可选，但为将来支持保留，当前版本未实现——decibri 后端会忽略独占标志，始终以共享模式打开设备，因此低延迟 / 位完美特性不会生效。</span></li>
       </ul>
 
       <h3>
         <span data-lang="en">What is the output sample rate?</span>
         <span data-lang="zh">输出采样率是多少？</span>
       </h3>
-      <p data-lang="en">Synthesis runs at 24 kHz internally (model rate). The default playback sample rate is now 48 kHz. Export sample rate is selectable (24 / 44.1 / 48 / 96 kHz) with linear upsampling from the model rate. In exclusive mode, the device must support the selected rate.</p>
-      <p data-lang="zh">合成内部以 24kHz（模型速率）运行。默认播放采样率现为 48kHz。导出采样率可选（24 / 44.1 / 48 / 96 kHz），从模型采样率线性上采样。独占模式下设备必须支持所选采样率。</p>
+      <p data-lang="en">Synthesis runs at 24 kHz internally (model rate). The default playback sample rate is now 48 kHz. Export sample rate is selectable (24 / 44.1 / 48 / 96 kHz) with band-limited Kaiser-windowed sinc resampling from the model rate. Playback always runs in shared mode, so the app resamples the audio itself.</p>
+      <p data-lang="zh">合成内部以 24kHz（模型速率）运行。默认播放采样率现为 48kHz。导出采样率可选（24 / 44.1 / 48 / 96 kHz），从模型采样率做 Kaiser 窗带限 sinc 重采样。播放始终使用共享模式，重采样由应用自行完成。</p>
 
       <h3>
         <span data-lang="en">What format is the exported WAV?</span>
         <span data-lang="zh">导出的 WAV 是什么格式？</span>
       </h3>
-      <p data-lang="en">48 kHz, 32-bit IEEE float WAV by default (the model runs at 24 kHz internally, with linear upsampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz, and bit depth 16 / 24 / 32-bit in the Export dialog.</p>
-      <p data-lang="zh">默认为 48kHz、32-bit IEEE float WAV（模型内部以 24kHz 运行，线性上采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz，位深度可在导出对话框中选择 16 / 24 / 32 位。</p>
+      <p data-lang="en">48 kHz, 32-bit IEEE float WAV by default (the model runs at 24 kHz internally, with band-limited Kaiser-windowed sinc resampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz, and bit depth 16 / 24 / 32-bit in the Export dialog.</p>
+      <p data-lang="zh">默认为 48kHz、32-bit IEEE float WAV（模型内部以 24kHz 运行，以 Kaiser 窗带限 sinc 重采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz，位深度可在导出对话框中选择 16 / 24 / 32 位。</p>
 
       <h2>
         <span data-lang="en">Audio to MIDI</span>
