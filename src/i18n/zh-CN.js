@@ -50,6 +50,7 @@ export default {
     synthesizing: '合成中...',
     loadingModels: '模型加载中',
     cancelSynthesis: '取消推理',
+    transportPlaying: '正在播放',
     statusWithPercent: '{label} {percent}%',
     statusWithPercentEta: '{label} {percent}% · 还剩 {time}',
     synthesizingProgress: '合成中 {progress}%',

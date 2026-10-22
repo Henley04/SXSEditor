@@ -9,17 +9,21 @@
  *   2. 播放中拖拽 playhead 会先 pausePlayback()（btnPause → "继续"），松手恢复
  *      播放时没有任何代码把它改回"暂停"，按钮文案与真实状态脱节。
  *
- * 现在的约定：
- *   · 三个按钮的**图标永不改变**（play / pause / stop），只通过 disabled 表达
- *     可用性 —— 与 DAW 一致，用户不会看到图标语义前后矛盾。
+ * 现在的约定（对齐 Logic / Reaper 一类成熟 DAW 的传输条）：
+ *   · 图标**跟随语义**，而不是固定不变：
+ *       idle / paused  → play
+ *       playing        → play（禁用 + 激活高亮，由 Pause 接管）
+ *       loading / synthesizing → close（点了就是取消，图标必须说明这一点）
+ *     早期版本让 Play 在合成期间保持 play 图标但执行"取消"，图标与行为不符，
+ *     用户点下去才发现是取消。图标和 title 现在必须描述**当前真实行为**。
  *   · 所有按钮状态只在本文件的 setTransport() 里派生，其他模块不得直接写
- *     btnPlay/btnPause/btnStop 的 disabled/title。
- *   · "正在合成"不再是 Play 按钮上的文案，而是右侧进度区的状态文本；
- *     Play 在合成期间保持可点，语义改为"取消推理"。
+ *     btnPlay/btnPause/btnStop 的 disabled/title/icon。
+ *   · "正在合成"不再占用 Play 的文本，而是右侧进度区的状态文本。
  */
 
 import { state, dom } from './state.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 
 export const TRANSPORT = {
     IDLE: 'idle',
@@ -67,11 +71,17 @@ function _applyButtonState() {
 
     if (dom.btnPlay) {
         dom.btnPlay.disabled = playing;
-        // 合成期间 Play 的语义是"取消"，不是"播放"：给悬停提示与读屏标签
-        const playLabelKey = busy ? 'main.cancelSynthesis' : 'main.play';
-        const playLabel = t(playLabelKey);
+        // 图标必须与**当前行为**一致：合成/加载期间点击是取消，就显示取消图标；
+        // 播放中 Play 由 Pause 接管，保留 play 图标但禁用并高亮。
+        const icon = busy ? 'close' : 'play';
+        const labelKey = busy
+            ? 'main.cancelSynthesis'
+            : (playing ? 'main.transportPlaying' : 'main.play');
+        const playLabel = t(labelKey);
         dom.btnPlay.title = playLabel;
         dom.btnPlay.setAttribute('aria-label', playLabel);
+        setLabel(dom.btnPlay, '', { icon });
+        dom.btnPlay.classList.toggle('is-active', playing);
     }
     if (dom.btnPause) {
         dom.btnPause.disabled = !playing;

@@ -50,6 +50,7 @@ export default {
     synthesizing: 'Synthesizing...',
     loadingModels: 'Loading models',
     cancelSynthesis: 'Cancel synthesis',
+    transportPlaying: 'Playing',
     statusWithPercent: '{label} {percent}%',
     statusWithPercentEta: '{label} {percent}% · {time} left',
     synthesizingProgress: 'Synthesizing {progress}%',

@@ -651,3 +651,12 @@
   .transport-status { max-width: 240px; font-size: 10px; }
   .transport-progress { display: none; }
 }
+
+/* 播放中：Play 被禁用但保持可见（视觉上表示"正在播放"），由 Pause 接管。
+   禁用态的 0.35 透明度会把"正在播放"这个状态也一起压暗，这里单独恢复。 */
+#toolbar .transport-btn.is-active {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-softer);
+}
