@@ -119,11 +119,14 @@ export function setTransport(next) {
  * 保证两种阶段的时间估算方式一致。
  *
  * @param {string} label 阶段名（已本地化）
- * @param {number} percent 0–100；非有限值 → 只显示阶段名（不确定进度）
+ * @param {number} [percent] 0–100；非有限值（含 null / undefined）→ 只显示阶段名（不确定进度）
  */
 export function setTransportProgress(label, percent) {
     if (!dom.transportStatus || !dom.transportStatusText) return;
-    const pct = Number(percent);
+    // null / undefined is "no value", not zero: Number(null) === 0 would print
+    // "Waiting for inference 0%" and yank the bar back to the left edge every
+    // time playback stalls, which reads as progress being lost.
+    const pct = (percent === null || percent === undefined) ? NaN : Number(percent);
     const hasPct = Number.isFinite(pct) && pct >= 0 && pct <= 100;
 
     let text = label;
