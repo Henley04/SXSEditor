@@ -26,7 +26,9 @@
     "cli:help": "electron-forge start -- --cli help",
     "build:native": "node scripts/build-native-electron.js",
     "mcp": "node scripts/sxseditor-mcp.js",
-    "splash:image": "node scripts/generate-splash-image.js"
+    "splash:image": "node scripts/generate-splash-image.js",
+    "mcp:docs": "node scripts/gen-mcp-docs.js",
+    "mcp:selftest": "node scripts/mcp-selftest.js"
   },
   "keywords": [
     "electron",

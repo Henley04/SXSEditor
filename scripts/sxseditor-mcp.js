@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 'use strict';
 // SXSEditor MCP stdio gateway.
-// Routes JSON-RPC over stdin/stdout to the running application's local
-// automation bridge (127.0.0.1 + Bearer token from the endpoint file).
+//
+// Bridges JSON-RPC (stdin/stdout) to the running application's local automation
+// bridge. Tool definitions are generated from src/shared/mcpSchema.js, so the
+// schemas an MCP client sees are the same ones the bridge validates against —
+// there is no second hand-maintained list to drift.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+
+const { schema } = require('../src/shared/mcpSchema');
 
 function endpoint() {
   const candidates = [];
@@ -23,114 +28,154 @@ function endpoint() {
   throw new Error('Start SXSEditor first; MCP endpoint not found');
 }
 
-function call(method, params = {}) {
+function request(method, urlPath, body) {
   const e = endpoint();
-  const body = Buffer.from(JSON.stringify({ method, params }));
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
-    const q = http.request({
+    const headers = { authorization: `Bearer ${e.token}` };
+    if (payload) {
+      headers['content-type'] = 'application/json';
+      headers['content-length'] = payload.length;
+    }
+    const req = http.request({
       hostname: '127.0.0.1',
       port: e.port,
-      path: '/automation',
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${e.token}`,
-        'content-type': 'application/json',
-        'content-length': body.length,
-      },
-    }, r => {
+      path: urlPath,
+      method,
+      headers,
+    }, (res) => {
       const chunks = [];
-      r.on('data', c => chunks.push(c));
-      r.on('end', () => {
-        try {
-          const x = JSON.parse(Buffer.concat(chunks));
-          if (x.ok) resolve(x.result);
-          else reject(new Error(x.error));
-        } catch (z) { reject(z); }
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let parsed;
+        try { parsed = text ? JSON.parse(text) : {}; } catch (_) { parsed = { raw: text }; }
+        if (res.statusCode >= 400 || parsed.ok === false) {
+          const info = parsed.error || { code: 'HTTP_ERROR', message: `HTTP ${res.statusCode}` };
+          const err = new Error(`${info.code || 'ERROR'}: ${info.message || text}`);
+          Object.assign(err, info, { status: res.statusCode });
+          return reject(err);
+        }
+        resolve(parsed.result !== undefined ? parsed.result : parsed);
       });
     });
-    // The bridge itself times out after 600s; keep a slightly larger client
-    // timeout so long exports / MIDI extraction are not cut short by us.
-    q.setTimeout(605000, () => q.destroy(new Error('Timeout waiting for SXSEditor')));
-    q.on('error', reject);
-    q.end(body);
+    // The bridge's own timeout is 600s for long methods; stay slightly above it.
+    req.setTimeout(605000, () => req.destroy(new Error('Timeout waiting for SXSEditor')));
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
   });
 }
 
-const obj = { type: 'object', additionalProperties: true };
-const tools = [
-  ['sxseditor_get_project', 'Read complete project state', { type: 'object', additionalProperties: false }],
-  ['sxseditor_apply_operations', 'Edit BPM, singers, accompaniment tracks, fragments, MIDI notes, envelopes, pitch curves and selection with ordered JSON operations', { type: 'object', required: ['operations'], properties: { operations: { type: 'array', items: obj } }, additionalProperties: false }],
-  ['sxseditor_replace_project', 'Replace the complete structured project JSON', { type: 'object', required: ['project'], properties: { project: obj }, additionalProperties: false }],
-  ['sxseditor_validate_project', 'Validate project JSON', { type: 'object', properties: { project: obj }, additionalProperties: false }],
-  ['sxseditor_import_midi', 'Import a local standard MIDI file, including multi-track mapping, tempo and timeline placement', { type: 'object', required: ['path'], properties: { path: { type: 'string' }, multiTrack: { type: 'boolean' }, createTracks: { type: 'boolean' }, singerId: { type: 'string' }, startTime: { type: 'number' }, applyProjectInfo: { type: 'boolean' } }, additionalProperties: false }],
-  ['sxseditor_extract_midi', 'Extract MIDI notes (and optionally F0) from a local audio file (WAV/MP3/FLAC/OGG/AAC/M4A)', { type: 'object', required: ['path'], properties: { path: { type: 'string' }, withPitch: { type: 'boolean' }, bpm: { type: 'number' } }, additionalProperties: false }],
-  ['sxseditor_import_accompaniment', 'Import and place local accompaniment audio', { type: 'object', required: ['path'], properties: { path: { type: 'string' }, name: { type: 'string' }, startTime: { type: 'number' }, volume: { type: 'number' } }, additionalProperties: false }],
-  ['sxseditor_import_singer', 'Import an .sxssinger file', { type: 'object', required: ['path'], properties: { path: { type: 'string' } }, additionalProperties: false }],
-  ['sxseditor_history', 'Undo or redo', { type: 'object', required: ['action'], properties: { action: { enum: ['undo', 'redo'] } }, additionalProperties: false }],
-  ['sxseditor_playback', 'Play, pause, stop or seek', { type: 'object', required: ['action'], properties: { action: { enum: ['play', 'pause', 'stop', 'seek'] }, seconds: { type: 'number' } }, additionalProperties: false }],
-  ['sxseditor_get_playback', 'Get playback status: whether playing, current position and duration', { type: 'object', additionalProperties: false }],
-  ['sxseditor_project_file', 'Load/save with dialogs or explicit paths', { type: 'object', required: ['action'], properties: { action: { enum: ['save', 'saveAs', 'load', 'saveTo', 'loadFrom'] }, path: { type: 'string' }, embedSingerFiles: { type: 'boolean' }, embedAccompanimentAudio: { type: 'boolean' } }, additionalProperties: false }],
-  ['sxseditor_export_audio', 'Export through UI or directly to a WAV path', { type: 'object', properties: { path: { type: 'string' }, options: obj }, additionalProperties: false }],
-  ['sxseditor_export_fragment', 'Export a single fragment to a WAV path', { type: 'object', required: ['fragmentId', 'path'], properties: { fragmentId: { type: 'string' }, path: { type: 'string' }, options: obj }, additionalProperties: false }],
-  ['sxseditor_export_lrc', 'Export the project as an LRC lyrics file (dialog or explicit path)', { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false }],
-  ['sxseditor_settings', 'Read or update application settings', { type: 'object', required: ['action'], properties: { action: { enum: ['get', 'update'] }, settings: obj }, additionalProperties: false }],
-  ['sxseditor_open', 'Open fragment editor or human-facing app windows', { type: 'object', required: ['target'], properties: { target: { enum: ['fragment', 'singerCreator', 'singerMarket', 'modelDownload', 'resourceManager'] }, fragmentId: { type: 'string' }, precision: { type: 'string' } }, additionalProperties: false }],
-  ['sxseditor_execute', 'Advanced access to every advertised automation method', { type: 'object', required: ['method'], properties: { method: { type: 'string' }, params: obj }, additionalProperties: false }],
-].map(([name, description, inputSchema]) => ({ name, description, inputSchema }));
+const call = (method, params = {}) => request('POST', '/automation', { method, params });
 
-function route(n, a) {
-  const direct = {
-    sxseditor_get_project: ['project.get', {}],
-    sxseditor_apply_operations: ['project.apply', a],
-    sxseditor_replace_project: ['project.replace', a],
-    sxseditor_validate_project: ['project.validate', a],
-    sxseditor_import_midi: ['midi.importFile', a],
-    sxseditor_extract_midi: ['audio.extractMidi', a],
-    sxseditor_import_accompaniment: ['accompaniment.import', a],
-    sxseditor_import_singer: ['singer.import', a],
-  };
-  if (direct[n]) return direct[n];
-  if (n === 'sxseditor_history') return [`history.${a.action}`, a];
-  if (n === 'sxseditor_playback') return [`playback.${a.action}`, a];
-  if (n === 'sxseditor_get_playback') return ['playback.get', a];
-  if (n === 'sxseditor_project_file') return [`project.${a.action}`, a];
-  if (n === 'sxseditor_export_audio') return [a.path ? 'audio.exportTo' : 'audio.export', a];
-  if (n === 'sxseditor_export_fragment') return ['fragment.exportTo', a];
-  if (n === 'sxseditor_export_lrc') return [a.path ? 'lrc.exportTo' : 'lrc.export', a];
-  if (n === 'sxseditor_settings') return [`settings.${a.action}`, a];
-  if (n === 'sxseditor_open') return a.target === 'fragment' ? ['fragment.open', a] : ['ui.open', a];
-  if (n === 'sxseditor_execute') return [a.method, a.params || {}];
+// ---------------------------------------------------------------- tool table
+
+const METHOD_ALIASES = {
+  sxseditor_get_project: 'project.get',
+  sxseditor_apply_operations: 'project.apply',
+  sxseditor_replace_project: 'project.replace',
+  sxseditor_validate_project: 'project.validate',
+  sxseditor_import_midi: 'midi.importFile',
+  sxseditor_extract_midi: 'audio.extractMidi',
+  sxseditor_import_accompaniment: 'accompaniment.import',
+  sxseditor_import_singer: 'singer.import',
+  sxseditor_get_playback: 'playback.get',
+  sxseditor_export_fragment: 'fragment.exportTo',
+};
+
+const tools = [];
+const toolMethod = new Map();
+
+for (const [method, def] of Object.entries(schema().methods)) {
+  const name = `sxs_${method.replace(/\./g, '_')}`;
+  toolMethod.set(name, method);
+  tools.push({
+    name,
+    description: def.description ? `${def.summary} — ${def.description}` : def.summary,
+    inputSchema: { ...def.params, $schema: 'http://json-schema.org/draft-07/schema#' },
+  });
 }
 
-// Example schema shown to clients via sxseditor://schema.
-const schema = {
-  schemaVersion: '1.0',
-  project: { bpm: 120, timeSignature: [4, 4] },
-  singers: [{ id: 'lead', type: 'singer', trackName: 'Lead', singerName: 'Lead' }],
-  fragments: [{
-    id: 'verse',
-    singerId: 'lead',
-    startTime: 0,
-    duration: 4,
-    name: 'Verse',
-    notes: [{ pitch: 60, start: 0, duration: 0.5, lyric: 'la' }],
-    envelopes: {
-      volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
-      pan: { keyframes: [{ time: 0, value: 0, smoothness: 0 }] },
-    },
-    pitchCurve: { enabled: true, anchorPoints: [], brushSegments: [] },
-  }],
+for (const [name, method] of Object.entries(METHOD_ALIASES)) {
+  const def = schema().methods[method];
+  if (!def) continue;
+  toolMethod.set(name, method);
+  tools.push({ name, description: `${def.summary} (alias for ${method})`, inputSchema: def.params });
+}
+
+const obj = { type: 'object', additionalProperties: true };
+tools.push(
+  { name: 'sxseditor_schema', description: 'Return the automation method table (JSON Schema)', inputSchema: { type: 'object', additionalProperties: false } },
+  { name: 'sxseditor_execute', description: 'Advanced: call any advertised automation method directly', inputSchema: { type: 'object', required: ['method'], properties: { method: { type: 'string' }, params: obj }, additionalProperties: false } },
+);
+
+// Multi-action tools keep their convenience surface, routing to one method.
+// Each mapper must drop the selector key (`action` / `target`): the underlying
+// method schema uses additionalProperties:false and would reject it.
+const MULTI = {
+  sxseditor_history: (a) => [`history.${a.action}`, {}],
+  sxseditor_playback: (a) => {
+    if (a.action === 'seek') return ['playback.seek', { seconds: a.seconds }];
+    return [`playback.${a.action}`, {}];
+  },
+  sxseditor_project_file: (a) => {
+    if (a.action === 'saveTo') {
+      return ['project.saveTo', { path: a.path, embedSingerFiles: a.embedSingerFiles, embedAccompanimentAudio: a.embedAccompanimentAudio }];
+    }
+    if (a.action === 'loadFrom') return ['project.loadFrom', { path: a.path }];
+    return [`project.${a.action}`, {}];
+  },
+  sxseditor_export_audio: (a) => (a.path ? ['audio.exportTo', { path: a.path, options: a.options }] : ['audio.export', {}]),
+  sxseditor_export_lrc: (a) => (a.path ? ['lrc.exportTo', { path: a.path }] : ['lrc.export', {}]),
+  sxseditor_settings: (a) => (a.action === 'update' ? ['settings.update', { settings: a.settings }] : ['settings.get', {}]),
+  sxseditor_open: (a) => (a.target === 'fragment'
+    ? ['fragment.open', { fragmentId: a.fragmentId }]
+    : ['ui.open', { target: a.target, precision: a.precision }]),
 };
+tools.push(
+  { name: 'sxseditor_history', description: 'Undo or redo', inputSchema: { type: 'object', required: ['action'], properties: { action: { enum: ['undo', 'redo'] } }, additionalProperties: false } },
+  { name: 'sxseditor_playback', description: 'Play, pause, stop or seek', inputSchema: { type: 'object', required: ['action'], properties: { action: { enum: ['play', 'pause', 'stop', 'seek'] }, seconds: { type: 'number' } }, additionalProperties: false } },
+  { name: 'sxseditor_project_file', description: 'Load/save with dialogs or explicit paths', inputSchema: { type: 'object', required: ['action'], properties: { action: { enum: ['save', 'saveAs', 'load', 'saveTo', 'loadFrom'] }, path: { type: 'string' }, embedSingerFiles: { type: 'boolean' }, embedAccompanimentAudio: { type: 'boolean' } }, additionalProperties: false } },
+  { name: 'sxseditor_export_audio', description: 'Export through UI or directly to a WAV path', inputSchema: { type: 'object', properties: { path: { type: 'string' }, options: obj }, additionalProperties: false } },
+  { name: 'sxseditor_export_lrc', description: 'Export the project as an LRC lyrics file', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false } },
+  { name: 'sxseditor_settings', description: 'Read or update application settings', inputSchema: { type: 'object', required: ['action'], properties: { action: { enum: ['get', 'update'] }, settings: obj }, additionalProperties: false } },
+  { name: 'sxseditor_open', description: 'Open the fragment editor or a secondary window', inputSchema: { type: 'object', required: ['target'], properties: { target: { enum: ['fragment', 'singerCreator', 'singerMarket', 'modelDownload', 'resourceManager'] }, fragmentId: { type: 'string' }, precision: { type: 'string' } }, additionalProperties: false } },
+);
+
+function route(name, args) {
+  if (name === 'sxseditor_schema') return ['schema.get', {}];
+  if (name === 'sxseditor_execute') return [args.method, args.params || {}];
+  if (MULTI[name]) return MULTI[name](args);
+  const method = toolMethod.get(name);
+  return method ? [method, args] : null;
+}
 
 const RESOURCES = [
   { uri: 'sxseditor://project', name: 'Current project', mimeType: 'application/json' },
-  { uri: 'sxseditor://schema', name: 'Project JSON schema example', mimeType: 'application/json' },
-  { uri: 'sxseditor://capabilities', name: 'Automation capabilities', mimeType: 'application/json' },
+  { uri: 'sxseditor://schema', name: 'Automation method table', mimeType: 'application/json' },
+  { uri: 'sxseditor://capabilities', name: 'Runtime capabilities', mimeType: 'application/json' },
+  { uri: 'sxseditor://jobs', name: 'Background jobs', mimeType: 'application/json' },
 ];
 
 function send(x) { process.stdout.write(JSON.stringify(x) + '\n'); }
 function ok(id, result) { if (id !== undefined) send({ jsonrpc: '2.0', id, result }); }
-function err(id, code, message) { send({ jsonrpc: '2.0', id: id !== undefined ? id : null, error: { code, message } }); }
+function err(id, code, message, data) {
+  send({ jsonrpc: '2.0', id: id !== undefined ? id : null, error: { code, message, data } });
+}
+
+function toolResult(v) {
+  return { content: [{ type: 'text', text: JSON.stringify(v, null, 2) }], structuredContent: v };
+}
+
+function toolError(e) {
+  const payload = { code: e.code || 'ERROR', message: e.message, field: e.field, hint: e.hint };
+  return {
+    content: [{ type: 'text', text: `Error ${payload.code}: ${payload.message}${payload.field ? ` (field: ${payload.field})` : ''}${payload.hint ? `\nHint: ${payload.hint}` : ''}` }],
+    structuredContent: { error: payload },
+    isError: true,
+  };
+}
 
 async function handle(x) {
   const { id, method, params = {} } = x;
@@ -139,8 +184,9 @@ async function handle(x) {
       return ok(id, {
         protocolVersion: '2025-06-18',
         capabilities: { tools: {}, resources: {}, prompts: {} },
-        serverInfo: { name: 'sxseditor', version: '1.0.0' },
-        instructions: 'Read sxseditor://schema and sxseditor://capabilities before editing.',
+        serverInfo: { name: 'sxseditor', version: '2.0.0' },
+        instructions: 'Call sxs_capabilities first, then sxs_schema for parameter schemas. '
+          + 'Use sxs_project_get with fields/includeNotes to limit payloads, and async=true for long exports.',
       });
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') return;
@@ -148,19 +194,21 @@ async function handle(x) {
     if (method === 'tools/list') return ok(id, { tools });
     if (method === 'tools/call') {
       const r = route(params.name, params.arguments || {});
-      if (!r) throw new Error('Unknown tool');
-      const v = await call(...r);
-      return ok(id, {
-        content: [{ type: 'text', text: JSON.stringify(v, null, 2) }],
-        structuredContent: v,
-      });
+      if (!r) throw Object.assign(new Error('Unknown tool'), { code: 'UNKNOWN_TOOL' });
+      try {
+        const v = await call(r[0], r[1]);
+        return ok(id, toolResult(v));
+      } catch (e) {
+        return ok(id, toolError(e));
+      }
     }
     if (method === 'resources/list') return ok(id, { resources: RESOURCES });
     if (method === 'resources/read') {
       let v;
-      if (params.uri === 'sxseditor://schema') v = schema;
-      else if (params.uri === 'sxseditor://project') v = await call('project.get');
+      if (params.uri === 'sxseditor://schema') v = await request('GET', '/schema');
+      else if (params.uri === 'sxseditor://project') v = await call('project.get', { includeNotes: false });
       else if (params.uri === 'sxseditor://capabilities') v = await call('capabilities');
+      else if (params.uri === 'sxseditor://jobs') v = await request('GET', '/jobs');
       else return err(id, -32002, 'Unknown resource');
       return ok(id, { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify(v, null, 2) }] });
     }
@@ -177,20 +225,21 @@ async function handle(x) {
       return ok(id, {
         messages: [{
           role: 'user',
-          content: { type: 'text', text: `Use sxseditor://schema to compose: ${params.arguments?.brief || ''}. Validate, then replace or apply operations.` },
+          content: { type: 'text', text: `Call sxs_schema, compose the project for: ${params.arguments && params.arguments.brief ? params.arguments.brief : ''}. Validate with sxs_project_validate, then sxs_project_replace.` },
         }],
       });
     }
     return err(id, -32601, 'Method not found');
   } catch (e) {
-    if (method === 'tools/call') return ok(id, { content: [{ type: 'text', text: e.message }], isError: true });
+    if (method === 'tools/call') return ok(id, toolError(e));
     err(id, -32000, e.message);
   }
 }
 
 let buf = '';
+const inFlight = new Set();
 process.stdin.setEncoding('utf8');
-process.stdin.on('data', c => {
+process.stdin.on('data', (c) => {
   buf += c;
   let i;
   while ((i = buf.indexOf('\n')) >= 0) {
@@ -198,11 +247,20 @@ process.stdin.on('data', c => {
     buf = buf.slice(i + 1);
     if (!line) continue;
     try {
-      handle(JSON.parse(line));
+      const p = handle(JSON.parse(line));
+      inFlight.add(p);
+      p.finally(() => inFlight.delete(p));
     } catch (e) {
       err(undefined, -32700, e.message);
     }
   }
 });
-process.stdin.on('end', () => process.exit(0));
-process.stdin.resume();
+process.stdin.on('end', async () => {
+  // A client may close stdin right after writing: give in-flight calls a chance
+  // to finish, otherwise their responses are dropped and the call looks hung.
+  if (inFlight.size) await Promise.race([
+    Promise.allSettled([...inFlight]),
+    new Promise((r) => setTimeout(r, 10000)),
+  ]);
+  process.exit(0);
+});

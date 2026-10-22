@@ -4,6 +4,7 @@ import { initI18n, applyLocale, getLocale, t } from '../i18n/index.js';
 import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initPipeline } from './pipeline.js';
+import { registerEditorMcpAutomation } from './mcpAutomation.js';
 import { resizeCanvases } from './canvasRenderer.js';
 import { setupEventListeners, _invalidateCanvasRect } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
@@ -175,6 +176,8 @@ document.addEventListener('localeChanged', () => {
   applyLocale();
   refreshPostprocessLabels();
 });
+
+registerEditorMcpAutomation();
 
 console.log(t('fragment.consoleStarted'));
 

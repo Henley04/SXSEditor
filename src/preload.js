@@ -101,6 +101,7 @@ function applyWindowCapabilityRedaction(api) {
 const _fullElectronAPI = {
   onMcpAutomationRequest: callback => { const h=(_e,m)=>callback(m); ipcRenderer.on(IPC_CHANNELS.MCP_AUTOMATION_REQUEST,h); return ()=>ipcRenderer.removeListener(IPC_CHANNELS.MCP_AUTOMATION_REQUEST,h); },
   sendMcpAutomationResponse: message => ipcRenderer.send(IPC_CHANNELS.MCP_AUTOMATION_RESPONSE,message),
+  sendMcpAutomationEvent: event => ipcRenderer.send(IPC_CHANNELS.MCP_AUTOMATION_EVENT,event),
   showSaveDialog: (options) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SAVE, options),
   showOpenDialog: (options) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN, options),
   saveFile: (filePath, data) => ipcRenderer.invoke(IPC_CHANNELS.FILE_SAVE, filePath, data),

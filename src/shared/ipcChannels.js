@@ -212,6 +212,7 @@ const IPC_CHANNELS = {
   // ---- mcp ----
   MCP_AUTOMATION_REQUEST: 'mcp:automation-request',
   MCP_AUTOMATION_RESPONSE: 'mcp:automation-response',
+  MCP_AUTOMATION_EVENT: 'mcp:automation-event',
   // ---- model-download ----
   MODEL_DOWNLOAD_CHECK_ALL_VERSIONS: 'model-download:check-all-versions',
   MODEL_DOWNLOAD_CHECK_JP_VERSION: 'model-download:check-jp-version',

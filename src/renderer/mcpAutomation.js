@@ -12,13 +12,34 @@ import {
   getCurrentPlaybackSeconds, ensurePipelineInitialized, loadAudioSettings,
   getExportInferenceOptions,
 } from './audioPlayback.js';
+import mcpModel from '../shared/mcpModel.js';
+
+const { normalizeNote, normalizeFragment, validateProjectDoc, shapeSnapshot } = mcpModel;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const num = (v, d = 0) => Number.isFinite(Number(v)) ? Number(v) : d;
 
+function mcpError(code, message, extra = {}) {
+  const err = new Error(message);
+  err.code = code;
+  Object.assign(err, extra);
+  return err;
+}
+
+function notFound(kind, id, known) {
+  return mcpError('NOT_FOUND', `Unknown ${kind} ${id}`, {
+    field: kind === 'fragment' ? 'fragmentId' : 'id',
+    hint: known && known.length ? `known ${kind} ids: ${known.join(', ')}` : `use project.get to list ${kind}s`,
+  });
+}
+
+function emit(type, data) {
+  try { window.electronAPI?.sendMcpAutomationEvent?.({ type, data }); } catch (_) {}
+}
+
 function snapshot() {
   return {
-    schemaVersion: '1.0',
+    schemaVersion: '2.0',
     project: clone(state.project),
     singers: clone(trackManager.getSingers().map(s => {
       const x = { ...s };
@@ -32,31 +53,8 @@ function snapshot() {
   };
 }
 
-function note(n, i = 0) {
-  const pitch = Math.round(num(n.pitch, 60));
-  const start = num(n.start);
-  const duration = num(n.duration, 0.25);
-  if (pitch < 0 || pitch > 127 || start < 0 || duration <= 0) throw new Error(`Invalid note ${i}`);
-  return { ...n, id: n.id ?? `mcp-note-${Date.now()}-${i}`, pitch, start, duration, lyric: String(n.lyric ?? 'la') };
-}
-
-function fragment(f) {
-  if (!f || typeof f !== 'object') throw new Error('fragment must be an object');
-  const duration = num(f.duration, 4);
-  if (duration <= 0) throw new Error('duration must be positive');
-  return {
-    ...f,
-    startTime: Math.max(0, num(f.startTime)),
-    duration,
-    notes: Array.isArray(f.notes) ? f.notes.map(note) : [],
-  };
-}
-
 // 授权一条路径：优先按"素材文件本身"授权（走 file:authorizePath 的文件分支，
 // 扩展名必须命中白名单），只有当路径没有扩展名时才退回按父目录授权。
-// 主进程已经收紧了目录分支（必须是登记的目录），而 MCP 的导入/导出目标都是
-// .sxsproj / .wav / .mid / .lrc / .sxssinger 这类白名单扩展名，走文件分支即可，
-// 因此收紧后这些调用点依然可用。
 async function authorize(path) {
   const hasExtension = /\.[A-Za-z0-9]{1,12}$/.test(path);
   const target = hasExtension
@@ -66,14 +64,114 @@ async function authorize(path) {
         return i > 0 ? path.slice(0, i) : path;
       })();
   const r = await window.electronAPI.authorizePath(target);
-  if (!r?.success) throw new Error(r?.error || 'Path not authorized');
+  if (!r?.success) {
+    throw mcpError('FORBIDDEN', r?.error || `Path not authorized: ${target}`, {
+      field: 'path',
+      hint: 'grant the directory once with session.grantRoot instead of authorizing per file',
+    });
+  }
 }
 
-function apply(ops) {
-  if (!Array.isArray(ops)) throw new Error('operations must be an array');
+/** Shallow copy that keeps runtime audio buffers intact (rollback safety). */
+function captureState() {
+  return {
+    project: clone(state.project),
+    singers: trackManager.getSingers().map((s) => ({ ...s })),
+    fragments: clone(trackManager.getFragments()),
+    selectedSingerId: state.selectedSingerId,
+    selectedFragmentId: state.selectedFragmentId,
+  };
+}
+
+function restoreState(snap) {
+  // Rebuild by splicing the live arrays instead of going through addSinger():
+  // createSinger() is a field whitelist, so a round-trip through it would drop
+  // wavBuffer / midiNotes / f0Data and silently change the singer's timbre on
+  // the next export. Splicing also keeps object identity for the undo stack.
+  const singers = trackManager.getSingers();
+  singers.length = 0;
+  snap.singers.forEach((s) => singers.push(s));
+  const fragments = trackManager.getFragments();
+  fragments.length = 0;
+  snap.fragments.forEach((f) => fragments.push(clone(f)));
+  state.project = clone(snap.project);
+  state.selectedSingerId = snap.selectedSingerId;
+  state.selectedFragmentId = snap.selectedFragmentId;
+}
+
+// ------------------------------------------------------------------ operations
+
+function validateOperation(op, index, context) {
+  const at = `operations[${index}]`;
+  if (!op || typeof op !== 'object') throw mcpError('VALIDATION_ERROR', 'operation must be an object', { field: at });
+  const singers = context.singerIds;
+  const fragments = context.fragmentIds;
+  switch (op.op) {
+    case 'set_project':
+      if (!op.value || typeof op.value !== 'object') throw mcpError('VALIDATION_ERROR', 'value must be an object', { field: `${at}.value` });
+      break;
+    case 'add_singer':
+      if (!op.value || typeof op.value !== 'object') throw mcpError('VALIDATION_ERROR', 'value must be an object', { field: `${at}.value` });
+      if (!op.value.trackName && !op.value.singerName) {
+        throw mcpError('VALIDATION_ERROR', 'trackName or singerName is required', { field: `${at}.value` });
+      }
+      if (op.value.id) singers.add(op.value.id);
+      break;
+    case 'update_singer':
+    case 'remove_singer':
+      if (!op.id) throw mcpError('VALIDATION_ERROR', 'id is required', { field: `${at}.id` });
+      if (!singers.has(op.id)) throw notFound('singer', op.id, [...singers]);
+      break;
+    case 'add_fragment': {
+      if (!op.value || typeof op.value !== 'object') throw mcpError('VALIDATION_ERROR', 'value must be an object', { field: `${at}.value` });
+      const sid = op.value.singerId;
+      if (!sid) throw mcpError('VALIDATION_ERROR', 'singerId is required', { field: `${at}.value.singerId` });
+      if (!singers.has(sid)) throw notFound('singer', sid, [...singers]);
+      normalizeFragment(op.value, 0, `${at}.value`);
+      if (op.value.id) fragments.add(op.value.id);
+      break;
+    }
+    case 'update_fragment':
+    case 'remove_fragment':
+      if (!op.id) throw mcpError('VALIDATION_ERROR', 'id is required', { field: `${at}.id` });
+      if (!fragments.has(op.id)) throw notFound('fragment', op.id, [...fragments]);
+      if (op.op === 'update_fragment' && op.value && op.value.notes) {
+        op.value.notes = op.value.notes.map((n, i) => normalizeNote(n, i, `${at}.value.notes`));
+      }
+      break;
+    case 'replace_notes':
+      if (!op.fragmentId) throw mcpError('VALIDATION_ERROR', 'fragmentId is required', { field: `${at}.fragmentId` });
+      if (!fragments.has(op.fragmentId)) throw notFound('fragment', op.fragmentId, [...fragments]);
+      (op.notes || []).forEach((n, i) => normalizeNote(n, i, `${at}.notes`));
+      break;
+    case 'set_selection':
+      if (op.singerId !== undefined && !singers.has(op.singerId)) throw notFound('singer', op.singerId, [...singers]);
+      if (op.fragmentId !== undefined && !fragments.has(op.fragmentId)) throw notFound('fragment', op.fragmentId, [...fragments]);
+      break;
+    case 'clear_project':
+      singers.clear();
+      fragments.clear();
+      break;
+    default:
+      throw mcpError('VALIDATION_ERROR', `Unsupported operation ${op.op}`, {
+        field: `${at}.op`,
+        hint: 'set_project, add_singer, update_singer, remove_singer, add_fragment, update_fragment, remove_fragment, replace_notes, set_selection, clear_project',
+      });
+  }
+}
+
+function precheckOps(ops) {
+  const context = {
+    singerIds: new Set(trackManager.getSingers().map((s) => s.id)),
+    fragmentIds: new Set(trackManager.getFragments().map((f) => f.id)),
+  };
+  ops.forEach((op, i) => validateOperation(op, i, context));
+}
+
+function applyInternal(ops) {
   const out = [];
-  try {
-    for (const op of ops) {
+  ops.forEach((op, index) => {
+    try {
       switch (op.op) {
         case 'set_project':
           state.project = { ...state.project, ...op.value };
@@ -83,28 +181,28 @@ function apply(ops) {
           out.push(trackManager.addSinger(op.value || {}));
           break;
         case 'update_singer':
-          if (!trackManager.updateSinger(op.id, op.value || {})) throw new Error(`Unknown singer ${op.id}`);
+          if (!trackManager.updateSinger(op.id, op.value || {})) throw notFound('singer', op.id);
           out.push(trackManager.getSinger(op.id));
           break;
         case 'remove_singer':
-          if (!trackManager.removeSinger(op.id)) throw new Error(`Unable to remove singer ${op.id}`);
+          if (!trackManager.removeSinger(op.id)) throw notFound('singer', op.id);
           out.push({ removed: op.id });
           break;
         case 'add_fragment':
-          out.push(trackManager.addFragment(fragment(op.value || {})));
+          out.push(trackManager.addFragment(normalizeFragment(op.value || {})));
           break;
         case 'update_fragment':
-          if (!trackManager.updateFragment(op.id, op.value || {})) throw new Error(`Unknown fragment ${op.id}`);
+          if (!trackManager.updateFragment(op.id, op.value || {})) throw notFound('fragment', op.id);
           out.push(trackManager.getFragment(op.id));
           break;
         case 'remove_fragment':
-          if (!trackManager.removeFragment(op.id)) throw new Error(`Unknown fragment ${op.id}`);
+          if (!trackManager.removeFragment(op.id)) throw notFound('fragment', op.id);
           out.push({ removed: op.id });
           break;
         case 'replace_notes': {
           const f = trackManager.getFragment(op.fragmentId);
-          if (!f) throw new Error(`Unknown fragment ${op.fragmentId}`);
-          f.notes = (op.notes || []).map(note);
+          if (!f) throw notFound('fragment', op.fragmentId);
+          f.notes = (op.notes || []).map((n, i) => normalizeNote(n, i));
           out.push({ fragmentId: f.id, noteCount: f.notes.length });
           break;
         }
@@ -117,34 +215,89 @@ function apply(ops) {
           state.project = { bpm: 120, timeSignature: [4, 4] };
           break;
         default:
-          throw new Error(`Unsupported operation ${op.op}`);
+          throw mcpError('VALIDATION_ERROR', `Unsupported operation ${op.op}`);
       }
+    } catch (err) {
+      err.opIndex = index;
+      throw err;
     }
-  } catch (err) {
-    // 中途失败时前面的 op 已经生效，不能把工程留在"改了但没标脏/没刷新"的状态。
-    // 不做整体回滚，但必须让 UI 与脏标记跟上，并把已应用数量报给调用方。
-    markDirty();
-    refreshAll();
-    const e = new Error(`${err.message || String(err)} (applied ${out.length}/${ops.length} operations)`);
-    e.appliedOps = out.length;
-    throw e;
-  }
-  markDirty();
-  refreshAll();
+  });
   return out;
 }
 
-function replace(doc) {
-  if (!doc || !Array.isArray(doc.singers) || !Array.isArray(doc.fragments)) throw new Error('Project requires singers and fragments');
-  trackManager.clearAll();
-  state.project = { bpm: 120, timeSignature: [4, 4], ...(doc.project || {}) };
-  doc.singers.forEach(s => trackManager.addSinger(s));
-  doc.fragments.forEach(f => trackManager.addFragment(fragment(f)));
-  history.clear();
-  markDirty();
-  refreshAll();
-  return snapshot();
+function apply(ops, { dryRun = false, atomic = true } = {}) {
+  if (!Array.isArray(ops)) throw mcpError('VALIDATION_ERROR', 'operations must be an array', { field: 'operations' });
+  precheckOps(ops);
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      operations: ops.length,
+      plan: ops.map((op, i) => ({ index: i, op: op.op, id: op.id || op.fragmentId || (op.value && op.value.id) || null })),
+    };
+  }
+
+  const before = atomic ? captureState() : null;
+  try {
+    const results = applyInternal(ops);
+    markDirty();
+    refreshAll();
+    emit('project.changed', { reason: 'apply', operations: ops.length });
+    return {
+      results,
+      applied: ops.length,
+      // Kept for callers written against the previous shape; summary only.
+      project: shapeSnapshot(snapshot(), { includeNotes: false }),
+    };
+  } catch (err) {
+    if (before) {
+      restoreState(before);
+      refreshAll();
+    }
+    throw mcpError(err.code || 'INTERNAL', err.message, {
+      field: err.field,
+      hint: err.hint,
+      details: { opIndex: err.opIndex, rolledBack: !!before },
+    });
+  }
 }
+
+function replace(doc, { dryRun = false } = {}) {
+  const check = validateProjectDoc(doc);
+  if (!check.valid) {
+    throw mcpError('VALIDATION_ERROR', check.errors[0].message, {
+      field: check.errors[0].field,
+      hint: check.errors[0].hint,
+      details: { errors: check.errors },
+    });
+  }
+  const normalized = {
+    project: { bpm: 120, timeSignature: [4, 4], ...(doc.project || {}) },
+    singers: doc.singers || [],
+    fragments: (doc.fragments || []).map((f, i) => normalizeFragment(f, i)),
+  };
+  if (dryRun) {
+    return { dryRun: true, singers: normalized.singers.length, fragments: normalized.fragments.length };
+  }
+  const before = captureState();
+  try {
+    trackManager.clearAll();
+    state.project = normalized.project;
+    normalized.singers.forEach((s) => trackManager.addSinger(s));
+    normalized.fragments.forEach((f) => trackManager.addFragment(f));
+    history.clear();
+    markDirty();
+    refreshAll();
+    emit('project.changed', { reason: 'replace', singers: normalized.singers.length, fragments: normalized.fragments.length });
+    return snapshot();
+  } catch (err) {
+    restoreState(before);
+    refreshAll();
+    throw mcpError('INTERNAL', `Replace failed and was rolled back: ${err.message}`, { details: { rolledBack: true } });
+  }
+}
+
+// --------------------------------------------------------------------- midi
 
 function importMidi(p) {
   if (p.projectInfo && p.applyProjectInfo !== false) {
@@ -158,7 +311,7 @@ function importMidi(p) {
     if (!s || p.createTracks !== false) {
       s = trackManager.addSinger({ trackName: t.name || `MIDI ${i + 1}`, singerName: p.singerName || t.name || `Singer ${i + 1}` });
     }
-    const notes = t.notes.map(note);
+    const notes = t.notes.map((n, k) => normalizeNote(n, k));
     const first = Math.min(...notes.map(n => n.start));
     const last = Math.max(...notes.map(n => n.start + n.duration));
     const f = trackManager.addFragment({
@@ -172,14 +325,12 @@ function importMidi(p) {
   });
   markDirty();
   refreshAll();
-  return { created, project: snapshot() };
+  emit('project.changed', { reason: 'midi.import', tracks: created.length });
+  return { created, project: shapeSnapshot(snapshot(), { includeNotes: false }) };
 }
 
-// 与 GUI "音频转 MIDI" 对齐：根据全局设置选择 RMVPE / FCPE / Basic Pitch 提取。
-// 返回的 notes 为 {pitch,start,duration,lyric} 数组（相对音频起点，单位拍），
-// f0 为可选音高数组（浮点数列表）。
 async function extractMidiFromAudio(p) {
-  if (!p.path) throw new Error('path is required');
+  if (!p.path) throw mcpError('VALIDATION_ERROR', 'path is required', { field: 'path' });
   await authorize(p.path);
   const raw = await window.electronAPI.readFileBuffer(p.path);
   const ac = new AudioContext();
@@ -187,7 +338,7 @@ async function extractMidiFromAudio(p) {
   try {
     audioBuffer = await ac.decodeAudioData(raw.slice(0));
   } catch (decodeErr) {
-    throw new Error(`Audio decode failed: ${decodeErr.message}`);
+    throw mcpError('VALIDATION_ERROR', `Audio decode failed: ${decodeErr.message}`, { field: 'path' });
   } finally {
     ac.close();
   }
@@ -207,7 +358,7 @@ async function extractMidiFromAudio(p) {
   let f0 = null;
   if (midiTool === 'rmvpe') {
     const r = await window.electronAPI.extractMidiRosvot({ audioData, sampleRate, bpm });
-    if (!r.success) throw new Error(r.error || 'RMVPE failed');
+    if (!r.success) throw mcpError('INTERNAL', r.error || 'RMVPE failed');
     notes = mapNotes(r.notes);
     if (extractPitch) f0 = r.f0Array;
   } else if (midiTool === 'fcpe') {
@@ -223,16 +374,16 @@ async function extractMidiFromAudio(p) {
       normalize: settings.fcpeNormalize !== false,
     } : undefined;
     const r = await window.electronAPI.extractMidiFcpe({ audioData, sampleRate, bpm, options: fcpeOpts });
-    if (!r.success) throw new Error(r.error || 'FCPE failed');
+    if (!r.success) throw mcpError('INTERNAL', r.error || 'FCPE failed');
     notes = mapNotes(r.notes);
     if (extractPitch) f0 = r.f0Array;
   } else {
     const r = await window.electronAPI.extractF0BasicPitch({ audioData, sampleRate, bpm });
-    if (!r.success) throw new Error(r.error || 'Basic Pitch failed');
+    if (!r.success) throw mcpError('INTERNAL', r.error || 'Basic Pitch failed');
     notes = mapNotes(r.notes);
     if (extractPitch) {
       const f0r = await window.electronAPI.extractF0({ audioData, sampleRate });
-      if (!f0r.success) throw new Error(f0r.error || 'RMVPE failed');
+      if (!f0r.success) throw mcpError('INTERNAL', f0r.error || 'RMVPE failed');
       f0 = f0r.f0Array;
     }
   }
@@ -246,14 +397,11 @@ async function extractMidiFromAudio(p) {
   };
 }
 
-// 单片段导出：与 runExportJob 的单分片逻辑一致（clippedNotes + pitchCurve + 导出参数），
-// 合成后直接编码为 WAV 写入目标路径。
 async function exportFragmentTo(p) {
-  if (!p.path) throw new Error('path is required');
   const f = trackManager.getFragment(p.fragmentId);
-  if (!f) throw new Error(`Unknown fragment ${p.fragmentId}`);
+  if (!f) throw notFound('fragment', p.fragmentId, trackManager.getFragments().map(x => x.id));
   const singer = trackManager.getSinger(f.singerId);
-  if (!singer) throw new Error(`Unknown singer ${f.singerId}`);
+  if (!singer) throw notFound('singer', f.singerId);
   await ensurePipelineInitialized();
   await loadAudioSettings();
   const o = { ...getExportInferenceOptions(), ...(p.options || {}) };
@@ -264,7 +412,7 @@ async function exportFragmentTo(p) {
     const noteEnd = n0.start + n0.duration;
     clippedNotes.push(noteEnd > fragDuration ? { ...n0, duration: fragDuration - n0.start } : n0);
   }
-  if (clippedNotes.length === 0) throw new Error('Fragment has no notes');
+  if (clippedNotes.length === 0) throw mcpError('PRECONDITION_FAILED', 'Fragment has no notes');
   const pitchCurveF0 = buildFragmentPitchCurveF0(f, clippedNotes, state.project.bpm);
   const audioData = await window.electronAPI.synthesizeSVS({
     notes: clippedNotes,
@@ -281,15 +429,12 @@ async function exportFragmentTo(p) {
       cfg: o.cfg,
       cfgRescale: o.cfgRescale,
       sampler: o.sampler,
-      // Q-Drift：MCP 显式传 qdrift 时才启用（未传 = 关闭，避免自动化脚本静默改变采样合约）
       qdrift: o.qdrift === true,
       cfgScheduleMode: o.cfgScheduleMode,
       cfgStrengthStart: o.cfgStrengthStart,
       cfgScheduleKeyframes: o.cfgScheduleKeyframes,
       dynamicThresholdEnabled: o.dynamicThresholdEnabled,
       dynamicThresholdPercentile: o.dynamicThresholdPercentile,
-      // 频谱后处理（音色 → 频谱曲线）：与 playAll / 导出一致下发，
-      // 否则 MCP 导出的音频会丢掉 specBlend / specSmoothT / specSmoothF。
       melPostprocess: buildMelPostprocessPayload(
         f.postprocess || null,
         clippedNotes,
@@ -301,50 +446,57 @@ async function exportFragmentTo(p) {
   });
   const { encodeWav } = require('../audio/wavEncoder.js');
   const sr = p.options?.sampleRate || 24000;
-  // 推理输出固定为 SAMPLE_RATE（24k）；只改 WAV 头会变速变调，必须先重采样。
   const outputAudio = resampleForExport(audioData, SAMPLE_RATE, sr, 1);
   const wav = encodeWav(outputAudio, sr, 1);
   await authorize(p.path);
   const saved = await window.electronAPI.saveFile(p.path, wav);
-  if (!saved?.success) throw new Error(saved?.error || 'Export failed');
+  if (!saved?.success) throw mcpError('INTERNAL', saved?.error || 'Export failed');
   return { path: p.path, sampleRate: sr, duration: outputAudio.length / sr };
 }
 
+// ------------------------------------------------------------------- execute
+
 async function execute(m, p = {}) {
   switch (m) {
-    case 'capabilities':
+    case 'capabilities': {
+      const settings = await window.electronAPI.getSettings().catch(() => null);
       return {
+        schemaVersion: '2.0',
         methods: [
-          'project.get', 'project.apply', 'project.replace', 'project.validate',
-          'project.saveTo', 'project.loadFrom',
-          'midi.importFile', 'audio.extractMidi',
-          'accompaniment.import', 'singer.import',
-          'history.undo', 'history.redo',
-          'fragment.open', 'fragment.exportTo',
+          'project.get', 'project.validate', 'project.apply', 'project.replace',
+          'project.saveTo', 'project.loadFrom', 'project.save',
+          'midi.importFile', 'audio.extractMidi', 'accompaniment.import', 'singer.import',
+          'history.undo', 'history.redo', 'fragment.open', 'fragment.exportTo',
+          'editor.getView', 'editor.setView',
           'playback.play', 'playback.pause', 'playback.stop', 'playback.seek', 'playback.get',
           'audio.export', 'audio.exportTo', 'lrc.export', 'lrc.exportTo',
           'settings.get', 'settings.update', 'ui.open',
         ],
+        features: {
+          projectOpen: true,
+          singerCount: trackManager.getSingers().length,
+          fragmentCount: trackManager.getFragments().length,
+          settingsLoaded: !!settings,
+        },
+        renderer: 'main_window',
       };
+    }
     case 'project.get':
-      return snapshot();
+      return shapeSnapshot(snapshot(), p);
     case 'project.validate': {
-      const d = p.project || snapshot();
-      const errors = [];
-      if (!d.project || num(d.project.bpm) <= 0) errors.push('project.bpm must be positive');
-      if (!Array.isArray(d.singers)) errors.push('singers must be an array');
-      if (!Array.isArray(d.fragments)) errors.push('fragments must be an array');
-      return { valid: !errors.length, errors };
+      const result = validateProjectDoc(p.project);
+      return { ...result, errorMessages: result.errors.map((e) => `${e.field}: ${e.message}`) };
     }
     case 'project.apply':
-      return { results: apply(p.operations), project: snapshot() };
+      return apply(p.operations, { dryRun: !!p.dryRun, atomic: p.atomic !== false });
     case 'project.replace':
-      return replace(p.project);
+      return replace(p.project, { dryRun: !!p.dryRun });
     case 'midi.importParsed':
       return importMidi(p);
     case 'audio.extractMidi':
       return extractMidiFromAudio(p);
     case 'accompaniment.import': {
+      if (!p.path) throw mcpError('VALIDATION_ERROR', 'path is required', { field: 'path' });
       await authorize(p.path);
       const b = await window.electronAPI.readFileBuffer(p.path);
       const s = trackManager.addSinger({
@@ -358,23 +510,25 @@ async function execute(m, p = {}) {
       await loadAccompanimentFile(s.id, b, p.path);
       markDirty();
       refreshAll();
+      emit('project.changed', { reason: 'accompaniment.import', singerId: s.id });
       return clone(s);
     }
-    case 'singer.import':
+    case 'singer.import': {
+      if (!p.path) throw mcpError('VALIDATION_ERROR', 'path is required', { field: 'path' });
       await authorize(p.path);
       await addSingerFromFile(await window.electronAPI.readFileBuffer(p.path), p.path);
       markDirty();
       refreshAll();
-      return snapshot();
+      emit('project.changed', { reason: 'singer.import' });
+      return shapeSnapshot(snapshot(), { includeNotes: false });
+    }
     case 'history.undo':
-      // undo() 失败会把命令退回 undoStack 并重抛（见 historyManager.js）。
-      // 用 try/finally 保证 UI 一定刷新，同时让错误继续抛给 MCP 调用方 ——
-      // 调用方需要知道这一步没成功，而不是收到一个"看起来成功"的快照。
       try {
         history.undo();
       } finally {
         refreshAll();
       }
+      emit('project.changed', { reason: 'undo' });
       return { canUndo: history.canUndo(), canRedo: history.canRedo() };
     case 'history.redo':
       try {
@@ -382,23 +536,29 @@ async function execute(m, p = {}) {
       } finally {
         refreshAll();
       }
+      emit('project.changed', { reason: 'redo' });
       return { canUndo: history.canUndo(), canRedo: history.canRedo() };
     case 'fragment.open': {
+      const ids = trackManager.getFragments().map((x) => x.id);
       const f = trackManager.getFragment(p.fragmentId);
-      if (!f) throw new Error('Unknown fragment');
+      if (!f) throw notFound('fragment', p.fragmentId, ids);
       openFragmentEditor(f);
+      emit('fragment.opened', { fragmentId: f.id });
       return { opened: f.id };
     }
     case 'fragment.exportTo':
       return exportFragmentTo(p);
     case 'playback.play':
       await playAll();
+      emit('playback.state', { playing: true });
       return { playing: true };
     case 'playback.pause':
       pausePlayback();
+      emit('playback.state', { playing: false, paused: true });
       return { paused: true };
     case 'playback.stop':
       stopPlayback();
+      emit('playback.state', { playing: false, stopped: true });
       return { playing: false };
     case 'playback.seek':
       await seekPlayback(Math.max(0, num(p.seconds)));
@@ -416,24 +576,29 @@ async function execute(m, p = {}) {
     }
     case 'project.save':
       await saveProject();
+      emit('project.saved', { path: state.currentProjectFilePath });
       return { path: state.currentProjectFilePath };
     case 'project.saveAs':
       await saveProjectAs();
+      emit('project.saved', { path: state.currentProjectFilePath });
       return { path: state.currentProjectFilePath };
     case 'project.load':
       await loadProject();
-      return snapshot();
+      emit('project.changed', { reason: 'load' });
+      return shapeSnapshot(snapshot(), { includeNotes: false });
     case 'project.saveTo': {
       await authorize(p.path);
       const r = await window.electronAPI.saveFile(p.path, await serializeProject(!!p.embedSingerFiles, !!p.embedAccompanimentAudio));
-      if (!r?.success) throw new Error(r?.error || 'Save failed');
+      if (!r?.success) throw mcpError('INTERNAL', r?.error || 'Save failed');
       state.currentProjectFilePath = p.path;
       markClean();
+      emit('project.saved', { path: p.path });
       return { path: p.path };
     }
     case 'project.loadFrom': {
       await authorize(p.path);
-      const r = replace(JSON.parse(await window.electronAPI.readFile(p.path)));
+      const raw = JSON.parse(await window.electronAPI.readFile(p.path));
+      const r = replace(raw);
       state.currentProjectFilePath = p.path;
       markClean();
       return r;
@@ -446,11 +611,10 @@ async function execute(m, p = {}) {
       const r = await runExportJob({ ...settings, ...p.options });
       const { encodeWav } = require('../audio/wavEncoder.js');
       const sr = p.options?.sampleRate || 24000;
-      // 同上：mixedAudio 处于 SAMPLE_RATE，编码前重采样到目标采样率。
       const outputAudio = resampleForExport(r.mixedAudio, SAMPLE_RATE, sr, r.numChannels || 1);
       await authorize(p.path);
       const saved = await window.electronAPI.saveFile(p.path, encodeWav(outputAudio, sr, r.numChannels || 1));
-      if (!saved?.success) throw new Error(saved?.error || 'Export failed');
+      if (!saved?.success) throw mcpError('INTERNAL', saved?.error || 'Export failed');
       return { path: p.path, sampleRate: sr, duration: r.maxDuration };
     }
     case 'lrc.export':
@@ -458,11 +622,10 @@ async function execute(m, p = {}) {
       return { started: true };
     case 'lrc.exportTo': {
       const lrc = buildProjectLrc();
-      if (!lrc) throw new Error('No lyrics to export');
+      if (!lrc) throw mcpError('PRECONDITION_FAILED', 'No lyrics to export');
       await authorize(p.path);
-      // UTF-8 BOM improves compatibility with older Windows LRC players (与 GUI 一致)。
       const saved = await window.electronAPI.saveFile(p.path, `\uFEFF${lrc}`);
-      if (!saved?.success) throw new Error(saved?.error || 'Save failed');
+      if (!saved?.success) throw mcpError('INTERNAL', saved?.error || 'Save failed');
       return { path: p.path };
     }
     case 'settings.get':
@@ -477,12 +640,13 @@ async function execute(m, p = {}) {
         resourceManager: () => window.electronAPI.resmgrOpen(),
       };
       const fn = actions[p.target];
-      if (!fn) throw new Error('Unknown UI target');
+      if (!fn) throw mcpError('VALIDATION_ERROR', `Unknown UI target ${p.target}`, { field: 'target' });
       await fn();
+      emit('ui.opened', { target: p.target });
       return { opened: p.target };
     }
     default:
-      throw new Error(`Unknown method ${m}`);
+      throw mcpError('UNKNOWN_METHOD', `Unknown method ${m}`);
   }
 }
 
@@ -492,7 +656,19 @@ export function registerMcpAutomation() {
     try {
       window.electronAPI.sendMcpAutomationResponse({ id: m.id, ok: true, result: await execute(m.method, m.params) });
     } catch (e) {
-      window.electronAPI.sendMcpAutomationResponse({ id: m.id, ok: false, error: e.message || String(e) });
+      window.electronAPI.sendMcpAutomationResponse({
+        id: m.id,
+        ok: false,
+        error: {
+          code: e.code || 'INTERNAL',
+          message: e.message || String(e),
+          field: e.field,
+          hint: e.hint,
+          details: e.details,
+        },
+      });
     }
   }));
 }
+
+export { execute as _executeForTests };

@@ -81,6 +81,8 @@ module.exports = [
             'src/audio/**/*.js',
             'src/utils/**/*.js',
             'src/shared/ipcChannels.js',
+            'src/shared/mcpSchema.js',
+            'src/shared/mcpModel.js',
             'src/shared/jpPhonemeMap.js',
             'src/shared/pluginPermissions.js',
             // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
