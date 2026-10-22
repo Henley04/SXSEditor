@@ -205,6 +205,72 @@
     }
   }
 
+  /* ------------------------------------------------------------------
+   * Figure lightbox: figures are downscaled to the prose column, so let
+   * readers open the full-resolution WebP (and the animated one) in an
+   * overlay. Falls back to a plain link when JS is unavailable.
+   * ------------------------------------------------------------------ */
+  function initFigureZoom() {
+    var links = document.querySelectorAll('.doc-figure .fig-zoom');
+    if (!links.length) return;
+
+    var overlay = null;
+
+    function close() {
+      if (!overlay) return;
+      overlay.classList.remove('open');
+      document.body.style.overflow = '';
+      var img = overlay.querySelector('img');
+      setTimeout(function () { if (img) img.removeAttribute('src'); }, 200);
+    }
+
+    function open(href, alt, captionHTML) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'fig-lightbox';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.innerHTML = '<button class="fig-lb-close" type="button" aria-label="Close">&times;</button>' +
+          '<div class="fig-lb-body"><img alt="" /><p class="fig-lb-cap"></p></div>';
+        overlay.addEventListener('click', function (e) {
+          if (e.target === overlay || e.target.classList.contains('fig-lb-close')) close();
+        });
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') close();
+        });
+      }
+      var img = overlay.querySelector('img');
+      img.src = href;
+      img.alt = alt || '';
+      overlay.querySelector('.fig-lb-cap').innerHTML = captionHTML || '';
+      overlay.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    links.forEach(function (link) {
+      link.addEventListener('click', function (e) {
+        var figure = link.closest('.doc-figure');
+        var img = link.querySelector('img');
+        var cap = figure ? figure.querySelector('figcaption') : null;
+        var visibleCap = null;
+        if (cap) {
+          var spans = cap.querySelectorAll('[data-lang]');
+          if (spans.length) {
+            Array.prototype.forEach.call(spans, function (sp) {
+              if (sp.classList.contains('show')) visibleCap = sp.innerHTML;
+            });
+            if (!visibleCap) visibleCap = cap.innerHTML;
+          } else {
+            visibleCap = cap.innerHTML;
+          }
+        }
+        e.preventDefault();
+        open(link.getAttribute('href'), img ? img.getAttribute('alt') : '', visibleCap);
+      });
+    });
+  }
+
   function boot() {
     initTheme();
     if (window.SXS_i18n) window.SXS_i18n.init();
@@ -216,6 +282,7 @@
     initBackToTop();
     initActiveSidebar();
     initAutoTOC();
+    initFigureZoom();
   }
 
   if (document.readyState === 'loading') {
