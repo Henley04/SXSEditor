@@ -205,6 +205,20 @@
     }
   }
 
+  /* Figures ship as a pair of screenshots (en / zh), because the app UI
+   * itself is localised. Swap the file when the page language changes. */
+  function applyFigureLang() {
+    var lang = document.documentElement.lang || 'en';
+    var zh = lang.indexOf('zh') === 0;
+    document.querySelectorAll('img[data-en][data-zh]').forEach(function (img) {
+      var src = zh ? img.getAttribute('data-zh') : img.getAttribute('data-en');
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    });
+    document.querySelectorAll('a.fig-zoom[data-en][data-zh]').forEach(function (a) {
+      a.setAttribute('href', zh ? a.getAttribute('data-zh') : a.getAttribute('data-en'));
+    });
+  }
+
   /* ------------------------------------------------------------------
    * Figure lightbox: figures are downscaled to the prose column, so let
    * readers open the full-resolution WebP (and the animated one) in an
@@ -282,7 +296,9 @@
     initBackToTop();
     initActiveSidebar();
     initAutoTOC();
+    applyFigureLang();
     initFigureZoom();
+    document.addEventListener('localeChanged', applyFigureLang);
   }
 
   if (document.readyState === 'loading') {

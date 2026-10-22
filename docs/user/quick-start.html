@@ -74,10 +74,12 @@
       </div>
 
       <figure class="doc-figure">
-        <a class="fig-zoom" href="../images/webp/overview-main.webp" aria-label="Open full-size image"><img src="../images/webp/overview-main.webp" alt="SXSEditor main window with numbered callouts for the tracks panel, fragment timeline, accompaniment track and toolbar" width="2160" height="1320" loading="lazy" decoding="async" /></a>
+        <a class="fig-zoom" href="../images/webp/overview-main.en.webp" data-en="../images/webp/overview-main.en.webp" data-zh="../images/webp/overview-main.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/overview-main.en.webp" data-en="../images/webp/overview-main.en.webp" data-zh="../images/webp/overview-main.zh.webp" alt="SXSEditor main window running on Linux: track panel with two singers, fragment timeline with three clips, and the toolbar" width="2160" height="960" loading="lazy" decoding="async" />
+        </a>
         <figcaption>
-          <span data-lang="en"><strong>The main window.</strong> <span class="fig-num">1</span> <strong>Tracks panel</strong> — one row per singer; <code>+</code> adds a fragment, the music icon imports an accompaniment. <span class="fig-num">2</span> <strong>Fragment timeline</strong> — double-click a fragment to edit it, drag it to move, drag its edges to resize. <span class="fig-num">3</span> <strong>Accompaniment track</strong> — shows the waveform, supports per-track volume. <span class="fig-num">4</span> <strong>Toolbar</strong> — playback, load / export, audio-to-MIDI, singer market.</span>
-          <span data-lang="zh"><strong>主界面。</strong> <span class="fig-num">1</span> <strong>轨道面板</strong>——每位歌手一行，<code>+</code> 新建分片，音符图标导入伴奏。<span class="fig-num">2</span> <strong>分片时间轴</strong>——双击片段进入编辑器，拖动可移动、拖边缘可缩放。<span class="fig-num">3</span> <strong>伴奏音轨</strong>——显示波形，支持逐轨音量。<span class="fig-num">4</span> <strong>工具栏</strong>——播放、加载 / 导出、音频转 MIDI、歌手市场。</span>
+          <span data-lang="en"><strong>The main window.</strong> <span class="fig-num">1</span> <strong>Tracks</strong> — one row per singer; <code>+</code> creates a fragment on that track. <span class="fig-num">2</span> <strong>Fragment timeline</strong> — double-click a clip to open the editor, drag it to move, drag its edges to resize. <span class="fig-num">3</span> <strong>Toolbar</strong> — transport, load / export, audio-to-MIDI and the singer market.</span>
+          <span data-lang="zh"><strong>主窗口。</strong> <span class="fig-num">1</span> <strong>轨道</strong>——每位歌手一行；<code>+</code> 在该轨道上新建分片。<span class="fig-num">2</span> <strong>分片时间轴</strong>——双击片段进入编辑器，拖动可移动，拖边缘可缩放。<span class="fig-num">3</span> <strong>工具栏</strong>——播放控制、加载 / 导出、音频转 MIDI 与歌手市场。</span>
         </figcaption>
       </figure>
 
@@ -197,13 +199,6 @@
           <p data-lang="zh">下载采用分片并行传输（最多 16 个并发连接）。如果下载失败，再次点击 <strong>Start Download</strong> 即可——已完成的文件会自动跳过。</p>
         </div>
       </div>
-      <figure class="doc-figure">
-        <a class="fig-zoom" href="../images/webp/model-download.webp" aria-label="Open full-size image"><img src="../images/webp/model-download.webp" alt="Model Download window: model status overview, download location, precision options, overall progress and action buttons" width="1888" height="1376" loading="lazy" decoding="async" /></a>
-        <figcaption>
-          <span data-lang="en"><strong>First-launch model download.</strong> <span class="fig-num">1</span> <strong>Status overview</strong> — main model, Japanese LoRA, SiFiGAN and FCPE. <span class="fig-num">2</span> <strong>Download location</strong> — change it before starting if the default drive is short on space. <span class="fig-num">3</span> <strong>Precision</strong> — FP32 / FP16 / INT8 / INT8-NPU can coexist in separate folders. <span class="fig-num">4</span> <strong>Progress and speed</strong> — overall percentage, throughput and ETA. <span class="fig-num">5</span> <strong>Start / Cancel</strong> — the button turns into <em>Close</em> when everything is installed.</span>
-          <span data-lang="zh"><strong>首次启动的模型下载。</strong> <span class="fig-num">1</span> <strong>状态总览</strong>——主模型、日语 LoRA、SiFiGAN、FCPE。<span class="fig-num">2</span> <strong>下载位置</strong>——默认盘空间不足时可在此更换。<span class="fig-num">3</span> <strong>模型精度</strong>——FP32 / FP16 / INT8 / INT8-NPU 各自独立目录，可共存。<span class="fig-num">4</span> <strong>进度与速度</strong>——总百分比、下载速率与剩余时间。<span class="fig-num">5</span> <strong>开始 / 取消下载</strong>——全部完成后按钮会变成「关闭」。</span>
-        </figcaption>
-      </figure>
 
       <p data-lang="en">Different precisions can coexist — you can switch later in Settings without re-downloading. Each precision has its own subdirectory.</p>
       <p data-lang="zh">不同精度可共存——之后可在设置中切换而无需重新下载。每种精度有独立的子目录。</p>
@@ -229,11 +224,14 @@
           <p data-lang="zh">参考音频必须是 <strong>纯人声</strong>——不能有背景音乐、乐器或混响。任何非人声内容都会被当作声音的一部分学习，导致合成输出出现伪影。</p>
         </div>
       </div>
+
       <figure class="doc-figure">
-        <a class="fig-zoom" href="../images/webp/singer-creator.webp" aria-label="Open full-size image"><img src="../images/webp/singer-creator.webp" alt="Singer Creator window with name field, avatar color, reference WAV upload, waveform preview and save button" width="1888" height="1376" loading="lazy" decoding="async" /></a>
+        <a class="fig-zoom" href="../images/webp/singer-creator.en.webp" data-en="../images/webp/singer-creator.en.webp" data-zh="../images/webp/singer-creator.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/singer-creator.en.webp" data-en="../images/webp/singer-creator.en.webp" data-zh="../images/webp/singer-creator.zh.webp" alt="Singer Creator window with name, avatar colour, loaded reference WAV and its waveform, preprocessing button and save" width="1760" height="1024" loading="lazy" decoding="async" />
+        </a>
         <figcaption>
-          <span data-lang="en"><strong>Singer Creator.</strong> <span class="fig-num">1</span> <strong>Name and avatar</strong> — the color or image shows up in the track list. <span class="fig-num">2</span> <strong>Reference WAV</strong> — pure vocals, ≤ 30 s, no music or reverb. <span class="fig-num">3</span> <strong>Waveform check</strong> — confirm the clip is clean before you commit to it. <span class="fig-num">4</span> <strong>Start audio preprocessing</strong> — extracts F0 and MIDI; the next window is where you type one lyric per note. <span class="fig-num">5</span> <strong>Save</strong> — writes a <code>.sxssinger</code> file you can reuse in any project.</span>
-          <span data-lang="zh"><strong>歌手创建器。</strong> <span class="fig-num">1</span> <strong>名称与头像</strong>——颜色或图片会显示在轨道列表中。<span class="fig-num">2</span> <strong>参考音频</strong>——纯人声、不超过 30 秒、不能有伴奏或混响。<span class="fig-num">3</span> <strong>波形核对</strong>——确认片段干净、无爆音再继续。<span class="fig-num">4</span> <strong>开始音频预处理</strong>——提取 F0 与 MIDI，随后在下一个窗口逐音符填写歌词。<span class="fig-num">5</span> <strong>保存</strong>——生成可在任意工程复用的 <code>.sxssinger</code> 文件。</span>
+          <span data-lang="en"><strong>Singer Creator.</strong> <span class="fig-num">1</span> <strong>Name and avatar</strong> — the colour is what shows up in the track list. <span class="fig-num">2</span> <strong>Reference WAV</strong> — pure vocals, up to 30 s; the file name, duration and waveform appear once it loads. <span class="fig-num">3</span> <strong>Start audio preprocessing</strong> — extracts F0 and MIDI; the next window is where you type one lyric per note. <span class="fig-num">4</span> <strong>Save</strong> — writes a <code>.sxssinger</code> file you can reuse in any project.</span>
+          <span data-lang="zh"><strong>歌手创建器。</strong> <span class="fig-num">1</span> <strong>名称与头像</strong>——颜色会显示在轨道列表里。<span class="fig-num">2</span> <strong>参考音频</strong>——纯人声、不超过 30 秒；载入后会显示文件名、时长与波形。<span class="fig-num">3</span> <strong>开始音频预处理</strong>——提取 F0 与 MIDI，随后在下一个窗口逐音符填写歌词。<span class="fig-num">4</span> <strong>保存</strong>——生成可在任意工程复用的 <code>.sxssinger</code> 文件。</span>
         </figcaption>
       </figure>
 
@@ -259,14 +257,6 @@
         <li><span data-lang="en">Drag the fragment to reposition it. Drag its edges to resize.</span><span data-lang="zh">拖动片段可重新定位。拖动其边缘可调整大小。</span></li>
       </ol>
 
-      <figure class="doc-figure">
-        <a class="fig-zoom" href="../images/webp/workflow-add-fragment.webp" aria-label="Open full-size image"><img src="../images/webp/workflow-add-fragment.webp" alt="Animated sequence: clicking plus on a singer row, the new fragment appearing on the timeline, then the fragment editor opening" width="1440" height="880" loading="lazy" decoding="async" /></a>
-        <figcaption>
-          <span data-lang="en"><strong>Add a fragment and open the editor</strong> (animated). <span class="fig-num">1</span> Click <code>+</code> on a singer row. <span class="fig-num">2</span> A new fragment appears on that track — drag it to move, drag its edges to resize. <span class="fig-num">3</span> Double-click it to open the piano roll and start writing notes and lyrics.</span>
-          <span data-lang="zh"><strong>添加分片并打开编辑器</strong>（动图）。<span class="fig-num">1</span> 点击歌手行的 <code>+</code>。<span class="fig-num">2</span> 该轨道上出现新片段——拖动可移动，拖边缘可缩放。<span class="fig-num">3</span> 双击片段进入钢琴卷帘，开始写音符和歌词。</span>
-        </figcaption>
-      </figure>
-
       <h2>
         <span data-lang="en">Step 5: Edit the Fragment (Piano Roll)</span>
         <span data-lang="zh">第 5 步：编辑片段（钢琴卷帘）</span>
@@ -286,11 +276,14 @@
           <p data-lang="zh">编辑会自动同步到主窗口——没有保存按钮。每次编辑后触发 500ms 防抖自动保存。按 <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> 可立即强制同步。</p>
         </div>
       </div>
+
       <figure class="doc-figure">
-        <a class="fig-zoom" href="../images/webp/fragment-editor.webp" aria-label="Open full-size image"><img src="../images/webp/fragment-editor.webp" alt="Fragment Editor: inspector panel on the right, piano roll with note bars and green pitch curve in the middle, phoneme lane at the bottom" width="2160" height="1170" loading="lazy" decoding="async" /></a>
+        <a class="fig-zoom" href="../images/webp/fragment-editor.en.webp" data-en="../images/webp/fragment-editor.en.webp" data-zh="../images/webp/fragment-editor.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/fragment-editor.en.webp" data-en="../images/webp/fragment-editor.en.webp" data-zh="../images/webp/fragment-editor.zh.webp" alt="Fragment Editor: piano keys, piano roll with note bars and lyrics, inspector on the right, parameter lane tabs at the bottom" width="2520" height="1350" loading="lazy" decoding="async" />
+        </a>
         <figcaption>
-          <span data-lang="en"><strong>Fragment Editor.</strong> <span class="fig-num">1</span> <strong>Inspector</strong> — pitch, start, duration and lyric of the selected note, its phonemes, and timbre / post-processing sliders. <span class="fig-num">2</span> <strong>Piano roll</strong> — note bars with inline lyrics; the green curve is the pitch curve, dots are anchors you can drag. <span class="fig-num">3</span> <strong>Phoneme lane</strong> — drag a boundary to re-time a phoneme; the highlighted block follows the selected note.</span>
-          <span data-lang="zh"><strong>片段编辑器。</strong> <span class="fig-num">1</span> <strong>检查器</strong>——选中音符的音高、起始、时长、歌词，音素列表，以及音色 / 后处理滑杆。<span class="fig-num">2</span> <strong>钢琴卷帘</strong>——音符条内直接显示歌词；绿色曲线是音高曲线，圆点锚点可拖动。<span class="fig-num">3</span> <strong>音素泳道</strong>——拖动分界线可调整音素时值，高亮块跟随当前选中的音符。</span>
+          <span data-lang="en"><strong>Fragment Editor.</strong> <span class="fig-num">1</span> <strong>Inspector</strong> — pitch, timing and lyric of the selected note, its phonemes, and the timbre / post-processing sliders. <span class="fig-num">2</span> <strong>Piano roll</strong> — note bars with inline lyrics; click to add, drag to move, double-click to edit the lyric. Press <kbd class="kbd">2</kbd> for Pitch mode. <span class="fig-num">3</span> <strong>Parameter lanes</strong> — VOL / PAN / Phoneme / Timbre.</span>
+          <span data-lang="zh"><strong>分片编辑器。</strong> <span class="fig-num">1</span> <strong>检查器</strong>——选中音符的音高、时值与歌词，音素列表，以及音色 / 后处理滑杆。<span class="fig-num">2</span> <strong>钢琴卷帘</strong>——音符条内直接显示歌词；点击添加、拖动移动、双击改歌词。按 <kbd class="kbd">2</kbd> 进入音高模式。<span class="fig-num">3</span> <strong>参数泳道</strong>——音量 / 声像 / 音素 / 音色。</span>
         </figcaption>
       </figure>
 

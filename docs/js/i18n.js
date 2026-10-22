@@ -130,6 +130,8 @@
       });
       // re-run prism if present
       if (global.Prism) global.Prism.highlightAll();
+      // let other modules (e.g. per-language figures) react to the switch
+      document.dispatchEvent(new CustomEvent('localeChanged', { detail: { locale: this.lang } }));
     }
   };
 
