@@ -1,4 +1,5 @@
 import { state, dom, trackManager, history } from './state.js';
+import { setAccompanimentVolume } from './accompanimentMixer.js';
 import {
   FRAGMENT_HEIGHT,
   SINGER_ROW_HEIGHT,
@@ -1089,6 +1090,9 @@ export function renderSingerList() {
             const value = Math.max(0, Math.min(2, Number(volumeInput.value)));
             singer.accompanimentVolume = value;
             volumeText.textContent = t('main.accompanimentVolumeShort', { volume: Math.round(value * 100) });
+            // 播放中即时生效：伴奏改为独立 BufferSource → GainNode 调度，
+            // 这里直接改增益（15ms 斜坡），不再需要重新播放。
+            setAccompanimentVolume(singer.id, value);
           });
           volumeInput.addEventListener('click', e => e.stopPropagation());
           volumeWrap.append(volumeText, volumeInput);

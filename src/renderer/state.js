@@ -61,6 +61,11 @@ export const dom = {
   btnPlay: document.getElementById('btn-play'),
   btnPause: document.getElementById('btn-pause'),
   btnStop: document.getElementById('btn-stop'),
+  // 传输控件右侧的进度区（推理 / 模型加载共用）
+  transportStatus: document.getElementById('transport-status'),
+  transportStatusText: document.getElementById('transport-status-text'),
+  transportProgress: document.getElementById('transport-progress'),
+  transportProgressFill: document.getElementById('transport-progress-fill'),
   timeDisplay: document.getElementById('time-display'),
   bpmInput: document.getElementById('bpm-input'),
   timeSigNum: document.getElementById('time-sig-num'),

@@ -2,6 +2,7 @@ import { state, dom, trackManager } from './state.js';
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
 import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { t } from '../i18n/index.js';
+import { TRANSPORT, getTransportState, setTransport, setTransportProgress, clearTransportStatus } from './transport.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
@@ -9,6 +10,7 @@ import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
+import { registerAccompanimentGain, clearAccompanimentGains } from './accompanimentMixer.js';
 // 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
 // （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
 import { getAudibleElapsedSec, getAudibleContextTime } from '../shared/audioOutputClock.js';
@@ -177,6 +179,89 @@ function _onBeforeUnloadForVisibility() {
 let _streamingActive = false;
 let _streamingFirstChunkOffsetSec = 0;  // First chunk's global position (for coordinate conversion)
 let _streamingAccEndSec = 0;            // Furthest accompaniment end in playhead seconds
+
+// 播放会话代数：取消后用户可能立刻再点播放，新会话会把 state.synthesisCancelled
+// 重置为 false。只靠那个布尔量，旧会话的检查点会误判成"没被取消"而继续跑。
+// 每次 playAll 自增，旧会话发现自己不是最新一代就直接退出。
+let _playGeneration = 0;
+
+// ==================== 伴奏实时控制 ====================
+// 伴奏此前被 _buildPlaybackChannels() 预混进人声缓冲，音量在混音那一刻就固化了，
+// 于是拖动音量滑块必须重新合成/重新播放才听得到变化（DAW 里这是即时生效的）。
+//
+// 现在播放路径不再预混伴奏，而是给每轨建独立的 BufferSource → GainNode，
+// 并在这里保留 GainNode 引用：滑块 input 时直接 setTargetAtTime 改增益，
+// 无需重启播放。导出路径仍然预混（离线渲染没有实时性要求）。
+const _accSources = new Set(); // 播放期伴奏 source，停止时统一清理
+
+function _clearAccompanimentNodes() {
+  for (const src of _accSources) {
+    safeCleanup('audioPlayback.accSrc.stop', () => { src.onended = null; src.stop(); });
+  }
+  _accSources.clear();
+  clearAccompanimentGains();
+}
+
+/**
+ * 播放期调度所有伴奏轨（独立 source，便于实时调音量）。
+ *
+ * @param {AudioContext} ctx
+ * @param {AudioNode} destination 通常是 state.gainNode
+ * @param {number} baseCtxTime "offsetSec 那一刻"对应的 ctx.currentTime
+ * @param {number} offsetSec 从时间轴的哪一秒开始播放
+ * @param {number} maxDurationSec 最多播放多久（与人声长度对齐，避免人声结束后伴奏孤零零继续）
+ */
+function _scheduleAccompaniment(ctx, destination, baseCtxTime, offsetSec, maxDurationSec) {
+  _clearAccompanimentNodes();
+  const bpm = state.project.bpm;
+  for (const track of getAccompanimentTracks()) {
+    const chans = track.audioChannels?.length ? track.audioChannels : (track.audioBuffer ? [track.audioBuffer] : []);
+    if (!chans.length || !chans[0]?.length) continue;
+
+    const buf = ctx.createBuffer(chans.length, chans[0].length, track.audioSampleRate || SAMPLE_RATE);
+    for (let ch = 0; ch < chans.length; ch++) buf.getChannelData(ch).set(chans[ch]);
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = Number.isFinite(track.accompanimentVolume) ? track.accompanimentVolume : 1;
+    src.connect(gain).connect(destination);
+
+    const accStartSec = (track.accompanimentStartTime || 0) / bpm * 60;
+
+    // 时间轴 → ctx 时间的映射：时间轴 T 对应 baseCtxTime + (T - offsetSec)。
+    // 于是伴奏内容位置 0（时间轴 accStartSec）应对应的 ctx 时刻是：
+    const contentZeroAt = baseCtxTime + (accStartSec - offsetSec);
+
+    // 若该时刻已过（暂停后从中间恢复、或拖拽播放头到伴奏已开始之后），
+    // 应从伴奏内容的"已经过去多久"处开始播。
+    //
+    // 注意：这里**只能有一个来源**。此前写成
+    //   bufOffset = max(0, offsetSec - accStartSec); bufOffset += safeNow - when;
+    // 而 safeNow - when ≈ offsetSec - accStartSec，等于把同一段延迟算了两遍，
+    // 表现为"暂停一次后伴奏跳过与已播时长等长的一段，并永久领先播放头"。
+    const safeNow = ctx.currentTime + 0.005;
+    const startAt = contentZeroAt > safeNow ? contentZeroAt : safeNow;
+    const bufOffset = Math.max(0, startAt - contentZeroAt);
+    if (bufOffset >= buf.duration) continue;
+
+    // 剩余可播时长：maxDurationSec 是"从 offsetSec 起还能播多久"，
+    // 晚启动了 (startAt - baseCtxTime) 秒，就要从这份预算里扣掉。
+    let playDur = buf.duration - bufOffset;
+    if (Number.isFinite(maxDurationSec) && maxDurationSec > 0) {
+      const remaining = maxDurationSec - Math.max(0, startAt - baseCtxTime);
+      if (remaining <= 0) continue;
+      playDur = Math.min(playDur, remaining);
+    }
+    if (playDur <= 0) continue;
+
+    src.start(startAt, bufOffset, playDur);
+
+    registerAccompanimentGain(track.id, gain);
+    _accSources.add(src);
+    src.onended = () => { _accSources.delete(src); };
+  }
+}
 // Per-stream delivered end (streamKey -> {end, done}). Multi-stream playback
 // (interleaved fragments / long-rest-split regions) paces the playhead by the
 // MINIMUM delivered end across active streams: the clock must never run past
@@ -204,7 +289,7 @@ function _createScheduler() {
         state.playheadRaf = null;
       }
       dom.timeDisplay.textContent = t('main.waitingForInference');
-      setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
+      setTransportProgress(t('main.waitingForInference'), null);
       // watchdog 带 0.3s 提前量时冻结点在 buffer 前沿之前，
       // 播放头画在当前（即将冻结的）位置而非前沿，避免恢复后回跳。
       const waitCtx = state.audioContext;
@@ -246,7 +331,7 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
     }
     dom.timeDisplay.textContent = t('main.waitingForInference');
     drawPlayheadLine(_scheduler.bufferEndSec);
-    setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
+    setTransportProgress(t('main.waitingForInference'), null);
   });
 }
 
@@ -255,6 +340,9 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
 function _finishStreamingPlayback() {
   state.streamingFinished = true;
   state.isPlaying = false;
+  // 流式路径不经过 stopAudioSource，需在这里清掉伴奏增益表，
+  // 否则暂停/播完后 _gains 里仍是已停止的节点（滑块拖了"有值但无声"）。
+  clearAccompanimentGains();
   state.playbackPauseOffset = 0;
   state.streamingSources = [];
   _streamingActive = false;
@@ -262,8 +350,7 @@ function _finishStreamingPlayback() {
   stopPlayheadAnimation();
   dom.timeDisplay.textContent = formatTime(0);
   clearPlayheadLine();
-  setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
-  dom.btnPlay.disabled = false;
+  setTransport(TRANSPORT.IDLE);
 }
 
 function _ensureVisibilityHandler() {
@@ -279,6 +366,28 @@ export async function ensurePipelineInitialized() {
     await state.pipelineInitPromise;
     return;
   }
+
+  // 首次初始化要把 9 个 ONNX 模型读进显存，冷启动时可达数秒。此前这一步完全
+  // 没有反馈：用户点了播放，界面只显示"合成中 0%"直到模型加载完才开始推理。
+  // 现在把它作为独立阶段暴露出来，并带百分比 + ETA。
+  let loadCleanup = null;
+  let sawLoadProgress = false;
+  try {
+    loadCleanup = window.electronAPI.onSVSLoadProgress?.((p) => {
+      sawLoadProgress = true;
+      setTransportProgress(t('main.loadingModels'), p && p.percent);
+    });
+  } catch (_) {}
+  setTransport(TRANSPORT.LOADING);
+  setTransportProgress(t('main.loadingModels'), 0);
+
+  // 兜底：WinML worker 路径与 WebNN 路径目前不上报细粒度进度，如果 1.5s 内
+  // 没有任何样本，就退化成"不确定进度"（只显示阶段名），而不是让用户盯着
+  // 一个永远停在 0% 的数字。
+  const stallTimer = setTimeout(() => {
+    if (!sawLoadProgress) setTransportProgress(t('main.loadingModels'), NaN);
+  }, 1500);
+
   state.pipelineInitPromise = window.electronAPI.initSVSPipeline();
   try {
     await state.pipelineInitPromise;
@@ -286,6 +395,15 @@ export async function ensurePipelineInitialized() {
   } catch (err) {
     state.pipelineInitPromise = null;
     throw err;
+  } finally {
+    clearTimeout(stallTimer);
+    if (loadCleanup) safeCleanup('audioPlayback.loadProgressCleanup', loadCleanup);
+    // 只有在仍处于 LOADING 时才恢复：若用户在加载期间点了取消/停止，
+    // stopPlayback 已经把状态改成 IDLE，这里不能把它拽回去。
+    if (getTransportState() === TRANSPORT.LOADING) {
+      setTransport(state.isSynthesizing ? TRANSPORT.SYNTHESIZING : TRANSPORT.IDLE);
+    }
+    clearTransportStatus();
   }
 }
 
@@ -295,21 +413,34 @@ export async function playAll() {
   if (state.isSynthesizing) return;
   state.isSynthesizing = true;
   state.synthesisCancelled = false;
-  dom.btnPlay.disabled = true;
-  setLabel(dom.btnPlay, t('main.synthesizing'), { icon: 'play' });
+  const myGeneration = ++_playGeneration;
+  // 进度不再占用 Play 按钮（那会让按钮在"播放/合成中/取消"三种语义间跳变），
+  // 改为在按钮右侧的进度区显示；Play 在此期间保持可点 = 取消推理。
+  setTransport(TRANSPORT.SYNTHESIZING);
+  setTransportProgress(t('main.synthesizingShort'), 0);
 
-  // 注册推理进度监听：更新按钮文本显示百分比（与分片编辑器对齐）
+  // 取消检查点：state.synthesisCancelled 此前只被写、从不被读，导致点了取消
+  // 之后推理继续跑、最后照样开始播放（声音自己响起来）。下面在每段长 await
+  // 之后检查一次，保证取消能在若干个 yield 点内生效。
+  const throwIfCancelled = () => {
+    // 代际不一致 = 已有更新的播放会话接管，本次必须退出
+    if (!state.synthesisCancelled && myGeneration === _playGeneration) return;
+    const err = new Error('Synthesis cancelled');
+    err.code = 'CANCELLED';
+    throw err;
+  };
+
+  // 注册推理进度监听：更新右侧进度区的百分比与 ETA
   let playProgressCleanup = null;
   try {
     playProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
-      if (state.isSynthesizing) {
-        setLabel(dom.btnPlay, t('main.synthesizingProgress', { progress }), { icon: 'play' });
-      }
+      if (state.isSynthesizing) setTransportProgress(t('main.synthesizingShort'), progress);
     });
   } catch (_) {}
 
   try {
     await loadAudioSettings();
+    throwIfCancelled();
 
     const fragments = trackManager.getFragments();
     const singers = trackManager.getSingers();
@@ -338,7 +469,7 @@ export async function playAll() {
       const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
       const silentVocal = new Float32Array(accMaxSamples);
       state.currentAudioData = silentVocal;
-      state.currentAudioChannels = _buildPlaybackChannels(silentVocal, state.project.bpm);
+      state.currentAudioChannels = _buildPlaybackChannels(silentVocal, state.project.bpm, false);
       state.currentAudioBuffer = null;
       dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
       if (state.playbackPauseOffset > 0) {
@@ -503,7 +634,8 @@ export async function playAll() {
               state.playbackStartTime = ctx.currentTime + 0.05;
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
-              if (dom.btnPause) setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
+              setTransport(TRANSPORT.PLAYING);
+              clearTransportStatus();
               startPlayheadAnimation();
 
               // Schedule accompaniment tracks as independent BufferSources
@@ -521,6 +653,8 @@ export async function playAll() {
                 const accGain = ctx.createGain();
                 accGain.gain.value = Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1;
                 accSource.connect(accGain).connect(state.gainNode);
+                // 登记给音量滑块：流式路径同样支持播放中实时调音量
+                registerAccompanimentGain(accTrack.id, accGain);
                 const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
                 const safeNow = ctx.currentTime + 0.01;
@@ -564,7 +698,7 @@ export async function playAll() {
                   cancelAnimationFrame(state.playheadRaf);
                   state.playheadRaf = null;
                 }
-                setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
+                setTransportProgress(t('main.waitingForInference'), null);
               });
             }
 
@@ -573,6 +707,9 @@ export async function playAll() {
             // 共享时钟基准（伴奏、先前 chunk、播放头都按它继续走）。
             if (_scheduler.isWaiting) {
               await _scheduler.resumeFromWait();
+              // 恢复后必须清掉"等待推理…"，否则它会一直挂在右侧直到停止播放
+              // （setTransport(PLAYING) 在状态未变化时不会动进度区）。
+              clearTransportStatus();
               startPlayheadAnimation();
             }
 
@@ -643,7 +780,7 @@ export async function playAll() {
         // result can arrive before all chunk events are rendered; this provides a
         // correct accompaniment-inclusive fallback and fixes silent accompaniment
         // on the second play.
-        state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+        state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm, false);
         state.currentAudioBuffer = null; // 流式播放无整段 buffer，置空避免 playhead 动画误判
 
         // 标记推理完成：后续不再触发 buffer underrun 等待
@@ -793,8 +930,10 @@ export async function playAll() {
         }
       }
 
+      // 推理可能耗时数秒：落地前再确认一次没有被取消，避免"取消后声音仍响起"
+      throwIfCancelled();
       state.currentAudioData = mixedAudio;
-      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm, false);
 
       // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
       // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
@@ -806,20 +945,33 @@ export async function playAll() {
     }
 
   } catch (error) {
-    console.error('Synthesis failed:', error);
-    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
-    showAlertDialog(t('main.synthesisFailedDetail', { detail: error.message }));
+    // 用户主动取消不是"合成失败"：不弹错误框，安静回到空闲。
+    if (state.synthesisCancelled || error?.code === 'CANCELLED') {
+      console.log('[Audio] synthesis cancelled by user');
+    } else {
+      console.error('Synthesis failed:', error);
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('main.synthesisFailedDetail', { detail: error.message }));
+    }
     dom.timeDisplay.textContent = formatTime(0);
   } finally {
-    state.isSynthesizing = false;
-    // 流式播放仍在进行时：若正在等待推理显示"等待推理..."，否则显示"播放"。
-    // 流式播放未启动或已结束时：显示"播放"。
-    if (_streamingActive && state.isPlaying && _scheduler && _scheduler.isWaiting) {
-      setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
-    } else {
-      setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
+    // 只有最新一代才能改动共享状态：被取消的旧会话可能在新会话已经开始后
+    // 才走到 finally，无条件复位会把新会话的 isSynthesizing 清掉。
+    if (myGeneration !== _playGeneration) {
+      if (playProgressCleanup) { safeCleanup('audioPlayback.playProgressCleanup', playProgressCleanup); playProgressCleanup = null; }
+      return;
     }
-    dom.btnPlay.disabled = false;
+    state.isSynthesizing = false;
+    if (state.synthesisCancelled) {
+      // 取消后必须落到 IDLE：此前没有任何地方复位，Play 会一直是可点但无反应
+      setTransport(TRANSPORT.IDLE);
+    } else {
+      // 合成结束后状态由 isPlaying 派生：流式路径此刻通常已在播（PLAYING），
+      // 整段路径刚 startAudioPlayback 过也是 PLAYING；失败且无缓存音频时回到 IDLE
+      // （PAUSED 会让 Stop 可点却没有可停内容）。
+      const hasAudio = !!(state.currentAudioData && state.currentAudioData.length > 0);
+      setTransport(state.isPlaying ? TRANSPORT.PLAYING : (hasAudio ? TRANSPORT.PAUSED : TRANSPORT.IDLE));
+    }
     if (playProgressCleanup) { safeCleanup('audioPlayback.playProgressCleanup', playProgressCleanup); playProgressCleanup = null; }
   }
 }
@@ -930,8 +1082,18 @@ export async function startAudioPlayback(offset) {
   }
 }
 
-function _buildPlaybackChannels(vocalMono, bpm) {
-  const tracks = getAccompanimentTracks();
+/**
+ * 把（可能多声道的）人声混成播放用声道数组。
+ *
+ * @param {Float32Array} vocalMono
+ * @param {number} bpm
+ * @param {boolean} [includeAccompaniment=true] 是否把伴奏轨混进来。
+ *   播放路径传 **false** —— 伴奏改为独立的 BufferSource + GainNode 调度，
+ *   这样音量才能实时改变（见 _scheduleAccompaniment）。导出路径保持 true，
+ *   离线渲染一次性混好即可。
+ */
+function _buildPlaybackChannels(vocalMono, bpm, includeAccompaniment = true) {
+  const tracks = includeAccompaniment ? getAccompanimentTracks() : [];
   const maxChannels = Math.max(2, ...tracks.map(t => t.audioChannels?.length || 1));
   const result = Array.from({ length: maxChannels }, () => new Float32Array(vocalMono.length));
   for (let ch = 0; ch < maxChannels; ch++) result[ch].set(vocalMono);
@@ -986,12 +1148,17 @@ export function startSharedPlayback(offset) {
       }
       dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
       drawPausedPlayheadAt(state.playbackPauseOffset);
+      // 播放头停在当前位置 → 暂停态（Play 可点 = 继续）
+      setTransport(TRANSPORT.PAUSED);
     } else {
       // 自然播放结束：重置到 0
       state.playbackPauseOffset = 0;
       stopPlayheadAnimation();
       dom.timeDisplay.textContent = formatTime(0);
       clearPlayheadLine();
+      // 必须显式回 IDLE：PLAYING 下 Play 是 disabled 的，漏掉这一步会让
+      // 播完之后 Play 永久变灰、Pause 亮着却因 isPlaying=false 空转。
+      setTransport(TRANSPORT.IDLE);
     }
   };
 
@@ -1000,8 +1167,13 @@ export function startSharedPlayback(offset) {
   // 基准取 start 之后的 currentTime 会让播放头从一开始就略微超前。
   const startAt = context.currentTime;
   source.start(startAt, offset);
+  // 伴奏独立调度（不预混）：滑块拖动时 setAccompanimentVolume 直接改 GainNode
+  const vocalDurSec = (state.currentAudioData?.length || 0) / SAMPLE_RATE;
+  _scheduleAccompaniment(context, state.gainNode, startAt, offset, Math.max(0, vocalDurSec - offset));
   state.currentAudioSource = source;
   state.isPlaying = true;
+  setTransport(TRANSPORT.PLAYING);
+  clearTransportStatus();
   state.playbackStartTime = startAt - offset;
   state.playbackPauseOffset = offset;
 
@@ -1035,6 +1207,8 @@ export async function startExclusivePlayback(offset) {
     }
 
     state.isPlaying = true;
+    setTransport(TRANSPORT.PLAYING);
+    clearTransportStatus();
     state.playbackStartTime = Date.now() / 1000 - offset;
     state.playbackPauseOffset = offset;
     // 记录播放启动时刻，用于 onAudioEnded 触发时判断是否"刚启动就结束"
@@ -1058,12 +1232,14 @@ export async function startExclusivePlayback(offset) {
         }
         dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
         drawPausedPlayheadAt(state.playbackPauseOffset);
+        setTransport(TRANSPORT.PAUSED);
       } else {
         // 自然播放结束：重置到 0
         state.playbackPauseOffset = 0;
         stopPlayheadAnimation();
         dom.timeDisplay.textContent = formatTime(0);
         clearPlayheadLine();
+        setTransport(TRANSPORT.IDLE);
       }
     });
 
@@ -1100,11 +1276,13 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
         }
         dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
         drawPausedPlayheadAt(state.playbackPauseOffset);
+        setTransport(TRANSPORT.PAUSED);
       } else {
         state.playbackPauseOffset = 0;
         stopPlayheadAnimation();
         dom.timeDisplay.textContent = formatTime(0);
         clearPlayheadLine();
+        setTransport(TRANSPORT.IDLE);
       }
       if (removeEndedListener) removeEndedListener();
       return;
@@ -1152,6 +1330,7 @@ export function pausePlayback() {
     }
     state.streamingSources = [];
     state.isPlaying = false;
+    clearAccompanimentGains();
     if (_scheduler) _scheduler.deactivate();
     if (state.playheadRaf) {
       cancelAnimationFrame(state.playheadRaf);
@@ -1159,7 +1338,7 @@ export function pausePlayback() {
     }
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
-    if (dom.btnPause) setLabel(dom.btnPause, t('main.continue'), { icon: 'play' });
+    setTransport(TRANSPORT.PAUSED);
     return;
   }
 
@@ -1175,7 +1354,7 @@ export function pausePlayback() {
     }
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
-    if (dom.btnPause) setLabel(dom.btnPause, t('main.continue'), { icon: 'play' });
+    setTransport(TRANSPORT.PAUSED);
   } else {
     if (!state.currentAudioSource) return;
     const context = getAudioContext();
@@ -1186,7 +1365,7 @@ export function pausePlayback() {
     // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
-    if (dom.btnPause) setLabel(dom.btnPause, t('main.continue'), { icon: 'play' });
+    setTransport(TRANSPORT.PAUSED);
   }
 }
 
@@ -1195,7 +1374,16 @@ export function stopPlayback() {
   if (_scheduler) _scheduler.deactivate();
   if (state.isSynthesizing) {
     state.synthesisCancelled = true;
-    window.electronAPI.cancelSVSSynthesis().catch(() => {});
+    // 只在管线已就绪（确实在推理）时才通知主进程取消。
+    // 模型加载（LOADING）阶段调 cancelSVSSynthesis 会落到主进程
+    // "无活跃任务 → resetSvsPipeline()" 的分支，把正在初始化的 lazy 实例
+    // 作废；下次播放要从头 _doInit()，表现为"取消一次，加载时间翻倍"。
+    if (state.pipelineInitialized) {
+      window.electronAPI.cancelSVSSynthesis().catch(() => {});
+    }
+    // 立即放开重入锁：否则 IDLE 下 Play 是可点的，但 playAll 的 guard 会
+    // 静默 return，用户看到的是"点了没反应"。旧会话会在最近的检查点退出。
+    state.isSynthesizing = false;
   }
   // 停止流式播放
   if (state.streamingSources && state.streamingSources.length > 0) {
@@ -1221,7 +1409,8 @@ export function stopPlayback() {
   state.currentAudioData = null;
   state.currentAudioBuffer = null;
   dom.timeDisplay.textContent = formatTime(0);
-  if (dom.btnPause) setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
+  setTransport(TRANSPORT.IDLE);
+  clearTransportStatus();
 }
 
 /**
@@ -1250,6 +1439,7 @@ export async function seekPlayback(newOffset) {
       state.playheadRaf = null;
     }
     state.playbackPauseOffset = Math.max(0, newOffset);
+    setTransport(TRANSPORT.PAUSED);
     drawPausedPlayheadAt(state.playbackPauseOffset);
     dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
     return;
@@ -1309,6 +1499,9 @@ export function getCurrentPlaybackSeconds() {
 }
 
 export function stopAudioSource() {
+  // 伴奏是独立 source，必须在这里一并停掉——否则暂停/停止后人声停了、
+  // 伴奏还在响（它在播放期是独立调度的，不再隶属 currentAudioSource）。
+  _clearAccompanimentNodes();
   if (state.currentAudioSource) {
     try {
       state.currentAudioSource.onended = null;
@@ -1370,8 +1563,7 @@ export function startPlayheadAnimation() {
           state.streamingSources = [];
           stopPlayheadAnimation();
           dom.timeDisplay.textContent = formatTime(0);
-          setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
-          dom.btnPlay.disabled = false;
+          setTransport(TRANSPORT.IDLE);
           clearPlayheadLine();
         }
         return;

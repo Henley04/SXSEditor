@@ -254,6 +254,7 @@ const IPC_CHANNELS = {
   SVS_CANCEL: 'svs:cancel',
   SVS_MODEL_INCOMPATIBLE: 'svs:model-incompatible',
   SVS_PROGRESS: 'svs:progress',
+  SVS_LOAD_PROGRESS: 'svs:loadProgress',
   // ---- update ----
   UPDATE_CANCEL_DOWNLOAD: 'update:cancel-download',
   UPDATE_DOWNLOAD_COMPLETE: 'update:download-complete',

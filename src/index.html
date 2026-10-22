@@ -8,10 +8,28 @@
   <body>
     <div id="app">
       <div id="toolbar">
-        <div class="toolbar-group">
-          <button id="btn-play" data-i18n="main.play" data-i18n-title="main.play" data-icon="play">播放</button>
-          <button id="btn-pause" data-i18n="main.pause" data-i18n-title="main.pause" data-icon="pause">暂停</button>
-          <button id="btn-stop" data-i18n="main.stop" data-i18n-title="main.stop" data-icon="stop">停止</button>
+        <div class="toolbar-group transport-group">
+          <!-- 传输控件只保留图标（省出的宽度给右侧的进度/ETA 用）。
+               文字标签退到 title（悬停提示）与 aria-label（无障碍）——
+               注意这里不能再用 data-i18n：applyLocale 会往 textContent 里填文本，
+               图标会被文字挤开。用 data-i18n-title / data-i18n-aria-label 即可。 -->
+          <button id="btn-play" class="transport-btn" data-icon="play"
+                  data-i18n-title="main.play" data-i18n-aria-label="main.play"
+                  aria-label="播放" disabled></button>
+          <button id="btn-pause" class="transport-btn" data-icon="pause"
+                  data-i18n-title="main.pause" data-i18n-aria-label="main.pause"
+                  aria-label="暂停" disabled></button>
+          <button id="btn-stop" class="transport-btn" data-icon="stop"
+                  data-i18n-title="main.stop" data-i18n-aria-label="main.stop"
+                  aria-label="停止" disabled></button>
+          <!-- 推理 / 模型加载进度：空闲时 display:none（完全不占位），
+               有进度时展开，文本右对齐，进度条在最右 -->
+          <div id="transport-status" class="transport-status" role="status" aria-live="polite">
+            <span id="transport-status-text" class="transport-status-text"></span>
+            <div id="transport-progress" class="transport-progress" hidden>
+              <div id="transport-progress-fill" class="transport-progress-fill"></div>
+            </div>
+          </div>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">

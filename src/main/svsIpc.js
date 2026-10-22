@@ -20,6 +20,14 @@ const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
+
+// 模型加载进度的目标窗口集合。
+//
+// 用集合而不是单个 sender：SVS_INIT 与 FRAGMENT_SVS_INIT 共享同一个
+// svsPipelineLazy promise，两个窗口可能同时等待同一次初始化。单槽写法会让
+// 后进入者覆盖前者、且先退出者的 finally 把槽位清空后又被后退出者写回旧值，
+// 结果是"只有一个窗口能收到进度"外加一个残留的幽灵 sender。
+const _loadProgressSenders = new Set();
 const { getRmvpeDetector, getBaseModelDir } = require('./pitchMidiIpc');
 const { SvsWorkerClient } = require('./svsWorkerClient');
 const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEnglishNotes, resolveLanguage: _resolveLanguage } = require('./languageDetection');
@@ -150,7 +158,13 @@ async function _createPipeline(languageOverride) {
       settingsSnapshot: settings,
     });
   }
-  return new (getPipelineModule().OnnxSVSPipeline)(modelPath, pipelineOptions);
+  // 模型加载进度：factory 在首次 init 时才跑，而 IPC handler 才知道发给哪个
+  // webContents，所以这里把 sender 做成模块级可替换的（handler 进/出时设/清）。
+  // 未设置时为 no-op，不影响 CLI。
+  return new (getPipelineModule().OnnxSVSPipeline)(modelPath, {
+    ...pipelineOptions,
+    onLoadProgress: (p) => { for (const fn of _loadProgressSenders) fn(p); },
+  });
 }
 
 const svsPipelineLazy = createLazyInitializer(async () => {
@@ -445,6 +459,39 @@ function _makeThrottledSender(win, channel) {
   };
 }
 
+/**
+ * 在等待管线初始化期间，把加载进度定向转发给发起请求的窗口。
+ *
+ * 只转发给这一个 webContents：FRAGMENT_SVS_INIT 与 SVS_INIT 可能并发，
+ * 广播会让两个窗口都收到对方的进度。
+ */
+async function _withLoadProgress(event, fn) {
+  const { BrowserWindow } = require('electron');
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return fn();
+  // 注意不能复用 _makeThrottledSender：它只接受数字 progress 并包成
+  // { progress }，而加载进度是 { stage, percent, current, total, name } 对象。
+  let lastAt = 0;
+  let lastPct = -1;
+  const send = (payload) => {
+    const pct = Number(payload && payload.percent);
+    const now = Date.now();
+    const isFinal = pct >= 100;
+    if (!isFinal && now - lastAt < 80 && Math.abs(pct - lastPct) < 1) return;
+    lastAt = now;
+    lastPct = pct;
+    try {
+      if (win && !win.isDestroyed()) win.send(IPC_CHANNELS.SVS_LOAD_PROGRESS, payload);
+    } catch (_) {}
+  };
+  _loadProgressSenders.add(send);
+  try {
+    return await fn();
+  } finally {
+    _loadProgressSenders.delete(send);
+  }
+}
+
 function registerSvsIpc() {
   // 当 int8 目录下检测到旧版 diff_step 模型（cond≠1024）时，向触发初始化的窗口推送提示事件。
   // 由渲染进程用自身 i18n 渲染弹窗文案（主/渲染进程双语字典各自维护）。
@@ -465,7 +512,7 @@ function registerSvsIpc() {
   }
 
   safeHandle(IPC_CHANNELS.SVS_INIT, async (event) => {
-    await svsPipelineLazy.get();
+    await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
@@ -676,7 +723,7 @@ function registerSvsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event) => {
-    await svsPipelineLazy.get();
+    await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };

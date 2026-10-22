@@ -5,6 +5,7 @@ import { refreshAll, invalidateFragmentNoteSprites, invalidateSingerListCache } 
 import { showAlertDialog } from '../alertDialog.js';
 // 2.2: 与主题管理共用同一份 token 注入实现，不再在本文件里复制一份。
 import { injectTokens } from '../themes/themeInit.js';
+import { refreshTransportLabels } from './transport.js';
 import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 
 // int8 旧版 diff_step 模型不兼容弹窗（主进程在 svs:init 时检测并推送一次）
@@ -69,6 +70,12 @@ if (window.electronAPI?.onFragmentSaved) {
       invalidateFragmentNoteSprites();
     }
     refreshAll();
+    // 分片编辑是实打实的工程改动，必须标脏。
+    // ad3dfdc 给 autoSaveProject 加了 400ms 防抖之后，这一行缺失会变成静默丢数据：
+    //   改完分片 → 主窗口 isDirty 仍为 false → 400ms 内关闭主窗口 →
+    //   主进程认为工程干净、不弹保存提示 → 渲染进程被销毁、防抖定时器永不执行
+    //   → 磁盘上还是编辑前的版本，用户毫无感知。
+    markDirty();
     autoSaveProject();
   });
   if (cleanup) state._ipcCleanups.push(cleanup);
@@ -84,6 +91,9 @@ function _refreshLocalizedUI() {
   document.documentElement.lang = getLocale();
   invalidateSingerListCache();
   refreshAll();
+  // applyLocale 会把三个传输按钮的 title/aria-label 重写成静态的
+  // main.play/pause/stop；合成期间它们应该是"取消推理"，必须重新派生一次。
+  refreshTransportLabels();
 }
 
 document.addEventListener('localeChanged', () => {

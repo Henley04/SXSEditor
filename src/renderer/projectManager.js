@@ -865,6 +865,12 @@ export async function saveProjectAs() {
 }
 
 export async function loadProject() {
+  // 立刻取消在途的自动保存。否则：
+  //   · 用户确认"丢弃未保存改动"的对话框停留期间，400ms 定时器会把即将被丢弃的
+  //     改动写回旧工程文件；
+  //   · 加载过程中 state.currentProjectFilePath 仍是旧路径，而内存里已经是
+  //     半加载的新工程，定时器触发就会把半加载状态写进旧工程。
+  cancelPendingAutoSave();
   if (state.isDirty) {
     const discard = await showConfirmDialog(t('main.unsavedChangesConfirm') || 'Unsaved changes will be lost. Continue?');
     if (!discard) return { loaded: false, canceled: true };

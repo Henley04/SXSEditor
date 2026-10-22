@@ -177,6 +177,12 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.SVS_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.SVS_PROGRESS, handler);
   },
+  // 模型加载进度（svs:loadProgress）：{ stage, percent, current, total, name }
+  onSVSLoadProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.SVS_LOAD_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.SVS_LOAD_PROGRESS, handler);
+  },
   onSVSChunkAudio: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.SVS_CHUNK_AUDIO, handler);

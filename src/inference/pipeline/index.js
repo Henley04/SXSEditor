@@ -174,6 +174,14 @@ class OnnxSVSPipeline {
         // _synthPromise 将 synthesize 串行化，B 等 A 完全结束（含 session 重建）才启动。
         this._synthPromise = null;
 
+        // 模型加载进度回调（可选）。首次 init() 时主进程把每条进度经
+        // 'svs:loadProgress' 转发给渲染进程，用于在传输控件右侧显示
+        // "模型加载中 xx% · 剩余 Ns"。未提供时是 no-op，不影响 CLI / 测试。
+        this._onLoadProgress = typeof options.onLoadProgress === 'function'
+            ? options.onLoadProgress
+            : null;
+        this._loadProgressPct = 0;
+
         // Initialize sub-modules
         this._textProcessing = new TextProcessing({ japaneseVocalization: this._japaneseVocalization });
         this.phone2idx = this._textProcessing.phone2idx;
@@ -1210,7 +1218,47 @@ class OnnxSVSPipeline {
         }
     }
 
+    /**
+     * 上报一次模型加载进度。
+     *
+     * 百分比按阶段加权：硬件探测 0–5%，模型文件解析 5–12%，加载模型 12–100%
+     * （按已加载数/总数线性分配）。单调递增，渲染进程可直接用它算 ETA
+     * （剩余 = 已用时间 × (100-p)/p）。
+     *
+     * @param {string} stage 'hardware' | 'resolve' | 'model'
+     * @param {object} [detail] { current, total, name }
+     */
+    _emitLoadProgress(stage, detail = {}) {
+        if (!this._onLoadProgress) return;
+        let pct;
+        if (stage === 'hardware') {
+            pct = 3;
+        } else if (stage === 'resolve') {
+            pct = 8;
+        } else {
+            const total = detail.total > 0 ? detail.total : 1;
+            const current = Math.min(total, Math.max(0, detail.current || 0));
+            pct = 12 + (current / total) * 88;
+        }
+        // 单调保护：并行加载小模型时回调会乱序完成，进度不能倒退
+        pct = Math.max(this._loadProgressPct, Math.min(100, Math.round(pct)));
+        this._loadProgressPct = pct;
+        try {
+            this._onLoadProgress({
+                stage,
+                percent: pct,
+                current: detail.current || 0,
+                total: detail.total || 0,
+                name: detail.name || '',
+            });
+        } catch (_) {
+            // 进度上报绝不能影响加载本身
+        }
+    }
+
     async _doInit() {
+        // 每次初始化都从 0 开始（单调保护会把上一次的 100 当成起点，否则重载时进度条不动）
+        this._loadProgressPct = 0;
         console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime + DirectML)...');
         console.log('[OnnxSVSPipeline] Model directory:', this.modelDir);
         if (this.languageOverride === 'ja') {
@@ -1221,7 +1269,9 @@ class OnnxSVSPipeline {
             }
         }
 
+        this._emitLoadProgress('hardware');
         const gpuInfo = await this._detectHardware();
+        this._emitLoadProgress('resolve');
         const { resolvedModelFiles, modelStats } = await this._resolveModelFiles();
         const sessionKeys = SESSION_KEYS;
         await this._detectModelPrecision(resolvedModelFiles);
@@ -1830,6 +1880,11 @@ class OnnxSVSPipeline {
             else largeIndices.push(i);
         }
 
+        // 加载进度：已完成的模型数（并行小模型乱序完成，_emitLoadProgress 内部做单调保护）
+        let _done = 0;
+        const _total = resolvedModelFiles.length;
+        const _tick = (name) => this._emitLoadProgress('model', { current: ++_done, total: _total, name });
+
         const loadOne = async (i) => {
             const modelFile = resolvedModelFiles[i];
             const modelPath = this._getModelPath(modelFile);
@@ -1858,6 +1913,7 @@ class OnnxSVSPipeline {
                     this.sessionEPs[sessionKeys[i]] = ep;
                     console.log(`[OnnxSVSPipeline] Default vocoder loaded as SiFiGAN fallback [${ep}]`);
                     loadedSessions.push(sessionKeys[i]);
+                    _tick(modelFile);
                     return;
                 }
                 const fallbackPath = this._getNpuFallbackPath(modelFile);
@@ -1885,6 +1941,7 @@ class OnnxSVSPipeline {
                 }
             }
             loadedSessions.push(sessionKeys[i]);
+            _tick(modelFile);
         };
 
         if (smallIndices.length > 0) {

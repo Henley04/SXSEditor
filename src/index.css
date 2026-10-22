@@ -573,3 +573,81 @@
   #toolbar label > input { font-size: var(--font-sm); }
   #time-display { min-width: 70px; font-size: var(--font-sm); }
 }
+
+/* ==========================================================================
+   传输控件（播放/暂停/停止）：仅图标
+   --------------------------------------------------------------------------
+   三个按钮改成图标后每条省下约 30-40px，这部分宽度让给右侧的进度显示。
+   图标按钮固定 30×30，避免不同语言的标签长度影响工具栏布局。
+   ========================================================================== */
+/* 用 #toolbar 提升特异性：components.css 里的 `#toolbar button` 是 ID 选择器，
+   单靠 .transport-btn 会被它的 padding 覆盖（30px 宽塞不下 10px 内边距）。 */
+#toolbar .transport-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+#toolbar .transport-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  /* 注意不要用 pointer-events: none —— 那会让禁用态连原生 title 都不弹，
+     而"为什么这个按钮不能点"恰恰是最需要提示的时候。 */
+}
+
+/* 进度区：空闲时不占位；有内容时展开并右对齐 */
+.transport-status {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 340px;
+  padding-left: 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  /* 数字等宽，进度百分比跳动时不会左右抖 */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.transport-status.active {
+  display: flex;
+}
+
+.transport-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.transport-progress {
+  flex: 0 0 auto;
+  width: 88px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-subtle);
+  overflow: hidden;
+}
+
+.transport-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* 窄屏：先牺牲进度条，只留文本（百分比本身比条更精确）。
+   字号同步降到 10px —— "模型加载中 88% · 还剩 12:34" 在 220px 里会被省略号
+   吃掉 ETA，而 ETA 正是这个区域存在的意义。 */
+@media (max-width: 1360px) {
+  .transport-status { max-width: 240px; font-size: 10px; }
+  .transport-progress { display: none; }
+}

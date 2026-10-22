@@ -5,9 +5,9 @@ import {
   SAMPLE_RATE,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { setLabel } from '../icons/iconHelper.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
+import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
@@ -238,16 +238,29 @@ dom.timeSigDen.addEventListener('change', () => {
 });
 
 // Transport controls
+//
+// 三个按钮的语义严格分工（状态派生见 renderer/transport.js）：
+//   Play  —— idle/paused：合成并播放、或从暂停位置继续；合成中：**取消**
+//   Pause —— 仅播放中可用
+//   Stop  —— 任何有音频/有任务的状态可用，回到起点
+// 此前 Pause 在暂停态还兼了一份"继续播放"的职责，与 Play 完全重复，
+// 视觉上表现为并排两个播放图标，因此这里删掉了那个分支。
 dom.btnPlay.addEventListener('click', async () => {
+  const st = getTransportState();
+  // 合成/加载模型期间，Play 是"取消"（按钮本身保持可点，不再 disabled ——
+  // 否则用户在数秒的等待里没有任何出口）。
+  if (st === TRANSPORT.SYNTHESIZING || st === TRANSPORT.LOADING) {
+    stopPlayback();
+    return;
+  }
+  if (st === TRANSPORT.PLAYING) return; // 播放中由 Pause 接管
+
   const fragments = trackManager.getFragments();
   // 仅伴奏轨、无分片的工程也必须能播放（playAll 已支持纯伴奏路径）。
   const hasAccompaniment = trackManager.getSingers().some(s => s.type === 'accompaniment');
   if (fragments.length === 0 && !hasAccompaniment) {
     const { showAlertDialog } = await import('../alertDialog.js');
     showAlertDialog(t('main.noFragmentsToPlay'));
-    return;
-  }
-  if (state.isPlaying || state.isSynthesizing) {
     return;
   }
   // 已有缓存的合成音频：从暂停位置恢复播放（无需重新合成）。
@@ -260,12 +273,7 @@ dom.btnPlay.addEventListener('click', async () => {
 });
 
 dom.btnPause.addEventListener('click', async () => {
-  if (state.isPlaying) {
-    pausePlayback();
-  } else if (state.currentAudioData && state.currentAudioData.length > 0) {
-    await startAudioPlayback(state.playbackPauseOffset || 0);
-    setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
-  }
+  if (state.isPlaying) pausePlayback();
 });
 
 dom.btnStop.addEventListener('click', () => {

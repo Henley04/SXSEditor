@@ -16,6 +16,7 @@ import { updateProjectSettings } from './projectManager.js';
 import { refreshAll, renderFragmentTimeline } from './timelineRenderer.js';
 import { state, dom } from './state.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
+import { TRANSPORT, setTransport } from './transport.js';
 import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
@@ -33,9 +34,15 @@ const deferIdle = (fn) => {
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  // 传输按钮的 title/aria-label 由状态机维护，而 applyLocale 会把它们重置成
+  // 静态 data-i18n-title。这里在语言应用后重新派生一次，保证 busy 态下的
+  // "取消推理"文案不会被覆盖回"播放"。
+  setTransport(TRANSPORT.IDLE);
   deferIdle(() => hydrateIcons(document));
 }).catch((err) => {
   console.error('[Renderer] i18n initialization failed:', err);
+  // i18n 失败也要让传输控件可用，否则三个按钮永远是 disabled
+  setTransport(TRANSPORT.IDLE);
 });
 
 // 任何祖先容器滚动都会让缓存的 getBoundingClientRect 失效（捕获阶段监听，
