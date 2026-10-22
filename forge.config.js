@@ -166,11 +166,27 @@ module.exports = {
     },
     {
       name: '@electron-forge/maker-deb',
-      config: {},
+      config: {
+        // Linux 打包的可执行文件名来自 package.json 的 productName（SXSEditor），
+        // 而 electron-installer-debian 默认按 name（sxseditor）去找二进制，
+        // 两者不一致会直接失败：
+        //   could not find the Electron app binary at ".../SXSEditor-linux-x64/sxseditor"
+        // 因此显式指定 bin。同时补上 deb 需要的 maintainer / homepage 字段。
+        bin: 'SXSEditor',
+        maintainer: 'SXSEditor Dev <dev@sxseditor.local>',
+        homepage: 'https://github.com/Henley04/SXSEditor',
+        description: 'AI Singing Voice Synthesis Workstation',
+        section: 'sound',
+      },
     },
     {
       name: '@electron-forge/maker-rpm',
-      config: {},
+      config: {
+        // 与 maker-deb 同样的二进制名不一致问题。
+        bin: 'SXSEditor',
+        homepage: 'https://github.com/Henley04/SXSEditor',
+        description: 'AI Singing Voice Synthesis Workstation',
+      },
     },
   ],
   plugins: [
