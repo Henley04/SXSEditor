@@ -37,6 +37,8 @@ export async function extractF0AndPitch() {
     } else {
       state.f0Data = extracted;
     }
+    // 标记来源：后续 FCPE「提取MIDI」不得覆盖这条曲线（见 midiExtraction）。
+    state.f0Source = 'rmvpe';
 
     if (state.pianoRoll) {
       state.pianoRoll.f0Data = state.f0Data;

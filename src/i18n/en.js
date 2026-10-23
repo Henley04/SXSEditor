@@ -561,6 +561,7 @@ export default {
     back: 'Back',
     wavWaveform: 'WAV Waveform',
     midiEditor: 'MIDI Editor',
+    midiCanvasAriaLabel: 'MIDI editor: press and drag on empty space to add a note, double-click a note to edit its lyric, Delete to remove the selected note',
     f0CurveReadOnly: 'F0 Fundamental Curve (Read-only)',
     waitingForExtraction: 'Waiting for extraction...',
     noteCount: '{count} notes',
@@ -626,7 +627,9 @@ export default {
       segment: 'Segmenting',
       quantize: 'Quantizing'
     },
-    eta: 'ETA',
+    elapsed: 'elapsed {seconds}s',
+    // Status hint shown when FCPE / Basic Pitch keeps an existing RMVPE F0.
+    f0KeptFromRmvpe: 'F0 kept from RMVPE (this tool only generated MIDI notes)',
     warn: {
       clipped: 'Clipping detected in the input audio',
       hot: 'Input audio level is too high',

@@ -6,44 +6,95 @@ import { buildSingerFields, showLoading, hideLoading, updateMidiInfo } from './u
 import { collectOptions, setStatus } from './panel.js';
 import { saveOptions, resolveOptions } from './extractionOptions.js';
 
-const STAGES = [
-  { key: 'analyze', pct: 8 },
-  { key: 'extract', pct: 55 },
-  { key: 'smooth', pct: 72 },
-  { key: 'segment', pct: 88 },
-  { key: 'quantize', pct: 96 },
-];
+// 各提取工具的真实阶段序列——只用于进度文案，不是虚构的百分比里程碑。
+const STAGE_SETS = {
+  fcpe: ['analyze', 'extract', 'smooth', 'segment', 'quantize'],
+  rmvpe: ['analyze', 'extract', 'smooth'],
+  basicpitch: ['analyze', 'extract', 'segment'],
+};
+
+// 占位进度永远停在这个百分比之下：真实推理是一次性 IPC，中途没有里程碑回调，
+// 一旦让进度条自己跑满，就会出现"进度先结束、结果后出来"。
+const CREEP_CEILING = 90;
+// 阶段/百分比推进节奏：真实推理通常 1.5~10s，太快就会像旧实现那样 1.3 秒跑满。
+const STAGE_CADENCE_MS = 900;
+// 文案重绘节奏：只刷"已用 X 秒"，比推进节奏密，避免读数停在 0.9s 显得卡住。
+const REPAINT_MS = 450;
 
 function stageLabel(key) {
   return t(`preprocess.stage.${key}`) || t('preprocess.processing');
 }
 
-function runPacedProgress(handle, textPrefix) {
-  let i = 0;
-  let lastPct = 0;
+/**
+ * 创建提取进度反馈（不撒谎版）。
+ *
+ * 主进程的 FCPE / RMVPE 推理是一次性 IPC，渲染进程拿不到中途进度，所以这里
+ * 只能做占位进度，但必须守住两条：
+ *   1. 百分比在上限 CREEP_CEILING 之下渐进爬升，只有真正拿到结果、并且结果
+ *      已经画到画布上之后，才由 finish() 推到 100%。
+ *      （旧实现是 5 个固定档位 × 260ms，1.3 秒就冲到 96% 然后卡死：音频稍长
+ *      一点就是"进度转圈比实际结果更早结束"。）
+ *   2. 副标题只显示真实已用时间。
+ *      （旧实现的"预计剩余 = elapsed × 0.6"是凭意外推，短音频恒显示"还剩
+ *      0.5s"，等于又在暗示"马上就完了"。）
+ */
+function createProgressReporter(handle, textPrefix, stageKeys) {
+  const stages = stageKeys && stageKeys.length ? stageKeys : STAGE_SETS.fcpe;
   const t0 = performance.now();
+  let stageIdx = 0;
+  let pct = 6;
+  let stopped = false;
+
+  const paint = () => {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    const label = stageLabel(stages[Math.min(stageIdx, stages.length - 1)]);
+    handle.setProgress(pct, `${textPrefix} ${label} · ${t('preprocess.elapsed', { seconds: elapsed })}`);
+  };
+
+  paint();
+
+  let lastAdvance = t0;
   const timer = setInterval(() => {
-    if (i < STAGES.length) {
-      const st = STAGES[i];
-      lastPct = st.pct;
-      handle.setProgress(st.pct, `${textPrefix} ${stageLabel(st.key)}`);
-      i++;
+    if (stopped) return;
+    const now = performance.now();
+    if (now - lastAdvance >= STAGE_CADENCE_MS) {
+      lastAdvance = now;
+      if (stageIdx < stages.length - 1) stageIdx++;
+      // 渐进爬升：越接近上限步长越小，永不触达 CREEP_CEILING 本身。
+      pct = Math.min(CREEP_CEILING, pct + Math.max(1.5, (CREEP_CEILING - pct) * 0.16));
     }
-  }, 260);
-  const finish = (extraMsg) => {
-    clearInterval(timer);
-    handle.setProgress(100, extraMsg || '');
-  };
-  // 估算剩余时间（基于已用时间外推）
-  const etaTimer = setInterval(() => {
-    const elapsed = (performance.now() - t0) / 1000;
-    const remaining = Math.max(0.5, elapsed * 0.6);
-    handle.setProgress(lastPct, `${textPrefix} ${t('preprocess.eta')} ~${remaining.toFixed(1)}s`);
-  }, 500);
+    paint();
+  }, REPAINT_MS);
+
   return {
-    finish,
-    stopEta: () => clearInterval(etaTimer),
+    finish() {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      handle.setProgress(100, '');
+    },
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
   };
+}
+
+/**
+ * 等两帧再继续，确保结果已经真正绘制到画布上。
+ * 窗口不可见时 rAF 不触发，用定时器兜底，避免遮罩永远不撤。
+ */
+function nextPaint(timeoutMs = 250) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(done));
+    setTimeout(done, timeoutMs);
+  });
 }
 
 function showQualityWarnings(warnings) {
@@ -122,7 +173,15 @@ export async function extractF0BasicPitch() {
     ? t('preprocess.extractingMidiFcpe')
     : t('preprocess.extractingMidiBasicPitch');
   const loading = showLoading(loadingMsg);
-  let paced = null;
+  let progress = null;
+  // 遮罩的关闭点必须可控：成功路径要等结果真正绘制完成才撤，否则会出现
+  // "进度转圈已经结束、音符还没画出来"。
+  let overlayClosed = false;
+  const closeOverlay = () => {
+    if (overlayClosed) return;
+    overlayClosed = true;
+    hideLoading(loading);
+  };
 
   try {
     const channelData = state.wavAudioBuffer.getChannelData(0);
@@ -132,7 +191,9 @@ export async function extractF0BasicPitch() {
     const resolvedOptions = resolveOptions(collectOptions());
     // 实际生效的 BPM（自动测速回填后会更新），用于音符 beat→秒换算。
     let effectiveBpm = resolvedOptions.bpm;
-    paced = runPacedProgress(loading, loadingMsg);
+    // 设备标记（仅 FCPE 会回传），用于状态栏文案。
+    let deviceTag = null;
+    progress = createProgressReporter(loading, loadingMsg, STAGE_SETS[midiTool]);
 
     let result;
     if (midiTool === 'rmvpe') {
@@ -187,7 +248,7 @@ export async function extractF0BasicPitch() {
 
     if (midiTool === 'fcpe') {
       // 设备/速度提示
-      const deviceTag = result.device === 'DML' ? 'DML (GPU)' : 'CPU';
+      deviceTag = result.device === 'DML' ? 'DML (GPU)' : 'CPU';
       setStatus(`${t('preprocess.deviceLabel')}: ${deviceTag}`);
       // 自动 BPM：回填到面板
       if (resolvedOptions.autoBpm && result.bpm && result.bpm > 0) {
@@ -226,8 +287,21 @@ export async function extractF0BasicPitch() {
       };
     });
 
-    if (result.f0Array && result.f0Array.length > 0) {
-      state.f0Data = result.f0Array;
+    // F0 归属：RMVPE 是专用 F0 提取器，FCPE / Basic Pitch 的 F0 只服务于
+    // 音符切分（各自的归一化、阈值、平滑、量程会把曲线形状改得面目全非）。
+    // 用户先点「RMVPE提取F0」再点「提取MIDI」时，此前会被这里的赋值悄悄顶掉，
+    // 表现为"提取完 MIDI，F0 曲线整条变了"。已有 RMVPE 结果时保留它。
+    const detectedF0 = result.f0Array && result.f0Array.length > 0 ? result.f0Array : null;
+    const keepRmvpeF0 = midiTool !== 'rmvpe'
+      && state.f0Source === 'rmvpe'
+      && Array.isArray(state.f0Data) && state.f0Data.length > 0;
+    if (detectedF0 && !keepRmvpeF0) {
+      state.f0Data = detectedF0;
+      state.f0Source = midiTool;
+    }
+    if (keepRmvpeF0) {
+      const prefix = deviceTag ? `${t('preprocess.deviceLabel')}: ${deviceTag} · ` : '';
+      setStatus(`${prefix}${t('preprocess.f0KeptFromRmvpe')}`);
     }
 
     if (state.pianoRoll) {
@@ -264,12 +338,19 @@ export async function extractF0BasicPitch() {
     };
 
     updateMidiInfo();
+    // 结果已写入状态并触发重绘：等两帧确认真的画出来了，再把进度推到 100%
+    // 并撤掉遮罩。IPC 返回只代表数据到了，不代表用户已经能看到结果。
+    await nextPaint();
+    if (progress) progress.finish();
+    closeOverlay();
     showAlertDialog(t('preprocess.midiExtractionComplete'));
   } catch (err) {
     console.error('Extraction failed:', err);
+    if (progress) progress.stop();
+    closeOverlay();
     showAlertDialog(t('preprocess.extractionFailed') + ': ' + err.message);
   } finally {
-    if (paced) { paced.finish(''); paced.stopEta(); }
-    hideLoading(loading);
+    if (progress) progress.stop();
+    closeOverlay();
   }
 }

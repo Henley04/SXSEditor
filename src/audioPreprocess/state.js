@@ -17,6 +17,10 @@ const state = {
   playbackRaf: null,
 
   f0Data: null,
+  // F0 来源：'rmvpe' | 'fcpe' | null。
+  // RMVPE 是专用 F0 提取器；FCPE 的 F0 只用于切分音符，不能顶掉用户已经
+  // 提取好的 RMVPE 曲线（否则点一次「提取MIDI」F0 就被悄悄换掉）。
+  f0Source: null,
   singerData: null,
   // 加载时裁掉的前导静音秒数：保存 singerData 时要把时间轴补回原始位置
   trimOffsetSec: 0,

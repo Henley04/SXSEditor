@@ -558,6 +558,7 @@ export default {
     back: '返回',
     wavWaveform: 'WAV 波形',
     midiEditor: 'MIDI 编辑器',
+    midiCanvasAriaLabel: 'MIDI编辑器：在空白处按下左键并拖动可新建音符，双击音符编辑歌词，Delete 删除选中音符',
     f0CurveReadOnly: 'F0 基频曲线 (只读)',
     waitingForExtraction: '等待提取...',
     noteCount: '{count} 音符',
@@ -623,7 +624,9 @@ export default {
       segment: '切分中',
       quantize: '量化中'
     },
-    eta: '预计剩余',
+    elapsed: '已用 {seconds}s',
+    // FCPE / Basic Pitch 不覆盖已有 RMVPE F0 时的状态栏提示
+    f0KeptFromRmvpe: 'F0 保持 RMVPE 结果（本次工具只用于生成 MIDI 音符）',
     warn: {
       clipped: '输入音频存在削波',
       hot: '输入音频电平过高',

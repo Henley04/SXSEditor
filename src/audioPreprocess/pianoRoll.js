@@ -54,6 +54,8 @@ export function initPianoRoll() {
     dragStartX: 0,
     dragStartY: 0,
     dragNoteStart: { start: 0, pitch: 0, duration: 0 },
+    // 本次按下是否新建了音符（id）。mouseup 后清空，用于只在真正新建时刷新计数。
+    _dragCreatedNoteId: null,
     hoverNoteId: null,
     bpm: BPM,
     projectSettings: { bpm: BPM, timeSignature: [4, 4] },
@@ -267,12 +269,30 @@ export function initPianoRoll() {
       this._sortedNotesLen = -1;
     },
 
+    /**
+     * 同一音高上 [start, end) 是否与既有音符重叠。
+     *
+     * 与分片编辑器的 hasNoteOverlap 语义一致：只比较同音高、半开区间相交。
+     * 新建音符与拖拽加长时用它兜底，避免手绘出同音高叠在一起的音符（合唱
+     * 声部数据里这种重叠会让 note_pitch/duration 两列对不上）。
+     */
+    _hasNoteOverlap(excludeId, pitch, start, end) {
+      for (const note of this.notes) {
+        if (note.id === excludeId) continue;
+        if (note.pitch !== pitch) continue;
+        if (note.start < end && note.start + note.duration > start) return true;
+      }
+      return false;
+    },
+
     _onMouseDown(e) {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
       if (x < PIANO_KEY_WIDTH) return;
       if (y < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT) return;
+      if (e.button !== 0) return;
 
+      this._dragCreatedNoteId = null;
       const hit = this._findNoteAt(x, y);
       if (hit) {
         this.selectedNoteId = hit.note.id;
@@ -284,14 +304,43 @@ export function initPianoRoll() {
         this.dragStartY = y;
         this._dragMoved = false;
       } else {
-        // Empty-space single click only clears/selects. Creating on mousedown
-        // made a near-miss below an existing note immediately add a note.
+        // 空白处按下 = 新建音符，与分片编辑器保持一致：按下即落一个 1/4 拍
+        // （不小于吸附网格）的音符并直接进入 resize 拖拽，拖动决定时值。
+        //
+        // 迁移前这里只清选择、新建只能靠双击 —— 两个编辑器手感不同，按分片
+        // 编辑器的习惯拖一下就什么都不会发生（用户感知为"无法新建 MIDI"）。
         this.selectedNoteId = null;
         this.dragMode = null;
+
+        const beats = Math.max(0, this._snapBeats(this._xToTime(x)));
+        const pitch = Math.max(0, Math.min(127, this._yToPitch(y)));
+        const newDuration = Math.max(this.snapGrid, 0.25);
+        // 同音高重叠时不新建（与分片编辑器一致）：紧贴既有音符下方的误点
+        // 不应该凭空多出一个音符。
+        if (!this._hasNoteOverlap(null, pitch, beats, beats + newDuration)) {
+          const newNote = {
+            id: Date.now() + Math.random(),
+            pitch,
+            start: beats,
+            duration: newDuration,
+            lyric: 'la',
+          };
+          this.notes.push(newNote);
+          this.selectedNoteId = newNote.id;
+          this.dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
+          this.dragMode = 'resize';
+          this.dragStartX = x;
+          this.dragStartY = y;
+          this._dragMoved = false;
+          this._dragCreatedNoteId = newNote.id;
+          this._invalidateSortedNotes();
+        }
       }
 
       this._staticCacheDirty = true;
       this.render();
+      // 新建后立刻刷新头部计数（此前只在 mouseup 且发生过位移时才刷）。
+      if (this._dragCreatedNoteId !== null) updateMidiInfo();
     },
 
     _onMouseMove(e) {
@@ -334,8 +383,13 @@ export function initPianoRoll() {
         // Resize minimum = one snap grid cell so the result always lands on
         // a grid line.
         newDuration = Math.max(this.snapGrid, this._snapBeats(newDuration));
-        note.duration = newDuration;
-        this._invalidateSortedNotes();
+        // 加长时禁止吃进同音高的下一个音符；缩短永远放行（否则一旦历史上
+        // 存在重叠，用户就再也拉不回合法长度）。
+        if (newDuration < note.duration ||
+            !this._hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+          note.duration = newDuration;
+          this._invalidateSortedNotes();
+        }
       }
       this._staticCacheDirty = true;
       this.render();
@@ -360,8 +414,15 @@ export function initPianoRoll() {
       this.dragStartX = 0;
       this.dragStartY = 0;
       this._dragMoved = false;
+      this._dragCreatedNoteId = null;
     },
 
+    /**
+     * 双击只做「编辑歌词」。
+     *
+     * 新建音符已经下移到 mousedown/拖拽（与分片编辑器一致），这里若再新建，
+     * 空白处双击会在 mousedown 已建的那个音符上再叠一个，变成一次双击两个音符。
+     */
     _onDoubleClick(e) {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
@@ -370,23 +431,7 @@ export function initPianoRoll() {
 
       const hit = this._findNoteAt(x, y);
       if (hit) {
-        const note = hit.note;
-        startInlineEdit(this, note, hit);
-      } else {
-        const beats = this._snapBeats(this._xToTime(x));
-        const newNote = {
-          id: Date.now() + Math.random(),
-          pitch: Math.max(0, Math.min(127, this._yToPitch(y))),
-          start: Math.max(0, beats),
-          duration: Math.max(this.snapGrid, 0.25),
-          lyric: 'la',
-        };
-        this.notes.push(newNote);
-        this.selectedNoteId = newNote.id;
-        this._invalidateSortedNotes();
-        this._staticCacheDirty = true;
-        this.render();
-        updateMidiInfo();
+        startInlineEdit(this, hit.note, hit);
       }
     },
 
