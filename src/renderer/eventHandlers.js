@@ -193,7 +193,19 @@ function _endPlayheadDrag() {
   drawPausedPlayheadAt(state.playbackPauseOffset);
   if (_wasPlayingBeforeDrag) {
     _wasPlayingBeforeDrag = false;
-    startAudioPlayback(state.playbackPauseOffset);
+    if (state.isSynthesizing) {
+      // 流式推理进行中拖拽播放头：此刻没有任何可复用的整段音频（chunk 是边合成
+      // 边播、播完即丢的），startAudioPlayback 会因 currentAudioData 为空而静默
+      // return —— 界面就卡在"暂停"：播放头停在新位置，按 Play 也没反应
+      // （playAll 的 isSynthesizing 重入保护把点击吞掉），只能等推理自己跑完。
+      // 这里直接放弃这一轮、从拖拽位置重来：主进程的分段缓存让已经推理过的
+      // 分段几乎瞬时命中，不会再从零算一遍。
+      // 注意不能看 getTransportState()：pausePlayback 已经把传输条改成 PAUSED，
+      // 这里只能靠 state.isSynthesizing 判断"还有一轮推理在跑"。
+      void playAll();
+    } else {
+      startAudioPlayback(state.playbackPauseOffset);
+    }
   }
 }
 
@@ -261,6 +273,14 @@ dom.btnPlay.addEventListener('click', async () => {
   if (fragments.length === 0 && !hasAccompaniment) {
     const { showAlertDialog } = await import('../alertDialog.js');
     showAlertDialog(t('main.noFragmentsToPlay'));
+    return;
+  }
+  // 还有一轮推理在跑（流式播放中被拖拽/暂停后传输条已是 PAUSED，不再是
+  // SYNTHESIZING，上面的"取消"分支拦不住）：Play 必须放弃旧会话、从当前起点
+  // 重来。不能走下面的"有缓存就续播"——currentAudioData 要么为空（首轮流式），
+  // 要么是上一轮的旧混音，与正在推理的内容不一致。
+  if (state.isSynthesizing) {
+    await playAll();
     return;
   }
   // 已有缓存的合成音频：从暂停位置恢复播放（无需重新合成）。

@@ -111,12 +111,16 @@ function updatePitchToolButtons() {
 export function updateFragmentPlayButton() {
   const btnPlayFragment = document.getElementById('btn-play-fragment');
   if (!btnPlayFragment) return;
-  if (getFragmentIsSynthesizing()) {
-    setLabel(btnPlayFragment, t('fragment.synthesizing'), { icon: 'play' });
-    btnPlayFragment.disabled = true;
-  } else if (getFragmentIsPlaying()) {
+  // 顺序很重要：流式播放期间 isSynthesizing 仍为 true（合成还没结束、还要继续
+  // 收 chunk），但声音已经在放了。必须先按"播放中"呈现（可点 = 停止），否则
+  // 按钮在整个合成期间都显示"合成中"且禁用 —— 用户既停不下来、也切不了位置，
+  // 只能等整段推理跑完（"按播放没反应"的直接原因）。
+  if (getFragmentIsPlaying()) {
     setLabel(btnPlayFragment, t('fragment.stop'), { icon: 'stop' });
     btnPlayFragment.disabled = false;
+  } else if (getFragmentIsSynthesizing()) {
+    setLabel(btnPlayFragment, t('fragment.synthesizing'), { icon: 'play' });
+    btnPlayFragment.disabled = true;
   } else if (getFragmentIsAutoInferring()) {
     // 后台自动推理进行中：仅提示，不禁用按钮——用户仍可随时手动播放或编辑。
     setLabel(btnPlayFragment, t('fragment.autoInferring'), { icon: 'play' });
@@ -249,7 +253,8 @@ export function setupUiControls() {
         showAlertDialog(t('fragment.noNotesToPlay'));
         return;
       }
-      if (getFragmentIsSynthesizing()) return;
+      // 播放中优先按"停止"处理：流式播放期间合成仍在进行（isSynthesizing=true），
+      // 旧顺序会在这里直接 return，按钮看似可点却毫无反应。
       if (getFragmentIsPlaying()) {
         stopFragmentPlayback();
         setFragmentCurrentTime(0);
@@ -259,6 +264,7 @@ export function setupUiControls() {
         render();
         return;
       }
+      if (getFragmentIsSynthesizing()) return;
       await playFragment();
     });
   }

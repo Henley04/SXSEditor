@@ -4,17 +4,23 @@
 // postprocessing 等一整棵子树，require 它要解析并编译数万行 JS。此前它在
 // svsIpc.js 第 1 行，而 svsIpc 在启动的 STEP 4 被同步 require —— 于是这份解析
 // 成本落在主窗口显示之前。ORT native addon 本身已由 ortRuntime 惰性化，
-// 这里再把 JS 解析也推迟到首次真正要建管线（或首次查询采样率）时。
+// 这里再把 JS 解析也推迟到首次真正要建管线时（采样率查询不再触发加载，
+// 见下面的 SAMPLE_RATE）。
 //
-// SAMPLE_RATE 是纯常量，但它在同一模块里，只能一起惰性化；下面的
-// getSampleRate() 在拿值时触发加载，调用点语义不变（这些 handler 都在
-// 用户交互后才跑）。
+// 采样率不从 pipeline 取：它只是 inference/shared/constants.js 里的一个常量，
+// 而 pipeline/index.js 仅导出 { OnnxSVSPipeline, NativeSVSPipeline, SAMPLE_RATE,
+// enumerateDMLDevices }，从来没有 getSampleRate() 这个函数。此前的写法
+// getPipelineModule().getSampleRate() 让 fragment-svs:getSampleRate 必然抛
+// "is not a function"（渲染进程初始化采样率是打开分片编辑器的第一步）。
+// 直接读轻量常量模块：既修掉异常，也不必为了回答一次采样率查询去解析整棵
+// 5000 行 pipeline（该常量模块本就是 pipeline/constants.js 的唯一来源）。
+const { SAMPLE_RATE } = require('../inference/shared/constants.js');
 let _pipelineModule = null;
 function getPipelineModule() {
   if (!_pipelineModule) _pipelineModule = require('../inference/pipeline');
   return _pipelineModule;
 }
-function getSampleRate() { return getPipelineModule().getSampleRate(); }
+function getSampleRate() { return SAMPLE_RATE; }
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');

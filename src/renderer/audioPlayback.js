@@ -407,10 +407,55 @@ export async function ensurePipelineInitialized() {
   }
 }
 
+/**
+ * 放弃当前这一轮合成会话，为"从新位置重来"让路。
+ *
+ * 与 stopPlayback() 的三点区别（都是必须的）：
+ *   1. **不动 playbackPauseOffset** —— 用户刚拖到/暂停的位置就是新一轮的起点，
+ *      stopPlayback 会把它清成 0，于是"按 Play 从头重播"（seek 位置被吞）；
+ *   2. 不打回 IDLE —— 调用方（playAll）紧接着就会接上新一轮合成；
+ *   3. 清空 currentAudioData/Channels/Buffer —— 旧音频与新一轮的输入不一致，
+ *      留着会被 btnPlay 的"有缓存就续播"分支当成可播音频。
+ *
+ * 必须真的去取消主进程的推理：不取消的话，新请求排在 _withSynthMutex 的队列
+ * 后面，要等旧任务自己跑完（长工程可能几十秒），用户看到的仍然是"按了没反应"。
+ * 取消是协作式的（安全点退出，worker 保持存活），见 svsWorkerClient。
+ */
+function _abandonActiveSession() {
+  // LOADING（模型加载）阶段不能发 cancel：主进程侧会落到"无活跃任务 →
+  // resetSvsPipeline()"的分支，把正在初始化的 lazy 实例作废，下次播放要重头加载。
+  if (state.pipelineInitialized && window.electronAPI?.cancelSVSSynthesis) {
+    window.electronAPI.cancelSVSSynthesis().catch(() => {});
+  }
+  state.synthesisCancelled = true;
+  state.streamingFinished = true;
+  _streamingActive = false;
+  for (const src of state.streamingSources) {
+    if (!src) continue;
+    safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
+  }
+  state.streamingSources = [];
+  if (_scheduler) _scheduler.deactivate();
+  // stopAudioSource 一并停掉伴奏 source 与播放头 rAF
+  stopAudioSource();
+  state.isPlaying = false;
+  state.currentAudioData = null;
+  state.currentAudioChannels = null;
+  state.currentAudioBuffer = null;
+}
+
 export async function playAll() {
+  // 已有一轮推理在跑时，用户按 Play 的语义是"现在就从当前起点播"，不是"忽略我"。
+  // 旧实现直接 `if (state.isSynthesizing) return;` —— 而流式播放中被拖拽暂停后
+  // 传输条已经是 PAUSED（Play 可点、文案是"播放"），点下去却什么都不发生，
+  // 用户只能拿 Stop/取消推理把它杀掉重来（而那条路会把起点清成 0）。
+  if (state.isSynthesizing) {
+    // 模型加载中（LOADING）不能中断：取消会让主进程作废正在初始化的实例。
+    if (getTransportState() === TRANSPORT.LOADING) return;
+    _abandonActiveSession();
+  }
   // 重入保护：防止连续调用导致前一次 finally 提前把 isSynthesizing 置 false，
   // 使后续进度回调失效（进度百分比偶发不显示的根因之一）。
-  if (state.isSynthesizing) return;
   state.isSynthesizing = true;
   state.synthesisCancelled = false;
   const myGeneration = ++_playGeneration;
@@ -769,6 +814,10 @@ export async function playAll() {
           bpm: state.project.bpm,
         });
 
+        // 被新一轮播放取代的旧会话：推理可能刚好跑完（取消没赶上），这时绝不能
+        // 覆盖共享状态 —— currentAudioData / 时间基准都属于新会话。
+        throwIfCancelled();
+
         // The main process may replay a cached stream much faster than realtime.
         // Let queued svs:chunk-audio IPC messages run before removing the listener.
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -815,15 +864,20 @@ export async function playAll() {
         // 否则流式播放仍在进行，playhead 动画已在运行，不重置 timeDisplay
       } catch (error) {
         if (streamingChunkCleanup) { safeCleanup('audioPlayback.streamingChunkCleanup', streamingChunkCleanup); streamingChunkCleanup = null; }
-        // 停止已调度的流式 source
-        state.streamingFinished = true;
-        _streamingActive = false;
-        if (_scheduler) _scheduler.deactivate();
-        for (const src of state.streamingSources) {
-          if (!src) continue;
-          safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
+        // 只有"最新一代"才能清理共享的流式状态：被取代的旧会话如果在这里停掉
+        // streamingSources / 停用 _scheduler，会把新一轮刚排好的 chunk 一起杀掉
+        // （表现为新一轮播放刚开个头就静音）。
+        if (myGeneration === _playGeneration) {
+          // 停止已调度的流式 source
+          state.streamingFinished = true;
+          _streamingActive = false;
+          if (_scheduler) _scheduler.deactivate();
+          for (const src of state.streamingSources) {
+            if (!src) continue;
+            safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
+          }
+          state.streamingSources = [];
         }
-        state.streamingSources = [];
         throw error;
       }
     } else {
@@ -945,6 +999,13 @@ export async function playAll() {
     }
 
   } catch (error) {
+    // 已被新一轮播放取代：错误一律静默。用户按 Play / 拖拽播放头时取消是主动行为，
+    // 不该弹"合成失败"；而且此刻 state.synthesisCancelled 已被新会话重置为 false，
+    // 只靠那个布尔量判断会把主动取消误报成失败。
+    if (myGeneration !== _playGeneration) {
+      if (playProgressCleanup) { safeCleanup('audioPlayback.playProgressCleanup', playProgressCleanup); playProgressCleanup = null; }
+      return;
+    }
     // 用户主动取消不是"合成失败"：不弹错误框，安静回到空闲。
     if (state.synthesisCancelled || error?.code === 'CANCELLED') {
       console.log('[Audio] synthesis cancelled by user');
@@ -1524,7 +1585,15 @@ export function startPlayheadAnimation() {
   _ensureVisibilityHandler();
   function updatePlayhead() {
     _sharedUpdateFn = updatePlayhead;
-    if (!state.isPlaying) return;
+    if (!state.isPlaying) {
+      // 必须把这个"已退出但 id 还留着"的句柄清掉：startPlayheadAnimation 的
+      // 幂等保护只看 state.playheadRaf 是否非空，残留一个死 id 会让之后每一次
+      // 启动都被 short-circuit —— 声音在放、播放头却一直不动。
+      // （典型触发：流式播放中暂停 → 推理跑完 → 这里被 startPlayheadAnimation
+      //   重新拉起 → 立刻因 !isPlaying 退出，句柄留在 state 上。）
+      state.playheadRaf = null;
+      return;
+    }
 
     const context = getAudioContext();
     // 两个时钟域，不可混用（混用 = 补偿量重复计入，人声真的与时间轴错开）：

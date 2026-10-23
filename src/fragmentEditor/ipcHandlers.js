@@ -3,6 +3,7 @@ import { setLabel } from '../icons/iconHelper.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
+  getFragmentIsPlaying,
   getPitchCurve,
   getNotes,
   getSelectedNoteIds,
@@ -57,7 +58,10 @@ export function setupIpcHandlers() {
     // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
     // 之前回调同时更新两个按钮，播放时导出按钮也被改成"导出 X%"，
     // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
-    if (getFragmentIsSynthesizing()) {
+    // 流式播放期间（isPlaying）不要把按钮改回"合成中 X%"：那一轮合成还没结束，
+    // 但按钮此刻的语义是"停止"（见 updateFragmentPlayButton），进度条位置由
+    // 画布播放头体现；否则按钮文案在"停止/合成中"之间来回跳。
+    if (getFragmentIsSynthesizing() && !getFragmentIsPlaying()) {
       const btnPlayFragment = document.getElementById('btn-play-fragment');
       if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.synthesizingProgress', { progress }), { icon: 'play' });
     } else if (getFragmentIsExporting()) {
