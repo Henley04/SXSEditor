@@ -6,19 +6,36 @@
 
 ### RMVPE 音高检测 (`rmvpe_mel.onnx`, `rmvpe_model.onnx`)
 
+`rmvpe_model.onnx` 是端到端模型：输入 16 kHz 原始波形，图内完成
+STFT → 128 维 log-mel → DeepUnet（5 层下采样）→ BiGRU → 360 维音高 salience。
+
 | 模型文件 | 输入 | 输出 | 说明 |
 |---------|------|------|------|
-| `rmvpe_mel.onnx` | `(batch, num_samples)` Float | `(batch, mel_bins, time_frames)` Float | 音频转梅尔频谱 |
-| `rmvpe_model.onnx` | `(batch, num_samples)` Float | `(batch, time_frames, n_class)` Float | 音高检测 |
+| `rmvpe_model.onnx` | `audio` `(batch, num_samples)` Float | `salience` `(batch, time_frames, 360)` Float | 音高 salience（Sigmoid，0~1） |
+| `rmvpe_mel.onnx` | `(batch, num_samples)` Float | `(batch, mel_bins, time_frames)` Float | 仅梅尔频谱（调试用，主流程不使用） |
 
-**参数**:
+**参数**（与官方 RMVPE 一致）:
 - 采样率: 16000 Hz
-- n_fft: 2048
-- hop_length: 160
-- win_length: 2048
-- num_mels: 128
-- mel_fmin: 30
-- mel_fmax: 7600
+- n_fft: 1024，hop_length: 160，win_length: 1024，Hann 窗，`center=True`
+- num_mels: 128，mel_fmin: 30，mel_fmax: 8000（`htk=True`），log-clamp: 1e-5
+- t_min: 30 Hz（cents 映射下限）
+
+**输出契约**:
+- `time_frames = 1 + floor(num_samples / 160)`，每帧 10 ms
+- **`time_frames` 必须是 32 的倍数**：U-Net 有 5 次 stride-2 下采样，
+  否则 AvgPool 取整后 Decoder 的 concat 尺寸对不上，session 直接报错。
+  调用方在末尾补零到 `(32k - 1) * 160` 采样即可（见 `rmvpePitchDetector.js`）。
+- salience 的每个 bin 对应 `cents = 20 * bin + 1997.3794084376191`
+- 解码（`RmvpePitchDetector.decodeSalience` 内实现，与 RVC `RMVPE.decode` 等价）:
+  1. `bin = argmax(salience[t])`
+  2. 在 `bin ± 4` 的 9 个 bin 上按 salience 加权平均 cents（超出 0..359 视为权重 0）
+  3. `f0 = 10 * 2 ** (cents / 1200)`
+  4. `max(salience[t]) <= 0.03` → 清音，`f0 = 0`
+
+> 历史问题：旧版模型固定输入 `240000` 采样（15 s），输出被 JS 当成
+> `(T, 2560)` 读取，实际是 `(1, 1504, 360)`。`base = t * 2560` 很快越界，
+> `Float32Array` 返回 `undefined`，argmax 永远停在 0 → 整条曲线锁死在 30 Hz。
+> 修复版把输入改为动态长度、类别数固定 360，并在 JS 侧显式校验形状。
 
 ### ROSVOT MIDI 识别 (`rosvot_mel.onnx`, `rosvot_model.onnx`)
 
@@ -41,14 +58,29 @@
 ### Python (onnxruntime)
 
 ```python
-import onnxruntime as ort
 import numpy as np
+import onnxruntime as ort
 
-# RMVPE 音高检测
+# RMVPE 音高检测（帧数必须 32 对齐）
 sess = ort.InferenceSession("onnx_models/preprocess/rmvpe_model.onnx")
-audio = np.random.randn(16000).astype(np.float32)  # 1秒音频
-outputs = sess.run(None, {"audio": audio.reshape(1, -1)})
-pitch_hidden = outputs[0]  # (batch, time_frames, n_class)
+audio = np.zeros(16000, dtype=np.float32)                 # 1 秒音频
+frames = 1 + len(audio) // 160                            # 101
+aligned = ((frames + 31) // 32) * 32                      # 128
+n_pad = (aligned - 1) * 160                               # 20320
+audio = np.pad(audio, (0, max(0, n_pad - len(audio))))
+salience = sess.run(None, {"audio": audio[None, :]})[0]   # (1, 128, 360)
+
+# 解码：argmax -> ±4 bin 加权平均 cents -> Hz
+CENTS = 20 * np.arange(360) + 1997.3794084376191
+f0 = np.zeros(salience.shape[1], dtype=np.float32)
+for t, row in enumerate(salience[0]):
+    c = int(row.argmax())
+    if row[c] <= 0.03:                                    # 清音
+        continue
+    lo, hi = max(0, c - 4), min(359, c + 4)
+    w = row[lo:hi + 1]
+    f0[t] = 10 * 2 ** ((w * CENTS[lo:hi + 1]).sum() / w.sum() / 1200)
+```
 
 # ROSVOT MIDI 识别
 sess = ort.InferenceSession("onnx_models/preprocess/rosvot_model.onnx")
@@ -63,22 +95,23 @@ note_bd_pred, note_pred, note_lengths = outputs
 ## 导出命令
 
 ```bash
-# 导出所有预处理模型
-python export_preprocess.py --model-type both --output-dir onnx_models/preprocess
+# 修复版 RMVPE（端到端，动态长度，360 类 salience）
+python scripts/export_rmvpe_onnx.py --ckpt rmvpe.pt --out onnx_models/preprocess/rmvpe_model.onnx
+python scripts/export_rmvpe_onnx.py --ckpt rmvpe.pt --out rmvpe_model_int8.onnx --precision int8
 
-# 仅导出 RMVPE
-python export_preprocess.py --model-type rmvpe --output-dir onnx_models/preprocess
+# 导出后自检（与官方 torch 实现逐帧对比）
+python scripts/export_rmvpe_onnx.py --ckpt rmvpe.pt --out /tmp/m.onnx --verify
 
-# 仅导出 ROSVOT
+# 其余预处理模型（ROSVOT 等）沿用原来的导出脚本
 python export_preprocess.py --model-type rosvot --output-dir onnx_models/preprocess
 ```
 
 ## 注意事项
 
-1. **STFT 实现**: 所有模型使用 `return_complex=False` 的 STFT 实现以确保 ONNX 兼容性
-2. **Mel Spectrogram**: 使用 librosa 的 mel 滤波器计算梅尔频谱
-3. **动态轴**: 所有模型支持动态 batch_size 和 seq_len
-4. **GRU 警告**: rmvpe_model 导出时会有 GRU batch_size 警告，保存时确保 batch_size=1
+1. **STFT 实现**: 修复版 RMVPE 用 `conv1d` 分帧（等价 `torch.stft(center=True)`），只依赖 Pad/Conv/Slice，避免 STFT 算子在 DirectML 上的兼容问题
+2. **Mel Spectrogram**: 使用 librosa 的 mel 滤波器（`htk=True`, fmin 30, fmax 8000）计算梅尔频谱
+3. **动态轴**: `audio` 的第 1 维与 `salience` 的 time 维都是动态的，但 **time 必须是 32 的倍数**
+4. **GRU 警告**: 导出时会有 GRU 变长 batch 警告，属正常现象（batch 恒为 1）
 
 ## 依赖
 
