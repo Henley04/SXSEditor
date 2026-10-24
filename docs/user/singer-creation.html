@@ -337,6 +337,18 @@
       <p data-lang="en">When loading a <code>.sxssinger</code> file, SXSEditor validates file format/version compatibility, required fields (name, reference audio), and data integrity (MIDI notes, F0 data). Validation errors are shown in a report dialog; warnings indicate non-critical issues.</p>
       <p data-lang="zh">加载 <code>.sxssinger</code> 文件时，SXSEditor 会校验文件格式/版本兼容性、必填字段（名称、参考音频）和数据完整性（MIDI 音符、F0 数据）。校验错误会显示在报告对话框中；警告表示非关键问题。</p>
 
+      <h3>
+        <span data-lang="en">Editing an Existing Singer File</span>
+        <span data-lang="zh">编辑已有歌手文件</span>
+      </h3>
+      <p data-lang="en">A <code>.sxssinger</code> file can be reopened for editing without going through the creator again. Use <strong>File → Edit Singer File…</strong>, or <strong>Edit Singer File…</strong> in the singer picker dialog. The file opens in the same audio-preprocessing window used during creation, with its notes and F0 curve already loaded — adjust notes, re-run F0/MIDI extraction, then press <strong>Save</strong>.</p>
+      <p data-lang="zh">无需重新走创建流程即可再次编辑 <code>.sxssinger</code> 文件。使用 <strong>文件 → 编辑歌手文件…</strong>，或在歌手选择对话框中选择 <strong>编辑歌手文件…</strong>。文件会在与创建时相同的音频预处理窗口中打开，音符与 F0 曲线已自动载入——可直接调整音符、重新提取 F0/MIDI，然后点击<strong>保存</strong>。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Saves in place.</strong> Saving writes back to the same <code>.sxssinger</code> path. Use a copy first if you want to keep the original.</span><span data-lang="zh"><strong>就地保存。</strong>保存会直接写回同一个 <code>.sxssinger</code> 路径；如需保留原文件，请先复制一份。</span></li>
+        <li><span data-lang="en"><strong>Loaded singers refresh automatically.</strong> If that singer is already in the current project, its notes and F0 are updated on save — no reload needed.</span><span data-lang="zh"><strong>已加载的歌手自动刷新。</strong>若该歌手已在当前项目中，保存后其音符与 F0 会就地更新，无需重新加载。</span></li>
+        <li><span data-lang="en"><strong>Name, color and avatar are preserved</strong> from the file; this window focuses on pitch and note editing.</span><span data-lang="zh"><strong>名称、颜色与头像保持文件中的原值</strong>；本窗口专注音高与音符编辑。</span></li>
+      </ul>
+
       <nav class="doc-pager">
         <a href="quick-start.html">
           <div class="pager-card">
