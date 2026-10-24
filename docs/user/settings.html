@@ -60,8 +60,8 @@
         <span data-lang="zh">设置</span>
       </h1>
 
-      <p data-lang="en">Open Settings from the menu bar: <strong>SXSEditor &gt; Settings</strong>. The Settings window uses a sidebar layout with categories: General, Inference, Audio, and Model. Most settings apply immediately on change (auto-saved with a 300ms debounce); language changes require an app restart.</p>
-      <p data-lang="zh">从菜单栏打开设置：<strong>SXSEditor &gt; Settings</strong>。设置窗口采用侧边栏布局，分类包括：通用、推理、音频和模型。大多数设置在更改后立即生效（300ms 防抖自动保存）；语言更改需要重启应用。</p>
+      <p data-lang="en">Open Settings from the menu bar: <strong>SXSEditor &gt; Settings</strong>. The Settings window uses a sidebar layout with categories: General, Inference, Audio, Model, Updates, and About. Most settings apply immediately on change (auto-saved with a 300ms debounce); language changes require an app restart.</p>
+      <p data-lang="zh">从菜单栏打开设置：<strong>SXSEditor &gt; Settings</strong>。设置窗口采用侧边栏布局，分类包括：通用、推理、音频、模型、更新和关于。大多数设置在更改后立即生效（300ms 防抖自动保存）；语言更改需要重启应用。</p>
 
       <h2>
         <span data-lang="en">General</span>
@@ -199,7 +199,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">CFG Rescale</span><span data-lang="zh">CFG Rescale 系数</span></td>
-            <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
+            <td><span data-lang="en">0.70</span><span data-lang="zh">0.70</span></td>
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Mitigates over-guidance artifacts. Recommended 0.5–0.9.</span><span data-lang="zh">缓解过度引导伪影。推荐 0.5–0.9。</span></td>
           </tr>
@@ -242,7 +242,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">CFG Rescale</span><span data-lang="zh">CFG Rescale 系数</span></td>
-            <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
+            <td><span data-lang="en">0.70</span><span data-lang="zh">0.70</span></td>
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Same as preview.</span><span data-lang="zh">同预览。</span></td>
           </tr>
@@ -353,7 +353,7 @@
           <tr>
             <td><span data-lang="en">Percentile</span><span data-lang="zh">百分位</span></td>
             <td><span data-lang="en">Slider 0.9–0.999. Higher values clip more aggressively.</span><span data-lang="zh">滑块 0.9–0.999。值越高裁剪越激进。</span></td>
-            <td><span data-lang="en">0.999</span><span data-lang="zh">0.999</span></td>
+            <td><span data-lang="en">0.995</span><span data-lang="zh">0.995</span></td>
           </tr>
         </tbody>
       </table>
@@ -373,11 +373,11 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>Constant</strong> (default)</span><span data-lang="zh"><strong>恒定</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>Constant</strong></span><span data-lang="zh"><strong>恒定</strong></span></td>
             <td><span data-lang="en">Same CFG strength throughout all diffusion steps.</span><span data-lang="zh">所有扩散步使用相同的 CFG 强度。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en"><strong>Linear</strong></span><span data-lang="zh"><strong>线性</strong></span></td>
+            <td><span data-lang="en"><strong>Linear</strong> (default)</span><span data-lang="zh"><strong>线性</strong>（默认）</span></td>
             <td><span data-lang="en">CFG strength ramps from high to low across steps.</span><span data-lang="zh">CFG 强度从高到低线性渐变。</span></td>
           </tr>
           <tr>
@@ -607,12 +607,12 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>FP32</strong> (default)</span><span data-lang="zh"><strong>FP32</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>FP16</strong></span><span data-lang="zh"><strong>FP16</strong></span></td>
             <td><span data-lang="en">Half precision. Best balance of quality and speed for discrete GPUs (4GB+ VRAM).</span><span data-lang="zh">半精度。独显（4GB+ 显存）质量与速度的最佳平衡。</span></td>
             <td><span data-lang="en">~1.5 GB</span><span data-lang="zh">约 1.5 GB</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">FP32</span><span data-lang="zh">FP32</span></td>
+            <td><span data-lang="en"><strong>FP32</strong> (default)</span><span data-lang="zh"><strong>FP32</strong>（默认）</span></td>
             <td><span data-lang="en">Full precision. Highest quality, very high VRAM usage. Requires 8GB+ VRAM.</span><span data-lang="zh">全精度。最高音质，显存占用很高。需要 8GB+ 显存。</span></td>
             <td><span data-lang="en">~3 GB</span><span data-lang="zh">约 3 GB</span></td>
           </tr>
@@ -687,7 +687,7 @@
           <tr>
             <td><span data-lang="en">Release diffStep Before Vocoder</span><span data-lang="zh">Vocoder 推理前释放 diffStep</span></td>
             <td><span data-lang="en">Releases the diffStep session after diffusion completes so the vocoder can use the freed ~3–4GB VRAM. Avoids 0x887A0006/TDR black screens. Cost: each vocoder run requires reloading diffStep (~1–3s), slowing multi-segment synthesis. Strongly recommended for SiFiGAN / low-VRAM GPUs.</span><span data-lang="zh">扩散完成后释放 diffStep session，让 vocoder 可使用释放的约 3–4GB 显存。避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（~1–3 秒），多段合成会变慢。SiFiGAN / 低显存显卡强烈建议开启。</span></td>
-            <td><span data-lang="en">On</span><span data-lang="zh">开启</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
           </tr>
         </tbody>
       </table>
