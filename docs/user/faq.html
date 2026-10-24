@@ -386,7 +386,7 @@
       <ul>
         <li><span data-lang="en"><strong>FCPE</strong> (default, recommended): ONNX-based pitch detector with a configurable post-processing pipeline (loudness normalization, silence gating, median smoothing, note quantization). Best extraction quality.</span><span data-lang="zh"><strong>FCPE</strong>（默认，推荐）：基于 ONNX 的音高检测器，配有可配置的后处理流水线（响度归一化、静音门控、中值平滑、音符量化）。提取质量最佳。</span></li>
         <li><span data-lang="en"><strong>Basic Pitch</strong>: Neural network-based, stable results for most scenarios.</span><span data-lang="zh"><strong>Basic Pitch</strong>：基于神经网络，大多数场景结果稳定。</span></li>
-        <li><span data-lang="en"><strong>RMVPE</strong>: Converts F0 pitch curve to notes. Experimental, results may be suboptimal.</span><span data-lang="zh"><strong>RMVPE</strong>：将 F0 音高曲线转为音符。实验性，结果可能不理想。</span></li>
+        <li><span data-lang="en"><strong>RMVPE</strong>: Converts an F0 pitch curve to notes, then extracts notes from it. It works again as of <strong>model v3</strong> — every earlier build shipped a model whose F0 output was read incorrectly, pinning the whole curve at 30 Hz, so results were unusable. Make sure the model has been updated before relying on it.</span><span data-lang="zh"><strong>RMVPE</strong>：将 F0 音高曲线转为音符，再从中提取音符。<strong>模型 v3</strong> 起已恢复可用——此前所有版本都因为 F0 输出被错误解析而把整条曲线锁死在 30 Hz，结果不可用。使用前请确认模型已更新。</span></li>
       </ul>
       <p data-lang="en">Change this in Settings &gt; Audio &gt; MIDI Extraction Tool.</p>
       <p data-lang="zh">在设置 &gt; 音频 &gt; MIDI 提取工具中更改。</p>

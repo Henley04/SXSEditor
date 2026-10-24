@@ -72,8 +72,27 @@
       </div>
 
       <h2>
-        <span data-lang="en">v2 (Current)</span>
-        <span data-lang="zh">v2（当前版本）</span>
+        <span data-lang="en">v3 (Current)</span>
+        <span data-lang="zh">v3（当前版本）</span>
+      </h2>
+
+      <div class="callout danger">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Upgrade immediately — RMVPE is broken in every earlier build.</strong> The F0 curve was pinned at 30 Hz for the whole clip, so <em>Extract F0</em> and <em>audio → MIDI</em> never actually worked. Old and new RMVPE models are mutually incompatible: this build refuses the old file with <code>INVALID_MODEL_OUTPUT</code> instead of degrading silently. Open <em>Model Manager → Update</em> and update before using pitch extraction.</p>
+          <p data-lang="zh"><strong>请立即升级——此前所有版本中的 RMVPE 都是坏的。</strong>整条 F0 曲线锁死在 30 Hz，<em>提取 F0</em> 与 <em>音频转 MIDI</em> 实际从未可用。新旧 RMVPE 模型互不兼容：本版本会以 <code>INVALID_MODEL_OUTPUT</code> 直接拒绝旧模型，而不是静默退化。请先打开 <em>模型管理 → 更新模型</em> 完成升级，再使用音高提取。</p>
+        </div>
+      </div>
+
+      <ul>
+        <li><span data-lang="en"><strong>RMVPE F0 stuck at 30 Hz — fixed</strong> — the old <code>preprocess/rmvpe_model.onnx</code> emits <code>(1, T, 360)</code>, but the detector decoded it as <code>(T frames, 2560 classes)</code>. <code>base = t * 2560</code> ran past the 541,440-element buffer within ~200 frames; out-of-range <code>Float32Array</code> reads return <code>undefined</code>, <code>undefined &gt; -Infinity</code> is false, so argmax stayed at index 0 and every frame mapped to <code>LUT[0] = 30 Hz</code>. The first ~2 s were mis-aligned neighbouring frames (the "random jumping" before the flat line). Measured on a known melody (MIDI 60/62/64/62/67/64/60 @96 BPM): median error is now <strong>0.58 cents</strong> (FP32) / <strong>1.01 cents</strong> (W8), with <strong>0</strong> silence false positives.</span><span data-lang="zh"><strong>RMVPE F0 锁死 30 Hz——已修复</strong>——旧 <code>preprocess/rmvpe_model.onnx</code> 输出 <code>(1, T, 360)</code>，检测器却按 <code>(T 帧, 2560 类)</code> 解码。<code>base = t * 2560</code> 在约 200 帧后就越过 541,440 个元素的缓冲区；<code>Float32Array</code> 越界返回 <code>undefined</code>，<code>undefined &gt; -Infinity</code> 恒假，argmax 永远停在索引 0，每帧都映射到 <code>LUT[0] = 30 Hz</code>。最前 ~2 秒读到的是错位的邻帧数据（也就是平线之前那段乱跳）。用已知旋律（MIDI 60/62/64/62/67/64/60 @96 BPM）实测：中位误差现为 <strong>0.58 音分</strong>（FP32）/ <strong>1.01 音分</strong>（W8），静音假阳性 <strong>0</strong>。</span></li>
+        <li><span data-lang="en"><strong>New RMVPE I/O contract</strong> — input is <code>audio (1, N)</code> with <strong>dynamic length</strong> (the mel frame count must be a multiple of 32; the app zero-pads automatically), output is <code>salience (1, T, 360)</code>. Decoding is argmax → ±4-bin weighted cents → <code>f0 = 10·2^(cents/1200)</code>, with <code>max(salience) ≤ 0.03</code> treated as unvoiced (<code>f0 = 0</code>). The previous model was hard-wired to 240,000 samples (15 s) and longer or shorter clips simply failed.</span><span data-lang="zh"><strong>RMVPE 接口变更</strong>——输入为 <code>audio (1, N)</code>，<strong>动态长度</strong>（mel 帧数需为 32 的倍数，应用会自动补零），输出为 <code>salience (1, T, 360)</code>。解码为 argmax → ±4 bin 加权 cents → <code>f0 = 10·2^(cents/1200)</code>，<code>max(salience) ≤ 0.03</code> 判为清音（<code>f0 = 0</code>）。旧模型固定 240,000 采样（15 秒），更长或更短的音频直接失败。</span></li>
+        <li><span data-lang="en"><strong>Per-repo version numbers</strong> — each ModelScope repository keeps its own tag sequence and was bumped by one: <code>SoulX-Singer-onnx-directml</code> <strong>v2</strong>, <code>-fp16</code> <strong>v3</strong>, <code>-int8</code> <strong>v1</strong>, <code>-int8-dynamic</code> <strong>v1</strong>. Model Manager compares against the tag of the precision you actually have installed, so the number shown there is the authoritative one. The INT8 build is weight-only (INT8 weights + <code>DequantizeLinear</code> → FP32 <code>Conv</code>), which keeps it compatible with the NPU profile.</span><span data-lang="zh"><strong>各仓库版本号</strong>——每个 ModelScope 仓库维护自己的标签序列，均 +1：<code>SoulX-Singer-onnx-directml</code> <strong>v2</strong>、<code>-fp16</code> <strong>v3</strong>、<code>-int8</code> <strong>v1</strong>、<code>-int8-dynamic</code> <strong>v1</strong>。模型管理是按你当前安装精度对应的仓库标签比较的，以那里显示的版本号为准。INT8 版本采用 weight-only 量化（INT8 权重 + <code>DequantizeLinear</code> → FP32 <code>Conv</code>），保持与 NPU 配置兼容。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">v2</span>
+        <span data-lang="zh">v2</span>
       </h2>
       <ul>
         <li><span data-lang="en"><strong>TRT-RTX long-generation fix</strong> — the RoPE position <code>cos/sin</code> tables are now baked directly into the diffusion model's weights (<code>[1, 8192, 64]</code> fp16, 8192-frame capacity), removing the runtime fp32 position <code>MatMul</code>. TensorRT-RTX (the NvTensorRtRtx / WinML execution provider) executed that <code>MatMul</code> on an 11-bit mantissa grid, rounding odd-frame phases for positions beyond 2048 and producing a tail energy dip / loudness collapse on longer generations. The fix applies to every execution provider.</span><span data-lang="zh"><strong>TRT-RTX 长片段修复</strong>——RoPE 位置 <code>cos/sin</code> 表现在直接烘焙进扩散模型权重（<code>[1, 8192, 64]</code> fp16，8192 帧容量），移除了运行时的 fp32 位置 <code>MatMul</code>。TensorRT-RTX（NvTensorRtRtx / WinML 执行提供者）会以 11 位尾数精度执行该 <code>MatMul</code>，导致 2048 帧之后奇数帧相位被舍入，长片段生成出现尾部能量凹陷 / 响度塌缩。该修复对所有执行提供者生效。</span></li>
