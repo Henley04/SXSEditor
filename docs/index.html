@@ -189,7 +189,7 @@ html[data-theme="dark"] .hud-b.playing .hud-meta b{color:var(--yellow)}
 /* ============ 功能 ============ */
 .features{background:var(--bg)}
 .f-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;margin-top:38px}
-.f-card{position:relative;background:var(--panel);border:2px solid var(--line);padding:24px;clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);transition:transform .22s,border-color .22s,filter .22s,background-color .35s}
+.f-card{position:relative;display:flex;flex-direction:column;background:var(--panel);border:2px solid var(--line);padding:24px;clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);transition:transform .22s,border-color .22s,filter .22s,background-color .35s}
 .f-card:hover{transform:translateY(-5px);border-color:var(--blue);filter:drop-shadow(6px 6px 0 var(--hard))}
 .f-idx{position:absolute;top:14px;right:18px;font-family:var(--num);font-weight:700;font-size:30px;color:transparent;-webkit-text-stroke:1.5px var(--line2);transition:.25s}
 .f-card:hover .f-idx{-webkit-text-stroke:1.5px var(--blue)}
@@ -202,12 +202,15 @@ html[data-theme="dark"] .f-ic.n{background:var(--blue-soft);color:var(--yellow)}
 .f-card h3{font-family:var(--disp);font-weight:400;font-size:21px;letter-spacing:.04em;margin-bottom:8px}
 .f-card p{font-size:13.5px;color:var(--ink2);margin-bottom:14px}
 .f-tags{display:flex;gap:8px;flex-wrap:wrap}
-.f-a{grid-column:span 7;grid-row:span 2;display:flex;flex-direction:column}
-.f-b,.f-c{grid-column:span 5}
-.f-d{grid-column:span 5}.f-e{grid-column:span 4}.f-f{grid-column:span 3}
-.scope-box{margin-top:auto;border:1.5px solid var(--line);background:var(--panel2)}
-#scope{display:block;width:100%;height:96px}
-.f-mini-stats{display:flex;gap:0;margin-top:14px;border:1.5px solid var(--line)}
+.f-card > .f-tags:last-child{margin-top:auto;padding-top:12px}
+.f-card > .plug-chips:last-child{margin-top:auto}
+.f-a{grid-column:span 7;display:flex;flex-direction:column}
+.f-b{grid-column:span 5}
+.f-c{grid-column:span 5}
+.f-d{grid-column:span 7}
+.f-e,.f-f{grid-column:span 6}
+.f-g,.f-h{grid-column:span 6}
+.f-mini-stats{display:flex;gap:0;margin-top:auto;padding-top:14px;border-top:1.5px solid var(--line)}
 .f-mini-stats div{flex:1;padding:8px 12px;border-right:1.5px solid var(--line);text-align:center}
 .f-mini-stats div:last-child{border-right:none}
 .f-mini-stats b{display:block;font-family:var(--num);font-size:19px;font-weight:700;color:var(--blue)}
@@ -244,22 +247,50 @@ html[data-theme="dark"] .zh-cell code em{color:var(--yellow)}
 .f-card.in .en-ph:nth-child(3) .en-bar i{animation-delay:.24s}
 .f-card.in .en-ph:nth-child(4) .en-bar i{animation-delay:.36s}
 @keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-.faders{display:grid;gap:11px;margin-bottom:14px}
-.fader{position:relative;height:6px;background:var(--line);border-radius:0}
-.fader::before{content:"";position:absolute;left:0;top:0;bottom:0;background:var(--blue);width:40%}
-.fader i{position:absolute;top:50%;width:13px;height:19px;background:var(--yellow);border:2px solid var(--hard-solid);transform:translate(-50%,-50%);left:40%;animation:fd 4.6s ease-in-out infinite}
-.fader:nth-child(1) i{animation-delay:0s}
-.fader:nth-child(2) i{animation-delay:.7s;animation-duration:5.4s}
-.fader:nth-child(3) i{animation-delay:1.3s;animation-duration:4.1s}
-.fader:nth-child(4) i{animation-delay:.4s;animation-duration:6s}
-@keyframes fd{0%,100%{left:24%}50%{left:74%}}
+
+/* 合成管线（真实流程示意） */
+.pipe{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:2px 0 14px;font-family:var(--num);font-size:11.5px;font-weight:700;letter-spacing:.04em}
+.pipe span{border:1.5px solid var(--line2);background:var(--panel2);padding:4px 9px}
+.pipe span.hot{border-color:var(--blue);color:var(--blue);background:var(--blue-soft)}
+.pipe i{font-style:normal;color:var(--ink2)}
+
+/* 能力清单 */
+.cap-list{list-style:none;margin:0 0 14px;display:grid;gap:6px}
+.cap-list li{display:flex;justify-content:space-between;gap:10px;padding-bottom:5px;border-bottom:1px dashed var(--line2);font-size:12.5px}
+.cap-list b{font-weight:700;flex-shrink:0}
+.cap-list span{color:var(--ink2);text-align:right}
+
+/* MCP 终端片段 */
+.mcp-console{border:1.5px solid var(--line);border-left:3px solid var(--blue);background:var(--navy);color:#dfe6f5;padding:10px 12px;margin-bottom:14px;font-family:var(--num);font-size:11.5px;line-height:1.8;overflow:hidden}
+.mcp-line{display:flex;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcp-line b{color:#fff}
+.mcp-arg{color:#8fa6c8;overflow:hidden;text-overflow:ellipsis}
+.mcp-p{color:var(--yellow);flex-shrink:0}
+.mcp-line.ok{color:#7ee2a8}
+.mcp-mini{font-family:var(--num);font-size:10.5px;line-height:1.95;color:#cfd8ea;margin-bottom:8px}
+.mcp-mini span{color:var(--yellow);margin-right:6px}
+.mcp-mini b{color:#fff;font-weight:700}
+.mcp-mini .ok{color:#7ee2a8}
+
+/* 音高检测器实测指标 */
+.det-table{border:1.5px solid var(--line);margin-bottom:14px}
+.det-row{display:grid;grid-template-columns:1fr 1.25fr .75fr;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px;align-items:center}
+.det-row:last-child{border-bottom:none}
+.det-head{background:var(--panel2);font-family:var(--num);font-size:10px;letter-spacing:.05em;color:var(--ink2);text-transform:uppercase}
+.det-row b{font-weight:700;font-family:var(--num)}
+.det-row i{font-style:normal;color:var(--ink2);font-size:10.5px}
+.det-row .ok{color:#1f9d55;font-weight:700;font-family:var(--num)}
+
+/* 精度档位 */
+.prec-list{list-style:none;margin:0 0 14px;display:grid;gap:6px}
+.prec-list li{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:5px 9px;background:var(--panel2);border-left:2px solid var(--blue)}
+.prec-list b{font-family:var(--num);font-weight:700}
+.prec-list span{color:var(--ink2)}
+.f-note{font-size:11.5px;line-height:1.6;color:var(--ink2);margin:0 0 12px}
+
 .plug-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
 .plug-chips span{font-family:var(--num);font-weight:700;font-size:12.5px;letter-spacing:.08em;padding:5px 12px;border:2px solid var(--line2);color:var(--ink);background:var(--panel2);transition:.2s}
 .f-card:hover .plug-chips span{border-color:var(--blue)}
-.sync-bar{height:10px;border:1.5px solid var(--line2);background:var(--panel2);margin-bottom:8px}
-.sync-fill{height:100%;width:0;background:repeating-linear-gradient(-45deg,var(--blue) 0 8px,var(--blue2) 8px 16px);transition:width 1.4s cubic-bezier(.22,.9,.3,1)}
-.in .sync-fill{width:78%}
-.sync-t{font-size:11.5px;color:var(--ink2);font-family:var(--num);font-weight:600;letter-spacing:.05em}
 
 /* ============ 工作流 ============ */
 .voices{background:var(--bg2);border-top:2px solid var(--line);border-bottom:2px solid var(--line)}
@@ -565,10 +596,14 @@ html[data-theme="dark"] footer{background:#070B14}
       </div>
 
       <div class="hud hud-a">
-        <div class="hud-h"><span class="live"></span><span data-i18n="hero.hud1">ONNX Runtime 推理</span></div>
+        <div class="hud-h"><span class="live"></span><span data-i18n="hero.hud1">MCP · AI 直接驱动编辑器</span></div>
         <div class="hud-bd">
-          <div class="spec" id="spec" aria-hidden="true"></div>
-          <div class="hud-meta"><span data-i18n="hero.hud1meta">DirectML · GPU</span><b data-i18n="hero.hud1val">6x 加速</b></div>
+          <div class="mcp-mini" aria-hidden="true">
+            <div><span>&#8250;</span><b>project.get</b></div>
+            <div><span>&#8250;</span><b>audio.extractMidi</b></div>
+            <div class="ok"><span>&#10003;</span>12 notes &#183; 41 ms</div>
+          </div>
+          <div class="hud-meta"><span data-i18n="hero.hud1meta">Claude &#183; Cursor &#183; 脚本</span><b data-i18n="hero.hud1val">44 个方法</b></div>
         </div>
       </div>
 
@@ -601,11 +636,17 @@ html[data-theme="dark"] footer{background:#070B14}
         <span class="f-idx">01</span>
         <div class="f-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h3l2.5-7 4 14 2.5-7h6"/></svg></div>
         <h3 data-i18n="feat.f1.h">SoulX-Singer 神经合成</h3>
-        <p data-i18n="feat.f1.p">深度学习歌声合成模型，运行于 ONNX Runtime 之上。DirectML GPU 加速将声码器推理速度提升 6 倍，mel 频谱前端信噪比从 49.86 dB 提升到 83.54 dB。中英日三语跨语种合成，同一模型自由演唱多语言曲目。</p>
+        <p data-i18n="feat.f1.p">深度学习歌声合成模型，跑在 ONNX Runtime 上。DirectML GPU 让声码器快 6 倍，mel 前端信噪比从 49.86 dB 提到 83.54 dB。中英日三语共用一套音色，换语言不用换歌手。分片级合成缓存、EBU R128 响度归一化与 48 kHz 导出都在同一条管线里，改一个音符只重算那一片。</p>
+        <div class="pipe" aria-hidden="true">
+          <span data-i18n="feat.f1.pipe1">参考音频</span><i>→</i>
+          <span data-i18n="feat.f1.pipe2">mel</span><i>→</i>
+          <span class="hot" data-i18n="feat.f1.pipe3">diffusion ×N</span><i>→</i>
+          <span data-i18n="feat.f1.pipe4">声码器</span><i>→</i>
+          <span>48 kHz</span>
+        </div>
         <div class="f-tags">
           <span class="tagc hot" data-i18n="feat.f1.t1">AI 声线</span><span class="tagc" data-i18n="feat.f1.t2">跨语种合成</span><span class="tagc" data-i18n="feat.f1.t3">ONNX opset 20</span>
         </div>
-        <div class="scope-box" style="margin-top:18px"><canvas id="scope"></canvas></div>
         <div class="f-mini-stats">
           <div><b>6x</b><span data-i18n="feat.f1.s1">GPU 加速比</span></div>
           <div><b>83dB</b><span data-i18n="feat.f1.s2">mel SNR</span></div>
@@ -617,28 +658,58 @@ html[data-theme="dark"] footer{background:#070B14}
         <span class="f-idx">02</span>
         <div class="f-ic y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M8 4v9M13 4v9M18 4v9" stroke-width="1.6"/></svg></div>
         <h3 data-i18n="feat.f2.h">钢琴卷帘编辑器</h3>
-        <p data-i18n="feat.f2.p">音符、歌词、音高曲线、音量/声像包络，以及音素级边界编辑。所画即所听，参数修改即时反馈。</p>
-        <div class="roll f-roll" id="featRoll"></div>
+        <p data-i18n="feat.f2.p">音符、歌词、音高、包络、音素边界，五层参数在同一张画布上改，改完立刻能听到差别。</p>
+        <ul class="cap-list">
+          <li><b data-i18n="feat.f2.c1">音符</b><span data-i18n="feat.f2.c1s">拖动 / 缩放 / 吸附小节</span></li>
+          <li><b data-i18n="feat.f2.c2">音高笔刷</b><span data-i18n="feat.f2.c2s">手绘滑音与颤音</span></li>
+          <li><b data-i18n="feat.f2.c3">包络</b><span data-i18n="feat.f2.c3s">音量 / 声像逐帧曲线</span></li>
+          <li><b data-i18n="feat.f2.c4">音素边界</b><span data-i18n="feat.f2.c4s">逐音素调时值与过渡</span></li>
+        </ul>
         <div class="f-tags"><span class="tagc" data-i18n="feat.f2.t1">音高笔刷</span><span class="tagc" data-i18n="feat.f2.t2">MIDI 导入</span><span class="tagc" data-i18n="feat.f2.t3">音素边界</span></div>
       </article>
 
       <article class="f-card f-c reveal" style="--d:.14s">
         <span class="f-idx">03</span>
-        <div class="f-ic c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="16.5" r="2.4"/></svg></div>
-        <h3 data-i18n="feat.f3.h">歌词自动音素化</h3>
-        <p data-i18n="feat.f3.p">歌词直接变音素：中文汉字自动生成带声调的 zh_ 音节音素（xīng → zh_xing1）；英文单词经 CMUdict 拆为 ARPAbet 音素，并按 MFA 对齐时长统计逐帧分配，短音符元音优先。</p>
+        <div class="f-ic c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></div>
+        <h3 data-i18n="feat.f3.h">AI 直连：内置 MCP 服务</h3>
+        <p data-i18n="feat.f3.p">编辑器自带 MCP 端点，Claude、Cursor 或任意脚本能直接读工程、写音符、跑渲染、导出音频。HTTP 与 stdio 共用同一份 schema。</p>
+        <div class="mcp-console">
+          <div class="mcp-line"><span class="mcp-p">›</span><b>project.apply</b><span class="mcp-arg">{ notes: 12, pitch: 64 }</span></div>
+          <div class="mcp-line ok"><span class="mcp-p">✓</span><span data-i18n="feat.f3.res">12 个音符已写入 · 耗时 41 ms</span></div>
+        </div>
+        <div class="f-tags"><span class="tagc hot">44 methods</span><span class="tagc" data-i18n="feat.f3.t1">本地回环</span><span class="tagc" data-i18n="feat.f3.t2">Bearer token</span></div>
+      </article>
+
+      <article class="f-card f-d reveal" style="--d:.1s">
+        <span class="f-idx">04</span>
+        <div class="f-ic n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="14" r="2" fill="currentColor"/><circle cx="12" cy="9" r="2" fill="currentColor"/><circle cx="19" cy="16" r="2" fill="currentColor"/></svg></div>
+        <h3 data-i18n="feat.f4.h">FCPE / RMVPE 自动提取 MIDI 与 F0</h3>
+        <p data-i18n="feat.f4.p">两条音高检测引擎并行可选。FCPE 负责日常提取，RMVPE 给出更平滑的曲线；模型接受任意长度，静音段落不再冒出假音符。</p>
+        <div class="det-table">
+          <div class="det-row det-head"><span data-i18n="feat.f4.c1">引擎</span><span data-i18n="feat.f4.c2">有声区中位误差</span><span data-i18n="feat.f4.c3">静音假阳性</span></div>
+          <div class="det-row"><b>FCPE</b><span>3.8 <i data-i18n="feat.f4.unit">音分</i></span><span class="ok">0</span></div>
+          <div class="det-row"><b>RMVPE</b><span>2.6 <i data-i18n="feat.f4.unit">音分</i></span><span class="ok">0</span></div>
+        </div>
+        <div class="f-tags"><span class="tagc" data-i18n="feat.f4.t1">动态长度</span><span class="tagc" data-i18n="feat.f4.t2">32 帧对齐</span><span class="tagc" data-i18n="feat.f4.t3">清音门限</span></div>
+      </article>
+
+      <article class="f-card f-e reveal" style="--d:.16s">
+        <span class="f-idx">05</span>
+        <div class="f-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="16.5" r="2.4"/></svg></div>
+        <h3 data-i18n="feat.f5.h">歌词自动音素化</h3>
+        <p data-i18n="feat.f5.p">歌词直接变音素：中文自动带声调（xīng → zh_xing1），英文经 CMUdict 拆成 ARPAbet，再按 MFA 时长统计逐帧分配。</p>
         <div class="alr alr-zh">
-          <span class="alr-badge" data-i18n="feat.f3.zhbadge">中文 · 自动声调</span>
+          <span class="alr-badge" data-i18n="feat.f5.zhbadge">中文 · 自动声调</span>
           <div class="zh-grid">
             <div class="zh-cell"><b>星</b><i>xīng</i><code>zh_xing<em>1</em></code></div>
             <div class="zh-cell"><b>辉</b><i>huī</i><code>zh_hui<em>1</em></code></div>
             <div class="zh-cell"><b>穹</b><i>qióng</i><code>zh_qiong<em>2</em></code></div>
             <div class="zh-cell"><b>响</b><i>xiǎng</i><code>zh_xiang<em>3</em></code></div>
           </div>
-          <div class="alr-cap" data-i18n="feat.f3.zhcap">pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）</div>
+          <div class="alr-cap" data-i18n="feat.f5.zhcap">pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）</div>
         </div>
         <div class="alr alr-en">
-          <span class="alr-badge" data-i18n="feat.f3.enbadge">ENGLISH · G2P + DURATION</span>
+          <span class="alr-badge" data-i18n="feat.f5.enbadge">ENGLISH · G2P + DURATION</span>
           <div class="en-flow">
             <span class="en-word">singer</span><span class="en-arrow">→</span>
             <div class="en-phones">
@@ -648,35 +719,39 @@ html[data-theme="dark"] footer{background:#070B14}
               <div class="en-ph vow"><span class="phn"><small>en_</small>ER0</span><span class="en-bar"><i style="width:82%"></i></span><span class="ms">90ms</span></div>
             </div>
           </div>
-          <div class="alr-cap" data-i18n="feat.f3.encap">CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first</div>
+          <div class="alr-cap" data-i18n="feat.f5.encap">CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first</div>
         </div>
-        <div class="f-tags"><span class="tagc" data-i18n="feat.f3.t1">中文自动声调</span><span class="tagc" data-i18n="feat.f3.t2">英文音素时长分配</span></div>
+        <div class="f-tags"><span class="tagc" data-i18n="feat.f5.t1">中文自动声调</span><span class="tagc" data-i18n="feat.f5.t2">英文音素时长分配</span></div>
       </article>
 
-      <article class="f-card f-d reveal" style="--d:.1s">
-        <span class="f-idx">04</span>
-        <div class="f-ic n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="14" r="2" fill="currentColor"/><circle cx="12" cy="9" r="2" fill="currentColor"/><circle cx="19" cy="16" r="2" fill="currentColor"/></svg></div>
-        <h3 data-i18n="feat.f4.h">多精度模型共存</h3>
-        <p data-i18n="feat.f4.p">FP32（推荐）/ FP16 / INT8 / INT8-NPU 多精度模型共存，切换无需重新下载。W16A32 量化在降低显存占用的同时接近 FP32 质量。</p>
-        <div class="faders"><span class="fader"><i></i></span><span class="fader"><i></i></span><span class="fader"><i></i></span><span class="fader"><i></i></span></div>
-        <div class="f-tags"><span class="tagc">FP32</span><span class="tagc">FP16</span><span class="tagc">INT8</span></div>
+      <article class="f-card f-f reveal" style="--d:.2s">
+        <span class="f-idx">06</span>
+        <div class="f-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 18V9M10 18V5M16 18v-6M22 18v-9"/></svg></div>
+        <h3 data-i18n="feat.f6.h">多精度模型共存</h3>
+        <p data-i18n="feat.f6.p">同一套工程，四种精度随时切换，不用重新下载。</p>
+        <ul class="prec-list">
+          <li><b>FP32</b><span data-i18n="feat.f6.p1">质量优先（推荐）</span></li>
+          <li><b>FP16</b><span data-i18n="feat.f6.p2">显存减半，W16A32</span></li>
+          <li><b>INT8</b><span data-i18n="feat.f6.p3">体积最小</span></li>
+          <li><b>INT8-NPU</b><span data-i18n="feat.f6.p4">面向 Intel NPU</span></li>
+        </ul>
+        <p class="f-note" data-i18n="feat.f6.note">切换精度无需重启；各精度分目录共存，互不覆盖。</p>
       </article>
 
-      <article class="f-card f-e reveal" style="--d:.16s">
-        <span class="f-idx">05</span>
-        <div class="f-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M7 9h10v4a5 5 0 0 1-10 0zM12 18v3"/></svg></div>
-        <h3 data-i18n="feat.f5.h">多后端推理</h3>
-        <p data-i18n="feat.f5.p">单一二进制支持 DirectML GPU、WebNN NPU/GPU 与 CPU 回退，自动选择最优后端。</p>
+      <article class="f-card f-g reveal" style="--d:.24s">
+        <span class="f-idx">07</span>
+        <div class="f-ic y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M7 9h10v4a5 5 0 0 1-10 0zM12 18v3"/></svg></div>
+        <h3 data-i18n="feat.f7.h">多后端推理</h3>
+        <p data-i18n="feat.f7.p">一个二进制覆盖 DirectML GPU、WebNN NPU/GPU 与 CPU，自动挑最优，失败自动回退。</p>
         <div class="plug-chips"><span>DirectML</span><span>WebNN</span><span>NPU</span><span>CPU</span></div>
       </article>
 
-      <article class="f-card f-f reveal" style="--d:.22s">
-        <span class="f-idx">06</span>
-        <div class="f-ic y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 17.4 10 3.8 3.8 0 0 1 17 18z"/></svg></div>
-        <h3 data-i18n="feat.f6.h">音频转 MIDI</h3>
-        <p data-i18n="feat.f6.p">FCPE 音高检测器（默认）或 basic_pitch 将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。</p>
-        <div class="sync-bar"><div class="sync-fill"></div></div>
-        <span class="sync-t" data-i18n="feat.f6.t">F0 / MIDI 自动提取</span>
+      <article class="f-card f-h reveal" style="--d:.28s">
+        <span class="f-idx">08</span>
+        <div class="f-ic c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 17.4 10 3.8 3.8 0 0 1 17 18z"/><path d="M12 12v6M9.5 14.5L12 12l2.5 2.5"/></svg></div>
+        <h3 data-i18n="feat.f8.h">插件式推理后端</h3>
+        <p data-i18n="feat.f8.p">内置管线不是唯一选择：插件可以接管推理后端，用自己的模型和参数，工程、播放、导出照常工作。</p>
+        <div class="plug-chips"><span data-i18n="feat.f8.c1">自定义模型</span><span data-i18n="feat.f8.c2">同协议</span></div>
       </article>
     </div>
   </div>
@@ -1040,18 +1115,18 @@ var I18N={
     "hero.hud1":"ONNX Runtime 推理","hero.hud1meta":"DirectML · GPU","hero.hud1val":"6x 加速",
     "hero.play":"试听 Demo","hero.pause":"暂停",
     "feat.title":"核心功能","feat.sub":"为歌声合成而生的创作工作台",
-    "feat.f1.h":"SoulX-Singer 神经合成","feat.f1.p":"深度学习歌声合成模型，运行于 ONNX Runtime 之上。DirectML GPU 加速将声码器推理速度提升 6 倍，mel 频谱前端信噪比从 49.86 dB 提升到 83.54 dB。中英日三语跨语种合成，同一模型自由演唱多语言曲目。",
+    "feat.f1.pipe1":"参考音频","feat.f1.pipe2":"mel","feat.f1.pipe3":"diffusion ×N","feat.f1.pipe4":"声码器","feat.f2.c1":"音符","feat.f2.c1s":"拖动 / 缩放 / 吸附小节","feat.f2.c2":"音高笔刷","feat.f2.c2s":"手绘滑音与颤音","feat.f2.c3":"包络","feat.f2.c3s":"音量 / 声像逐帧曲线","feat.f2.c4":"音素边界","feat.f2.c4s":"逐音素调时值与过渡","feat.f3.res":"12 个音符已写入 · 耗时 41 ms","feat.f4.c1":"引擎","feat.f4.c2":"有声区中位误差","feat.f4.c3":"静音假阳性","feat.f4.unit":"音分","feat.f4.t1":"动态长度","feat.f4.t2":"32 帧对齐","feat.f4.t3":"清音门限","feat.f5.zhbadge":"中文 · 自动声调","feat.f5.zhcap":"pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）","feat.f5.enbadge":"ENGLISH · G2P + DURATION","feat.f5.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first","feat.f5.t1":"中文自动声调","feat.f5.t2":"英文音素时长分配","feat.f6.p1":"质量优先（推荐）","feat.f6.p2":"显存减半，W16A32","feat.f6.p3":"体积最小","feat.f6.p4":"面向 Intel NPU","feat.f7.h":"多后端推理","feat.f7.p":"一个二进制覆盖 DirectML GPU、WebNN NPU/GPU 与 CPU，自动挑最优，失败自动回退。","feat.f8.h":"插件式推理后端","feat.f8.p":"内置管线不是唯一选择：插件可以接管推理后端，用自己的模型和参数，工程、播放、导出照常工作。","feat.f8.c1":"自定义模型","feat.f8.c2":"同协议","feat.f6.note":"切换精度无需重启；各精度分目录共存，互不覆盖。","feat.f1.h":"SoulX-Singer 神经合成","feat.f1.p":"深度学习歌声合成模型，跑在 ONNX Runtime 上。DirectML GPU 让声码器快 6 倍，mel 前端信噪比从 49.86 dB 提到 83.54 dB。中英日三语共用一套音色，换语言不用换歌手。分片级合成缓存、EBU R128 响度归一化与 48 kHz 导出都在同一条管线里，改一个音符只重算那一片。",
     "feat.f1.t1":"AI 声线","feat.f1.t2":"跨语种合成","feat.f1.t3":"ONNX opset 20",
     "feat.f1.s1":"GPU 加速比","feat.f1.s2":"mel SNR","feat.f1.s3":"量化精度",
-    "feat.f2.h":"钢琴卷帘编辑器","feat.f2.p":"音符、歌词、音高曲线、音量/声像包络，以及音素级边界编辑。所画即所听，参数修改即时反馈。",
+    "feat.f2.h":"钢琴卷帘编辑器","feat.f2.p":"音符、歌词、音高、包络、音素边界，五层参数在同一张画布上改，改完立刻能听到差别。",
     "feat.f2.t1":"音高笔刷","feat.f2.t2":"MIDI 导入","feat.f2.t3":"音素边界",
-    "feat.f3.h":"歌词自动音素化","feat.f3.p":"歌词直接变音素：中文汉字自动生成带声调的 zh_ 音节音素（xīng → zh_xing1）；英文单词经 CMUdict 拆为 ARPAbet 音素，并按 MFA 对齐时长统计逐帧分配，短音符元音优先。",
+    "feat.f3.h":"AI 直连：内置 MCP 服务","feat.f3.p":"编辑器自带 MCP 端点，Claude、Cursor 或任意脚本能直接读工程、写音符、跑渲染、导出音频。HTTP 与 stdio 共用同一份 schema。",
     "feat.f3.zhbadge":"中文 · 自动声调","feat.f3.zhcap":"pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）",
     "feat.f3.enbadge":"英文 · 词转音素 + 时长","feat.f3.encap":"CMUdict ARPAbet 音素 · MFA 对齐时长统计（中位数）· 20ms/帧 · 短音符元音优先",
-    "feat.f3.t1":"中文自动声调","feat.f3.t2":"英文音素时长分配",
-    "feat.f4.h":"多精度模型共存","feat.f4.p":"FP32（推荐）/ FP16 / INT8 / INT8-NPU 多精度模型共存，切换无需重新下载。W16A32 量化在降低显存占用的同时接近 FP32 质量。",
-    "feat.f5.h":"多后端推理","feat.f5.p":"单一二进制支持 DirectML GPU、WebNN NPU/GPU 与 CPU 回退，自动选择最优后端。",
-    "feat.f6.h":"音频转 MIDI","feat.f6.p":"FCPE 音高检测器（默认）或 basic_pitch 将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。","feat.f6.t":"F0 / MIDI 自动提取",
+    "feat.f3.t1":"本地回环","feat.f3.t2":"Bearer token",
+    "feat.f4.h":"FCPE / RMVPE 自动提取 MIDI 与 F0","feat.f4.p":"两条音高检测引擎并行可选。FCPE 负责日常提取，RMVPE 给出更平滑的曲线；模型接受任意长度，静音段落不再冒出假音符。",
+    "feat.f5.h":"歌词自动音素化","feat.f5.p":"歌词直接变音素：中文自动带声调（xīng → zh_xing1），英文经 CMUdict 拆成 ARPAbet，再按 MFA 时长统计逐帧分配。",
+    "feat.f6.h":"多精度模型共存","feat.f6.p":"同一套工程，四种精度随时切换，不用重新下载。","feat.f6.t":"F0 / MIDI 自动提取",
     "news.title":"版本情报","news.sub":"应用公告 · 模型更新 · 缺陷修复",
     "news.tab.all":"全部","news.tab.notice":"公告","news.tab.event":"活动","news.tab.patch":"更新",
     "news.tag.patch":"更新","news.tag.notice":"公告","news.tag.event":"活动",
@@ -1093,21 +1168,21 @@ var I18N={
     "hero.note":"<i>Windows (primary) · macOS/Linux (source build, CPU-only, unverified)</i> ｜ MIT licensed ｜ Trilingual synthesis: CN · EN · JP",
     "stat.lang":"Synth Languages","stat.prec":"Model Precisions","stat.gpu":"GPU Speedup",
     "hero.tag1":"Real-time Synthesis","hero.tag2":"Range C2 – G5","hero.tag3":"CN · EN · JP Cross-lingual",
-    "hero.hud1":"ONNX Runtime Inference","hero.hud1meta":"DirectML · GPU","hero.hud1val":"6x Faster",
+    "hero.hud1":"MCP · AI 直接驱动编辑器","hero.hud1meta":"Claude · Cursor · 脚本","hero.hud1val":"44 个方法",
     "hero.play":"Play Demo","hero.pause":"Pause",
     "feat.title":"Features","feat.sub":"A workbench built for singing synthesis",
-    "feat.f1.h":"SoulX-Singer Neural Synthesis","feat.f1.p":"Deep-learning singing synthesis model running on ONNX Runtime. DirectML GPU acceleration speeds up vocoder inference by 6x; mel-frontend SNR rises from 49.86 dB to 83.54 dB. Trilingual cross-lingual synthesis — one model sings freely across CN / EN / JP repertoires.",
+    "feat.f1.pipe1":"reference","feat.f1.pipe2":"mel","feat.f1.pipe3":"diffusion ×N","feat.f1.pipe4":"vocoder","feat.f2.c1":"Notes","feat.f2.c1s":"drag / resize / bar snap","feat.f2.c2":"Pitch brush","feat.f2.c2s":"draw portamento and vibrato","feat.f2.c3":"Envelopes","feat.f2.c3s":"per-frame volume and pan","feat.f2.c4":"Phoneme bounds","feat.f2.c4s":"tune each phoneme's timing","feat.f3.res":"12 notes written · 41 ms","feat.f4.c1":"Engine","feat.f4.c2":"median error (voiced)","feat.f4.c3":"silence false positives","feat.f4.unit":"cents","feat.f4.t1":"any length","feat.f4.t2":"32-frame aligned","feat.f4.t3":"voicing gate","feat.f5.zhbadge":"CHINESE · AUTO TONE","feat.f5.zhcap":"pinyin-pro tone marking · neutral tone = 5 · manual override (e.g. 星3)","feat.f5.enbadge":"ENGLISH · G2P + DURATION","feat.f5.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first","feat.f5.t1":"Chinese auto tone","feat.f5.t2":"English phoneme timing","feat.f6.p1":"quality first (recommended)","feat.f6.p2":"half the VRAM, W16A32","feat.f6.p3":"smallest footprint","feat.f6.p4":"for Intel NPU","feat.f7.h":"Multi-backend inference","feat.f7.p":"One binary covers DirectML GPU, WebNN NPU/GPU and CPU. Best backend is picked automatically, with fallback when it fails.","feat.f8.h":"Pluggable inference backends","feat.f8.p":"The built-in pipeline is not the only option: a plugin can take over inference with its own model and parameters, while editing, playback and export keep working.","feat.f8.c1":"custom model","feat.f8.c2":"same protocol","hero.hud1":"MCP · let an agent drive the editor","hero.hud1meta":"Claude · Cursor · scripts","hero.hud1val":"44 methods","feat.f6.note":"Switch without restarting — each precision lives in its own folder.","feat.f1.h":"SoulX-Singer Neural Synthesis","feat.f1.p":"A deep-learning singing synthesizer running on ONNX Runtime. DirectML makes the vocoder 6x faster and lifts the mel frontend SNR from 49.86 dB to 83.54 dB. One voice sings Chinese, English and Japanese — switch language, not singer. Segment-level synth cache, EBU R128 loudness normalisation and 48 kHz export live in the same pipeline: editing one note only re-runs that slice.",
     "feat.f1.t1":"AI Voice","feat.f1.t2":"Cross-lingual","feat.f1.t3":"ONNX opset 20",
     "feat.f1.s1":"GPU Speedup","feat.f1.s2":"mel SNR","feat.f1.s3":"Quantization",
-    "feat.f2.h":"Piano-roll Editor","feat.f2.p":"Notes, lyrics, pitch curves, volume/pan envelopes, plus phoneme-level boundary editing. What you draw is what you hear — parameter changes are audible instantly.",
+    "feat.f2.h":"Piano-roll Editor","feat.f2.p":"Notes, lyrics, pitch, envelopes and phoneme boundaries — five layers on one canvas, every edit audible immediately.",
     "feat.f2.t1":"Pitch Brush","feat.f2.t2":"MIDI Import","feat.f2.t3":"Phoneme Bounds",
-    "feat.f3.h":"Automatic Lyric Phonemization","feat.f3.p":"Lyrics become phonemes directly: Han characters auto-generate toned zh_ syllable tokens (xīng → zh_xing1); English words split into ARPAbet phonemes via CMUdict, with per-frame durations from MFA-aligned stats — vowel-first on short notes.",
+    "feat.f3.h":"Agent-ready: built-in MCP server","feat.f3.p":"The editor ships its own MCP endpoint — Claude, Cursor or any script can read the project, write notes, run inference and export audio. HTTP and stdio share one schema.",
     "feat.f3.zhbadge":"CHINESE · AUTO TONE","feat.f3.zhcap":"pinyin-pro auto tone marks · neutral tone → 5 · manual override supported (e.g. xing3)",
     "feat.f3.enbadge":"ENGLISH · G2P + DURATION","feat.f3.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first",
-    "feat.f3.t1":"Auto CN tones","feat.f3.t2":"EN phoneme durations",
-    "feat.f4.h":"Multi-Precision Models","feat.f4.p":"FP32 (recommended) / FP16 / INT8 / INT8-NPU coexist; switch without re-downloading. W16A32 quantization cuts VRAM usage while staying close to FP32 quality.",
-    "feat.f5.h":"Multi-Backend Inference","feat.f5.p":"A single binary supports DirectML GPU, WebNN NPU/GPU, and CPU fallback — auto-picks the best backend.",
-    "feat.f6.h":"Audio to MIDI","feat.f6.p":"FCPE pitch detector (default) or basic_pitch converts existing audio into MIDI notes, with optional F0 pitch curve extraction.","feat.f6.t":"F0 / MIDI Auto Extract",
+    "feat.f3.t1":"loopback only","feat.f3.t2":"Bearer token",
+    "feat.f4.h":"Automatic MIDI + F0 with FCPE / RMVPE","feat.f4.p":"Two pitch detectors, both shipped. FCPE for everyday extraction, RMVPE when you want a smoother curve. Both accept any clip length, and silence no longer produces phantom notes.",
+    "feat.f5.h":"Automatic lyric-to-phoneme","feat.f5.p":"Lyrics become phonemes directly: Chinese gets tones automatically (xīng → zh_xing1), English is split into ARPAbet through CMUdict and timed with MFA duration statistics.",
+    "feat.f6.h":"Four precisions, one project","feat.f6.p":"Switch precision at any time — no re-download, no new project.","feat.f6.t":"F0 / MIDI Auto Extract",
     "news.title":"Release Notes","news.sub":"Announcements · Model updates · Bug fixes",
     "news.tab.all":"All","news.tab.notice":"Notice","news.tab.event":"Event","news.tab.patch":"Patch",
     "news.tag.patch":"Patch","news.tag.notice":"Notice","news.tag.event":"Event",
@@ -1292,18 +1367,6 @@ buildRoll(document.getElementById('featRoll'),featNotes,false);
   svg.appendChild(pl);fr.appendChild(svg);
 })();
 
-/* ---------- 频谱条 ---------- */
-var spec=document.getElementById('spec'),bars=[];
-for(var i=0;i<26;i++){var b=document.createElement('i');spec.appendChild(b);bars.push({el:b,ph:i*0.73});}
-
-/* ---------- 示波器 ---------- */
-var scope=document.getElementById('scope'),sctx=scope.getContext('2d');
-function sizeScope(){
-  var dpr=window.devicePixelRatio||1,w=scope.clientWidth,h=96;
-  scope.width=w*dpr;scope.height=h*dpr;sctx.setTransform(dpr,0,0,dpr,0,0);
-}
-sizeScope();window.addEventListener('resize',sizeScope);
-
 /* ---------- 音频试听（洛天依示例音频） ---------- */
 var AC=null,master=null,analyser=null,srcNode=null,freqData=null,timeData=null,playing=false;
 var BEAT=60/132,LOOP=16*BEAT;
@@ -1385,62 +1448,6 @@ document.querySelectorAll('[data-freq]').forEach(function(btn){
   });
 });
 
-/* ---------- 动画主循环：频谱 + 示波器 ---------- */
-function anim(ts){
-  var t=ts/1000;
-  var hasData=playing&&analyser;
-  /* 频谱条 */
-  if(hasData){
-    analyser.getByteFrequencyData(freqData);
-    var step=Math.floor(freqData.length/bars.length)||1;
-    for(var j=0;j<bars.length;j++){
-      var idx=Math.min(freqData.length-1,j*step);
-      var v=Math.max(0.05,freqData[idx]/255);
-      bars[j].el.style.height=(v*100)+'%';
-    }
-  }else{
-    for(var k=0;k<bars.length;k++){
-      var br=bars[k];
-      var v=0.14+0.11*Math.sin(t*1.6+br.ph)+0.06*Math.sin(t*3.1+br.ph*1.7);
-      br.el.style.height=Math.max(5,Math.min(100,v*100))+'%';
-    }
-  }
-  /* 示波器 */
-  var w=scope.clientWidth,h=96,mid=h/2;
-  sctx.clearRect(0,0,w,h);
-  sctx.lineWidth=1;
-  sctx.strokeStyle=getComputedStyle(root).getPropertyValue('--line');
-  sctx.beginPath();sctx.moveTo(0,mid);sctx.lineTo(w,mid);sctx.stroke();
-  if(hasData){
-    analyser.getByteTimeDomainData(timeData);
-    var amp=h*0.38;
-    [['--blue',1],['--yellow',0.55]].forEach(function(L){
-      sctx.strokeStyle=getComputedStyle(root).getPropertyValue(L[0]).trim();
-      sctx.lineWidth=2;sctx.beginPath();
-      for(var x=0;x<=w;x+=2){
-        var idx=Math.min(timeData.length-1,Math.floor(x/w*timeData.length));
-        var v=(timeData[idx]-128)/128;
-        var y=mid+v*amp*L[1];
-        if(x===0)sctx.moveTo(x,y);else sctx.lineTo(x,y);
-      }
-      sctx.stroke();
-    });
-  }else{
-    var ampBase=h*0.3*(0.55+0.2*Math.sin(t*0.9));
-    [['--blue',0.021,2.2,1],['--yellow',0.033,-3.1,0.55]].forEach(function(L){
-      sctx.strokeStyle=getComputedStyle(root).getPropertyValue(L[0]).trim();
-      sctx.lineWidth=2;sctx.beginPath();
-      for(var x=0;x<=w;x+=3){
-        var env=Math.sin(x/w*Math.PI);
-        var y=mid+Math.sin(x*L[1]+t*L[2])*ampBase*L[3]*env+Math.sin(x*L[1]*2.7+t*L[2]*1.6)*ampBase*0.22*env;
-        if(x===0)sctx.moveTo(x,y);else sctx.lineTo(x,y);
-      }
-      sctx.stroke();
-    });
-  }
-  requestAnimationFrame(anim);
-}
-requestAnimationFrame(anim);
 })();
 </script>
 </body>
