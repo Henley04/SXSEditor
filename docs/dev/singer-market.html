@@ -234,9 +234,14 @@
             <td><span data-lang="en"><code>dialog.showSaveDialog</code> with the original filename as default; authorizes path.</span><span data-lang="zh"><code>dialog.showSaveDialog</code>，默认文件名为原文件名；授权路径。</span></td>
           </tr>
           <tr>
-            <td><code>singer-market:health</code></td>
-            <td><code>GET /health</code></td>
-            <td><span data-lang="en">Liveness probe (db / kv / config, plus B2 credentials and a real bucket-existence probe, cached 60s).</span><span data-lang="zh">存活探针（db / kv / config，外加 B2 凭据与真实的桶存在性探测，结果缓存 60 秒）。</span></td>
+            <td><code>singer-market:licenses</code></td>
+            <td><code>GET /api/licenses</code></td>
+            <td><span data-lang="en">License catalog (13 presets + a <code>custom</code> slot) for the upload dialog's license selector; no auth required.</span><span data-lang="zh">上传对话框许可选择器使用的许可证目录（13 个预设 + <code>custom</code> 自定义项）；无需鉴权。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:download-progress</code></td>
+            <td><span data-lang="en">— (main → renderer event)</span><span data-lang="zh">—（主进程 → 渲染进程事件）</span></td>
+            <td><span data-lang="en">Progress events emitted during <code>singer-market:download</code>: <code>{ fileId, received, total }</code>.</span><span data-lang="zh"><code>singer-market:download</code> 期间发出的进度事件：<code>{ fileId, received, total }</code>。</span></td>
           </tr>
         </tbody>
       </table>
@@ -318,9 +323,9 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
             <td><span data-lang="en">Tag list / fuzzy search / autocomplete (<code>?suggest=1</code>) / exact check. Exact forms: <code>?exact=&lt;name&gt;</code> or, since v2.2.0, <code>?exact=1&amp;name=&lt;name&gt;</code> (<code>q</code> also accepted as the name). In v2.1.0 the boolean form searched for a tag literally named "1".</span><span data-lang="zh">标签列表 / 模糊搜索 / 自动补全（<code>?suggest=1</code>）/ 精确存在性检查。精确形式：<code>?exact=&lt;名称&gt;</code>，v2.2.0 起也支持 <code>?exact=1&amp;name=&lt;名称&gt;</code>（名字也可用 <code>q</code>）。v2.1.0 中布尔形式会错误地去查找名为 "1" 的标签。</span></td>
           </tr>
           <tr>
-            <td><code>GET /health</code></td>
+            <td><code>GET /api/licenses</code></td>
             <td><span data-lang="en">none</span><span data-lang="zh">无</span></td>
-            <td><span data-lang="en">Liveness; reports <code>db</code>, <code>kv</code>, <code>config</code>, <code>b2_credentials</code>, <code>b2_bucket</code> (real B2 list-buckets probe, cached 60s in KV); <code>b2</code> = credentials AND bucket. Since v2.2.0.</span><span data-lang="zh">存活探针；上报 <code>db</code>、<code>kv</code>、<code>config</code>、<code>b2_credentials</code>、<code>b2_bucket</code>（真实 B2 list-buckets 探测，KV 缓存 60 秒）；<code>b2</code> = 凭据与桶皆就绪。v2.2.0 起。</span></td>
+            <td><span data-lang="en">License catalog: 13 presets (All Rights Reserved default, CC0, CC BY family, MIT, Apache-2.0, GPL/AGPL, …) plus a <code>custom</code> slot. Returns <code>{ items, total, default, custom_allowed, require_license, custom_key }</code>.</span><span data-lang="zh">许可证目录：13 个预设（默认为保留所有权利、CC0、CC BY 系列、MIT、Apache-2.0、GPL/AGPL 等）加一个 <code>custom</code> 自定义项。返回 <code>{ items, total, default, custom_allowed, require_license, custom_key }</code>。</span></td>
           </tr>
         </tbody>
       </table>
