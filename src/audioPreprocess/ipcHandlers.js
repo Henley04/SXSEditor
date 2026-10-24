@@ -54,6 +54,13 @@ function restoreEditContent(edit) {
     state.pianoRoll.notes = notes;
     state.pianoRoll._staticCacheDirty = true;
     state.pianoRoll.render();
+    // 视口默认停在最高音区（scrollY = 0），C4 附近的音符全在屏幕外。
+    // 载入后把音域滚到可视区中部，否则用户会以为文件没加载出来。
+    const pitches = notes.map((n) => n.pitch);
+    state.pianoRoll.scrollPitchRangeIntoView(
+      Math.min(...pitches) - 2,
+      Math.max(...pitches) + 2
+    );
   }
 
   if (Array.isArray(edit.f0Data) && edit.f0Data.length > 0) {

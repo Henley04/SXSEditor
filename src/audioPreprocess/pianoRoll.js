@@ -177,6 +177,25 @@ export function initPianoRoll() {
       return Math.round(maxPitch - (y + this.scrollY - pianoAreaTop) / (NOTE_HEIGHT * this.zoomY));
     },
 
+    /**
+     * 把某个音高区间滚动到可视区中部。
+     *
+     * 载入已有音符（歌手编辑）时，scrollY 还停在 0 —— 视口只显示 127 以下
+     * 十几个半音，C4 附近的音符全在屏幕外，看起来像"没加载出来"。
+     */
+    scrollPitchRangeIntoView(minPitch, maxPitch) {
+      const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+      const visibleH = Math.max(NOTE_HEIGHT * 4, this.height - pianoAreaTop);
+      const nh = NOTE_HEIGHT * this.zoomY;
+      const midPitch = (Math.max(0, Math.min(127, minPitch)) + Math.max(0, Math.min(127, maxPitch))) / 2;
+      const target = (127 - midPitch) * nh - visibleH / 2;
+      const maxScroll = Math.max(0, 128 * nh - visibleH);
+      this.scrollY = Math.max(0, Math.min(maxScroll, target));
+      this._staticCacheDirty = true;
+      this.render();
+      updateScrollbars();
+    },
+
     _snapBeats(beats) {
       const grid = this.snapGrid;
       return Math.round(beats / grid) * grid;
