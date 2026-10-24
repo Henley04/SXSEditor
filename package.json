@@ -28,7 +28,8 @@
     "mcp": "node scripts/sxseditor-mcp.js",
     "splash:image": "node scripts/generate-splash-image.js",
     "mcp:docs": "node scripts/gen-mcp-docs.js",
-    "mcp:selftest": "node scripts/mcp-selftest.js"
+    "mcp:selftest": "node scripts/mcp-selftest.js",
+    "test:e2e:rmvpe": "node test/e2e/rmvpeE2E.js"
   },
   "keywords": [
     "electron",

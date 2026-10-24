@@ -2,6 +2,23 @@
 
 音频预处理模型（音高检测和 MIDI 音符识别）转换为 ONNX 格式。
 
+## ⚠️ 版本要求（2026-10-24）
+
+RMVPE 的旧模型（`preprocess/rmvpe_model.onnx`，输入固定 240000 采样）存在致命缺陷：
+应用按 `(T帧, 2560类)` 解码，而图实际输出 `(1, T, 360)`，`base = t * 2560` 迅速越界，
+argmax 永远停在 0 —— **F0 曲线整段锁死在 30 Hz**，"提取 F0 / 音频转 MIDI" 实际不可用。
+
+修复版模型已发布，**必须升级到下列版本**，旧模型与新代码互不兼容（新代码会抛
+`INVALID_MODEL_OUTPUT` 拒绝加载）：
+
+| ModelScope 仓库 | 最低版本 |
+|---|---|
+| `syxppp/SoulX-Singer-onnx-directml` | **v2** |
+| `syxppp/SoulX-Singer-onnx-directml-fp16` | **v3** |
+| `syxppp/SoulX-Singer-onnx-directml-int8` | **v1** |
+| `syxppp/SoulX-Singer-onnx-directml-int8-dynamic` | **v1** |
+
+
 ## 模型列表
 
 ### RMVPE 音高检测 (`rmvpe_mel.onnx`, `rmvpe_model.onnx`)
