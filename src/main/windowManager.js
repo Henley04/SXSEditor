@@ -114,6 +114,25 @@ function buildAppMenu() {
             }
           },
         },
+        {
+          label: t('menu.editSinger'),
+          click: () => {
+            // 延迟 require：singerIpc 依赖本模块（getMainWindow / openAudioPreprocess），
+            // 顶层互相 require 会形成循环。
+            const { openSingerFileForEdit } = require('./singerIpc');
+            openSingerFileForEdit().then((res) => {
+              if (res && res.success === false && !res.canceled) {
+                const { dialog } = require('electron');
+                const opts = { type: 'error', message: t('menu.editSinger'), detail: res.error || '' };
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                  dialog.showMessageBox(mainWindow, opts);
+                } else {
+                  dialog.showMessageBox(opts);
+                }
+              }
+            }).catch((err) => console.error('[Menu] open singer editor failed:', err));
+          },
+        },
         { type: 'separator' },
         {
           label: t('menu.aboutSXSEditor'),
@@ -761,6 +780,9 @@ function openAudioPreprocess(data) {
     singerColor: data.singerColor,
     avatarImageData: data.avatarImageData,
     avatarImageName: data.avatarImageName,
+    // 歌手编辑模式：带上已有音符 / F0 / singerData 与目标文件路径。
+    // 只有从「编辑歌手文件」入口打开时才有值，正常新建流程为 undefined。
+    edit: data.edit || null,
   };
   preprocessWavBuffer = data.wavBuffer;
 

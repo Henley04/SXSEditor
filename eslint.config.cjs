@@ -87,6 +87,8 @@ module.exports = [
             'src/shared/pluginPermissions.js',
             // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
             'src/shared/safeCall.js',
+            // .sxssinger 解析（主进程用，纯函数便于单测）
+            'src/shared/singerFileEdit.js',
             'src/modelManager.js',
             'src/modelRegistry.js',
             'src/preload.js',

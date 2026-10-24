@@ -4,100 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('worker_threads');
 const { t } = require('./locale');
-const { getMainWindow } = require('./windowManager');
+const { getMainWindow, openAudioPreprocess } = require('./windowManager');
 const { isPathAllowed, isSystemPath, authorizePath } = require('./security');
 const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
-const SXSSINGER_FORMAT_VERSION = '1.0.0';
+const {
+  SXSSINGER_FORMAT_VERSION,
+  validateSingerFileData,
+  buildSingerEditPayload,
+} = require('../shared/singerFileEdit');
 
-function validateSingerFileData(data) {
-  const errors = [];
-  const warnings = [];
-
-  if (!data || typeof data !== 'object') {
-    errors.push('File content is not a valid JSON object');
-    return { valid: false, errors, warnings };
-  }
-
-  if (!data.singerName || typeof data.singerName !== 'string') {
-    errors.push('Missing singerName or incorrect format');
-  } else if (data.singerName.trim().length === 0) {
-    errors.push('singerName cannot be empty');
-  } else if (data.singerName.length > 100) {
-    warnings.push('singerName too long, may display incorrectly');
-  }
-
-  if (data.color !== undefined && data.color !== null) {
-    if (typeof data.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(data.color)) {
-      warnings.push('color format incorrect, expected #RRGGBB format, will use default color');
-    }
-  }
-
-  if (!data.wavBase64 || typeof data.wavBase64 !== 'string') {
-    errors.push('Missing wavBase64 or incorrect format');
-  } else {
-    try {
-      const wavBuf = Buffer.from(data.wavBase64, 'base64');
-      if (wavBuf.length < 44) {
-        errors.push('wavBase64 too small, not a valid WAV file');
-      } else if (wavBuf.length > 50 * 1024 * 1024) {
-        warnings.push('wavBase64 exceeds 50MB, may cause performance issues');
-      }
-    } catch (_e) {
-      errors.push('wavBase64 Base64 decode failed');
-    }
-  }
-
-  if (data.wavDuration !== undefined && data.wavDuration !== null) {
-    if (typeof data.wavDuration !== 'number' || data.wavDuration <= 0) {
-      warnings.push('wavDuration format incorrect, will try to infer from audio data');
-    } else if (data.wavDuration > 60) {
-      warnings.push('Audio duration exceeds 60 seconds, recommend using shorter reference audio');
-    }
-  }
-
-  if (data.midiNotes !== undefined && data.midiNotes !== null) {
-    if (!Array.isArray(data.midiNotes)) {
-      warnings.push('midiNotes format incorrect, will be ignored');
-    } else {
-      for (let i = 0; i < data.midiNotes.length; i++) {
-        const note = data.midiNotes[i];
-        if (!note || typeof note !== 'object') {
-          warnings.push(`MIDI note ${i + 1} format incorrect`);
-          break;
-        }
-        if (typeof note.pitch !== 'number' || note.pitch < 0 || note.pitch > 127) {
-          warnings.push(`MIDI note ${i + 1} has abnormal pitch value (${note.pitch})`);
-          break;
-        }
-      }
-    }
-  }
-
-  if (data.f0Data !== undefined && data.f0Data !== null) {
-    if (!Array.isArray(data.f0Data)) {
-      warnings.push('f0Data format incorrect, will be ignored');
-    }
-  }
-
-  if (data.singerData !== undefined && data.singerData !== null) {
-    if (typeof data.singerData !== 'object') {
-      warnings.push('singerData format incorrect, will be ignored');
-    }
-  }
-
-  if (data.avatarBase64 !== undefined && data.avatarBase64 !== null) {
-    if (typeof data.avatarBase64 !== 'string') {
-      warnings.push('avatarBase64 format incorrect, will be ignored');
-    }
-  }
-
-  if (data.formatVersion !== undefined && typeof data.formatVersion !== 'string') {
-    warnings.push('formatVersion format incorrect');
-  }
-
-  return { valid: errors.length === 0, errors, warnings };
-}
+// 歌手文件内嵌 WAV（base64），50MB 音频会膨胀到 ~67MB。留足余量但挡住误选的大文件。
+const MAX_SINGER_FILE_BYTES = 300 * 1024 * 1024;
 
 /**
  * Offload WAV base64 encoding + JSON.stringify to a worker_thread so the
@@ -150,7 +68,58 @@ function encodeSingerFileContentAsync(singerData, fields) {
   });
 }
 
+/**
+ * 打开已有 .sxssinger 进入「歌手编辑」。
+ *
+ * 复用预处理窗口（音高/MIDI 编辑能力原本就在那里），只是额外把已有的
+ * midiNotes / f0Data / singerData / 文件路径一起送进去，保存时写回原文件，
+ * 而不是新建一个歌手。
+ */
+async function openSingerFileForEdit() {
+  const mainWindow = getMainWindow();
+  const dialogOptions = {
+    title: t('dialog.openSingerFile'),
+    filters: [{ name: 'SXS Singer', extensions: ['sxssinger'] }],
+    properties: ['openFile'],
+  };
+  const result = mainWindow && !mainWindow.isDestroyed()
+    ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+
+  const filePath = path.resolve(result.filePaths[0]);
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return { success: false, error: t('dialog.singerFileInvalid') };
+    if (stat.size > MAX_SINGER_FILE_BYTES) {
+      return { success: false, error: t('dialog.singerFileTooLarge') };
+    }
+
+    const raw = await fs.promises.readFile(filePath, 'utf8');
+    const parsed = buildSingerEditPayload(raw, filePath);
+    if (!parsed.ok) {
+      const invalid = parsed.code === 'INVALID_JSON' || parsed.code === 'INVALID_DATA';
+      console.warn('[SingerEditor] rejected file:', parsed.code, parsed.error);
+      return { success: false, error: invalid ? t('dialog.singerFileInvalid') : parsed.error };
+    }
+
+    // 编辑后要写回同一个路径：显式授权，否则保存时会被 isPathAllowed 拒绝。
+    authorizePath(filePath);
+    openAudioPreprocess(parsed.payload);
+
+    return { success: true, filePath };
+  } catch (err) {
+    console.error('[SingerEditor] open failed:', err);
+    return { success: false, error: err.message };
+  }
+}
+
 function registerSingerIpc() {
+  safeHandle(IPC_CHANNELS.OPEN_SINGER_EDITOR, () => openSingerFileForEdit());
+
   safeHandle(IPC_CHANNELS.SAVE_SINGER_FILE, async (event, singerData) => {
     try {
       // If filePath is provided, save directly to it (save-in-place).
@@ -229,6 +198,24 @@ function registerSingerIpc() {
         }
       }
 
+      // 歌手编辑：文件已存在，主窗口按 filePath 就地刷新对应歌手
+      // （而不是走 SINGER_CREATED 再添加一条重复记录）。
+      if (singerData.notifyMainWindowUpdate === true) {
+        const mainWindow = getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.SINGER_UPDATED, {
+            filePath,
+            singerName: singerData.singerName,
+            color: singerData.color,
+            avatarPath: avatarBase64,
+            wavBuffer: singerData.wavBuffer,
+            midiNotes: midiNotesToSave,
+            f0Data: f0DataToSave,
+            singerData: singerDataToSave,
+          });
+        }
+      }
+
       return { success: true, filePath, canceled: false };
     } catch (err) {
       console.error('Failed to save singer file:', err);
@@ -239,6 +226,7 @@ function registerSingerIpc() {
 
 module.exports = {
   registerSingerIpc,
+  openSingerFileForEdit,
   validateSingerFileData,
   SXSSINGER_FORMAT_VERSION,
 };

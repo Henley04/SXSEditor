@@ -138,6 +138,13 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.PROJECT_SETTINGS_CHANGED, handler);
   },
   openSingerCreator: () => ipcRenderer.invoke(IPC_CHANNELS.OPEN_SINGER_CREATOR),
+  // 打开已有 .sxssinger 进入「歌手编辑」：沿用预处理窗口，保存时写回原文件。
+  openSingerEditor: () => ipcRenderer.invoke(IPC_CHANNELS.OPEN_SINGER_EDITOR),
+  onSingerUpdated: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.SINGER_UPDATED, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.SINGER_UPDATED, handler);
+  },
   openSingerMarket: () => ipcRenderer.invoke('openSingerMarket'),
   saveSingerFile: (singerData) => ipcRenderer.invoke(IPC_CHANNELS.SAVE_SINGER_FILE, singerData),
   onSingerCreatorSaveRequest: (callback) => {

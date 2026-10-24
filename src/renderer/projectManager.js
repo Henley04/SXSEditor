@@ -408,6 +408,21 @@ export function showSingerSelectDialog(singerId) {
         },
       },
       {
+        text: t('main.editSingerFile'),
+        type: 'default',
+        onClick: async () => {
+          closeSelf();
+          if (!window.electronAPI?.openSingerEditor) {
+            showAlertDialog(t('main.singerCreatorNotImplemented'));
+            return;
+          }
+          const res = await window.electronAPI.openSingerEditor();
+          if (res && res.success === false && !res.canceled) {
+            showAlertDialog(t('main.singerEditorFailed', { detail: res.error || '' }));
+          }
+        },
+      },
+      {
         text: t('common.cancel'),
         type: 'default',
         onClick: () => {},

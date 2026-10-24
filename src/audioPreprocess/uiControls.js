@@ -436,6 +436,38 @@ export async function saveSingerData() {
       midiNotes: state.pianoRoll ? state.pianoRoll.notes : [],
     };
 
+    // ===== 歌手编辑模式：直接写回原 .sxssinger，并通知主窗口就地刷新 =====
+    if (state.editFilePath) {
+      if (!window.electronAPI || typeof window.electronAPI.saveSingerFile !== 'function') {
+        showAlertDialog(t('preprocess.saveFailed') + ': saveSingerFile unavailable');
+        return;
+      }
+      const result = await window.electronAPI.saveSingerFile({
+        singerName: state.singerName,
+        color: state.singerColor,
+        avatarImageData: state.avatarImageData || null,
+        avatarImageName: state.avatarImageName || null,
+        wavBuffer: state.wavFileBuffer,
+        wavFileName: state.wavFileName,
+        duration: state.wavDuration,
+        isPreprocessed: true,
+        preprocessResult,
+        filePath: state.editFilePath,
+        // 不新建歌手条目，只按 filePath 更新已加载的那一条
+        notifyMainWindow: false,
+        notifyMainWindowUpdate: true,
+      });
+      if (result && result.success) {
+        showAlertDialog(t('preprocess.editSaved'), () => {
+          stopPlayback();
+          window.close();
+        });
+      } else {
+        showAlertDialog(t('preprocess.saveFailed') + ': ' + ((result && result.error) || ''));
+      }
+      return;
+    }
+
     await window.electronAPI.sendPreprocessData(preprocessResult);
 
     showAlertDialog(t('preprocess.preprocessSaveSuccess'), () => {

@@ -48,6 +48,33 @@ if (window.electronAPI?.onSingerCreated) {
   if (cleanup) state._ipcCleanups.push(cleanup);
 }
 
+// Singer edited IPC handler: a .sxssinger was edited and saved from the
+// preprocessing window. Update the singer that was loaded from that exact
+// file (by path) instead of adding a duplicate entry.
+if (window.electronAPI?.onSingerUpdated) {
+  const cleanup = window.electronAPI.onSingerUpdated((data) => {
+    const singers = trackManager.getSingers();
+    const singer = singers.find(s => s.singerFilePath && s.singerFilePath === data.filePath);
+    if (!singer) return; // 只是磁盘文件被改，项目里没加载它 —— 无需处理
+
+    trackManager.updateSinger(singer.id, {
+      singerName: data.singerName,
+      trackName: data.singerName,
+      color: data.color,
+      ...(data.avatarPath ? { avatarPath: data.avatarPath } : {}),
+    });
+    if (data.wavBuffer) singer.wavBuffer = data.wavBuffer;
+    if (data.midiNotes) singer.midiNotes = data.midiNotes;
+    if (data.f0Data) singer.f0Data = data.f0Data;
+    if (data.singerData) singer.singerData = data.singerData;
+
+    invalidateSingerListCache();
+    markDirty();
+    refreshAll();
+  });
+  if (cleanup) state._ipcCleanups.push(cleanup);
+}
+
 // Fragment saved IPC handler
 if (window.electronAPI?.onFragmentSaved) {
   const cleanup = window.electronAPI.onFragmentSaved((data) => {

@@ -27,8 +27,11 @@ const IPC_CHANNELS = {
   UPDATE_PROJECT_SETTINGS: 'updateProjectSettings',
   PROJECT_SETTINGS_CHANGED: 'projectSettingsChanged',
   OPEN_SINGER_CREATOR: 'openSingerCreator',
+  OPEN_SINGER_EDITOR: 'openSingerEditor',
   SAVE_SINGER_FILE: 'saveSingerFile',
   SINGER_CREATED: 'singerCreated',
+  // 主进程 → 主窗口：已存在的歌手文件被编辑保存，按 filePath 就地更新
+  SINGER_UPDATED: 'singerUpdated',
   OPEN_AUDIO_PREPROCESS: 'openAudioPreprocess',
   SEND_PREPROCESS_DATA: 'sendPreprocessData',
   PREPROCESS_DATA_SAVED: 'preprocessDataSaved',

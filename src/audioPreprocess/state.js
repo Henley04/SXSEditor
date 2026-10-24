@@ -25,6 +25,12 @@ const state = {
   // 加载时裁掉的前导静音秒数：保存 singerData 时要把时间轴补回原始位置
   trimOffsetSec: 0,
 
+  // ===== 歌手编辑模式 =====
+  // 非空表示当前窗口是从「打开歌手文件进行编辑」进来的：保存时直接写回
+  // 这个路径，而不是把结果回传给歌手创建窗口。
+  editFilePath: null,
+  editSingerData: null,
+
   waveformScrollX: 0,
   waveformZoomX: 1,
 
