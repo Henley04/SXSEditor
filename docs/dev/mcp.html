@@ -1,0 +1,1376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Automation API (MCP) — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.8 1.8 1.8.9 0 1.6-.6 1.9-1.2-2.5-.3-5.2-1.3-5.2-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 0 0 2.2-.3 4.6 1.3.9-1.4 2.2-1.9 3.4-1.9 1.2 0 2.6.5 3.4 1.9 2.5-1.7 4.6-1.3 4.6-1.3 2.3 1.8 1.2 2.8 1.2 3.1 0 4.6-2.6 5.5-5.2 5.8.4.4.8 1.1.8 2.2v3.3c0 .6.2.7.8.5 4.6-1.5 7.9-5.7 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Automation API (MCP)</span><span data-lang="zh">自动化 API（MCP）</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Automation API (MCP)</span>
+        <span data-lang="zh">自动化 API（MCP）</span>
+      </h1>
+<p data-lang="en">SXSEditor exposes a loopback HTTP bridge so agents and scripts can drive the editor. The stdio MCP server (<code>npm run mcp</code>) wraps the same API; both share one schema.</p>
+      <p data-lang="zh">SXSEditor 暴露一个回环 HTTP 桥，使智能体与脚本可以驱动编辑器。stdio MCP 服务器（<code>npm run mcp</code>）包装同一套 API；两者共用同一份架构。</p>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Schema version <strong>2.0</strong> — this page is generated from <code>src/shared/mcpSchema.js</code> by <code>npm run mcp:docs</code>, together with the raw Markdown reference <code>docs/MCP.md</code>. Do not edit by hand. Source files: <code>src/main/mcpBridge.js</code> (HTTP bridge), <code>src/main/mcpErrors.js</code> (error codes), <code>src/main/mcpJobs.js</code> (background jobs), <code>src/main/mcpValidate.js</code> (schema validation), <code>src/main/mcpWindowOps.js</code> (window operations), <code>scripts/sxseditor-mcp.js</code> (stdio server).</p>
+          <p data-lang="zh">架构版本 <strong>2.0</strong>——本页由 <code>npm run mcp:docs</code> 从 <code>src/shared/mcpSchema.js</code> 生成，同时产出原始 Markdown 参考 <code>docs/MCP.md</code>。请勿手工编辑。相关源文件：<code>src/main/mcpBridge.js</code>（HTTP 桥）、<code>src/main/mcpErrors.js</code>（错误码）、<code>src/main/mcpJobs.js</code>（后台任务）、<code>src/main/mcpValidate.js</code>（架构校验）、<code>src/main/mcpWindowOps.js</code>（窗口操作）、<code>scripts/sxseditor-mcp.js</code>（stdio 服务器）。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Endpoints</span>
+        <span data-lang="zh">端点</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Method</span><span data-lang="zh">方法</span></th>
+            <th><span data-lang="en">Path</span><span data-lang="zh">路径</span></th>
+            <th><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/health</code></td>
+            <td><span data-lang="en">Liveness, app + schema version (Bearer token still required)</span><span data-lang="zh">存活探针，应用 + 架构版本（仍需 Bearer token）</span></td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/schema</code></td>
+            <td><span data-lang="en">Method table with JSON Schema</span><span data-lang="zh">带 JSON Schema 的方法表</span></td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/events</code></td>
+            <td><span data-lang="en">Server-sent events (`?token=` allowed, EventSource cannot set headers)</span><span data-lang="zh">服务器推送事件（允许 `?token=`，EventSource 无法设置请求头）</span></td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td>
+            <td><code>/jobs, /jobs/:id</code></td>
+            <td><span data-lang="en">Background job status</span><span data-lang="zh">后台任务状态</span></td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td>
+            <td><code>/automation</code></td>
+            <td><span data-lang="en">`{method, params, requestId?, async?}`</span><span data-lang="zh">`{method, params, requestId?, async?}`</span></td>
+          </tr>
+        </tbody>
+      </table>
+<p data-lang="en">The bridge listens on <code>127.0.0.1</code> only — non-loopback clients are rejected with <code>FORBIDDEN</code>. Discovery file: <code>&lt;userData&gt;/mcp-endpoint.json</code> (mode <code>0600</code>) with <code>port</code>, <code>token</code> (the default token only), <code>pid</code>, <code>version</code>, <code>schemaVersion</code>, and <code>urls</code>. Named tokens stay in <code>&lt;userData&gt;/mcp-tokens.json</code> — readers of the discovery file cannot impersonate every configured client. <code>&lt;userData&gt;</code> is <code>%APPDATA%/SXSEditor</code> on Windows and <code>~/.config/SXSEditor</code> on Linux.</p>
+      <p data-lang="zh">桥仅监听 <code>127.0.0.1</code>——非回环客户端会被 <code>FORBIDDEN</code> 拒绝。发现文件：<code>&lt;userData&gt;/mcp-endpoint.json</code>（权限 <code>0600</code>），含 <code>port</code>、<code>token</code>（仅默认 token）、<code>pid</code>、<code>version</code>、<code>schemaVersion</code> 与 <code>urls</code>。命名 token 保存在 <code>&lt;userData&gt;/mcp-tokens.json</code>——发现文件的读取者无法冒充每个已配置的客户端。<code>&lt;userData&gt;</code> 在 Windows 上为 <code>%APPDATA%/SXSEditor</code>，Linux 上为 <code>~/.config/SXSEditor</code>。</p>
+      <h2>
+        <span data-lang="en">Calling</span>
+        <span data-lang="zh">调用</span>
+      </h2>
+<pre><code>EP=$(node -p "require(process.env.HOME+'/.config/SXSEditor/mcp-endpoint.json').port")
+TOKEN=$(node -p "require(process.env.HOME+'/.config/SXSEditor/mcp-endpoint.json').token")
+curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"method":"project.get","params":{"includeNotes":false}}'</code></pre><p data-lang="en">Every response is <code>{ok, result, warnings?, requestId?}</code> or <code>{ok:false, error:{code, message, field?, hint?, details?}}</code>.</p>
+      <p data-lang="zh">每个响应都是 <code>{ok, result, warnings?, requestId?}</code> 或 <code>{ok:false, error:{code, message, field?, hint?, details?}}</code>。</p>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Limits.</strong> Rate limit is 120 requests per 10-second window (<code>RATE_LIMITED</code> with a <code>retry</code> hint). Request bodies are capped at 32 MiB. A synchronous call times out after 60 s (<code>TIMEOUT</code>); long methods get 600 s.</p>
+          <p data-lang="zh"><strong>限额。</strong>限速为每 10 秒窗口 120 次请求（超限返回 <code>RATE_LIMITED</code> 并带 <code>retry</code> 提示）。请求体上限 32 MiB。同步调用 60 秒超时（<code>TIMEOUT</code>）；长时方法为 600 秒。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Errors</span>
+        <span data-lang="zh">错误</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Code</span><span data-lang="zh">错误码</span></th>
+            <th><span data-lang="en">HTTP</span><span data-lang="zh">HTTP</span></th>
+            <th><span data-lang="en">Meaning</span><span data-lang="zh">含义</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>VALIDATION_ERROR</code></td>
+            <td>400</td>
+            <td><span data-lang="en">params failed JSON Schema validation (see `field` / `details.errors`)</span><span data-lang="zh">参数未通过 JSON Schema 校验（见 `field` / `details.errors`）</span></td>
+          </tr>
+          <tr>
+            <td><code>UNKNOWN_METHOD</code></td>
+            <td>404</td>
+            <td><span data-lang="en">method not in the schema (hint: `see GET /schema`)</span><span data-lang="zh">方法不在架构中（提示：`see GET /schema`）</span></td>
+          </tr>
+          <tr>
+            <td><code>NOT_FOUND</code></td>
+            <td>404</td>
+            <td><span data-lang="en">referenced job, file, fragment or singer does not exist</span><span data-lang="zh">引用的任务、文件、片段或歌手不存在</span></td>
+          </tr>
+          <tr>
+            <td><code>CONFLICT</code></td>
+            <td>409</td>
+            <td><span data-lang="en">state conflict with the current project / job</span><span data-lang="zh">与当前项目 / 任务状态冲突</span></td>
+          </tr>
+          <tr>
+            <td><code>PRECONDITION_FAILED</code></td>
+            <td>422</td>
+            <td><span data-lang="en">inference models not installed, or no project window open</span><span data-lang="zh">推理模型未安装，或没有打开的项目窗口</span></td>
+          </tr>
+          <tr>
+            <td><code>FORBIDDEN</code></td>
+            <td>403</td>
+            <td><span data-lang="en">non-loopback client, system path, or path outside granted roots</span><span data-lang="zh">非回环客户端、系统路径，或授权根目录之外的路径</span></td>
+          </tr>
+          <tr>
+            <td><code>UNAUTHORIZED</code></td>
+            <td>401</td>
+            <td><span data-lang="en">missing or invalid Bearer token</span><span data-lang="zh">缺少或无效的 Bearer token</span></td>
+          </tr>
+          <tr>
+            <td><code>RATE_LIMITED</code></td>
+            <td>429</td>
+            <td><span data-lang="en">too many requests (see `retry` hint)</span><span data-lang="zh">请求过多（见 `retry` 提示）</span></td>
+          </tr>
+          <tr>
+            <td><code>TIMEOUT</code></td>
+            <td>504</td>
+            <td><span data-lang="en">automation call exceeded its timeout</span><span data-lang="zh">自动化调用超时</span></td>
+          </tr>
+          <tr>
+            <td><code>CANCELLED</code></td>
+            <td>409</td>
+            <td><span data-lang="en">job was cancelled</span><span data-lang="zh">任务已取消</span></td>
+          </tr>
+          <tr>
+            <td><code>INTERNAL</code></td>
+            <td>500</td>
+            <td><span data-lang="en">unexpected error</span><span data-lang="zh">意外错误</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Events</span>
+        <span data-lang="zh">事件</span>
+      </h2>
+<p data-lang="en"><code>/events</code> streams <code>event: &lt;type&gt;</code> frames. Current types: <code>bridge.started</code>, <code>project.changed</code>, <code>project.saved</code>, <code>fragment.opened</code>, <code>playback.state</code>, <code>ui.opened</code>, <code>job.started</code>, <code>job.completed</code>, <code>job.failed</code>.</p>
+      <p data-lang="zh"><code>/events</code> 推送 <code>event: &lt;type&gt;</code> 帧。当前类型：<code>bridge.started</code>、<code>project.changed</code>、<code>project.saved</code>、<code>fragment.opened</code>、<code>playback.state</code>、<code>ui.opened</code>、<code>job.started</code>、<code>job.completed</code>、<code>job.failed</code>。</p>
+      <h2>
+        <span data-lang="en">Jobs</span>
+        <span data-lang="zh">后台任务</span>
+      </h2>
+<p data-lang="en">Add <code>"async": true</code> to <code>POST /automation</code> for long methods (export, synthesis, MIDI extraction). The call returns <code>202 {jobId, poll}</code>; poll <code>GET /jobs/&lt;id&gt;</code> for <code>status</code> (<code>queued</code> → <code>running</code> → <code>completed</code> / <code>failed</code> / <code>cancelled</code>) plus <code>result</code> or <code>error</code>.</p>
+      <p data-lang="zh">对长时方法（导出、合成、MIDI 提取）在 <code>POST /automation</code> 中加 <code>"async": true</code>。调用返回 <code>202 {jobId, poll}</code>；轮询 <code>GET /jobs/&lt;id&gt;</code> 获取 <code>status</code>（<code>queued</code> → <code>running</code> → <code>completed</code> / <code>failed</code> / <code>cancelled</code>）以及 <code>result</code> 或 <code>error</code>。</p>
+      <h2>
+        <span data-lang="en">Method Reference</span>
+        <span data-lang="zh">方法参考</span>
+      </h2>
+<p data-lang="en">All 44 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
+      <p data-lang="zh">全部 44 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
+      <h3>
+        <span data-lang="en">Schema &amp; Capabilities</span>
+        <span data-lang="zh">架构与能力</span>
+      </h3>
+
+      <h4><code>schema.get</code></h4>
+      <p data-lang="en">Return this method table (same payload as GET /schema).</p>
+      <p data-lang="zh">返回本方法表（与 GET /schema 相同载荷）。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "schema.get",
+  "params": {}
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Schema &amp; Capabilities</span>
+        <span data-lang="zh">架构与能力</span>
+      </h3>
+
+      <h4><code>capabilities</code></h4>
+      <p data-lang="en">Method list plus runtime features and preconditions.</p>
+      <p data-lang="zh">方法列表外加运行时特性与前提条件。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "capabilities",
+  "params": {}
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Session &amp; File Access</span>
+        <span data-lang="zh">会话与文件访问</span>
+      </h3>
+
+      <h4><code>session.grantRoot</code></h4>
+      <p data-lang="en">Grant the automation session read/write access to a directory tree.</p>
+      <p data-lang="zh">授予自动化会话对某目录树的读写权限。</p>
+      <p data-lang="en">The directory is validated (no system/sensitive/hidden paths) and added to the same in-memory allow-list the file dialogs use. Grants live until the app exits or session.revokeRoots is called.</p>
+      <p data-lang="zh">目录会经过校验（拒绝系统 / 敏感 / 隐藏路径），并加入文件对话框使用的同一内存允许列表。授权持续到应用退出或调用 session.revokeRoots 为止。</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project</span><span data-lang="zh">目标：<code>main</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Absolute directory path</span><span data-lang="zh">string · 必填 · 目录绝对路径</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "session.grantRoot",
+  "params": {
+    "path": "${path}"
+  }
+}</code></pre>
+
+      <h4><code>session.roots</code></h4>
+      <p data-lang="en">List directories granted in this session.</p>
+      <p data-lang="zh">列出本会话已授权的目录。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "session.roots",
+  "params": {}
+}</code></pre>
+
+      <h4><code>session.revokeRoots</code></h4>
+      <p data-lang="en">Revoke session directory grants (all when path is omitted).</p>
+      <p data-lang="zh">撤销会话目录授权（省略 path 时撤销全部）。</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project</span><span data-lang="zh">目标：<code>main</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · optional · Directory to revoke</span><span data-lang="zh">string · 可选 · 要撤销的目录</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "session.revokeRoots",
+  "params": {
+    "path": "${path}"
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Windows &amp; UI</span>
+        <span data-lang="zh">窗口与界面</span>
+      </h3>
+
+      <h4><code>ui.windows</code></h4>
+      <p data-lang="en">List application windows with id, title, url and bounds.</p>
+      <p data-lang="zh">列出应用窗口（id、标题、url 与边界）。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "ui.windows",
+  "params": {}
+}</code></pre>
+
+      <h4><code>ui.resize</code></h4>
+      <p data-lang="en">Resize a window (content size).</p>
+      <p data-lang="zh">调整窗口大小（内容尺寸）。</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project</span><span data-lang="zh">目标：<code>main</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>window</code></td>
+            <td><span data-lang="en">string · optional · Window id, url substring or title substring (default: main window)</span><span data-lang="zh">string · 可选 · 窗口 id、url 子串或标题子串（默认：主窗口）</span></td>
+          </tr>
+          <tr>
+            <td><code>width</code></td>
+            <td><span data-lang="en">integer · required · Content width in CSS px · range 200..10000</span><span data-lang="zh">integer · 必填 · 内容宽度（CSS px） · 范围 200..10000</span></td>
+          </tr>
+          <tr>
+            <td><code>height</code></td>
+            <td><span data-lang="en">integer · required · Content height in CSS px · range 200..10000</span><span data-lang="zh">integer · 必填 · 内容高度（CSS px） · 范围 200..10000</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "ui.resize",
+  "params": {
+    "window": "${window}",
+    "width": 1,
+    "height": 1
+  }
+}</code></pre>
+
+      <h4><code>ui.reload</code></h4>
+      <p data-lang="en">Reload a window renderer.</p>
+      <p data-lang="zh">重新加载窗口渲染进程。</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project</span><span data-lang="zh">目标：<code>main</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>window</code></td>
+            <td><span data-lang="en">string · optional · Window selector (default: main window)</span><span data-lang="zh">string · 可选 · 窗口选择器（默认：主窗口）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "ui.reload",
+  "params": {
+    "window": "${window}"
+  }
+}</code></pre>
+
+      <h4><code>ui.locale</code></h4>
+      <p data-lang="en">Switch the application language and reload every window.</p>
+      <p data-lang="zh">切换应用语言并重载所有窗口。</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project</span><span data-lang="zh">目标：<code>main</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>locale</code></td>
+            <td><span data-lang="en">`en` | `zh-CN` · required · Target locale</span><span data-lang="zh">`en` | `zh-CN` · 必填 · 目标语言</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "ui.locale",
+  "params": {
+    "locale": "en"
+  }
+}</code></pre>
+
+      <h4><code>ui.screenshot</code></h4>
+      <p data-lang="en">Capture a window at a given CSS size and device scale.</p>
+      <p data-lang="zh">以指定 CSS 尺寸与设备缩放捕获窗口。</p>
+      <p data-lang="en">Uses the DevTools protocol so the capture can be 2x even when the physical display is not. Without `path` the PNG is returned as base64.</p>
+      <p data-lang="zh">使用 DevTools 协议，因此即使物理显示器不是高 DPI，也可捕获 2 倍图。不带 path 时以 base64 返回 PNG。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>window</code></td>
+            <td><span data-lang="en">string · optional · Window selector (default: main window)</span><span data-lang="zh">string · 可选 · 窗口选择器（默认：主窗口）</span></td>
+          </tr>
+          <tr>
+            <td><code>width</code></td>
+            <td><span data-lang="en">integer · optional · CSS width to emulate · range 100..4000</span><span data-lang="zh">integer · 可选 · 要模拟的 CSS 宽度 · 范围 100..4000</span></td>
+          </tr>
+          <tr>
+            <td><code>height</code></td>
+            <td><span data-lang="en">integer · optional · CSS height to emulate · range 100..4000</span><span data-lang="zh">integer · 可选 · 要模拟的 CSS 高度 · 范围 100..4000</span></td>
+          </tr>
+          <tr>
+            <td><code>scale</code></td>
+            <td><span data-lang="en">number · optional · Device scale factor (default 2) · range 1..4</span><span data-lang="zh">number · 可选 · 设备缩放因子（默认 2） · 范围 1..4</span></td>
+          </tr>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · optional · Save PNG here instead of returning base64</span><span data-lang="zh">string · 可选 · 保存 PNG 到此路径，而非返回 base64</span></td>
+          </tr>
+          <tr>
+            <td><code>keepSize</code></td>
+            <td><span data-lang="en">boolean · optional · Keep the window at its current size (default: resize, capture, restore)</span><span data-lang="zh">boolean · 可选 · 保持窗口当前尺寸（默认：调整、捕获、恢复）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "ui.screenshot",
+  "params": {
+    "window": "${window}",
+    "width": 1,
+    "height": 1,
+    "scale": 1,
+    "path": "${path}",
+    "keepSize": true
+  }
+}</code></pre>
+
+      <h4><code>ui.open</code></h4>
+      <p data-lang="en">Open a secondary window (singer creator, market, model download…).</p>
+      <p data-lang="zh">打开次级窗口（歌手创建、市场、模型下载等）。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>target</code></td>
+            <td><span data-lang="en">`singerCreator` | `singerMarket` | `modelDownload` | `resourceManager` · required</span><span data-lang="zh">`singerCreator` | `singerMarket` | `modelDownload` | `resourceManager` · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>precision</code></td>
+            <td><span data-lang="en">string · optional · Model precision for modelDownload</span><span data-lang="zh">string · 可选 · modelDownload 的模型精度</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><em><span data-lang="en">Legacy aliases: <code>name</code> → <code>target</code> (accepted with a deprecation warning).</span><span data-lang="zh">旧别名：<code>name</code> → <code>target</code>（接受，但会发出弃用警告）。</span></em></p>
+      <pre><code>{
+  "method": "ui.open",
+  "params": {
+    "target": "singerCreator",
+    "precision": "${precision}"
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Jobs</span>
+        <span data-lang="zh">后台任务</span>
+      </h3>
+
+      <h4><code>jobs.list</code></h4>
+      <p data-lang="en">List automation jobs (newest first).</p>
+      <p data-lang="zh">列出自动化任务（最新在前）。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "jobs.list",
+  "params": {}
+}</code></pre>
+
+      <h4><code>jobs.get</code></h4>
+      <p data-lang="en">Get one job by id.</p>
+      <p data-lang="zh">按 id 获取单个任务。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>jobId</code></td>
+            <td><span data-lang="en">string · required · Job id</span><span data-lang="zh">string · 必填 · 任务 id</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "jobs.get",
+  "params": {
+    "jobId": "${jobId}"
+  }
+}</code></pre>
+
+      <h4><code>jobs.cancel</code></h4>
+      <p data-lang="en">Cancel a queued job; running jobs report that they cannot be stopped.</p>
+      <p data-lang="zh">取消排队中的任务；运行中的任务会报告无法停止。</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>jobId</code></td>
+            <td><span data-lang="en">string · required · Job id</span><span data-lang="zh">string · 必填 · 任务 id</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "jobs.cancel",
+  "params": {
+    "jobId": "${jobId}"
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Project</span>
+        <span data-lang="zh">项目</span>
+      </h3>
+
+      <h4><code>project.get</code></h4>
+      <p data-lang="en">Read the current project snapshot.</p>
+      <p data-lang="zh">读取当前项目快照。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>includeNotes</code></td>
+            <td><span data-lang="en">boolean · optional · Include fragment notes (default true)</span><span data-lang="zh">boolean · 可选 · 包含片段音符（默认 true）</span></td>
+          </tr>
+          <tr>
+            <td><code>noteOffset</code></td>
+            <td><span data-lang="en">integer · optional · Skip this many notes per fragment · range 0..∞</span><span data-lang="zh">integer · 可选 · 每个片段跳过的音符数 · 范围 0..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>noteLimit</code></td>
+            <td><span data-lang="en">integer · optional · Return at most this many notes per fragment · range 1..∞</span><span data-lang="zh">integer · 可选 · 每个片段最多返回的音符数 · 范围 1..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>fields</code></td>
+            <td><span data-lang="en">string[] · optional · Top-level fields to include: project, singers, fragments, selection, filePath, isDirty</span><span data-lang="zh">string[] · 可选 · 要包含的顶层字段：project、singers、fragments、selection、filePath、isDirty</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "project.get",
+  "params": {
+    "includeNotes": true,
+    "noteOffset": 1,
+    "noteLimit": 1,
+    "fields": []
+  }
+}</code></pre>
+
+      <h4><code>project.validate</code></h4>
+      <p data-lang="en">Validate a project document without touching the open project.</p>
+      <p data-lang="zh">校验项目文档，不影响当前打开的项目。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>project</code></td>
+            <td><span data-lang="en">object · required</span><span data-lang="zh">object · 必填</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "project.validate",
+  "params": {
+    "project": {}
+  }
+}</code></pre>
+
+      <h4><code>project.apply</code></h4>
+      <p data-lang="en">Apply a batch of operations atomically.</p>
+      <p data-lang="zh">原子地应用一批操作。</p>
+      <p data-lang="en">All operations are validated first. With atomic=true (default) a failure rolls the project back to the pre-call snapshot and returns the failing operation index.</p>
+      <p data-lang="zh">所有操作先校验。atomic=true（默认）时，失败会回滚到调用前快照，并返回失败操作的序号。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>operations</code></td>
+            <td><span data-lang="en">object[] · required</span><span data-lang="zh">object[] · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>dryRun</code></td>
+            <td><span data-lang="en">boolean · optional · Validate and report what would change, without mutating</span><span data-lang="zh">boolean · 可选 · 校验并报告将发生的变化，不做修改</span></td>
+          </tr>
+          <tr>
+            <td><code>atomic</code></td>
+            <td><span data-lang="en">boolean · optional · Roll back on failure (default true)</span><span data-lang="zh">boolean · 可选 · 失败时回滚（默认 true）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "project.apply",
+  "params": {
+    "operations": [],
+    "dryRun": true,
+    "atomic": true
+  }
+}</code></pre>
+
+      <h4><code>project.replace</code></h4>
+      <p data-lang="en">Replace the whole project document.</p>
+      <p data-lang="zh">替换整个项目文档。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>project</code></td>
+            <td><span data-lang="en">object · required</span><span data-lang="zh">object · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>dryRun</code></td>
+            <td><span data-lang="en">boolean · optional · Validate only</span><span data-lang="zh">boolean · 可选 · 仅校验</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "project.replace",
+  "params": {
+    "project": {},
+    "dryRun": true
+  }
+}</code></pre>
+
+      <h4><code>project.saveTo</code></h4>
+      <p data-lang="en">Serialize the project to a .sxsproj file.</p>
+      <p data-lang="zh">将项目序列化为 .sxsproj 文件。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Destination path</span><span data-lang="zh">string · 必填 · 目标路径</span></td>
+          </tr>
+          <tr>
+            <td><code>embedSingerFiles</code></td>
+            <td><span data-lang="en">boolean · optional · Embed singer payloads inside the project</span><span data-lang="zh">boolean · 可选 · 将歌手数据嵌入项目内</span></td>
+          </tr>
+          <tr>
+            <td><code>embedAccompanimentAudio</code></td>
+            <td><span data-lang="en">boolean · optional · Embed accompaniment audio</span><span data-lang="zh">boolean · 可选 · 嵌入伴奏音频</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "project.saveTo",
+  "params": {
+    "path": "${path}",
+    "embedSingerFiles": true,
+    "embedAccompanimentAudio": true
+  }
+}</code></pre>
+
+      <h4><code>project.loadFrom</code></h4>
+      <p data-lang="en">Open a .sxsproj file into the editor.</p>
+      <p data-lang="zh">打开 .sxsproj 文件到编辑器。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Project file path</span><span data-lang="zh">string · 必填 · 项目文件路径</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "project.loadFrom",
+  "params": {
+    "path": "${path}"
+  }
+}</code></pre>
+
+      <h4><code>project.save</code></h4>
+      <p data-lang="en">Save to the current path (dialog fallback).</p>
+      <p data-lang="zh">保存到当前路径（对话框回退）。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "project.save",
+  "params": {}
+}</code></pre>
+
+      <h4><code>project.saveAs</code></h4>
+      <p data-lang="en">Save through the native dialog and return the chosen path.</p>
+      <p data-lang="zh">经原生对话框保存并返回所选路径。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "project.saveAs",
+  "params": {}
+}</code></pre>
+
+      <h4><code>project.load</code></h4>
+      <p data-lang="en">Open a project through the native dialog.</p>
+      <p data-lang="zh">经原生对话框打开项目。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "project.load",
+  "params": {}
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">MIDI</span>
+        <span data-lang="zh">MIDI</span>
+      </h3>
+
+      <h4><code>midi.importFile</code></h4>
+      <p data-lang="en">Import a .mid file as tracks and fragments.</p>
+      <p data-lang="zh">导入 .mid 文件为轨道与片段。</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>main</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · MIDI file path</span><span data-lang="zh">string · 必填 · MIDI 文件路径</span></td>
+          </tr>
+          <tr>
+            <td><code>name</code></td>
+            <td><span data-lang="en">string · optional · Track name override</span><span data-lang="zh">string · 可选 · 轨道名覆盖</span></td>
+          </tr>
+          <tr>
+            <td><code>multiTrack</code></td>
+            <td><span data-lang="en">boolean · optional · Create one track per MIDI track (default true)</span><span data-lang="zh">boolean · 可选 · 每个 MIDI 轨道创建一个轨道（默认 true）</span></td>
+          </tr>
+          <tr>
+            <td><code>createTracks</code></td>
+            <td><span data-lang="en">boolean · optional · Create new tracks instead of reusing singerId (default true)</span><span data-lang="zh">boolean · 可选 · 创建新轨道而非复用 singerId（默认 true）</span></td>
+          </tr>
+          <tr>
+            <td><code>singerId</code></td>
+            <td><span data-lang="en">string · optional · Existing singer to place the notes on</span><span data-lang="zh">string · 可选 · 用于放置音符的现有歌手</span></td>
+          </tr>
+          <tr>
+            <td><code>startTime</code></td>
+            <td><span data-lang="en">number · optional · Where the first fragment starts, in beats · range 0..∞</span><span data-lang="zh">number · 可选 · 第一个片段的起始位置（拍） · 范围 0..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>applyProjectInfo</code></td>
+            <td><span data-lang="en">boolean · optional · Apply tempo/time signature from the MIDI file (default true)</span><span data-lang="zh">boolean · 可选 · 应用 MIDI 文件中的速度 / 拍号（默认 true）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "midi.importFile",
+  "params": {
+    "path": "${path}",
+    "name": "${name}",
+    "multiTrack": true,
+    "createTracks": true,
+    "singerId": "${singerId}",
+    "startTime": 1,
+    "applyProjectInfo": true
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Audio</span>
+        <span data-lang="zh">音频</span>
+      </h3>
+
+      <h4><code>audio.extractMidi</code></h4>
+      <p data-lang="en">Run F0/MIDI extraction on an audio file.</p>
+      <p data-lang="zh">对音频文件运行 F0 / MIDI 提取。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Audio file path</span><span data-lang="zh">string · 必填 · 音频文件路径</span></td>
+          </tr>
+          <tr>
+            <td><code>bpm</code></td>
+            <td><span data-lang="en">number · optional · Tempo used for beat conversion · range 1..∞</span><span data-lang="zh">number · 可选 · 用于拍号换算的速度 · 范围 1..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>withPitch</code></td>
+            <td><span data-lang="en">boolean · optional · Also return the F0 curve (default true)</span><span data-lang="zh">boolean · 可选 · 同时返回 F0 曲线（默认 true）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "audio.extractMidi",
+  "params": {
+    "path": "${path}",
+    "bpm": 1,
+    "withPitch": true
+  }
+}</code></pre>
+
+      <h4><code>audio.export</code></h4>
+      <p data-lang="en">Export via the GUI dialog.</p>
+      <p data-lang="zh">通过 GUI 对话框导出。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able) · requires: <code>models</code></span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步） · 依赖：<code>models</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "audio.export",
+  "params": {}
+}</code></pre>
+
+      <h4><code>audio.exportTo</code></h4>
+      <p data-lang="en">Synthesize the whole project and write a WAV.</p>
+      <p data-lang="zh">合成整个项目并写出 WAV。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · long-running (job-able) · requires: <code>models</code></span><span data-lang="zh">目标：<code>renderer</code> · 长时运行（可异步） · 依赖：<code>models</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Destination WAV path</span><span data-lang="zh">string · 必填 · 目标 WAV 路径</span></td>
+          </tr>
+          <tr>
+            <td><code>options</code></td>
+            <td><span data-lang="en">object · optional · sampleRate / numChannels / inference overrides</span><span data-lang="zh">object · 可选 · sampleRate / numChannels / 推理参数覆盖</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "audio.exportTo",
+  "params": {
+    "path": "${path}",
+    "options": {}
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Accompaniment</span>
+        <span data-lang="zh">伴奏</span>
+      </h3>
+
+      <h4><code>accompaniment.import</code></h4>
+      <p data-lang="en">Add an accompaniment track from an audio file.</p>
+      <p data-lang="zh">从音频文件添加伴奏轨道。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Audio file path</span><span data-lang="zh">string · 必填 · 音频文件路径</span></td>
+          </tr>
+          <tr>
+            <td><code>name</code></td>
+            <td><span data-lang="en">string · optional · Track name</span><span data-lang="zh">string · 可选 · 轨道名</span></td>
+          </tr>
+          <tr>
+            <td><code>startTime</code></td>
+            <td><span data-lang="en">number · optional · Start offset in seconds · range 0..∞</span><span data-lang="zh">number · 可选 · 起始偏移（秒） · 范围 0..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>volume</code></td>
+            <td><span data-lang="en">number · optional · Track volume 0-1 · range 0..1</span><span data-lang="zh">number · 可选 · 轨道音量 0-1 · 范围 0..1</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "accompaniment.import",
+  "params": {
+    "path": "${path}",
+    "name": "${name}",
+    "startTime": 1,
+    "volume": 1
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Singers</span>
+        <span data-lang="zh">歌手</span>
+      </h3>
+
+      <h4><code>singer.import</code></h4>
+      <p data-lang="en">Import a .sxssinger voice profile.</p>
+      <p data-lang="zh">导入 .sxssinger 音色档案。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Singer file path</span><span data-lang="zh">string · 必填 · 歌手文件路径</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "singer.import",
+  "params": {
+    "path": "${path}"
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">History</span>
+        <span data-lang="zh">编辑历史</span>
+      </h3>
+
+      <h4><code>history.undo</code></h4>
+      <p data-lang="en">Undo the last project edit.</p>
+      <p data-lang="zh">撤销上一次项目编辑。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "history.undo",
+  "params": {}
+}</code></pre>
+
+      <h4><code>history.redo</code></h4>
+      <p data-lang="en">Redo the last undone edit.</p>
+      <p data-lang="zh">重做上一次撤销的编辑。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "history.redo",
+  "params": {}
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Fragments</span>
+        <span data-lang="zh">片段</span>
+      </h3>
+
+      <h4><code>fragment.open</code></h4>
+      <p data-lang="en">Open a fragment in the piano-roll editor window.</p>
+      <p data-lang="zh">在钢琴卷帘编辑器窗口中打开片段。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>fragmentId</code></td>
+            <td><span data-lang="en">string · required · Fragment id</span><span data-lang="zh">string · 必填 · 片段 id</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><em><span data-lang="en">Legacy aliases: <code>id</code> → <code>fragmentId</code> (accepted with a deprecation warning).</span><span data-lang="zh">旧别名：<code>id</code> → <code>fragmentId</code>（接受，但会发出弃用警告）。</span></em></p>
+      <pre><code>{
+  "method": "fragment.open",
+  "params": {
+    "fragmentId": "${fragmentId}"
+  }
+}</code></pre>
+
+      <h4><code>fragment.exportTo</code></h4>
+      <p data-lang="en">Synthesize one fragment and write a WAV.</p>
+      <p data-lang="zh">合成单个片段并写出 WAV。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · long-running (job-able) · requires: <code>models</code></span><span data-lang="zh">目标：<code>renderer</code> · 长时运行（可异步） · 依赖：<code>models</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>fragmentId</code></td>
+            <td><span data-lang="en">string · required · Fragment id</span><span data-lang="zh">string · 必填 · 片段 id</span></td>
+          </tr>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Destination WAV path</span><span data-lang="zh">string · 必填 · 目标 WAV 路径</span></td>
+          </tr>
+          <tr>
+            <td><code>options</code></td>
+            <td><span data-lang="en">object · optional · Inference overrides (nSteps, cfg, sampler, sampleRate…)</span><span data-lang="zh">object · 可选 · 推理参数覆盖（nSteps、cfg、sampler、sampleRate 等）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "fragment.exportTo",
+  "params": {
+    "fragmentId": "${fragmentId}",
+    "path": "${path}",
+    "options": {}
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Editor</span>
+        <span data-lang="zh">编辑器</span>
+      </h3>
+
+      <h4><code>editor.getView</code></h4>
+      <p data-lang="en">Read the editor view state (zoom, scroll, mode, selection).</p>
+      <p data-lang="zh">读取编辑器视图状态（缩放、滚动、模式、选择）。</p>
+      <p><em><span data-lang="en">target: <code>editor</code></span><span data-lang="zh">目标：<code>editor</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "editor.getView",
+  "params": {}
+}</code></pre>
+
+      <h4><code>editor.setView</code></h4>
+      <p data-lang="en">Set zoom, scroll, edit mode and note selection in the editor.</p>
+      <p data-lang="zh">设置编辑器缩放、滚动、编辑模式与音符选择。</p>
+      <p><em><span data-lang="en">target: <code>editor</code> · mutates project</span><span data-lang="zh">目标：<code>editor</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>zoomX</code></td>
+            <td><span data-lang="en">number · optional · Horizontal zoom factor 0.25-8 · range 0.25..8</span><span data-lang="zh">number · 可选 · 水平缩放因子 0.25-8 · 范围 0.25..8</span></td>
+          </tr>
+          <tr>
+            <td><code>scrollBeats</code></td>
+            <td><span data-lang="en">number · optional · Scroll so this beat is at the left edge · range 0..∞</span><span data-lang="zh">number · 可选 · 滚动到指定拍位于左边缘 · 范围 0..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>scrollY</code></td>
+            <td><span data-lang="en">number · optional · Vertical scroll in px · range 0..∞</span><span data-lang="zh">number · 可选 · 垂直滚动（px） · 范围 0..∞</span></td>
+          </tr>
+          <tr>
+            <td><code>mode</code></td>
+            <td><span data-lang="en">`MIDI` | `Pitch` · optional · Top edit mode</span><span data-lang="zh">`MIDI` | `Pitch` · 可选 · 顶部编辑模式</span></td>
+          </tr>
+          <tr>
+            <td><code>paramLane</code></td>
+            <td><span data-lang="en">`VOL` | `PAN` | `Phoneme` | `Timbre` · optional · Bottom lane</span><span data-lang="zh">`VOL` | `PAN` | `Phoneme` | `Timbre` · 可选 · 底部参数通道</span></td>
+          </tr>
+          <tr>
+            <td><code>selectedNoteIds</code></td>
+            <td><span data-lang="en">string[] · optional · Replace the note selection</span><span data-lang="zh">string[] · 可选 · 替换音符选择</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "editor.setView",
+  "params": {
+    "zoomX": 1,
+    "scrollBeats": 1,
+    "scrollY": 1,
+    "mode": "MIDI",
+    "paramLane": "VOL",
+    "selectedNoteIds": []
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Playback</span>
+        <span data-lang="zh">播放</span>
+      </h3>
+
+      <h4><code>playback.play</code></h4>
+      <p data-lang="en">Synthesize and play the project.</p>
+      <p data-lang="zh">合成并播放项目。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · long-running (job-able) · requires: <code>models</code></span><span data-lang="zh">目标：<code>renderer</code> · 长时运行（可异步） · 依赖：<code>models</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "playback.play",
+  "params": {}
+}</code></pre>
+
+      <h4><code>playback.pause</code></h4>
+      <p data-lang="en">Pause playback.</p>
+      <p data-lang="zh">暂停播放。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "playback.pause",
+  "params": {}
+}</code></pre>
+
+      <h4><code>playback.stop</code></h4>
+      <p data-lang="en">Stop playback.</p>
+      <p data-lang="zh">停止播放。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "playback.stop",
+  "params": {}
+}</code></pre>
+
+      <h4><code>playback.seek</code></h4>
+      <p data-lang="en">Seek to a position in seconds.</p>
+      <p data-lang="zh">跳转到指定秒数位置。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>seconds</code></td>
+            <td><span data-lang="en">number · required · Target position · range 0..∞</span><span data-lang="zh">number · 必填 · 目标位置 · 范围 0..∞</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "playback.seek",
+  "params": {
+    "seconds": 1
+  }
+}</code></pre>
+
+      <h4><code>playback.get</code></h4>
+      <p data-lang="en">Playback state (position, duration, synthesizing).</p>
+      <p data-lang="zh">播放状态（位置、时长、合成中）。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "playback.get",
+  "params": {}
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Lyrics (LRC)</span>
+        <span data-lang="zh">歌词（LRC）</span>
+      </h3>
+
+      <h4><code>lrc.export</code></h4>
+      <p data-lang="en">Export lyrics via the GUI dialog.</p>
+      <p data-lang="zh">通过 GUI 对话框导出歌词。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 长时运行（可异步）</span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "lrc.export",
+  "params": {}
+}</code></pre>
+
+      <h4><code>lrc.exportTo</code></h4>
+      <p data-lang="en">Write a .lrc file.</p>
+      <p data-lang="zh">写出 .lrc 文件。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · long-running (job-able)</span><span data-lang="zh">目标：<code>renderer</code> · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>path</code></td>
+            <td><span data-lang="en">string · required · Destination path</span><span data-lang="zh">string · 必填 · 目标路径</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "lrc.exportTo",
+  "params": {
+    "path": "${path}"
+  }
+}</code></pre>
+
+      <h3>
+        <span data-lang="en">Settings</span>
+        <span data-lang="zh">设置</span>
+      </h3>
+
+      <h4><code>settings.get</code></h4>
+      <p data-lang="en">Read the settings object.</p>
+      <p data-lang="zh">读取设置对象。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "settings.get",
+  "params": {}
+}</code></pre>
+
+      <h4><code>settings.update</code></h4>
+      <p data-lang="en">Patch settings and return the result.</p>
+      <p data-lang="zh">修补设置并返回结果。</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>settings</code></td>
+            <td><span data-lang="en">object · required · Settings patch</span><span data-lang="zh">object · 必填 · 设置补丁</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><em><span data-lang="en">Legacy aliases: <code>patch</code> → <code>settings</code> (accepted with a deprecation warning).</span><span data-lang="zh">旧别名：<code>patch</code> → <code>settings</code>（接受，但会发出弃用警告）。</span></em></p>
+      <pre><code>{
+  "method": "settings.update",
+  "params": {
+    "settings": {}
+  }
+}</code></pre>
+
+      <h2>
+        <span data-lang="en">Notes</span>
+        <span data-lang="zh">备注</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en">File paths must be inside a directory granted with <code>session.grantRoot</code> (or one of the app's default save roots). Grants are session-scoped and disappear on exit. The renderer additionally self-authorizes individually whitelisted media/project files (<code>.wav</code>, <code>.sxssinger</code>, <code>.sxsproj</code>, <code>.mid</code>, <code>.lrc</code>) through the same path rules as the dialogs.</span><span data-lang="zh">文件路径必须位于用 <code>session.grantRoot</code> 授权的目录内（或应用默认保存根目录之一）。授权随会话生效，退出即失效。渲染进程另外会通过对话框相同的路径规则，自行放行个别白名单媒体 / 项目文件（<code>.wav</code>、<code>.sxssinger</code>、<code>.sxsproj</code>、<code>.mid</code>、<code>.lrc</code>）。</span></li>
+        <li><span data-lang="en"><code>project.apply</code> validates every operation before mutating and rolls back on failure (<code>atomic: false</code> opts out). <code>dryRun: true</code> returns the plan without touching state.</span><span data-lang="zh"><code>project.apply</code> 会在修改前校验每个操作，失败即回滚（<code>atomic: false</code> 可退出回滚）。<code>dryRun: true</code> 只返回计划，不触碰状态。</span></li>
+        <li><span data-lang="en">Note ids are derived from note content, so identical payloads produce identical ids.</span><span data-lang="zh">音符 id 由音符内容派生，因此相同的载荷会产生相同的 id。</span></li>
+      </ul>
+
+      <nav class="doc-pager">
+        <a href="plugins.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Plugin Backends</span><span data-lang="zh">插件后端</span></div></div></a>
+        <a href="themes.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Themes &amp; UI</span><span data-lang="zh">主题与界面</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

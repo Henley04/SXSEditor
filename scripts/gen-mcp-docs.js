@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { schema, VERSION } = require('../src/shared/mcpSchema');
+const { CODES } = require('../src/main/mcpErrors');
 
 const out = path.join(__dirname, '..', 'docs', 'MCP.md');
 
@@ -61,8 +62,10 @@ lines.push('| GET | `/events` | Server-sent events (`?token=` allowed, EventSour
 lines.push('| GET | `/jobs`, `/jobs/:id` | Background job status |');
 lines.push('| POST | `/automation` | `{method, params, requestId?, async?}` |');
 lines.push('');
-lines.push('Discovery file: `<userData>/mcp-endpoint.json` (mode `0600`) with `port`, `token`,');
-lines.push('`tokens[]` (named tokens from `mcp-tokens.json`), `version`, `schemaVersion`, `urls`.');
+lines.push('Discovery file: `<userData>/mcp-endpoint.json` (mode `0600`) with `port`, `token`');
+lines.push('(the default token only), `pid`, `version`, `schemaVersion`, and `urls`. Named tokens');
+lines.push('stay in `<userData>/mcp-tokens.json` — readers of the discovery file cannot impersonate');
+lines.push('every configured client.');
 lines.push('');
 lines.push('## Calling');
 lines.push('');
@@ -81,8 +84,21 @@ lines.push('## Errors');
 lines.push('');
 lines.push('| Code | HTTP | Meaning |');
 lines.push('|---|---|---|');
-for (const [code, status] of Object.entries({ VALIDATION_ERROR: 400, UNAUTHORIZED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409, PRECONDITION_FAILED: 422, RATE_LIMITED: 429, TIMEOUT: 504, CANCELLED: 409, INTERNAL: 500 })) {
-  lines.push(`| \`${code}\` | ${status} | — |`);
+const CODE_MEANINGS = {
+  VALIDATION_ERROR: 'params failed JSON Schema validation (see `field` / `details.errors`)',
+  UNKNOWN_METHOD: 'method not in the schema (hint: `see GET /schema`)',
+  NOT_FOUND: 'referenced job, file, fragment or singer does not exist',
+  CONFLICT: 'state conflict with the current project / job',
+  PRECONDITION_FAILED: 'inference models not installed, or no project window open',
+  FORBIDDEN: 'non-loopback client, system path, or path outside granted roots',
+  UNAUTHORIZED: 'missing or invalid Bearer token',
+  RATE_LIMITED: 'too many requests (see `retry` hint)',
+  TIMEOUT: 'automation call exceeded its timeout',
+  CANCELLED: 'job was cancelled',
+  INTERNAL: 'unexpected error',
+};
+for (const [code, status] of Object.entries(CODES)) {
+  lines.push(`| \`${code}\` | ${status} | ${CODE_MEANINGS[code] || '—'} |`);
 }
 lines.push('');
 lines.push('## Events');

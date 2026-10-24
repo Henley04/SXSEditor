@@ -15,8 +15,10 @@ The stdio MCP server (`npm run mcp`) wraps the same API; both share one schema.
 | GET | `/jobs`, `/jobs/:id` | Background job status |
 | POST | `/automation` | `{method, params, requestId?, async?}` |
 
-Discovery file: `<userData>/mcp-endpoint.json` (mode `0600`) with `port`, `token`,
-`tokens[]` (named tokens from `mcp-tokens.json`), `version`, `schemaVersion`, `urls`.
+Discovery file: `<userData>/mcp-endpoint.json` (mode `0600`) with `port`, `token`
+(the default token only), `pid`, `version`, `schemaVersion`, and `urls`. Named tokens
+stay in `<userData>/mcp-tokens.json` — readers of the discovery file cannot impersonate
+every configured client.
 
 ## Calling
 
@@ -35,16 +37,17 @@ Every response is `{ok, result, warnings?, requestId?}` or
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `VALIDATION_ERROR` | 400 | — |
-| `UNAUTHORIZED` | 401 | — |
-| `FORBIDDEN` | 403 | — |
-| `NOT_FOUND` | 404 | — |
-| `CONFLICT` | 409 | — |
-| `PRECONDITION_FAILED` | 422 | — |
-| `RATE_LIMITED` | 429 | — |
-| `TIMEOUT` | 504 | — |
-| `CANCELLED` | 409 | — |
-| `INTERNAL` | 500 | — |
+| `VALIDATION_ERROR` | 400 | params failed JSON Schema validation (see `field` / `details.errors`) |
+| `UNKNOWN_METHOD` | 404 | method not in the schema (hint: `see GET /schema`) |
+| `NOT_FOUND` | 404 | referenced job, file, fragment or singer does not exist |
+| `CONFLICT` | 409 | state conflict with the current project / job |
+| `PRECONDITION_FAILED` | 422 | inference models not installed, or no project window open |
+| `FORBIDDEN` | 403 | non-loopback client, system path, or path outside granted roots |
+| `UNAUTHORIZED` | 401 | missing or invalid Bearer token |
+| `RATE_LIMITED` | 429 | too many requests (see `retry` hint) |
+| `TIMEOUT` | 504 | automation call exceeded its timeout |
+| `CANCELLED` | 409 | job was cancelled |
+| `INTERNAL` | 500 | unexpected error |
 
 ## Events
 

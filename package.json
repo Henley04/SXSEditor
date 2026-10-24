@@ -27,7 +27,7 @@
     "build:native": "node scripts/build-native-electron.js",
     "mcp": "node scripts/sxseditor-mcp.js",
     "splash:image": "node scripts/generate-splash-image.js",
-    "mcp:docs": "node scripts/gen-mcp-docs.js",
+    "mcp:docs": "node scripts/gen-mcp-docs.js && node scripts/gen-mcp-html.js",
     "mcp:selftest": "node scripts/mcp-selftest.js",
     "test:e2e:rmvpe": "node test/e2e/rmvpeE2E.js",
     "test:e2e:singer-edit": "electron test/e2e/singerEditE2E.js"
