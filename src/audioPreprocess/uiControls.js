@@ -1,5 +1,5 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT, BPM } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, getF0AreaHeight, BPM } from './constants.js';
 import { t } from '../i18n/index.js';
 import { mergePhoneme } from '../utils/mergePhoneme.js';
 import { tokenizeLyric } from '../utils/cjkUtils.js';
@@ -185,7 +185,7 @@ export function updateInlineInputPosition(roll) {
   const nh = NOTE_HEIGHT * roll.zoomY;
 
   const visible = nx + nw >= PIANO_KEY_WIDTH && nx <= roll.width &&
-                  ny + nh >= HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT && ny <= roll.height;
+                  ny + nh >= HEADER_HEIGHT + getF0AreaHeight() && ny <= roll.height;
 
   if (visible) {
     state.activeInlineInput.style.display = '';

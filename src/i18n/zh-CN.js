@@ -560,6 +560,7 @@ export default {
     back: '返回',
     wavWaveform: 'WAV 波形',
     midiEditor: 'MIDI 编辑器',
+    toggleF0: '收起 / 展开 F0 曲线',
     midiCanvasAriaLabel: 'MIDI编辑器：在空白处按下左键并拖动可新建音符，双击音符编辑歌词，Delete 删除选中音符',
     f0CurveReadOnly: 'F0 基频曲线 (只读)',
     waitingForExtraction: '等待提取...',

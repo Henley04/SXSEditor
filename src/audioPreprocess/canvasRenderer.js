@@ -1,5 +1,5 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, BPM, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, BPM, HEADER_HEIGHT, getF0AreaHeight } from './constants.js';
 import { getCanvasColors } from '../themes/canvasTheme.js';
 
 // Offscreen canvas cache for waveform (static layer, no playhead)
@@ -227,7 +227,7 @@ export function getMaxScrollY() {
   if (!state.pianoRoll) return 0;
   const pr = state.pianoRoll;
   if (!pr.height) return 0;
-  const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+  const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
   const viewportHeight = pr.height - pianoAreaTop;
   if (viewportHeight <= 0) return 0;
   const totalContentHeight = 128 * NOTE_HEIGHT * pr.zoomY;
@@ -279,7 +279,7 @@ export function updateScrollbars() {
 
   // 垂直滚动条
   if (dom.vscroll && dom.vscrollThumb) {
-    const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+    const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
     const viewportHeight = pr.height - pianoAreaTop;
     const totalContentHeight = 128 * NOTE_HEIGHT * pr.zoomY;
     const maxScrollY = Math.max(0, totalContentHeight - viewportHeight);

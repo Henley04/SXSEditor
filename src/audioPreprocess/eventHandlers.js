@@ -1,5 +1,5 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT } from './constants.js';
+import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT, NOTE_HEIGHT, getF0AreaHeight, isF0AreaCollapsed, setF0AreaCollapsed } from './constants.js';
 import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH, getMaxScrollX, getMaxScrollY } from './canvasRenderer.js';
 import { togglePlayback, startPlayback, stopPlayback, pausePlayback } from './playback.js';
 import { extractF0AndPitch } from './f0Extraction.js';
@@ -171,6 +171,41 @@ export function setupEventHandlers() {
   if (dom.btnImportMidi) {
     dom.btnImportMidi.addEventListener('click', importMidiFile);
   }
+  // F0 曲线折叠开关：编辑歌手与新建歌手的预处理窗口共用同一份状态
+  // （constants.js 里持久化到 localStorage），折叠后钢琴卷轴占满整个编辑区。
+  const btnToggleF0 = document.getElementById('btn-toggle-f0');
+  if (btnToggleF0) {
+    const syncF0ToggleState = () => {
+      btnToggleF0.setAttribute('aria-pressed', String(!isF0AreaCollapsed()));
+    };
+    syncF0ToggleState();
+    btnToggleF0.addEventListener('click', () => {
+      const roll = state.pianoRoll;
+      // 折叠会把可视区顶边从「头部 + F0 区」挪到「头部」，同时 maxScroll 变小，
+      // scrollY 会被 clamp 回一个更小的值 —— 音符会整体下移甚至掉出视口。
+      // 先记住当前视口中心对应的音高，切换后再把它放回中心，视觉位置就稳定了。
+      let centerPitch = null;
+      if (roll) {
+        const areaTop = HEADER_HEIGHT + getF0AreaHeight();
+        const visibleH = Math.max(NOTE_HEIGHT * 4, roll.height - areaTop);
+        centerPitch = roll._yToPitch(areaTop + visibleH / 2);
+      }
+
+      setF0AreaCollapsed(!isF0AreaCollapsed());
+      syncF0ToggleState();
+
+      if (roll) {
+        roll._staticCacheDirty = true;
+        if (centerPitch !== null) {
+          // 同一个音高同时作为上下界 → 重新居中
+          roll.scrollPitchRangeIntoView(centerPitch, centerPitch);
+        } else {
+          roll.render();
+        }
+      }
+    });
+  }
+
   dom.btnSave.addEventListener('click', saveSingerData);
   dom.btnBack.addEventListener('click', () => {
     stopPlayback();

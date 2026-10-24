@@ -563,6 +563,7 @@ export default {
     back: 'Back',
     wavWaveform: 'WAV Waveform',
     midiEditor: 'MIDI Editor',
+    toggleF0: 'Collapse / expand F0 curve',
     midiCanvasAriaLabel: 'MIDI editor: press and drag on empty space to add a note, double-click a note to edit its lyric, Delete to remove the selected note',
     f0CurveReadOnly: 'F0 Fundamental Curve (Read-only)',
     waitingForExtraction: 'Waiting for extraction...',

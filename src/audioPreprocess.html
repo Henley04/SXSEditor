@@ -125,7 +125,13 @@
         <div id="midi-section">
           <div id="midi-header">
             <span class="section-title" data-i18n="preprocess.midiEditor">MIDI 编辑器</span>
-            <span id="midi-info" class="file-info" data-i18n="preprocess.waitingForExtraction">-</span>
+            <div class="midi-header-right">
+              <span id="midi-info" class="file-info" data-i18n="preprocess.waitingForExtraction">-</span>
+              <button id="btn-toggle-f0" class="f0-toggle" type="button" aria-pressed="true"
+                      title="收起 / 展开 F0 曲线" data-i18n-title="preprocess.toggleF0">
+                <span class="f0-toggle-dot" aria-hidden="true"></span>F0
+              </button>
+            </div>
           </div>
           <div id="midi-body">
             <div id="midi-container">

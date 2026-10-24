@@ -1,5 +1,5 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT, BPM } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, getF0AreaHeight, BPM } from './constants.js';
 import { t } from '../i18n/index.js';
 import { debounce } from '../utils/debounce.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
@@ -164,13 +164,13 @@ export function initPianoRoll() {
 
     _pitchToY(pitch) {
       const maxPitch = 127;
-      const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+      const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
       return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT * this.zoomY - this.scrollY;
     },
 
     _yToPitch(y) {
       const maxPitch = 127;
-      const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+      const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
       const pianoAreaBottom = this.height;
       if (y >= pianoAreaBottom) return 0;
       if (y <= pianoAreaTop) return maxPitch;
@@ -184,7 +184,7 @@ export function initPianoRoll() {
      * 十几个半音，C4 附近的音符全在屏幕外，看起来像"没加载出来"。
      */
     scrollPitchRangeIntoView(minPitch, maxPitch) {
-      const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+      const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
       const visibleH = Math.max(NOTE_HEIGHT * 4, this.height - pianoAreaTop);
       const nh = NOTE_HEIGHT * this.zoomY;
       const midPitch = (Math.max(0, Math.min(127, minPitch)) + Math.max(0, Math.min(127, maxPitch))) / 2;
@@ -308,7 +308,7 @@ export function initPianoRoll() {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
       if (x < PIANO_KEY_WIDTH) return;
-      if (y < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT) return;
+      if (y < HEADER_HEIGHT + getF0AreaHeight()) return;
       if (e.button !== 0) return;
 
       this._dragCreatedNoteId = null;
@@ -446,7 +446,7 @@ export function initPianoRoll() {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
       if (x < PIANO_KEY_WIDTH) return;
-      if (y < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT) return;
+      if (y < HEADER_HEIGHT + getF0AreaHeight()) return;
 
       const hit = this._findNoteAt(x, y);
       if (hit) {
@@ -640,10 +640,13 @@ export function initPianoRoll() {
 
     _drawF0Curve(ctx, w, h, c) {
       if (!this.f0Data || this.f0Data.length === 0) return;
+      // 折叠后高度为 0：整块跳过，否则会在钢琴键区顶部留下一条 100px 的空白带
+      const areaHeight = getF0AreaHeight();
+      if (areaHeight <= 0) return;
 
       const f0AreaTop = HEADER_HEIGHT;
-      const f0AreaBottom = f0AreaTop + F0_CURVE_AREA_HEIGHT;
-      const f0AreaHeight = f0AreaBottom - f0AreaTop;
+      const f0AreaBottom = f0AreaTop + areaHeight;
+      const f0AreaHeight = areaHeight;
       const minF0 = 50;
       const maxF0 = 1500;
       const minLogF0 = Math.log2(minF0);
@@ -656,7 +659,7 @@ export function initPianoRoll() {
       const f0BgEndX = state.wavDuration > 0 ? Math.min(Math.floor(audioEndX), w) : w;
 
       ctx.fillStyle = c.bgInput;
-      ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, F0_CURVE_AREA_HEIGHT);
+      ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, areaHeight);
 
       // 在F0区域背景之上重绘节拍网格线
       const beatsPerMeasure = this.projectSettings.timeSignature[0];
@@ -808,11 +811,11 @@ export function initPianoRoll() {
         ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
         ctx.beginPath();
         ctx.moveTo(x, HEADER_HEIGHT);
-        ctx.lineTo(x, HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+        ctx.lineTo(x, HEADER_HEIGHT + getF0AreaHeight());
         ctx.stroke();
         ctx.strokeStyle = isMeasureLine ? c.fgDisabled : c.borderStrong;
         ctx.beginPath();
-        ctx.moveTo(x, HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+        ctx.moveTo(x, HEADER_HEIGHT + getF0AreaHeight());
         ctx.lineTo(x, h);
         ctx.stroke();
         if (isMeasureLine) {
@@ -825,7 +828,7 @@ export function initPianoRoll() {
       }
 
       const startPitch = this._yToPitch(h);
-      const endPitch = this._yToPitch(HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+      const endPitch = this._yToPitch(HEADER_HEIGHT + getF0AreaHeight());
       const blackKeys = new Set([1, 3, 6, 8, 10]);
       for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
         const y = this._pitchToY(p);
@@ -845,7 +848,7 @@ export function initPianoRoll() {
         const w = note.duration * BEAT_WIDTH * this.zoomX;
         const h = NOTE_HEIGHT * this.zoomY;
 
-        if (x + w < PIANO_KEY_WIDTH || x > this.width || y + h < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT || y > this.height) continue;
+        if (x + w < PIANO_KEY_WIDTH || x > this.width || y + h < HEADER_HEIGHT + getF0AreaHeight() || y > this.height) continue;
 
         const isSelected = note.id === this.selectedNoteId;
         const isHover = note.id === this.hoverNoteId;
@@ -888,7 +891,7 @@ export function initPianoRoll() {
       };
 
       const startPitch = this._yToPitch(h);
-      const endPitch = this._yToPitch(HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+      const endPitch = this._yToPitch(HEADER_HEIGHT + getF0AreaHeight());
       const blackKeys = new Set([1, 3, 6, 8, 10]);
 
       for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
