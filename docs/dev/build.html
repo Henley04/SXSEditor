@@ -154,7 +154,7 @@ cd SXSEditor</code></pre>
       <ul>
         <li><code>onnxruntime-node</code> <span data-lang="en">— ONNX Runtime with DirectML/CPU execution providers (main process)</span><span data-lang="zh">— ONNX Runtime，提供 DirectML/CPU 执行提供者（主进程）</span></li>
         <li><code>onnxruntime-web</code> <span data-lang="en">— ONNX Runtime with WebNN EP for NPU/GPU inference (renderer process)</span><span data-lang="zh">— ONNX Runtime，提供 WebNN EP 用于 NPU/GPU 推理（渲染进程）</span></li>
-        <li><code>@tensorflow/tfjs</code> <span data-lang="en">— Basic Pitch MIDI extraction</span><span data-lang="zh">— Basic Pitch MIDI 提取</span></li>
+        <li><code>@tensorflow/tfjs-core</code>, <code>@tensorflow/tfjs-converter</code>, <code>@tensorflow/tfjs-backend-cpu</code>, <code>@tensorflow/tfjs-backend-wasm</code> <span data-lang="en">— Basic Pitch MIDI extraction (TFJS split packages)</span><span data-lang="zh">— Basic Pitch MIDI 提取（TFJS 拆分子包）</span></li>
         <li><code>pinyin-pro</code> <span data-lang="en">— Chinese character → pinyin conversion</span><span data-lang="zh">— 汉字转拼音</span></li>
         <li><code>decibri</code> <span data-lang="en">— WASAPI audio output (Windows)</span><span data-lang="zh">— WASAPI 音频输出（Windows）</span></li>
         <li><code>systeminformation</code> <span data-lang="en">— GPU/VRAM detection</span><span data-lang="zh">— GPU/显存检测</span></li>
@@ -287,16 +287,18 @@ npm run test:watch        # Watch mode</code></pre>
 │   ├── dev/                   # Developer docs (this page)
 │   └── wiki/                  # Wiki source markdown
 ├── onnx_models/               # ONNX model files (git-ignored, auto-downloaded)
-│   ├── fp16/ fp32/ int8/      # Precision subdirectories
-│   ├── ja/                    # Japanese model variants
-│   └── preprocess/            # RMVPE & ROSVOT pitch detection models
+│   ├── fp16/ int8/            # Precision subdirectories (fp32 = root level)
+│   ├── int8/optimized_npu/    # NPU static-shape export
+│   ├── &lt;precision&gt;/JP/       # Japanese LoRA model variants
+│   ├── preprocess/            # RMVPE / ROSVOT / FCPE pitch detection models
+│   └── basic_pitch_model/     # Basic Pitch MIDI extraction (TFJS)
 ├── scripts/                   # Build helpers (generate-build-info.js)
 ├── src/
 │   ├── main.js                # Electron main process entry point
 │   ├── preload.js             # contextBridge IPC API
 │   ├── main/                  # Main process modules (windowManager, security,
 │   │                          #   settingsIpc, svsIpc, audioIpc, themeIpc, ...)
-│   ├── renderer/              # Main window renderer (timeline, project IO)
+│   ├── renderer/              # Main window renderer (timeline, project IO, lrcExport)
 │   ├── fragmentEditor/        # Fragment editor renderer (piano roll)
 │   ├── editor/                # Shared editor modules (trackManager, historyManager)
 │   ├── inference/             # Neural inference pipelines
@@ -306,11 +308,11 @@ npm run test:watch        # Watch mode</code></pre>
 │   │   ├── fcpePitchDetector.js  # FCPE pitch detector (default MIDI extraction)
 │   │   ├── basicPitch.js
 │   │   └── phone_set.json     # Phoneme vocabulary (3033 entries)
-│   ├── audio/                 # AudioOutputManager (WASAPI), wavEncoder, lrcExport
+│   ├── audio/                 # AudioOutputManager (WASAPI), wavEncoder
 │   ├── themes/                # Theme system (builtins, manager, tokens)
 │   ├── i18n/                  # Internationalization (en, zh-CN)
 │   └── utils/                 # Shared utilities
-├── test/                      # Test suite (~61 files, 1500+ cases)
+├── test/                      # Test suite (95 files, 1904 cases; 1889 in CI)
 ├── forge.config.js            # Electron Forge config (packaging, makers)
 ├── webpack.*.config.js        # Webpack configs (main + renderer)
 └── package.json</code></pre>

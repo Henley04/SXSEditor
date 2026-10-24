@@ -241,7 +241,7 @@ Fine-tunes preflow + embedding layer to add Japanese phoneme support for singing
 
 **Output:** `SoulX-Singer/outputs/lora_jp/`
 
-### 13.1 Full Pipeline (8 steps, recommended)
+### 12.1 Full Pipeline (8 steps, recommended)
 **Script:** `train/lora_jp/run_pipeline.py`
 Runs all 8 steps sequentially: phoneme mapping → init embeddings → 3-phase training → 3 validations → final synthesis check.
 
@@ -250,7 +250,7 @@ Runs all 8 steps sequentially: phoneme mapping → init embeddings → 3-phase t
 cd SoulX-Singer ; python train/lora_jp/run_pipeline.py
 ```
 
-### 13.2 Dataset Preparation
+### 12.2 Dataset Preparation
 **Script:** `train/lora_jp/prepare_dataset.py`
 Converts PJS Corpus (lab + wav + MIDI) to training metadata JSON format.
 
@@ -258,7 +258,7 @@ Converts PJS Corpus (lab + wav + MIDI) to training metadata JSON format.
 cd SoulX-Singer ; python train/lora_jp/prepare_dataset.py --corpus_dir "pretrained_models/SoulX-Singer/assets/LoRA-JP/PJS_corpus_ver1.1" --output_dir "train/lora_jp/dataset" --sample_rate 24000
 ```
 
-### 13.3 Embedding Initialization
+### 12.3 Embedding Initialization
 **Script:** `train/lora_jp/init_embeddings.py`
 Extends the embedding table with Japanese phonemes, initialized from Chinese+English phoneme mapping with L2 normalization and std calibration.
 
@@ -266,7 +266,7 @@ Extends the embedding table with Japanese phonemes, initialized from Chinese+Eng
 cd SoulX-Singer ; python train/lora_jp/init_embeddings.py --model_path "pretrained_models/SoulX-Singer/model.pt" --mapping "train/lora_jp/jp_phoneme_mapping.json" --phoneset "train/lora_jp/jp_phone_set.json" --output "outputs/lora_jp/init_embed.pt" --target_std 0.9
 ```
 
-### 13.4 Staged Training (3 Phases)
+### 12.4 Staged Training (3 Phases)
 **Script:** `train/lora_jp/train_staged.py`
 
 Three-phase training strategy:
@@ -285,7 +285,7 @@ cd SoulX-Singer ; python train/lora_jp/train_staged.py --phase 2 --model_path "p
 cd SoulX-Singer ; python train/lora_jp/train_staged.py --phase 3 --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --resume "outputs/lora_jp/stage2/best.pt" --batch_size 2 --lr 5e-5 --device cuda
 ```
 
-### 13.5 Validation & Auto-Rollback
+### 12.5 Validation & Auto-Rollback
 **Script:** `train/lora_jp/validate_and_rollback.py`
 Validates checkpoint quality using 3 metrics: embedding std, avg frames per phoneme, and validation loss.
 Triggers automatic rollback if danger thresholds are crossed. Optionally synthesizes test sentences.
@@ -298,7 +298,7 @@ cd SoulX-Singer ; python train/lora_jp/validate_and_rollback.py --checkpoint "ou
 cd SoulX-Singer ; python train/lora_jp/validate_and_rollback.py --checkpoint "outputs/lora_jp/stage3/best.pt" --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --phoneset_path "train/lora_jp/jp_phone_set.json" --dataset_metadata "train/lora_jp/dataset/metadata.json" --dataset_wav_dir "train/lora_jp/dataset/wavs" --output_dir "outputs/lora_jp" --device cuda --synthesize
 ```
 
-### 13.6 ONNX Export (for SXSEditor)
+### 12.6 ONNX Export (for SXSEditor)
 **Script:** `train/lora_jp/export_onnx.py`
 Exports fine-tuned preflow + JP embedding as ONNX files compatible with SXSEditor inference pipeline.
 Generates `note_text_encoder.onnx` (extended embedding) and `preflow.onnx` (fine-tuned preflow).
@@ -307,7 +307,7 @@ Generates `note_text_encoder.onnx` (extended embedding) and `preflow.onnx` (fine
 cd SoulX-Singer ; python train/lora_jp/export_onnx.py --checkpoint "outputs/lora_jp/stage3/best.pt" --base_model "pretrained_models/SoulX-Singer/model.pt" --output_dir "onnx_models/fp16/JP"
 ```
 
-### 13.7 LoRA Training (Legacy single-phase)
+### 12.7 LoRA Training (Legacy single-phase)
 **Script:** `train/lora_jp/train_lora.py`
 Older single-phase fine-tuning script (preflow + JP embedding). Use `train_staged.py` for better results.
 
@@ -315,7 +315,7 @@ Older single-phase fine-tuning script (preflow + JP embedding). Use `train_stage
 cd SoulX-Singer ; python train/lora_jp/train_lora.py --model_path "pretrained_models/SoulX-Singer/model.pt" --config "soulxsinger/config/soulxsinger.yaml" --output_dir "outputs/lora_jp" --epochs 50 --batch_size 4 --use_amp
 ```
 
-### 13.8 Phoneme Mapping Generation
+### 12.8 Phoneme Mapping Generation
 **Script:** `train/lora_jp/phoneme_mapping.py`
 Generates Japanese-to-source phoneme mapping JSON used for embedding initialization.
 
@@ -323,7 +323,7 @@ Generates Japanese-to-source phoneme mapping JSON used for embedding initializat
 cd SoulX-Singer ; python train/lora_jp/phoneme_mapping.py
 ```
 
-### 13.9 PyTorch Inference Verification
+### 12.9 PyTorch Inference Verification
 **Script:** `train/lora_jp/infer_lora.py`
 Runs PyTorch inference with fine-tuned model to verify Japanese singing voice synthesis quality.
 
