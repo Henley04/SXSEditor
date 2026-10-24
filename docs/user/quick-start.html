@@ -68,8 +68,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">SXSEditor is a desktop application for singing voice synthesis (SVS). It uses the SoulX-Singer neural model on ONNX Runtime with DirectML GPU, WebNN NPU, and CPU support. Supported singing languages: <strong>English</strong>, <strong>Chinese (Mandarin)</strong>, and <strong>Japanese</strong> (via English phoneme migration or hybrid phoneme mapping on the base model; jp-lora mode requires the optional JP model pack).</p>
-          <p data-lang="zh">SXSEditor 是一个歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU 和 CPU 推理。支持的合成语言：<strong>英语</strong>、<strong>中文（普通话）</strong> 和 <strong>日语</strong>（通过英语音素迁移或混合音素映射在基础模型上合成；jp-lora 模式需下载可选 JP 模型包）。</p>
+          <p data-lang="en">SXSEditor is a desktop application for singing voice synthesis (SVS). It uses the SoulX-Singer neural model on ONNX Runtime with DirectML GPU, WebNN NPU, and CPU support. Supported singing languages: <strong>English</strong>, <strong>Chinese (Mandarin)</strong>, and <strong>Japanese</strong> (via English phoneme migration or hybrid phoneme mapping on the base model; the JP LoRA model mode is still in development and currently disabled in Settings).</p>
+          <p data-lang="zh">SXSEditor 是一个歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU 和 CPU 推理。支持的合成语言：<strong>英语</strong>、<strong>中文（普通话）</strong> 和 <strong>日语</strong>（通过英语音素迁移或混合音素映射在基础模型上合成；日语 LoRA 模型模式仍在开发中，当前已在设置中禁用）。</p>
         </div>
       </div>
 
@@ -189,7 +189,7 @@
         <li><span data-lang="en">Select your desired precision. If unsure, choose <strong>FP32</strong> for the best quality.</span><span data-lang="zh">选择所需精度。如不确定，请选 <strong>FP32</strong> 以获得最佳音质。</span></li>
         <li><span data-lang="en">(Optional) Click <strong>Change</strong> to choose a different download directory. The default location does not require admin privileges.</span><span data-lang="zh">（可选）点击 <strong>Change</strong> 选择其他下载目录。默认位置无需管理员权限。</span></li>
         <li><span data-lang="en">Click <strong>Start Download</strong>.</span><span data-lang="zh">点击 <strong>Start Download</strong>。</span></li>
-        <li><span data-lang="en">Wait for all 9 ONNX model files to download. The window shows per-file and overall progress.</span><span data-lang="zh">等待 9 个 ONNX 模型文件全部下载完成。窗口会显示每个文件和总进度。</span></li>
+        <li><span data-lang="en">Wait for all model files to download (19 required files at FP32/FP16/INT8 precision; 12 at INT8-NPU). The window shows per-file and overall progress.</span><span data-lang="zh">等待所有模型文件下载完成（FP32/FP16/INT8 精度下共 19 个必需文件；INT8-NPU 为 12 个）。窗口会显示每个文件和总进度。</span></li>
         <li><span data-lang="en">When all files show "Complete", click <strong>Close</strong>. The main window appears.</span><span data-lang="zh">当所有文件显示 "Complete" 时，点击 <strong>Close</strong>。主窗口随即出现。</span></li>
       </ol>
       <div class="callout tip">

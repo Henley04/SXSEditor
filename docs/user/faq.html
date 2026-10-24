@@ -118,8 +118,8 @@
         <span data-lang="en">What models do I need?</span>
         <span data-lang="zh">需要哪些模型？</span>
       </h3>
-      <p data-lang="en">SXSEditor requires 9 ONNX model files for the SVS synthesis pipeline, plus optional models for pitch detection (RMVPE) and MIDI extraction (Basic Pitch). On first launch, the Model Download window opens automatically to download them.</p>
-      <p data-lang="zh">SXSEditor 的 SVS 合成管线需要 9 个 ONNX 模型文件，外加可选的音高检测（RMVPE）和 MIDI 提取（Basic Pitch）模型。首次启动时，模型下载窗口会自动打开进行下载。</p>
+      <p data-lang="en">SXSEditor requires 9 ONNX models for the SVS synthesis pipeline — 16 files in total at FP32/FP16/INT8 precision (seven of the models ship external .onnx.data weight files), or 9 self-contained files at INT8-NPU. Pitch detection (RMVPE) and MIDI extraction (Basic Pitch) models are downloaded in the same first-launch flow, for 19 required files in all (12 at INT8-NPU). On first launch, the Model Download window opens automatically to download them.</p>
+      <p data-lang="zh">SXSEditor 的 SVS 合成管线需要 9 个 ONNX 模型——在 FP32/FP16/INT8 精度下共 16 个文件（其中 7 个模型附带 .onnx.data 外部权重文件），INT8-NPU 精度下为 9 个自包含文件。音高检测（RMVPE）与 MIDI 提取（Basic Pitch）模型在同一首次启动流程中一并下载，总计 19 个必需文件（INT8-NPU 为 12 个）。首次启动时，模型下载窗口会自动打开进行下载。</p>
 
       <h3>
         <span data-lang="en">How much disk space do models need?</span>
@@ -284,7 +284,7 @@
         <span data-lang="zh">合成速度很慢</span>
       </h3>
       <ul>
-        <li><span data-lang="en"><strong>First synthesis is always slower</strong> — the pipeline must load 9 ONNX models into GPU memory. Subsequent syntheses are faster.</span><span data-lang="zh"><strong>首次合成总是较慢</strong>——管线需要将 9 个 ONNX 模型加载到 GPU 显存。之后的合成会更快。</span></li>
+        <li><span data-lang="en"><strong>First synthesis is always slower</strong> — the pipeline must load the 9 ONNX models (16 files at standard precision) into GPU memory. Subsequent syntheses are faster.</span><span data-lang="zh"><strong>首次合成总是较慢</strong>——管线需要将 9 个 ONNX 模型（标准精度下 16 个文件）加载到 GPU 显存。之后的合成会更快。</span></li>
         <li><span data-lang="en"><strong>Use a discrete GPU</strong> if available. CPU inference is significantly slower.</span><span data-lang="zh">如有 <strong>独立显卡</strong> 请使用。CPU 推理明显较慢。</span></li>
         <li><span data-lang="en"><strong>Reduce diffusion steps</strong> in Settings &gt; Preview Inference Parameters. Default is 16; try 8 for faster preview.</span><span data-lang="zh">在设置 &gt; 预览推理参数中 <strong>减少扩散步数</strong>。默认 16；可尝试 8 以加快预览。</span></li>
         <li><span data-lang="en"><strong>Set CFG Strength to 0</strong> to skip unconditional prediction, roughly doubling speed.</span><span data-lang="zh"><strong>将 CFG Strength 设为 0</strong> 可跳过无条件预测，速度约提升一倍。</span></li>

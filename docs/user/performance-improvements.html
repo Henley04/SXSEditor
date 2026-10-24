@@ -113,15 +113,15 @@
         </tbody>
       </table>
 
-      <p data-lang="en">TensorRT-RTX is <strong>opt-in</strong>: the app exposes a <em>one-click TensorRT-RTX diagnostic</em> and keeps the TRT dynamic profile generation optional. Model files are drop-in compatible with the existing <code>fp16/</code> folder, so switching between DML and TensorRT-RTX requires no extra downloads.</p>
-      <p data-lang="zh">TensorRT-RTX 为<strong>可选开启</strong>：应用提供<em>一键 TensorRT-RTX 诊断</em>，并保持 TRT 动态 profile 生成可选。模型文件与现有 <code>fp16/</code> 目录直接兼容，因此在 DML 与 TensorRT-RTX 之间切换无需额外下载。</p>
+      <p data-lang="en">TensorRT-RTX needs no manual setup: on the Windows ML path, ONNX Runtime probes the <code>NvTensorRtRtx</code> execution provider first (then OpenVINO) and falls back to DirectML/CPU when unavailable — an installed TensorRT-RTX runtime is therefore used automatically. Model files are drop-in compatible with the existing <code>fp16/</code> folder, so switching between DML and TensorRT-RTX requires no extra downloads.</p>
+      <p data-lang="zh">TensorRT-RTX 无需手动开启：在 Windows ML 路径上，ONNX Runtime 会优先探测 <code>NvTensorRtRtx</code> 执行提供器（随后是 OpenVINO），不可用时自动回退 DirectML/CPU——因此安装了 TensorRT-RTX 运行时即自动启用。模型文件与现有 <code>fp16/</code> 目录直接兼容，在 DML 与 TensorRT-RTX 之间切换无需额外下载。</p>
 
       <h2>
         <span data-lang="en">Native backend selection</span>
         <span data-lang="zh">原生后端选择</span>
       </h2>
-      <p data-lang="en">The old WAML-enabled checkbox has been replaced by a <strong>native inference backend selector</strong> in Settings. A single execution provider now serves multiple hardware paths — you pick a preferred backend (e.g. <em>TensorRT-RTX</em>, <em>DML</em>, <em>WebNN NPU/GPU</em> or <em>CPU</em>) and SXSEditor falls back automatically when a path is unavailable. This removes a whole class of "model loaded on CPU" surprises and makes hardware switching explicit.</p>
-      <p data-lang="zh">设置中旧的 WinML 开关已被<strong>原生推理后端选择器</strong>取代。单一执行提供器现可服务多条硬件路径——你选择一个首选后端（如 <em>TensorRT-RTX</em>、<em>DML</em>、<em>WebNN NPU/GPU</em> 或 <em>CPU</em>），当某条路径不可用时 SXSEditor 会自动回退。这消除了一整类"模型意外跑到 CPU 上"的问题，也让硬件切换变得清晰。</p>
+      <p data-lang="en">The old WAML-enabled checkbox has been replaced by a <strong>native inference backend selector</strong> in Settings (Inference → Native backend). You pick a preferred backend — <em>Auto (Windows ML first)</em>, <em>Windows ML</em> or <em>DirectML</em> — and SXSEditor falls back automatically when a path is unavailable. On the Windows ML paths the runtime probes the TensorRT-RTX and OpenVINO execution providers before falling back to DirectML/CPU. This removes a whole class of "model loaded on CPU" surprises and makes hardware switching explicit.</p>
+      <p data-lang="zh">设置中旧的 WinML 开关已被<strong>原生推理后端选择器</strong>取代（推理 → 本机执行后端）。你选择一个首选后端——<em>自动（Windows ML 优先）</em>、<em>Windows ML</em> 或 <em>DirectML</em>——当某条路径不可用时 SXSEditor 会自动回退。在 Windows ML 路径上，运行时会先探测 TensorRT-RTX 与 OpenVINO 执行提供器，再回退 DirectML/CPU。这消除了一整类"模型意外跑到 CPU 上"的问题，也让硬件切换变得清晰。</p>
 
       <h2>
         <span data-lang="en">Robustness: zero-output protection &amp; D2H fallback</span>
@@ -148,12 +148,12 @@
         <span data-lang="zh">如何启用</span>
       </h2>
       <ol>
-        <li data-lang="en">Install the latest <strong>v2.0.2</strong> build.</li>
-        <li data-lang="zh">安装最新的 <strong>v2.0.2</strong> 版本。</li>
-        <li data-lang="en">Open <em>Settings → Backend</em> and select <strong>TensorRT-RTX (NVIDIA)</strong> after running the built-in diagnostic.</li>
-        <li data-lang="zh">打开 <em>设置 → 后端</em>，运行内置诊断后选择 <strong>TensorRT-RTX (NVIDIA)</strong>。</li>
-        <li data-lang="en">Confirm the log shows <code>[winml:NvTensor]</code> for <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code>.</li>
-        <li data-lang="zh">确认日志中 <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> 显示 <code>[winml:NvTensor]</code>。</li>
+        <li data-lang="en">Install the latest build.</li>
+        <li data-lang="zh">安装最新的版本。</li>
+        <li data-lang="en">Open <em>Settings → Inference</em> and leave Native backend on <strong>Auto (Windows ML first)</strong> — this is the path that probes TensorRT-RTX.</li>
+        <li data-lang="zh">打开 <em>设置 → 推理</em>，将本机执行后端保持为<strong>自动（Windows ML 优先）</strong>——这是会探测 TensorRT-RTX 的路径。</li>
+        <li data-lang="en">Confirm the log shows the <code>[TRTRTX]</code> scope for <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> (e.g. <code>[TRTRTX][session:…] created ep=…NvTensorRtRtx…</code>); <code>[WinML]</code> appears when another Windows ML EP serves the model.</li>
+        <li data-lang="zh">确认日志中 <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code>显示 <code>[TRTRTX]</code> 前缀（例如 <code>[TRTRTX][session:…] created ep=…NvTensorRtRtx…</code>）；当其他 Windows ML EP 承载模型时显示 <code>[WinML]</code>。</li>
       </ol>
 
       <nav class="doc-pager">

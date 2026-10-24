@@ -80,8 +80,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX model files</strong> in total. The model operates internally at <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. Playback now defaults to <strong>48000 Hz</strong> — the 24 kHz model output is resampled with a band-limited Kaiser-windowed sinc interpolator for playback. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
-          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型文件</strong>。模型内部以 <strong>24000 Hz</strong> 运行，hop size 为 <strong>480</strong>。播放默认采样率现在为 <strong>48000 Hz</strong>——24 kHz 模型输出经 Kaiser 窗带限 sinc 重采样后播放。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
+          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX models</strong> in total. At FP32/FP16/INT8 precision these expand to <strong>16 files</strong> (seven models ship external .onnx.data weight files); at INT8-NPU they are 9 self-contained files. The first-launch download covers 19 required files in all (adding the RMVPE pitch model and the Basic Pitch MIDI model; 12 at INT8-NPU). The model operates internally at <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. Playback now defaults to <strong>48000 Hz</strong> — the 24 kHz model output is resampled with a band-limited Kaiser-windowed sinc interpolator for playback. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
+          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型</strong>。在 FP32/FP16/INT8 精度下它们展开为 <strong>16 个文件</strong>（其中 7 个模型附带 .onnx.data 外部权重文件）；INT8-NPU 精度下为 9 个自包含文件。首次启动下载共覆盖 19 个必需文件（另含 RMVPE 音高模型与 Basic Pitch MIDI 模型；INT8-NPU 为 12 个）。模型内部以 <strong>24000 Hz</strong> 运行，hop size 为 <strong>480</strong>。播放默认采样率现在为 <strong>48000 Hz</strong>——24 kHz 模型输出经 Kaiser 窗带限 sinc 重采样后播放。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
         </div>
       </div>
 
@@ -103,8 +103,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Synthesis Cancellation</strong> — a cancel button appears during synthesis (both preview and export). Cancellation is <em>cooperative</em>: GPU inference exits at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach. The cancellation is near-instant for Euler/Heun samplers and completes at the next sub-stage for STORK-2.</p>
-          <p data-lang="zh"><strong>取消合成</strong>——合成过程中（预览和导出均支持）会出现取消按钮。取消为<em>协作式</em>：GPU 推理在扩散步之间的安全检查点退出，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。Euler/Heun 求解器下取消近乎即时，STORK-2 则在下一个 sub-stage 完成后退出。</p>
+          <p data-lang="en"><strong>Synthesis Cancellation</strong> — preview playback can be stopped at any time: during model loading and synthesis the transport's Play button turns into a <strong>Cancel synthesis</strong> button (Stop also stays available), and the underlying cancellation is <em>cooperative</em> — GPU inference exits at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach. Cancellation is near-instant for Euler/Heun samplers and completes at the next sub-stage for STORK-2. <strong>Export is different:</strong> once an export starts, its Cancel button is disabled and closing the dialog does not stop it — the export keeps running in the background and the WAV file is still written.</p>
+          <p data-lang="zh"><strong>取消合成</strong>——预览播放可随时停止：模型加载与合成期间，播放按钮会变为<strong>取消合成</strong>按钮（Stop 也始终可用），底层取消为<em>协作式</em>——GPU 推理在扩散步之间的安全检查点退出，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。Euler/Heun 求解器下取消近乎即时，STORK-2 则在下一个 sub-stage 完成后退出。<strong>导出则不同：</strong>导出开始后其 Cancel 按钮即被禁用，关闭对话框也不会停止导出——导出会在后台继续运行并照常写出 WAV 文件。</p>
         </div>
       </div>
 
@@ -296,7 +296,7 @@
         <tbody>
           <tr>
             <td><span data-lang="en">Format</span><span data-lang="zh">格式</span></td>
-            <td><span data-lang="en">WAV (PCM)</span><span data-lang="zh">WAV（PCM）</span></td>
+            <td><span data-lang="en">WAV (32-bit IEEE float by default; 16/24-bit integer PCM)</span><span data-lang="zh">WAV（默认 32-bit IEEE float；16/24 位为整型 PCM）</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Model Internal Rate</span><span data-lang="zh">模型内部采样率</span></td>

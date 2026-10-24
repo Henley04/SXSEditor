@@ -248,8 +248,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">The server imposes a hard upload size cap (default 100 MB, the Cloudflare Workers free-tier limit). <code>.sxssinger</code> files are typically a few MB, so this is rarely an issue.</p>
-          <p data-lang="zh">服务端对上传大小有硬性上限（默认 100 MB，Cloudflare Workers 免费层限制）。<code>.sxssinger</code> 文件通常仅几 MB，因此基本不会触及上限。</p>
+          <p data-lang="en">The client enforces a hard upload size cap of <strong>512 MB</strong> per <code>.sxssinger</code> file — a safety guard against accidentally streaming a huge file off your machine. <code>.sxssinger</code> files are typically only a few MB, so this is rarely an issue.</p>
+          <p data-lang="zh">客户端对每个 <code>.sxssinger</code> 文件有 <strong>512 MB</strong> 的硬性上传上限——这是防止误选大文件将数据无上限流出的兜底保护。<code>.sxssinger</code> 文件通常仅几 MB，因此基本不会触及上限。</p>
         </div>
       </div>
 
