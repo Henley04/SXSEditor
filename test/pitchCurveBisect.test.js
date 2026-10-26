@@ -27,6 +27,11 @@ const {
   bumpNotesVersion,
 } = state;
 
+// 自动/手动作用域：手动层只在 coverage 内生效（M3 的"逐音符共存"语义）。
+// 参考实现必须使用同一个作用域计算，否则等价性比对会把"区外走音符音高"
+// 误判成实现错误。
+const { computeManualCoverage } = require('../src/shared/autoPitchCurve.js');
+
 // ---- 线性参考实现（改写前的原逻辑，O(n) 线性扫描）----
 // 注意：v3 补丁在 brush 与 auto-pitch 之间增加了 _findActiveNoteAtTime 回退，
 // 即当锚点/笔刷均未覆盖该时间点时，先尝试用激活音符的 pitch 作为 basePitch。
@@ -43,9 +48,17 @@ function _findActiveNoteAtTime(time) {
 function linearRef(pitchCurve, sortedAnchors, autoPoints, time) {
   if (!pitchCurve.enabled) return null;
   let basePitch = null;
+  // F4 修复后的语义：作用域内锚点区间外**延续首/末锚点值**（笔刷仍优先）；
+  // 作用域外一律交给音符音高/自动层 —— 与 createPitchResolver 一致。
+  let anchorEdgeFallback = null;
+  const sortedNotes = getNotes().slice().sort((a, b) => a.start - b.start || b.duration - a.duration);
+  const coverage = computeManualCoverage(pitchCurve, sortedNotes, { mergeGapBeats: 0.5 });
+  const inCoverage = coverage.some((r) => time >= r.start && time <= r.end);
 
-  if (pitchCurve.anchorPoints.length > 0) {
-    if (!(time < sortedAnchors[0].time || time > sortedAnchors[sortedAnchors.length - 1].time)) {
+  if (inCoverage && pitchCurve.anchorPoints.length > 0) {
+    const firstT = sortedAnchors[0].time;
+    const lastT = sortedAnchors[sortedAnchors.length - 1].time;
+    if (!(time < firstT || time > lastT)) {
       for (let i = 0; i < sortedAnchors.length - 1; i++) {
         if (time >= sortedAnchors[i].time && time <= sortedAnchors[i + 1].time) {
           const t = (sortedAnchors[i + 1].time - sortedAnchors[i].time) > 0
@@ -59,10 +72,14 @@ function linearRef(pitchCurve, sortedAnchors, autoPoints, time) {
         }
       }
       if (basePitch === null) basePitch = sortedAnchors[sortedAnchors.length - 1].pitch;
+    } else {
+      anchorEdgeFallback = time < firstT
+        ? sortedAnchors[0].pitch
+        : sortedAnchors[sortedAnchors.length - 1].pitch;
     }
   }
 
-  if (basePitch === null) {
+  if (basePitch === null && inCoverage) {
     for (const seg of pitchCurve.brushSegments) {
       if (seg.points.length < 2) continue;
       const pts = seg.points;
@@ -79,6 +96,10 @@ function linearRef(pitchCurve, sortedAnchors, autoPoints, time) {
         break;
       }
     }
+  }
+
+  if (basePitch === null && inCoverage && anchorEdgeFallback !== null) {
+    basePitch = anchorEdgeFallback;
   }
 
   if (basePitch === null) {

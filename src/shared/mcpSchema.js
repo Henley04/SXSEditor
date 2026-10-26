@@ -50,6 +50,13 @@ const FRAGMENT = {
   required: ['singerId'],
 };
 
+const PITCH_ANCHOR = obj({
+  time: num('Time in beats', { minimum: 0 }),
+  pitch: num('Absolute MIDI pitch (NOT an offset)'),
+  strength: num('Anchor strength 0-100', { minimum: 0, maximum: 100 }),
+  smoothness: num('Segment smoothness 0-100', { minimum: 0, maximum: 100 }),
+}, ['time', 'pitch']);
+
 const PROJECT_DOC = obj({
   project: obj({ bpm: num('Beats per minute', { minimum: 1 }), timeSignature: { type: 'array', items: { type: 'integer' }, minItems: 2, maxItems: 2 } }),
   singers: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -244,6 +251,27 @@ const METHODS = {
     target: 'renderer', mutates: true,
     params: obj({ fragmentId: str('Fragment id') }, ['fragmentId']),
     aliases: { id: 'fragmentId' },
+  },
+  'fragment.getPitchCurve': {
+    summary: 'Read a fragment pitch curve: auto config, manual anchors/brush/derived segments, and the manual coverage ranges.',
+    description: 'Anchors store ABSOLUTE MIDI pitches. Manual content wins inside its coverage; the auto layer fills the rest.',
+    target: 'renderer',
+    params: obj({
+      fragmentId: str('Fragment id'),
+      includePoints: bool('Include every point of derived segments (default false: only id/range/pointCount)'),
+    }, ['fragmentId']),
+  },
+  'fragment.setPitchCurve': {
+    summary: 'Update a fragment pitch curve: auto params, on/off, preset, manual anchors, derived segments.',
+    description: 'Omitted fields stay untouched. reset="manual" clears manual content (back to auto); reset="all" also disables auto.',
+    target: 'renderer', mutates: true,
+    params: obj({
+      fragmentId: str('Fragment id'),
+      auto: { type: 'object', additionalProperties: true, description: 'Partial auto config: { enabled, preset, params }' },
+      anchorPoints: { type: 'array', items: PITCH_ANCHOR, description: 'Replace manual anchors (omit to keep)' },
+      bakedSegments: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Replace derived segments (omit to keep)' },
+      reset: { type: 'string', enum: ['manual', 'all'], description: 'manual = clear manual layers; all = also disable auto' },
+    }, ['fragmentId']),
   },
   'fragment.exportTo': {
     summary: 'Synthesize one fragment and write a WAV.',

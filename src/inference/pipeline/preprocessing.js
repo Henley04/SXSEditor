@@ -93,8 +93,15 @@ class Preprocessing {
 
     buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0) {
         if (notes.length === 0) return new Float32Array(0);
-        const lastNote = notes[notes.length - 1];
-        const totalBeats = lastNote.start + lastNote.duration;
+        // F2：总时长取 max(start+duration)，不再取 notes[notes.length-1]。
+        // 渲染层新建音符是 push 到数组末尾的，数组末元素未必是最晚结束的音符；
+        // 用它算 totalFrames 会让整段 F0 被截断（实测 150 帧 vs 应有 300 帧，
+        // 尾部 3 秒的音高 conditioning 全部变成 unvoiced）。
+        let totalBeats = 0;
+        for (const n of notes) {
+            const end = n.start + n.duration;
+            if (end > totalBeats) totalBeats = end;
+        }
         const totalSeconds = (totalBeats / bpm) * 60;
         const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / HOP_SIZE);
 

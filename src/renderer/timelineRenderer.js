@@ -696,6 +696,10 @@ export function renderFragmentTimeline() {
         labelClipRect,
       );
 
+      // 自动/手动徽标：让"这段有没有自动曲线、有没有被手动改过"在主窗口一眼可见
+      // （不需要打开分片编辑器才能发现）。
+      _drawPitchCurveBadge(ctx, fragment, fragX + labelInsetX, y + 4, labelMaxWidth, c);
+
       ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
       const bps = state.project.timeSignature ? state.project.timeSignature[0] : 4;
@@ -1271,4 +1275,44 @@ if (typeof window !== 'undefined') {
     invalidateFragmentNoteSprites();
     refreshAll();
   });
+}
+
+/**
+ * 分片卡片上的音高曲线状态徽标。
+ *   · 自动开启 + 无手动内容  → "自动"（浅色）
+ *   · 自动开启 + 有手动内容  → "混合"（强调色）
+ *   · 仅手动                 → "手动"
+ * 未开启自动且无手动内容时不画（v2.0.2 的旧工程不会多出任何视觉元素）。
+ */
+function _drawPitchCurveBadge(ctx, fragment, x, y, maxWidth, c) {
+  const pc = fragment && fragment.pitchCurve;
+  if (!pc) return;
+  const autoOn = !!(pc.auto && pc.auto.enabled);
+  const manualCount = (pc.anchorPoints?.length || 0)
+    + (pc.brushSegments?.length || 0)
+    + (pc.bakedSegments?.length || 0);
+  if (!autoOn && manualCount === 0) return;
+
+  const label = autoOn ? (manualCount > 0 ? t('main.pitchCurveMixed') : t('main.pitchCurveAuto')) : t('main.pitchCurveManual');
+  ctx.font = '9px sans-serif';
+  const w = Math.min(maxWidth, ctx.measureText(label).width + 8);
+  if (w < 16) return;
+  const h = 12;
+  const bx = Math.max(0, x);
+  if (bx + w > maxWidth) return;
+
+  ctx.save();
+  ctx.fillStyle = autoOn ? (c.accent || '#5b8def') : (c.fgMuted || '#8888a8');
+  ctx.globalAlpha = 0.85;
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath();
+    ctx.roundRect(bx, y, w, h, 3);
+    ctx.fill();
+  } else {
+    ctx.fillRect(bx, y, w, h);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(label, bx + 4, y + 9);
+  ctx.restore();
 }

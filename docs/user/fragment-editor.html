@@ -354,8 +354,8 @@
         <span data-lang="en">Pitch Curves</span>
         <span data-lang="zh">音高曲线</span>
       </h2>
-      <p data-lang="en">Pitch curves add pitch slides and other expressive effects on top of the base MIDI pitch. The final pitch is: <strong>MIDI note pitch + pitch curve offset</strong>. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
-      <p data-lang="zh">音高曲线在基础 MIDI 音高之上添加滑音等表现性效果。最终音高为：<strong>MIDI 音符音高 + 音高曲线偏移</strong>。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
+      <p data-lang="en">Pitch curves are stored as <strong>absolute MIDI pitches</strong>: wherever the curve covers a frame, that pitch replaces the frame outright — it is <em>not</em> an offset added on top of the note. Frames outside the anchor range fall back to the note's own MIDI pitch. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
+      <p data-lang="zh">音高曲线的锚点存的是<strong>绝对 MIDI 音高</strong>：曲线覆盖到的帧直接采用该音高，<em>不是</em>在音符音高上叠加偏移。锚点范围之外的帧回落到音符自身的 MIDI 音高。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
       <p data-lang="en">Switch to Pitch mode by pressing <kbd class="kbd">2</kbd> or clicking the <strong>Pitch</strong> button in the toolbar.</p>
       <p data-lang="zh">按 <kbd class="kbd">2</kbd> 或点击工具栏的 <strong>Pitch</strong> 按钮切换到音高模式。</p>
       <h3>

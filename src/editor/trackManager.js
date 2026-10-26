@@ -11,6 +11,8 @@
  * `singer.backend?.type === 'plugin'`，否则插件被删除后的兼容策略会散落得到处都是。
  */
 
+import { createDefaultPitchCurve, normalizePitchCurve } from '../shared/pitchCurveState.js';
+
 /** 内置后端（缺省）。每次返回新对象，避免调用方共享引用后互相污染。 */
 export function createBuiltinBackend() {
   return { type: 'sxs' };
@@ -118,11 +120,10 @@ function createSinger(data = {}) {
 }
 
 function createPitchCurve() {
-  return {
-    enabled: true,
-    anchorPoints: [],
-    brushSegments: [],
-  };
+  // 新建分片默认开启自动音高曲线（开箱即用）。
+  // 加载旧工程走 normalizePitchCurve(raw)（autoDefault=false）—— 旧工程没有
+  // auto 字段，归一化后 auto.enabled=false，听感与旧版本逐位一致。
+  return createDefaultPitchCurve({ autoDefault: true });
 }
 
 function createFragment(data = {}) {
@@ -140,7 +141,10 @@ function createFragment(data = {}) {
     color: data.color ?? TRACK_COLORS[_hashCode(String(data.singerId ?? id)) % TRACK_COLORS.length],
     notes: data.notes ?? [],
     envelopes,
-    pitchCurve: data.pitchCurve ?? createPitchCurve(),
+    // pitchCurve 走"合并式归一化"而不是白名单重建：既补齐 auto/bakedSegments 的
+    // 默认值，又保留未来新增的未知字段（否则下一版加字段又会重演 F2 的静默丢失）。
+    // 有 pitchCurve 字段 = 来自工程/更新（缺 auto 即关闭）；没有 = 新建分片（自动开启）。
+    pitchCurve: data.pitchCurve ? normalizePitchCurve(data.pitchCurve) : createPitchCurve(),
     // 汉字分组与音色/后处理曲线都是分片的持久化字段：createFragment 是显式
     // 白名单对象，漏登记的字段会在工程 load→addFragment 时被静默丢弃
     // （postprocess 丢失后编辑器回退全默认，首次自动保存还会把默认值写回）。

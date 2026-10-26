@@ -53,6 +53,8 @@ let pitchCurve = {
   enabled: true,
   anchorPoints: [],
   brushSegments: [],
+  // 派生段（拖动自动曲线 / F0 导入产生）；auto 配置由 normalizePitchCurve 注入
+  bakedSegments: [],
 };
 
 let autoSaveTimer = null;

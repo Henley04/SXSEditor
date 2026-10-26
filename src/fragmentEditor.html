@@ -38,7 +38,19 @@
       </div>
       <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
       <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
-          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
+          <button id="btn-pitch-reset" class="btn-pitch-tool" title="清除所有手动曲线，恢复到自动层" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
+          <label class="auto-pitch-toggle" title="自动生成音高曲线（不阻止手动编辑）">
+            <input type="checkbox" id="auto-pitch-enabled">
+            <span data-i18n="fragment.autoPitch">自动</span>
+          </label>
+          <select id="auto-pitch-preset" class="auto-pitch-preset" title="自动曲线预设">
+            <option value="natural">自然</option>
+            <option value="soft">柔和</option>
+            <option value="power">有力</option>
+            <option value="ballad">叙事</option>
+            <option value="off">关闭</option>
+          </select>
+          <button id="btn-auto-pitch-params" class="btn-pitch-tool" data-i18n="fragment.autoPitchParams">参数</button>
           <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键调节平滑 · 中键框选</span>
           <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
           <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
@@ -338,6 +350,37 @@
           <button type="button" id="note-ctx-clear" class="note-ctx-action note-ctx-danger" data-i18n="fragment.noteCtxClear">清除效果</button>
         </div>
       </div>
+    </div>
+
+    <div id="auto-pitch-panel" class="auto-pitch-panel" hidden>
+      <div class="auto-pitch-panel-head">
+        <span data-i18n="fragment.autoPitchPanelTitle">自动音高曲线参数</span>
+        <button id="btn-auto-pitch-close" class="auto-pitch-close" title="关闭">×</button>
+      </div>
+      <div class="auto-pitch-grid">
+        <label>起音时长 ms<input type="number" data-auto-param="attackMs" min="0" max="200" step="5"></label>
+        <label>起音音分<input type="number" data-auto-param="attackCents" min="-200" max="50" step="5"></label>
+        <label>过冲上限 ¢<input type="number" data-auto-param="overshootMaxCents" min="0" max="120" step="5"></label>
+        <label>过冲比例<input type="number" data-auto-param="overshootRatio" min="0" max="0.6" step="0.05"></label>
+        <label>预备 ¢<input type="number" data-auto-param="prepCents" min="-60" max="0" step="5"></label>
+        <label>滑音 ms<input type="number" data-auto-param="glideMs" min="0" max="300" step="10"></label>
+        <label>滑音阈值 半音<input type="number" data-auto-param="glideMinSemitones" min="0" max="12" step="1"></label>
+        <label>句尾下滑 ¢<input type="number" data-auto-param="releaseCents" min="-100" max="0" step="5"></label>
+        <label>抖动 ¢<input type="number" data-auto-param="jitterCents" min="0" max="25" step="1"></label>
+        <label>量化 半音<input type="number" data-auto-param="quantize" min="0" max="1" step="0.5"></label>
+        <label>自动颤音深度 ¢<input type="number" data-auto-param="autoVibrato.depth" min="0" max="100" step="2"></label>
+        <label>自动颤音速率 Hz<input type="number" data-auto-param="autoVibrato.rate" min="1" max="12" step="0.1"></label>
+        <label>颤音速率漂移 %<input type="number" data-auto-param="autoVibrato.drift" min="0" max="30" step="1"></label>
+        <label>边界过渡 ms<input type="number" data-auto-param="crossfadeMs" min="0" max="100" step="5"></label>
+        <label>换音过渡归属
+          <select id="auto-glide-ownership">
+            <option value="auto">自动曲线接管</option>
+            <option value="post">后处理接管</option>
+            <option value="both">两者叠加</option>
+          </select>
+        </label>
+      </div>
+      <div class="auto-pitch-note">换音过渡归属 = 自动曲线接管时，音色面板的「过渡」参数会被暂时忽略，避免双重过冲。</div>
     </div>
   </body>
 </html>

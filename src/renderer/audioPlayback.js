@@ -7,6 +7,8 @@ import { setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
+// F2/F3：主窗口参与合成的音符集合必须与分片编辑器同一套（过滤未激活重叠 + 排序）。
+import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
@@ -548,17 +550,8 @@ export async function playAll() {
       for (const fragment of allFragments) {
         const singer = singerMap.get(fragment.singerId);
         if (!singer) continue;
-        const fragDuration = fragment.duration;
-        const clippedNotes = [];
-        for (const note of fragment.notes) {
-          if (note.start >= fragDuration) continue;
-          const noteEnd = note.start + note.duration;
-          if (noteEnd > fragDuration) {
-            clippedNotes.push({ ...note, duration: fragDuration - note.start });
-          } else {
-            clippedNotes.push(note);
-          }
-        }
+        // F2/F3：与分片编辑器 getClippedNotes 完全一致（inactive 过滤 + 排序 + 裁剪）
+        const clippedNotes = computeActiveClippedNotes(fragment, fragment.notes);
         if (clippedNotes.length === 0) continue;
         const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
         multiFragments.push({
@@ -892,18 +885,8 @@ export async function playAll() {
         const singer = singerMap.get(fragment.singerId);
         if (!singer) { completedFrags++; continue; }
 
-        // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
-        const fragDuration = fragment.duration;
-        const clippedNotes = [];
-        for (const note of fragment.notes) {
-          if (note.start >= fragDuration) continue;
-          const noteEnd = note.start + note.duration;
-          if (noteEnd > fragDuration) {
-            clippedNotes.push({ ...note, duration: fragDuration - note.start });
-          } else {
-            clippedNotes.push(note);
-          }
-        }
+        // clippedNotes：与分片编辑器 getClippedNotes 同一真源（F2/F3）
+        const clippedNotes = computeActiveClippedNotes(fragment, fragment.notes);
         if (clippedNotes.length === 0) { completedFrags++; continue; }
 
         // 该 fragment 的 pitchCurveF0（与分片编辑器 buildPitchCurveF0Data 等价）
@@ -949,7 +932,9 @@ export async function playAll() {
         // fragment 起点，与下游 startSample = fragment.startTime→sample 的混音逻辑
         // 协作，最终将 audioData[0] 放置在首音符的全局位置，与 MIDI note 对齐。
         const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
-        const firstNoteOffsetSample = Math.floor((clippedNotes[0].start / state.project.bpm) * 60 * SAMPLE_RATE);
+        // F2：取 min(start) 而非首元素 —— 乱序时首元素可能不是最早的音符，
+      // 会让整段音频被前置静音平移（实测乱序首元素 start=8 拍 → 偏移 4.00s）。
+      const firstNoteOffsetSample = Math.floor((firstNoteStart(clippedNotes) / state.project.bpm) * 60 * SAMPLE_RATE);
         const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
         const paddedAudio = new Float32Array(requiredLength);
         paddedAudio.set(audioData, firstNoteOffsetSample);
@@ -1776,18 +1761,8 @@ export async function runExportJob(opts) {
         continue;
       }
 
-      // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
-      const fragDuration = fragment.duration;
-      const clippedNotes = [];
-      for (const note of fragment.notes) {
-        if (note.start >= fragDuration) continue;
-        const noteEnd = note.start + note.duration;
-        if (noteEnd > fragDuration) {
-          clippedNotes.push({ ...note, duration: fragDuration - note.start });
-        } else {
-          clippedNotes.push(note);
-        }
-      }
+      // clippedNotes：与分片编辑器 getClippedNotes 同一真源（F2/F3）
+      const clippedNotes = computeActiveClippedNotes(fragment, fragment.notes);
       if (clippedNotes.length === 0) continue;
 
       const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
@@ -1836,7 +1811,9 @@ export async function runExportJob(opts) {
       // fragment 起点，与下游 startSample = fragment.startTime→sample 的混音逻辑
       // 协作，最终将 audioData[0] 放置在首音符的全局位置，与 MIDI note 对齐。
       const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
-      const firstNoteOffsetSample = Math.floor((clippedNotes[0].start / state.project.bpm) * 60 * SAMPLE_RATE);
+      // F2：取 min(start) 而非首元素 —— 乱序时首元素可能不是最早的音符，
+      // 会让整段音频被前置静音平移（实测乱序首元素 start=8 拍 → 偏移 4.00s）。
+      const firstNoteOffsetSample = Math.floor((firstNoteStart(clippedNotes) / state.project.bpm) * 60 * SAMPLE_RATE);
       const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
       const paddedAudio = new Float32Array(requiredLength);
       paddedAudio.set(audioData, firstNoteOffsetSample);

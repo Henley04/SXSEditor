@@ -7,6 +7,9 @@
   "description": "深色琥珀强调，温暖复古的独立暗色主题",
   "tags": ["builtin", "dark", "amber"],
   "tokens": {
+    "--pitch-auto-active":   "#ffffff",
+    "--pitch-auto-muted":    "rgba(196, 178, 150, 0.5)",
+    "--pitch-manual-region": "rgba(240, 180, 90, 0.07)",
     "--color-blue-50":  "#e8f0ff",
     "--color-blue-100": "#c8dcff",
     "--color-blue-200": "#a0c0ff",

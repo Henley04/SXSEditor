@@ -2,7 +2,7 @@ import { state, dom, trackManager, history } from './state.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog, showProjectInfoImportDialog } from '../alertDialog.js';
 import { showAudioToMidiDialog, showLoadingOverlay, updateLoadingMessage, hideLoadingOverlay } from './uiControls.js';
-import { f0DataToPitchCurveAnchorPoints } from './f0Utils.js';
+import { f0DataToSlipSegments } from './f0Utils.js';
 import { markDirty } from './projectManager.js';
 import { refreshAll, renderFragmentTimeline } from './timelineRenderer.js';
 
@@ -185,6 +185,10 @@ export async function handleAudioToMidi() {
           start: n.start ?? 0,
           duration: n.duration ?? 0.25,
           lyric: n.lyric || 'la',
+          // F8：携带 FCPE 在 pitchbend 量化模式下算出的滑音数据。
+          // 之前只映射 pitch/start/duration/lyric，pitchBends 被整体丢弃，
+          // 导致"保留滑音"设置在这条导入路径上实际失效（试听也听不到滑音）。
+          ...(Array.isArray(n.bend) && n.bend.length > 0 ? { bend: n.bend } : {}),
         }));
 
         if (extractPitch) {
@@ -259,13 +263,16 @@ export async function handleAudioToMidi() {
     });
 
     if (f0Data && f0Data.length > 0) {
-      const anchorPoints = f0DataToPitchCurveAnchorPoints(f0Data, bpm);
-      if (anchorPoints.length > 0) {
-        fragment.pitchCurve = {
-          enabled: true,
-          anchorPoints,
-          brushSegments: [],
-        };
+      // "仅滑音"导入：只把明显偏离音符的片段做成派生段，其余交给自动曲线。
+      // 之前是把整条 F0 转成几千个锚点（3 分钟约 4500 个 / 260KB），
+      // 既无法手工编辑，也让"自动/手动"边界完全消失。
+      const { segments, anchors, keptRatio } = f0DataToSlipSegments(f0Data, bpm, midiNotes);
+      if (segments.length > 0) {
+        fragment.pitchCurve.bakedSegments = segments;
+        fragment.pitchCurve.enabled = true;
+        console.log(`[audioToMidi] 生成 ${anchors.length} 个锚点 → 归并为 ${segments.length} 个滑音段（保留 ${(keptRatio * 100).toFixed(0)}%，其余交给自动曲线）`);
+      } else {
+        console.log(`[audioToMidi] 未发现明显滑音（${anchors.length} 个锚点均在 ±25 音分内），全部交给自动曲线`);
       }
     }
 

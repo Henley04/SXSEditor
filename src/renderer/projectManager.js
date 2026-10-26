@@ -1,5 +1,9 @@
 import { state, dom, trackManager, history } from './state.js';
 import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE } from './constants.js';
+// 工程格式版本收敛到单一常量（原来 '1.1.0' 与 [1,1,0] 两处硬编码，改一处会判错）
+import { PROJECT_FORMAT_VERSION, PROJECT_MIN_READER, PROJECT_FEATURES, checkProjectHeader } from '../shared/projectFormat.js';
+import { buildAutoCurve, resolvePitchRanges } from '../shared/autoPitchCurve.js';
+import { computeActiveClippedNotes, lastNoteEnd } from '../shared/activeNotes.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog, showConfirmDialog } from '../alertDialog.js';
 import { createDialog, showSingerValidationReport } from './uiControls.js';
@@ -554,7 +558,11 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
   // 拖慢 stringify，此时改为紧凑输出；普通工程保留 2 空格缩进便于 diff/手查。
   const hasEmbeddedPayload = embedSingerFiles || embedAccompanimentAudio;
   return JSON.stringify({
-    version: '1.1.0',
+    version: PROJECT_FORMAT_VERSION,
+    // minReader：低于此版本读写会丢字段（auto 层于 1.2.0 引入）。
+    // features：能力清单，旧版读到未知项应提示而不是静默忽略。
+    minReader: PROJECT_MIN_READER,
+    features: PROJECT_FEATURES,
     project: {
       bpm: state.project.bpm,
       timeSignature: state.project.timeSignature,
@@ -905,24 +913,30 @@ export async function loadProject() {
         const data = await window.electronAPI.readFile(result.filePaths[0]);
         const obj = JSON.parse(data);
         if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
-        if (obj.version) {
-          const projVersion = obj.version.split('.').map(Number);
-          const currentVersion = [1, 1, 0];
-          if (projVersion[0] > currentVersion[0]) {
-            showAlertDialog(t('main.projectVersionTooHigh', { version: obj.version }));
-            return;
-          }
-          // major 相同、minor 更高：新版字段会被旧代码静默忽略，重新保存即
-          // 丢数据。必须让用户知情并确认，而不是无声加载。
-          if (projVersion[0] === currentVersion[0] && projVersion[1] > currentVersion[1]) {
-            const proceed = await showConfirmDialog(
-              t('main.projectMinorVersionTooHigh', { version: obj.version })
-            );
-            if (!proceed) return { loaded: false, canceled: true };
-          }
-          if (projVersion[0] < currentVersion[0] || projVersion[1] < currentVersion[1]) {
-             console.warn(`Project file version(${obj.version}) is low, will try downgrade load`);
-          }
+        // 版本判定收敛到 shared/projectFormat.checkProjectHeader（可单测）：
+        //   reject  —— major 更高，或 minReader 高于当前版本（会算错/丢数据）
+        //   confirm —— major 相同、minor 更高（新字段会被忽略，重存即丢）
+        //   ok      —— 正常/降级加载
+        const compat = checkProjectHeader(obj);
+        if (compat.action === 'reject') {
+          showAlertDialog(t(
+            compat.reason === 'min-reader' ? 'main.projectMinReaderTooHigh' : 'main.projectVersionTooHigh',
+            { version: obj.version, minReader: obj.minReader, currentVersion: PROJECT_FORMAT_VERSION },
+          ));
+          return;
+        }
+        if (compat.action === 'confirm') {
+          const proceed = await showConfirmDialog(
+            t('main.projectMinorVersionTooHigh', { version: obj.version })
+          );
+          if (!proceed) return { loaded: false, canceled: true };
+        }
+        if (compat.reason === 'lower') {
+          console.warn(`Project file version(${obj.version}) is low, will try downgrade load`);
+        }
+        if (compat.unknownFeatures.length > 0) {
+          // 前向兼容：未知特性不阻断，只记录（将来可在 UI 上提示）
+          console.warn('[project] 未知特性（可能来自更新版本）:', compat.unknownFeatures.join(', '));
         }
         if (obj.project) {
           state.project.bpm = obj.project.bpm ?? 120;
@@ -1025,5 +1039,82 @@ export async function loadProject() {
       console.error('Load failed', err);
       showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
     }
+  }
+}
+
+/**
+ * 生成「旧版兼容工程」（1.1.0）。
+ *
+ * 跨版本协作的现实问题：1.2.0 工程里的自动音高曲线是**参数化派生**的，
+ * 旧版（1.1.0）不认识 auto 字段 —— 打开后曲线变成平线，且一旦打开分片编辑器
+ * 就会被三字段白名单抹掉，重存即永久丢失。
+ *
+ * 这里把自动层**烘焙成普通锚点**（0.08 拍采样，与旧版默认密度一致），
+ * 并把版本号写回 1.1.0：旧版打开就是一条普通手绘曲线，听感基本一致。
+ *
+ * 只烘焙"完全没有手动内容"的分片；已有锚点/笔刷/派生段的分片保持原样
+ * （那本来就是旧版能读的东西）。
+ *
+ * @returns {string} 可直接写盘的 JSON 字符串
+ */
+export function buildLegacyProjectJson() {
+  const bpm = state.project.bpm;
+  const fragments = trackManager.getFragments().map((f) => {
+    const pc = f.pitchCurve || {};
+    const legacyCurve = {
+      enabled: pc.enabled !== false,
+      anchorPoints: Array.isArray(pc.anchorPoints) ? pc.anchorPoints.map((a) => ({ ...a })) : [],
+      brushSegments: Array.isArray(pc.brushSegments) ? pc.brushSegments.map((s) => ({ ...s })) : [],
+    };
+    const hasManual = legacyCurve.anchorPoints.length > 0
+      || legacyCurve.brushSegments.length > 0
+      || (Array.isArray(pc.bakedSegments) && pc.bakedSegments.length > 0);
+    const autoOn = pc.auto && pc.auto.enabled;
+    if (autoOn && !hasManual) {
+      // 全自动分片 → 采样成锚点，旧版即可原样播放
+      const notes = computeActiveClippedNotes(f, f.notes);
+      if (notes.length > 0) {
+        const pts = buildAutoCurve(
+          { sortedNotes: notes, auto: pc.auto, bpm, ranges: resolvePitchRanges(notes) },
+          0, lastNoteEnd(notes), 0.08,
+        );
+        legacyCurve.anchorPoints = pts.map((p) => ({
+          time: Math.max(0, p.time),
+          pitch: p.pitch,
+          strength: 100,
+          smoothness: 30,
+        }));
+      }
+    }
+    return { ...f, pitchCurve: legacyCurve };
+  });
+
+  return JSON.stringify({
+    version: '1.1.0',
+    project: { bpm: state.project.bpm, timeSignature: state.project.timeSignature },
+    singers: trackManager.getSingers(),
+    fragments,
+  }, null, 2);
+}
+
+/**
+ * 导出旧版兼容工程（弹保存对话框）。
+ * @returns {Promise<{saved:boolean, filePath?:string}>}
+ */
+export async function exportLegacyProject() {
+  if (!window.electronAPI?.showSaveDialog) return { saved: false };
+  const result = await window.electronAPI.showSaveDialog({
+    filters: [{ name: 'SXSEditor Project (compat)', extensions: ['sxsproj'] }],
+    defaultPath: (state.currentProjectFilePath || 'project.sxsproj').replace(/\.sxsproj$/i, '') + '-compat.sxsproj',
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+  const json = buildLegacyProjectJson();
+  try {
+    await window.electronAPI.writeFile(result.filePath, json);
+    return { saved: true, filePath: result.filePath };
+  } catch (err) {
+    console.error('[project] 导出旧版兼容工程失败:', err);
+    showAlertDialog(t('main.projectSaveFailed') + ': ' + (err.message || ''));
+    return { saved: false };
   }
 }

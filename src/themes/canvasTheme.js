@@ -111,6 +111,10 @@ export function getCanvasColors() {
         pitchPoint:     v('--success')         || '#4ade80',
         pitchAutoLine:  v('--success-glow')    || 'rgba(74, 222, 128, 0.25)',
         pitchAutoPoint: v('--success-soft')    || 'rgba(74, 222, 128, 0.6)',
+        // 自动音高曲线：生效 = 白（浅色主题由 token 改为深色），被手动覆盖 = 灰
+        pitchAutoActive:   v('--pitch-auto-active')   || '#ffffff',
+        pitchAutoMuted:    v('--pitch-auto-muted')    || 'rgba(170, 178, 194, 0.55)',
+        pitchManualRegion: v('--pitch-manual-region') || 'rgba(91, 141, 239, 0.07)',
 
         // Envelope / parameter lines
         paramVol:       v('--accent')          || '#5b8def',

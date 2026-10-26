@@ -92,6 +92,9 @@ module.exports = {
       ...(skipOnnxModels ? {} : { unpackDir: 'onnx_models' })
     },
     prune: true,
+    // 临时：Linux 构建跳过 native 模块重编（decibri/ort-bridge 是 Windows 专用，
+    // 且 @electron/rebuild 需要联网下载 Electron headers，离线环境会 socket hang up）
+    nativeRebuild: process.platform !== 'linux',
     quiet: false,
     ignore: (file) => {
       if (!file) return false;

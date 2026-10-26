@@ -39,6 +39,7 @@ import {
   getTrackBackend,
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
+import { firstNoteStart } from '../shared/activeNotes.js';
 import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
@@ -804,8 +805,10 @@ function padAudioToFragmentDuration(audioData) {
   // paddedAudio[0] 对齐到 fragment 起点，这样下游 startOffset / currentTime 都以
   // fragment 起点为参考，与 canvas 中 note.start 的 beat 坐标一致。
   const clippedNotes = getClippedNotes();
+  // F2：取 min(start) —— getClippedNotes 现已排序，但这里仍显式求最小值，
+  // 避免未来改动排序规则时又退化成"首元素假设"。
   const firstNoteOffsetSample = clippedNotes.length > 0
-    ? Math.floor((clippedNotes[0].start / bpm) * 60 * getSampleRate())
+    ? Math.floor((firstNoteStart(clippedNotes) / bpm) * 60 * getSampleRate())
     : 0;
   const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
   if (requiredLength <= audioData.length && firstNoteOffsetSample === 0) return audioData;
@@ -978,7 +981,7 @@ export async function playFragment() {
           const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
           const clippedNotes = getClippedNotes();
           const firstNoteStartSec = clippedNotes.length > 0
-            ? (clippedNotes[0].start / bpm) * 60
+            ? (firstNoteStart(clippedNotes) / bpm) * 60
             : 0;
           const playStartPosition = getFragmentPlayStartPosition();
 

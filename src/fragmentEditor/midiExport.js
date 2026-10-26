@@ -1,6 +1,8 @@
 import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { getCurrentFragment, getCurrentProject, getNotes } from './state.js';
+// 音高曲线采样（含自动层）：用于把曲线导出为 pitch bend
+import { getPitchAtTime } from './canvasRenderer.js';
 
 const PPQ = 480;
 
@@ -35,7 +37,17 @@ function timeSignatureBytes(timeSignature) {
   return [numerator, dd, 24, 8];
 }
 
-export function encodeFragmentMidi(notes, bpm, trackName = 'Fragment', timeSignature = null) {
+/**
+ * @param {Array} notes
+ * @param {number} bpm
+ * @param {string} [trackName]
+ * @param {Array|null} [timeSignature]
+ * @param {((beat:number)=>number|null)|null} [curveSampler]
+ *   音高曲线采样器（beat → 绝对 MIDI 音高，null = 无覆盖）。传入后把曲线
+ *   量化为 14-bit pitch bend 写进 MIDI —— 否则用户画的滑音带不到别的 DAW/歌声合成器
+ *   （审查报告 F12）。pitch bend 范围按 GM 默认 ±2 半音。
+ */
+export function encodeFragmentMidi(notes, bpm, trackName = 'Fragment', timeSignature = null, curveSampler = null) {
   const tempo = Math.max(1, Math.round(60000000 / Math.max(1, Number(bpm) || 120)));
   const events = [
     { tick: 0, order: 0, bytes: meta(0x03, utf8(trackName)) },
@@ -52,6 +64,33 @@ export function encodeFragmentMidi(notes, bpm, trackName = 'Fragment', timeSigna
     if (lyric) events.push({ tick: startTick, order: 1, bytes: meta(0x05, utf8(lyric)) });
     events.push({ tick: startTick, order: 2, bytes: [0x90, pitch, 96] });
     events.push({ tick: endTick, order: 0, bytes: [0x80, pitch, 0] });
+  }
+
+  // ---- 音高曲线 → pitch bend（每 16 分音符采样一次，量化到 ±2 半音 / 14 bit）----
+  if (typeof curveSampler === 'function' && Array.isArray(notes) && notes.length > 0) {
+    let lastBeat = 0;
+    for (const n of notes) {
+      if (Number.isFinite(n.start) && Number.isFinite(n.duration)) {
+        lastBeat = Math.max(lastBeat, n.start + n.duration);
+      }
+    }
+    const stepTicks = Math.max(1, Math.round(PPQ / 4));
+    const lastTick = Math.round(lastBeat * PPQ);
+    const sorted = notes.slice().sort((a, b) => a.start - b.start);
+    for (let tick = 0; tick <= lastTick; tick += stepTicks) {
+      const beat = tick / PPQ;
+      let pitch;
+      try { pitch = curveSampler(beat); } catch (_e) { pitch = null; }
+      if (pitch === null || !Number.isFinite(pitch)) continue;
+      const baseNote = _noteAtBeat(sorted, beat);
+      if (!baseNote || !(baseNote.pitch > 0)) continue;
+      // cents → ±2 半音 → 14 bit（0..16383，中心 8192）
+      const cents = (pitch - baseNote.pitch) * 100;
+      const norm = Math.max(-1, Math.min(1, cents / 200));
+      const bend = Math.max(-8192, Math.min(8191, Math.round(norm * 8191)));
+      const value = bend + 8192;
+      events.push({ tick, order: 3, bytes: [0xE0, value & 0x7f, (value >> 7) & 0x7f] });
+    }
   }
 
   events.sort((a, b) => a.tick - b.tick || a.order - b.order);
@@ -86,11 +125,26 @@ export async function exportFragmentMidi() {
       filters: [{ name: 'MIDI', extensions: ['mid', 'midi'] }],
     });
     if (result.canceled || !result.filePath) return;
-    const data = encodeFragmentMidi(notes, bpm, name, project?.timeSignature);
+    // 传入曲线采样器：把音高曲线导出为 pitch bend（F12）
+    const data = encodeFragmentMidi(notes, bpm, name, project?.timeSignature, (beat) => getPitchAtTime(beat));
     const saved = await window.electronAPI.saveFile(result.filePath, data);
     if (saved && saved.success === false) throw new Error(saved.error || t('fragment.midiSaveFailed'));
   } catch (error) {
     console.error('[Fragment MIDI Export]', error);
     showAlertDialog(t('fragment.exportMidiFailedDetail', { detail: error.message || String(error) }));
   }
+}
+
+/** 某拍所在的音符（用于把曲线差值换算成相对该音符的 pitch bend）。 */
+function _noteAtBeat(sortedNotes, beat) {
+  let lo = 0;
+  let hi = sortedNotes.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const n = sortedNotes[mid];
+    if (beat < n.start) hi = mid - 1;
+    else if (beat >= n.start + n.duration) lo = mid + 1;
+    else return n;
+  }
+  return null;
 }

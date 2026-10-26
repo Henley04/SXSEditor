@@ -1,5 +1,7 @@
 import { t, tOr } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
+// pitchCurve 归一化：补齐 auto/bakedSegments 默认值，并保留未来字段
+import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
@@ -131,22 +133,21 @@ async function handleFragmentData(data) {
   });
 
   if (data.fragment.pitchCurve) {
-    setPitchCurve({
-      enabled: data.fragment.pitchCurve.enabled !== undefined ? data.fragment.pitchCurve.enabled : true,
-      anchorPoints: data.fragment.pitchCurve.anchorPoints || [],
-      brushSegments: data.fragment.pitchCurve.brushSegments || [],
-    });
+    // 合并式归一化（不是三字段白名单重建）：
+    // 旧代码只取 enabled/anchorPoints/brushSegments，导致 auto 参数与
+    // bakedSegments 在"打开编辑器 → 500ms 自动保存"后被永久抹掉。
+    // normalizePitchCurve 会补默认值、夹紧数值，并保留未识别的未来字段。
+    setPitchCurve(normalizePitchCurve(data.fragment.pitchCurve));
     if (getPitchCurve().brushSegments.length > 0) {
       convertExistingBrushSegmentsToAnchorPoints();
     }
   } else {
-    setPitchCurve({
-      enabled: true,
-      anchorPoints: [],
-      brushSegments: [],
-    });
+    // 极旧工程没有 pitchCurve 字段：按"无自动曲线"处理，保持听感不变
+    setPitchCurve(normalizePitchCurve(null));
   }
   invalidatePitchCurveCache();
+  // 通知 UI 刷新自动曲线控件（开关/预设/参数面板）
+  try { document.dispatchEvent(new CustomEvent('sxse:fragment-loaded')); } catch (_e) { /* 非 DOM 环境忽略 */ }
 
   // 音色 / 后处理曲线：旧工程没有该字段 → 退回全默认（所有处理关闭，音频与旧版本一致）。
   // normalizePostprocessState 逐参数合并到注册表默认值上，并把默认值/锚点值全部

@@ -32,6 +32,7 @@ import {
 import { getTimbreDefault, getTimbreKeyframes } from './postprocessAccess.js';
 import { attachHoverTip, hideHoverTip, installHoverTipGlobalDismiss } from './paramTooltip.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
+import { AUTO_PITCH_DEFAULTS, paramsForPreset } from '../shared/autoPitchCurve.js';
 import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
 import { exportFragmentMidi } from './midiExport.js';
@@ -185,12 +186,16 @@ export function setupUiControls() {
     });
   }
 
+  setupAutoPitchUi();
+
   const btnPitchReset = document.getElementById('btn-pitch-reset');
   if (btnPitchReset) {
     btnPitchReset.addEventListener('click', () => {
       const oldSnapshot = clonePitchCurveState();
       getPitchCurve().anchorPoints = [];
       getPitchCurve().brushSegments = [];
+      // 派生段也是手动资产：Reset 语义是"清除所有手动内容，回到自动层"
+      getPitchCurve().bakedSegments = [];
       invalidatePitchCurveCache();
       const newSnapshot = clonePitchCurveState();
       history.push({
@@ -688,4 +693,115 @@ export function syncTimbreParamValue(paramId) {
   if (slider && document.activeElement !== slider) slider.value = String(value);
   _syncValueLabel(paramId, value);
   if (paramId === getActiveTimbreParam()) _syncModeTag(paramId);
+}
+
+/**
+ * 自动音高曲线的开关 / 预设 / 高级参数面板。
+ *
+ * 设计约束（设计方案 §3 契约 C1–C8）：
+ *   · 不做任何"拦截式"交互：改参数只影响自动层，手动资产原样保留；
+ *   · 每一次改动都进撤销栈（快照含 auto + bakedSegments）；
+ *   · 参数面板里没有任何只读/联动锁死的项，改任何一项都会自动切到 "custom"。
+ */
+export function setupAutoPitchUi() {
+  const enabledEl = document.getElementById('auto-pitch-enabled');
+  const presetEl = document.getElementById('auto-pitch-preset');
+  const btnParams = document.getElementById('btn-auto-pitch-params');
+  const panel = document.getElementById('auto-pitch-panel');
+  const btnClose = document.getElementById('btn-auto-pitch-close');
+  const glideOwnEl = document.getElementById('auto-glide-ownership');
+  const inputs = Array.from(document.querySelectorAll('[data-auto-param]'));
+  if (!enabledEl || !presetEl || !panel) return null;
+
+  const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
+  const setPath = (obj, path, val) => {
+    const ks = path.split('.');
+    let o = obj;
+    for (let i = 0; i < ks.length - 1; i++) {
+      if (!o[ks[i]] || typeof o[ks[i]] !== 'object') o[ks[i]] = {};
+      o = o[ks[i]];
+    }
+    o[ks[ks.length - 1]] = val;
+  };
+
+  function ensureAuto() {
+    const pc = getPitchCurve();
+    if (!pc.auto) {
+      pc.auto = { enabled: false, preset: 'natural', version: 1, params: { ...AUTO_PITCH_DEFAULTS } };
+    } else if (!pc.auto.params) {
+      pc.auto.params = { ...AUTO_PITCH_DEFAULTS };
+    }
+    if (!pc.auto.params.autoVibrato) {
+      pc.auto.params.autoVibrato = { ...AUTO_PITCH_DEFAULTS.autoVibrato };
+    }
+    return pc.auto;
+  }
+
+  function sync() {
+    const auto = getPitchCurve().auto;
+    enabledEl.checked = !!(auto && auto.enabled);
+    presetEl.value = auto && auto.preset ? auto.preset : 'natural';
+    const params = (auto && auto.params) || AUTO_PITCH_DEFAULTS;
+    for (const inp of inputs) {
+      const v = getPath(params, inp.dataset.autoParam);
+      if (typeof v === 'number') inp.value = String(Number(v.toFixed(3)));
+    }
+    if (glideOwnEl) glideOwnEl.value = params.glideOwnership || 'auto';
+  }
+
+  function commit(mutator) {
+    const before = clonePitchCurveState();
+    const auto = ensureAuto();
+    mutator(auto);
+    auto.version = (auto.version || 0) + 1;
+    invalidatePitchCurveCache();
+    const after = clonePitchCurveState();
+    history.push({
+      undo() { applyPitchCurveSnapshot(before); sync(); render(); },
+      redo() { applyPitchCurveSnapshot(after); sync(); render(); },
+    });
+    render();
+    scheduleAutoSave();
+    sync();
+  }
+
+  enabledEl.addEventListener('change', () => {
+    commit((a) => { a.enabled = enabledEl.checked; });
+  });
+
+  presetEl.addEventListener('change', () => {
+    commit((a) => {
+      const id = presetEl.value;
+      a.preset = id;
+      a.enabled = id !== 'off';
+      a.params = paramsForPreset(id);
+    });
+  });
+
+  if (btnParams) btnParams.addEventListener('click', () => { panel.hidden = !panel.hidden; sync(); });
+  if (btnClose) btnClose.addEventListener('click', () => { panel.hidden = true; });
+
+  for (const inp of inputs) {
+    inp.addEventListener('change', () => {
+      const num = Number(inp.value);
+      if (!Number.isFinite(num)) { sync(); return; }
+      const path = inp.dataset.autoParam;
+      commit((a) => {
+        setPath(a.params, path, num);
+        // 改任一参数即离开预设，避免"选了预设又偷偷改了一项"的语义混乱
+        a.preset = 'custom';
+      });
+    });
+  }
+
+  if (glideOwnEl) {
+    glideOwnEl.addEventListener('change', () => {
+      commit((a) => { a.params.glideOwnership = glideOwnEl.value; });
+    });
+  }
+
+  // 分片数据载入后刷新控件（ipcHandlers 载入完成时派发）
+  document.addEventListener('sxse:fragment-loaded', sync);
+  sync();
+  return { sync };
 }

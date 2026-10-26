@@ -159,11 +159,11 @@ describe('主窗口 F0 的锚点强度 / 平滑', () => {
     const eff = buildEffectiveValues(sorted, 'pitch');
     for (let i = 0; i < f0.length; i++) {
       const beat = (i * HOP) / SAMPLE_RATE / 60 * BPM;
-      // 锚点区间内必须与真源逐点一致；区间外回落到 note.pitch（60，
-      // 与末锚点同值，两条语义在这里自然重合）
+      // 锚点区间内与真源逐点一致；区间外**延续首/末锚点值**（F4 修复）——
+      // 旧实现回落到 note.pitch，会在末锚点之后造成 12 半音级的可闻台阶。
       const expected = beat >= first && beat <= last
         ? expectHz(evalSortedCurve(sorted, eff, beat))
-        : expectHz(60);
+        : expectHz(beat < first ? eff[0] : eff[eff.length - 1]);
       expect(f0[i], `帧 ${i}（拍 ${beat.toFixed(2)}）`).to.be.closeTo(expected, 1e-3);
     }
   });

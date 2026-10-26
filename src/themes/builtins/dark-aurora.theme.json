@@ -7,6 +7,9 @@
   "description": "默认暗色主题，复刻 SXSEditor 经典蓝紫风格",
   "tags": ["builtin", "dark", "default"],
   "tokens": {
+    "--pitch-auto-active":   "#ffffff",
+    "--pitch-auto-muted":    "rgba(170, 178, 194, 0.55)",
+    "--pitch-manual-region": "rgba(91, 141, 239, 0.07)",
     "--color-blue-50":  "#dbe7ff",
     "--color-blue-100": "#b7ceff",
     "--color-blue-200": "#8fb1ff",

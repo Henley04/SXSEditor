@@ -4,6 +4,10 @@ import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, seriali
 import { refreshAll } from './timelineRenderer.js';
 import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
+// F2/F3：MCP 导出与主窗口播放走同一套音符集合真源
+import { computeActiveClippedNotes } from '../shared/activeNotes.js';
+import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { normalizeAutoConfig, computeManualCoverage } from '../shared/autoPitchCurve.js';
 import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { buildProjectLrc, exportProjectLrc } from './lrcExport.js';
 import { resampleForExport } from './exportDialog.js';
@@ -405,13 +409,7 @@ async function exportFragmentTo(p) {
   await ensurePipelineInitialized();
   await loadAudioSettings();
   const o = { ...getExportInferenceOptions(), ...(p.options || {}) };
-  const fragDuration = f.duration;
-  const clippedNotes = [];
-  for (const n0 of (f.notes || [])) {
-    if (n0.start >= fragDuration) continue;
-    const noteEnd = n0.start + n0.duration;
-    clippedNotes.push(noteEnd > fragDuration ? { ...n0, duration: fragDuration - n0.start } : n0);
-  }
+  const clippedNotes = computeActiveClippedNotes(f, f.notes);
   if (clippedNotes.length === 0) throw mcpError('PRECONDITION_FAILED', 'Fragment has no notes');
   const pitchCurveF0 = buildFragmentPitchCurveF0(f, clippedNotes, state.project.bpm);
   const audioData = await window.electronAPI.synthesizeSVS({
@@ -538,6 +536,63 @@ async function execute(m, p = {}) {
       }
       emit('project.changed', { reason: 'redo' });
       return { canUndo: history.canUndo(), canRedo: history.canRedo() };
+    case 'fragment.getPitchCurve': {
+      const f = trackManager.getFragment(p.fragmentId);
+      if (!f) throw notFound('fragment', p.fragmentId, trackManager.getFragments().map((x) => x.id));
+      const pc = normalizePitchCurve(f.pitchCurve);
+      const notes = computeActiveClippedNotes(f, f.notes);
+      const coverage = computeManualCoverage(pc, notes, {
+        mergeGapBeats: pc.auto && pc.auto.params ? pc.auto.params.mergeGapBeats : 0.5,
+      });
+      return {
+        fragmentId: f.id,
+        pitchCurve: {
+          enabled: pc.enabled,
+          auto: pc.auto,
+          anchorPoints: pc.anchorPoints,
+          brushSegments: pc.brushSegments,
+          // 派生段默认只回元信息：一个导入段可能有上千个点，全部返回会把响应撑爆
+          bakedSegments: pc.bakedSegments.map((seg) => (p.includePoints
+            ? { ...seg }
+            : { id: seg.id, start: seg.start, end: seg.end, origin: seg.origin, pointCount: seg.points.length })),
+        },
+        coverage,
+      };
+    }
+    case 'fragment.setPitchCurve': {
+      const f = trackManager.getFragment(p.fragmentId);
+      if (!f) throw notFound('fragment', p.fragmentId, trackManager.getFragments().map((x) => x.id));
+      const pc = normalizePitchCurve(f.pitchCurve);
+      if (p.reset === 'manual' || p.reset === 'all') {
+        pc.anchorPoints = [];
+        pc.brushSegments = [];
+        pc.bakedSegments = [];
+        if (p.reset === 'all') pc.auto.enabled = false;
+      }
+      if (p.auto && typeof p.auto === 'object') {
+        const merged = {
+          ...pc.auto,
+          ...p.auto,
+          params: { ...pc.auto.params, ...(p.auto.params || {}) },
+        };
+        pc.auto = normalizeAutoConfig(merged);
+        pc.auto.version = (pc.auto.version || 0) + 1;
+      }
+      if (Array.isArray(p.anchorPoints)) pc.anchorPoints = p.anchorPoints;
+      if (Array.isArray(p.bakedSegments)) pc.bakedSegments = p.bakedSegments;
+      f.pitchCurve = normalizePitchCurve(pc);
+      markDirty();
+      refreshAll();
+      return {
+        fragmentId: f.id,
+        pitchCurve: {
+          enabled: f.pitchCurve.enabled,
+          auto: f.pitchCurve.auto,
+          anchorCount: f.pitchCurve.anchorPoints.length,
+          bakedSegmentCount: f.pitchCurve.bakedSegments.length,
+        },
+      };
+    }
     case 'fragment.open': {
       const ids = trackManager.getFragments().map((x) => x.id);
       const f = trackManager.getFragment(p.fragmentId);

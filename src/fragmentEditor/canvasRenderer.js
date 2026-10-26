@@ -1,4 +1,18 @@
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+// F2/F3：参与合成的音符集合统一走 shared 真源（过滤未激活重叠 + 裁剪 + 排序）。
+// 之前本文件自己实现一遍、主窗口再实现一遍，两处对 inactive 与排序的处理不一致。
+import { computeActiveClippedNotes, computeInactiveNoteIds, lastNoteEnd } from '../shared/activeNotes.js';
+// 自动/手动统一求值（与主窗口 f0Utils 共用同一引擎）
+import {
+  createPitchResolver,
+  resolvePitchRanges,
+  applyJitterToF0,
+  buildAutoCurve,
+  coverageAt,
+  findNoteAtBeat as findNoteAtBeatShared,
+} from '../shared/autoPitchCurve.js';
+import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { applyGlideOwnership } from '../shared/postprocessCurves.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
 import { t } from '../i18n/index.js';
@@ -507,22 +521,11 @@ export function _interpolateEnvelope(envelope, time) {
 export function getClippedNotes() {
   const currentFragment = getCurrentFragment();
   const notes = getNotes();
-  // 过滤掉未激活的重叠 note：同一时间点只有第一个 note 参与合成
-  const inactiveIds = getCachedInactiveNoteIds(notes);
-  const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
-  if (!currentFragment || !currentFragment.duration) return activeNotes;
-  const fragDuration = currentFragment.duration;
-  const clipped = [];
-  for (const note of activeNotes) {
-    if (note.start >= fragDuration) continue;
-    const noteEnd = note.start + note.duration;
-    if (noteEnd > fragDuration) {
-      clipped.push({ ...note, duration: fragDuration - note.start });
-    } else {
-      clipped.push(note);
-    }
-  }
-  return clipped;
+  // F2/F3：过滤未激活重叠 note → 裁剪到分片时长 → 按 start 升序。
+  // 排序是必须的：buildPitchCurveF0Data 曾用 clippedNotes 末元素当"最晚音符"，
+  // 而新建音符是 push 到数组末尾的，乱序时 F0 会被截断（实测丢 3 秒的音高 conditioning）。
+  // inactive 过滤的判定序仍按"原始数组顺序"（先插入者激活），见 shared/activeNotes.js。
+  return computeActiveClippedNotes(currentFragment, notes);
 }
 
 /**
@@ -539,23 +542,31 @@ export function buildPitchCurveF0Data(options = {}) {
   const notes = getNotes();
   if (!pitchCurve.enabled || notes.length === 0) return null;
 
+  const pcNorm = normalizePitchCurve(pitchCurve);
+  const autoOn = !!(pcNorm.auto && pcNorm.auto.enabled);
   const hasCustom = isPitchCurveCustomized();
   // F0 后处理（中值 / Savitzky-Golay / 贝塞尔过渡）即使没有手绘音高曲线也必须生效，
   // 否则用户在"音色"lane 里开的平滑只对改过音高的分片有效。
   const smoothingActive = applyPostprocess && hasF0PostprocessEffect();
-  if (!hasCustom && !smoothingActive) return null;
+  // 自动层：没有任何手动内容时也必须产出 F0（"开了 auto 就有曲线"）
+  if (!hasCustom && !smoothingActive && !autoOn) return null;
 
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const currentFragment = getCurrentFragment();
   const fragDuration = currentFragment ? currentFragment.duration : Infinity;
   const clippedNotes = getClippedNotes();
   if (clippedNotes.length === 0) return null;
-  const lastNote = clippedNotes[clippedNotes.length - 1];
-  const totalBeats = Math.min(lastNote.start + lastNote.duration, fragDuration);
+  // F2：总时长取 max(start+duration)，不再取数组末元素 —— "最晚结束"未必是
+  // 排序后的最后一个（长音符在前、短音符在后时末元素更早结束）。
+  const totalBeats = Math.min(lastNoteEnd(clippedNotes), fragDuration);
   const totalSeconds = (totalBeats / bpm) * 60;
   const hopSize = 480;
   const sampleRate = getSampleRate();
   const totalFrames = Math.floor(totalSeconds * sampleRate / hopSize);
+
+  // jitterStage='post'：曲线层不含抖动，放到滤波之后叠加（否则会被 SG/中值削掉）
+  const jitterPost = autoOn && pcNorm.auto.params.jitterStage === 'post';
+  const resolver = _getPitchResolver(jitterPost ? 'f0-nojitter' : 'render');
 
   // 逐帧判断"这一帧是否落在某个音符内"。
   //
@@ -587,7 +598,15 @@ export function buildPitchCurveF0Data(options = {}) {
       f0Array[i] = 0;
       continue;
     }
-    const pitch = getPitchAtTime(frameBeat);
+    // 统一求值（手动 > 自动 > 音符音高）+ 颤音叠加
+    let pitch = resolver.pitchAt(frameBeat);
+    const note = _findActiveNoteAtTime(frameBeat);
+    if (note && note.vibrato && note.vibrato.enabled) {
+      if (pitch === null) pitch = note.pitch;
+      pitch += computeVibratoOffset(note, frameBeat);
+    } else if (pitch === null) {
+      pitch = note ? note.pitch : null;
+    }
     if (pitch !== null && pitch > 0) {
       f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
     } else {
@@ -597,12 +616,24 @@ export function buildPitchCurveF0Data(options = {}) {
 
   if (smoothingActive && totalFrames > 0) {
     const params = buildF0ParamArrays(totalFrames, bpm, getSampleRate(), hopSize);
+    // 重合处理：auto 接管换音过渡时把 f0Glide 置零（与主窗口同一策略）
+    applyGlideOwnership(params, autoOn ? pcNorm.auto : null);
     if (params.active) {
       f0Array = applyF0Postprocess(f0Array, params, {
         sampleRate: getSampleRate(),
         hopSize,
       });
     }
+  }
+
+  // 自动抖动后置（与主窗口 f0Utils 同一策略）
+  if (jitterPost && f0Array.length > 0) {
+    f0Array = applyJitterToF0(f0Array, {
+      sortedNotes,
+      auto: pcNorm.auto,
+      bpm,
+      ranges: resolvePitchRanges(sortedNotes),
+    }, { sampleRate: getSampleRate(), hopSize });
   }
 
   return f0Array;
@@ -653,16 +684,22 @@ export function clonePitchCurveState() {
   const pitchCurve = getPitchCurve();
   return {
     enabled: pitchCurve.enabled,
+    // 自动层与派生段都是可编辑状态，必须进撤销快照 —— 否则"拖动自动曲线"
+    // 与"改自动参数"无法撤销
+    auto: pitchCurve.auto ? deepClone(pitchCurve.auto) : undefined,
     anchorPoints: deepClone(pitchCurve.anchorPoints),
     brushSegments: deepClone(pitchCurve.brushSegments),
+    bakedSegments: deepClone(pitchCurve.bakedSegments || []),
   };
 }
 
 export function applyPitchCurveSnapshot(snapshot) {
   const pitchCurve = getPitchCurve();
   pitchCurve.enabled = snapshot.enabled;
+  if (snapshot.auto !== undefined) pitchCurve.auto = deepClone(snapshot.auto);
   pitchCurve.anchorPoints = deepClone(snapshot.anchorPoints);
   pitchCurve.brushSegments = deepClone(snapshot.brushSegments);
+  pitchCurve.bakedSegments = deepClone(snapshot.bakedSegments || []);
   invalidatePitchCurveCache();
 }
 
@@ -720,25 +757,9 @@ export function hasNoteOverlapMulti(excludeIds, pitch, start, end) {
  * @returns {Set<number>} 未激活的 note id 集合
  */
 export function getInactiveNoteIds(notes) {
-  const inactive = new Set();
-  const activeRanges = []; // 已激活 note 的时间区间 [{start, end}]
-  for (const n of notes) {
-    const nEnd = n.start + n.duration;
-    // 检查是否与任意已激活 note 时间重叠
-    let overlapped = false;
-    for (const r of activeRanges) {
-      if (n.start < r.end && nEnd > r.start) {
-        overlapped = true;
-        break;
-      }
-    }
-    if (overlapped) {
-      inactive.add(n.id);
-    } else {
-      activeRanges.push({ start: n.start, end: nEnd });
-    }
-  }
-  return inactive;
+  // 判定逻辑已抽到 shared/activeNotes.js（主窗口也要用同一套），
+  // 这里保留导出与"按原始插入序判定"的历史语义。
+  return computeInactiveNoteIds(notes);
 }
 
 // ---- 缓存：getInactiveNoteIds / getOutOfPitchRangeNotes ----
@@ -881,6 +902,8 @@ export function generateAutoPitchPoints() {
 export function isPitchCurveCustomized() {
   const pitchCurve = getPitchCurve();
   if (pitchCurve.anchorPoints.length > 0 || pitchCurve.brushSegments.length > 0) return true;
+  // 派生段（拖动自动曲线 / F0 导入产生）同样是手动资产，必须计入"已自定义"
+  if (Array.isArray(pitchCurve.bakedSegments) && pitchCurve.bakedSegments.length > 0) return true;
   // 启用了颤音的 note 也算作"已自定义"，确保 buildPitchCurveF0Data 会生成 F0
   const notes = getNotes();
   for (let i = 0; i < notes.length; i++) {
@@ -1083,58 +1106,69 @@ function _bisectSegmentIndex(pts, time) {
   return j === 0 ? 0 : j - 1;
 }
 
+/**
+ * 自动/手动统一求值器的缓存。
+ *
+ * getPitchAtTime 在渲染循环里每帧被调用数千次（采样点 + 拖拽），必须避免
+ * 每次重新排序锚点、重算强度有效值。缓存键 = notesVersion + pitchCurveVersion
+ * + 分片时长 + BPM —— 任一变化都会重建（notes 被替换时 state 会自增 version）。
+ */
+const _pitchResolverCache = new Map();
+
+/** 使统一求值器缓存失效（备注：key 已覆盖版本，这里供显式场景调用）。 */
+export function invalidatePitchResolver() {
+  _pitchResolverCache.clear();
+}
+
+/**
+ * @param {'render'|'f0-nojitter'} variant
+ *   render       —— 渲染用，抖动计入曲线（视觉与听感同源）
+ *   f0-nojitter  —— F0 构建用；jitterStage='post' 时抖动在滤波之后叠加，曲线层先不含
+ */
+function _getPitchResolver(variant = 'render') {
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const frag = getCurrentFragment();
+  const key = `${getNotesVersion()}|${getPitchCurveVersion()}|${frag ? frag.duration : 0}|${bpm}|${variant}`;
+  const cached = _pitchResolverCache.get(key);
+  if (cached) return cached;
+  // 只在缓存失效时做过滤/排序（getClippedNotes 本身也有 inactive 缓存）
+  const clipped = getClippedNotes();
+  // 归一化兜底：旧工程没有 auto 字段 → auto.enabled=false，行为与旧版一致
+  const pc = normalizePitchCurve(getPitchCurve());
+  const resolver = createPitchResolver({
+    pitchCurve: pc,
+    auto: pc.auto,
+    sortedNotes: clipped,
+    bpm,
+    ranges: resolvePitchRanges(clipped),
+    includeJitter: variant === 'render',
+  });
+  // 只保留最近 4 个变体，避免长会话里无限增长
+  if (_pitchResolverCache.size > 4) _pitchResolverCache.clear();
+  _pitchResolverCache.set(key, resolver);
+  return resolver;
+}
+
+/**
+ * 某时刻的曲线层音高（含自动层与手动作用域，不含颤音）。
+ *
+ * 优先级：手动（作用域内）> 自动 > null（调用方回退 note.pitch）。
+ * 与主窗口 buildFragmentPitchCurveF0 走同一个 shared resolver —— 两条路径
+ * 不再各自复刻一份数学（历史上因此丢过锚点强度、也分叉过 inactive 过滤）。
+ */
 export function getPitchAtTime(time) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return null;
 
-  let basePitch = null;
+  const resolver = _getPitchResolver();
+  let basePitch = resolver.pitchAt(time);
 
-  if (pitchCurve.anchorPoints.length > 0) {
-    const sorted = getSortedAnchorPoints();
-    if (!(time < sorted[0].time || time > sorted[sorted.length - 1].time)) {
-      const i = _bisectSegmentIndex(sorted, time);
-      if (i >= 0) {
-        // 锚点强度：先把锚点值按强度拉向"相邻锚点连线"，再做原有平滑插值。
-        // 强度 100（缺省）时 eff 与 value 完全一致，历史曲线逐点不变。
-        basePitch = evalSortedCurve(sorted, _getEffectivePitchValues(sorted), time);
-      }
-      if (basePitch === null) basePitch = sorted[sorted.length - 1].pitch;
-    }
-  }
-
+  // 回退：作用域外且自动层关闭时，曲线层没有值 → 用激活音符的音高。
+  // 这是旧行为（v2.0.2 的 getPitchAtTime 同样在锚点/笔刷都未覆盖时回落到
+  // note.pitch），保留它以免"auto 关闭"时渲染与 F0 构建出现 null。
   if (basePitch === null) {
-    for (const seg of pitchCurve.brushSegments) {
-      if (seg.points.length < 2) continue;
-      const pts = seg.points;
-      if (time >= pts[0].time && time <= pts[pts.length - 1].time) {
-        const i = _bisectSegmentIndex(pts, time);
-        if (i >= 0) {
-          const t = (pts[i + 1].time - pts[i].time) > 0
-            ? (time - pts[i].time) / (pts[i + 1].time - pts[i].time)
-            : 0;
-          basePitch = pts[i].pitch + t * (pts[i + 1].pitch - pts[i].pitch);
-        }
-        break;
-      }
-    }
-  }
-
-  if (basePitch === null) {
-    const activeNote = _findActiveNoteAtTime(time);
-    if (activeNote) basePitch = activeNote.pitch;
-  }
-
-  if (basePitch === null) {
-    const autoPoints = generateAutoPitchPoints();
-    if (autoPoints.length > 0) {
-      const i = _bisectSegmentIndex(autoPoints, time);
-      if (i >= 0 && !autoPoints[i].breakAfter) {
-        const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
-          ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
-          : 0;
-        basePitch = autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
-      }
-    }
+    const active = _findActiveNoteAtTime(time);
+    if (active) basePitch = active.pitch;
   }
 
   // 颤音叠加：在锚点/笔刷/自动音高之上加正弦调制。
@@ -1149,6 +1183,134 @@ export function getPitchAtTime(time) {
   }
 
   return basePitch;
+}
+
+/** 供渲染层判断某时刻是否处于手动作用域（决定自动曲线画白还是画灰）。 */
+export function getManualCoverage() {
+  return _getPitchResolver().coverage;
+}
+
+/** 供渲染层取当前生效的 auto 配置（已归一化）。 */
+export function getResolvedAuto() {
+  return _getPitchResolver().autoCfg;
+}
+
+/**
+ * 批量：把选中的锚点/派生段整体移调 N 个半音（只影响手动资产）。
+ * 自动层由音符派生，不需要也不应该被移调 —— 这正是"逐音符编辑曲线不跟随"
+ * 反过来的那一半：用户显式移调手动内容时，必须能一次改完。
+ *
+ * @param {number} semitones
+ * @param {number[]} [anchorIndices] 缺省 = 全部锚点
+ * @returns {number} 实际移动的锚点数
+ */
+export function transposePitchCurve(semitones, anchorIndices) {
+  const shift = Number(semitones);
+  if (!Number.isFinite(shift) || shift === 0) return 0;
+  const pc = getPitchCurve();
+  const idxs = Array.isArray(anchorIndices) && anchorIndices.length > 0
+    ? anchorIndices
+    : pc.anchorPoints.map((_, i) => i);
+  let moved = 0;
+  for (const i of idxs) {
+    const ap = pc.anchorPoints[i];
+    if (!ap) continue;
+    ap.pitch = Math.max(0, Math.min(127, ap.pitch + shift));
+    moved++;
+  }
+  for (const seg of pc.bakedSegments || []) {
+    for (const pt of seg.points) pt.pitch = Math.max(0, Math.min(127, pt.pitch + shift));
+  }
+  if (moved > 0 || (pc.bakedSegments || []).length > 0) {
+    invalidatePitchCurveCache();
+    scheduleAutoSaveSoon();
+  }
+  return moved;
+}
+
+/**
+ * 批量：把手动锚点/派生段吸附到最近的半音（"贴合到准音"）。
+ * @param {number} [grid=1] 量化步长（半音）
+ * @returns {number} 实际改动的点数
+ */
+export function quantizePitchCurve(grid = 1) {
+  const step = Number(grid) > 0 ? Number(grid) : 1;
+  const pc = getPitchCurve();
+  let changed = 0;
+  for (const ap of pc.anchorPoints) {
+    const q = Math.round(ap.pitch / step) * step;
+    if (Math.abs(q - ap.pitch) > 1e-6) { ap.pitch = q; changed++; }
+  }
+  for (const seg of pc.bakedSegments || []) {
+    for (const pt of seg.points) {
+      const q = Math.round(pt.pitch / step) * step;
+      if (Math.abs(q - pt.pitch) > 1e-6) { pt.pitch = q; changed++; }
+    }
+  }
+  if (changed > 0) {
+    invalidatePitchCurveCache();
+    scheduleAutoSaveSoon();
+  }
+  return changed;
+}
+
+/** 延迟自动保存（批处理用；避免每次改动都触发一轮签名重算）。 */
+function scheduleAutoSaveSoon() {
+  try {
+    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+  } catch (_e) { /* scheduleAutoSave 由调用方注入或不存在时忽略 */ }
+}
+
+/**
+ * 命中测试：点是否落在"自动曲线"上（用于拖动派生）。
+ * 只在 auto 生效、且该时刻**不在手动作用域内**时命中 —— 作用域内画的是灰线，
+ * 点它应该去操作已有的手动锚点，而不是再派生一份。
+ *
+ * @returns {{time:number, pitch:number}|null}
+ */
+export function hitAutoCurveAt(x, y) {
+  const autoCfg = getResolvedAuto();
+  if (!autoCfg || !autoCfg.enabled) return null;
+  const time = xToTime(x);
+  if (coverageAt(getManualCoverage(), time)) return null;
+  const pitch = getPitchAtTime(time);
+  if (pitch === null) return null;
+  if (Math.abs(y - pitchToY(pitch)) > 6) return null;
+  return { time, pitch };
+}
+
+/**
+ * 以当前自动曲线为模板创建一个派生段（拖动自动曲线的第一步）。
+ *
+ * 语义（设计方案 §3.3）：派生段是"当时的自动曲线"的**快照副本**，
+ * 生成后即为手动资产；原自动曲线不会被删除（它是参数化派生量），
+ * 只是在该段区间内转为灰色参考显示。
+ *
+ * @param {number} beat 光标所在拍
+ * @param {{stepBeats?:number}} [opts]
+ * @returns {object|null} bakedSegment
+ */
+export function createBakedSegmentAt(beat, opts = {}) {
+  const notes = getClippedNotes();
+  const note = findNoteAtBeatShared(notes, beat);
+  if (!note) return null;
+  const start = note.start;
+  const end = note.start + note.duration;
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const autoCfg = getResolvedAuto();
+  const pts = buildAutoCurve(
+    { sortedNotes: notes, auto: autoCfg, bpm, ranges: resolvePitchRanges(notes) },
+    start, end, opts.stepBeats ?? 0.05,
+  );
+  if (pts.length < 2) return null;
+  return {
+    id: `bk_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
+    start,
+    end,
+    origin: 'auto-drag',
+    autoPreset: autoCfg ? autoCfg.preset : null,
+    points: pts.map((p) => ({ time: p.time, pitch: p.pitch, strength: 100, smoothness: 0 })),
+  };
 }
 
 export function findAnchorPointAt(x, y) {
@@ -1908,8 +2070,91 @@ function renderPitchCurve(c) {
     ctx.setLineDash([]);
   }
 
+  // ---- 自动音高曲线层（白=生效 / 灰=被手动覆盖）----
+  const autoCfg = getResolvedAuto();
+  const autoOn = !!(autoCfg && autoCfg.enabled);
+  const coverage = getManualCoverage();
+
+  // 手动区背景带：一眼看出"这一段是手动的"
+  if (coverage.length > 0) {
+    ctx.fillStyle = c.pitchManualRegion || 'rgba(91, 141, 239, 0.07)';
+    const h = ctx.canvas ? ctx.canvas.height : 0;
+    for (const r of coverage) {
+      const x0 = timeToX(r.start);
+      const x1 = timeToX(r.end);
+      if (x1 < 0 || x0 > w) continue;
+      ctx.fillRect(x0, 0, Math.max(1, x1 - x0), h);
+    }
+  }
+
+  function _coverageColorAt(t) {
+    for (const r of coverage) if (t >= r.start && t <= r.end) return c.pitchAutoMuted;
+    return c.pitchAutoActive;
+  }
+
+  /**
+   * 绘制实际生效的自动曲线：作用域外白色实线、作用域内灰色虚线。
+   *
+   * 采样点 = 均匀采样 ∪ 锚点时间（F11）：旧实现只按等间隔采样，
+   * 缩小到全曲视口时每 8 个锚点才画 1 个 —— 界面上被抹平的噪声，
+   * 合成时一个不少地进入 F0（"看着干净、听着发抖"）。
+   */
+  function drawAutoCurve() {
+    if (!autoOn) return;
+    let maxT = endBeat + 2;
+    for (const ap of pitchCurve.anchorPoints) if (ap.time + 2 > maxT) maxT = ap.time + 2;
+    for (const seg of (pitchCurve.bakedSegments || [])) if (seg.end + 2 > maxT) maxT = seg.end + 2;
+    const beatRange = Math.max(1e-6, maxT - startBeat);
+    const denseSteps = Math.floor(beatRange / PITCH_CURVE_SAMPLE_INTERVAL);
+    const steps = Math.min(Math.max(200, w), Math.max(2, denseSteps));
+    const ts = [];
+    for (let i = 0; i <= steps; i++) ts.push(startBeat + (i / steps) * beatRange);
+    for (const ap of pitchCurve.anchorPoints) {
+      if (ap.time >= startBeat && ap.time <= maxT) ts.push(ap.time);
+    }
+    ts.sort((a, b) => a - b);
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    let color = null;
+    let started = false;
+    let lastX = 0;
+    let lastY = 0;
+    for (let i = 0; i < ts.length - 1; i++) {
+      const t0 = ts[i];
+      const t1 = ts[i + 1];
+      if (t1 === t0) continue;
+      const p0 = getPitchAtTime(t0);
+      const p1 = getPitchAtTime(t1);
+      if (p0 === null || p1 === null) {
+        if (started) { ctx.stroke(); started = false; color = null; }
+        continue;
+      }
+      const col = _coverageColorAt((t0 + t1) / 2);
+      if (col !== color) {
+        if (started) ctx.stroke();
+        ctx.strokeStyle = col;
+        ctx.setLineDash(col === c.pitchAutoMuted ? [4, 3] : []);
+        ctx.beginPath();
+        lastX = timeToX(t0);
+        lastY = pitchToY(p0);
+        ctx.moveTo(lastX, lastY);
+        color = col;
+        started = true;
+      }
+      lastX = timeToX(t1);
+      lastY = pitchToY(p1);
+      ctx.lineTo(lastX, lastY);
+    }
+    if (started) ctx.stroke();
+    ctx.restore();
+  }
+
   if (!hasCustom) {
-    drawAutoPoints(c.pitchAutoPoint, 2, [6, 4]);
+    // 没有手动内容时：自动层就是唯一曲线，直接画真实曲线；auto 关闭则保留旧虚线
+    if (autoOn) drawAutoCurve();
+    else drawAutoPoints(c.pitchAutoPoint, 2, [6, 4]);
 
     for (const note of notes) {
       const startX = timeToX(note.start);
@@ -1943,7 +2188,9 @@ function renderPitchCurve(c) {
     return;
   }
 
-  drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
+  // 有手动内容时：先画自动层（灰/白），再由手动曲线与锚点覆盖其上
+  if (autoOn) drawAutoCurve();
+  else drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
 
   // autoPoints 现在只在 note 起始/末端有拟合点（breakAfter 阻止 note 内部插值），
   // drawAutoPoints 仅做 moveTo 不会画出线段，这里补画拟合点小圆点保持视觉参考。

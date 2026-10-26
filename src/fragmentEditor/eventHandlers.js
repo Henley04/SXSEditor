@@ -1334,6 +1334,21 @@ function finalizeDragOperation() {
       }
       break;
     }
+    case 'pitchBakedCreate':
+    case 'pitchBakedMove': {
+      // 派生段是手动资产，拖动/创建都要能撤销。只有真的发生位移才入栈
+      // （单纯点一下自动曲线 = 无变化，不该占用一次撤销）。
+      const snapshotBefore = getPitchCurveSnapshotBeforeDrag();
+      if (snapshotBefore && dragOperation && dragOperation.moved) {
+        const oldSnapshot = snapshotBefore;
+        const newSnapshot = clonePitchCurveState();
+        history.push({
+          undo() { applyPitchCurveSnapshot(oldSnapshot); },
+          redo() { applyPitchCurveSnapshot(newSnapshot); },
+        });
+      }
+      break;
+    }
     case 'anchorsDelete': {
       const snapshotBefore = getPitchCurveSnapshotBeforeDrag();
       if (snapshotBefore) {
@@ -1544,6 +1559,34 @@ function handlePitchMouseDown(e, pos) {
       setDragMode('pitch-anchor');
       setDragOperation({ type: selectedAnchorIndices.size > 1 ? 'pitchAnchorsMove' : 'pitchAnchorMove' });
     } else {
+      // ---- 拖动自动曲线 = 派生一份手动副本（设计方案 §3.3）----
+      // 只在命中自动曲线、且该时刻不在手动作用域内时触发；
+      // Ctrl/Cmd+点击 强制走"新建锚点"，给不想派生的情况留出口。
+      const autoHit = (e.ctrlKey || e.metaKey) ? null : hitAutoCurveAt(pos.x, pos.y);
+      if (autoHit) {
+        const seg = createBakedSegmentAt(autoHit.time);
+        if (seg) {
+          if (!Array.isArray(pitchCurve.bakedSegments)) pitchCurve.bakedSegments = [];
+          pitchCurve.bakedSegments.push(seg);
+          invalidatePitchCurveCache();
+          selectedAnchorIndices.clear();
+          setDragMode('pitch-baked');
+          setDragOperation({
+            type: 'pitchBakedCreate',
+            segmentId: seg.id,
+            startPitch: autoHit.pitch,
+            basePitches: seg.points.map((p) => p.pitch),
+            moved: false,
+          });
+          setDragStartX(pos.x);
+          setDragStartY(pos.y);
+          setDragStartMouseTime(xToTime(pos.x));
+          setDragStartMousePitch(yToPitchContinuous(pos.y));
+          scheduleAutoSave();
+          render();
+          return;
+        }
+      }
       selectedAnchorIndices.clear();
       const time = xToTime(pos.x);
       const pitch = yToPitchContinuous(pos.y);
@@ -2483,6 +2526,26 @@ export function setupEventListeners() {
 
     if (dragMode === 'pitch-anchor' && getPitchDragAnchorIdx() >= 0) {
       applyPitchAnchorDrag(pos);
+      return;
+    }
+
+    // 拖动派生段：整体垂直平移（Alt = 局部高斯变形留给后续版本）
+    if (dragMode === 'pitch-baked') {
+      const op = getDragOperation();
+      if (op && op.type === 'pitchBakedCreate') {
+        const seg = (getPitchCurve().bakedSegments || []).find((s) => s.id === op.segmentId);
+        if (seg && Array.isArray(op.basePitches)) {
+          const dy = yToPitchContinuous(pos.y) - op.startPitch;
+          const shift = Math.max(-36, Math.min(36, dy));
+          for (let i = 0; i < seg.points.length; i++) {
+            const base = op.basePitches[i] ?? seg.points[i].pitch;
+            seg.points[i].pitch = Math.max(0, Math.min(127, base + shift));
+          }
+          op.moved = Math.abs(shift) > 0.01;
+          invalidatePitchCurveCache();
+        }
+      }
+      render();
       return;
     }
 

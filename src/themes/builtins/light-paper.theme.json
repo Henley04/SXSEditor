@@ -7,6 +7,9 @@
   "description": "明亮白底主题，护眼清爽",
   "tags": ["builtin", "light"],
   "tokens": {
+    "--pitch-auto-active":   "#1f2937",
+    "--pitch-auto-muted":    "rgba(107, 114, 128, 0.55)",
+    "--pitch-manual-region": "rgba(59, 130, 246, 0.08)",
     "--color-blue-50":  "#eef4ff",
     "--color-blue-100": "#dbe7ff",
     "--color-blue-200": "#b7ceff",
