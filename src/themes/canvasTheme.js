@@ -45,6 +45,19 @@ export function getCanvasColors() {
         return '';
     }
 
+    // 背景是否偏亮（用于给"必须在背景上可见"的颜色选 fallback）。
+    // 相对亮度阈值 140/255：白纸、米色、浅灰都在亮侧；深色主题远低于此。
+    const _bgAppRaw = (v('--bg-app') || '#14141f').trim();
+    const isLightBg = (() => {
+        const m = /^#([0-9a-f]{6})$/i.exec(_bgAppRaw);
+        if (!m) return false;
+        const n = parseInt(m[1], 16);
+        const r = (n >> 16) & 255;
+        const g = (n >> 8) & 255;
+        const b = n & 255;
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 140;
+    })();
+
     _cached = {
         // ---- Backgrounds ----
         bgApp:          v('--bg-app')          || '#14141f',
@@ -111,9 +124,14 @@ export function getCanvasColors() {
         pitchPoint:     v('--success')         || '#4ade80',
         pitchAutoLine:  v('--success-glow')    || 'rgba(74, 222, 128, 0.25)',
         pitchAutoPoint: v('--success-soft')    || 'rgba(74, 222, 128, 0.6)',
-        // 自动音高曲线：生效 = 白（浅色主题由 token 改为深色），被手动覆盖 = 灰
-        pitchAutoActive:   v('--pitch-auto-active')   || '#ffffff',
-        pitchAutoMuted:    v('--pitch-auto-muted')    || 'rgba(170, 178, 194, 0.55)',
+        // 自动音高曲线：生效 = 高对比色，被手动覆盖 = 灰
+        //
+        // fallback 必须按**背景亮度**选，不能硬编码白色：自定义主题（或新增内置
+        // 主题漏配 token）时，白线画在浅色背景上完全不可见 —— 实机复现过：
+        // acg 主题（--bg-app #ece8da）下曲线此前"有绘制但看不见"，用户会以为
+        // 自动曲线没生效。这里用背景亮度判断，任何主题都不会踩。
+        pitchAutoActive:   v('--pitch-auto-active')   || (isLightBg ? '#1f2937' : '#ffffff'),
+        pitchAutoMuted:    v('--pitch-auto-muted')    || (isLightBg ? 'rgba(107, 114, 128, 0.55)' : 'rgba(170, 178, 194, 0.55)'),
         pitchManualRegion: v('--pitch-manual-region') || 'rgba(91, 141, 239, 0.07)',
 
         // Envelope / parameter lines

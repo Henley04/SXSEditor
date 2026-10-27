@@ -30,6 +30,31 @@ function mcpError(code, message, extra = {}) {
   return err;
 }
 
+/**
+ * 把主窗口侧的改动推给**已打开**的分片编辑器窗口。
+ *
+ * 之前是单向同步（编辑器 → 主窗口）：MCP 改完数据后，若该分片的编辑器开着，
+ * 编辑器的 500ms 防抖自动保存会把内存里的旧数据写回主窗口，外部修改被静默
+ * 回退（实机复现：写入的锚点 3 秒后自己消失）。这里补上反向通道。
+ *
+ * 没有打开的编辑器时是 no-op —— 主进程会同步 pendingFragmentData 快照，
+ * 下次打开即是最新数据。
+ *
+ * @param {string} fragmentId
+ * @param {object} patch 只放发生变化的字段（notes / pitchCurve / ...）
+ */
+async function pushFragmentPatch(fragmentId, patch) {
+  try {
+    const api = typeof window !== 'undefined' ? window.electronAPI : null;
+    if (!api || typeof api.pushFragmentPatch !== 'function') return;
+    if (!patch || Object.keys(patch).length === 0) return;
+    await api.pushFragmentPatch(fragmentId, patch);
+  } catch (err) {
+    // 推送失败不影响主窗口状态：数据已经落在主窗口，最坏情况是编辑器需要重开
+    console.warn('[MCP] pushFragmentPatch failed:', err);
+  }
+}
+
 function notFound(kind, id, known) {
   return mcpError('NOT_FOUND', `Unknown ${kind} ${id}`, {
     field: kind === 'fragment' ? 'fragmentId' : 'id',
@@ -195,10 +220,17 @@ function applyInternal(ops) {
         case 'add_fragment':
           out.push(trackManager.addFragment(normalizeFragment(op.value || {})));
           break;
-        case 'update_fragment':
+        case 'update_fragment': {
           if (!trackManager.updateFragment(op.id, op.value || {})) throw notFound('fragment', op.id);
-          out.push(trackManager.getFragment(op.id));
+          const updated = trackManager.getFragment(op.id);
+          out.push(updated);
+          // 已打开的编辑器要跟着变（含 notes / pitchCurve / envelopes ...）
+          // applyInternal 是同步函数：推送 fire-and-forget（失败只 warn，不影响返回）
+          if (op.value && typeof op.value === 'object') {
+            void pushFragmentPatch(op.id, { ...op.value });
+          }
           break;
+        }
         case 'remove_fragment':
           if (!trackManager.removeFragment(op.id)) throw notFound('fragment', op.id);
           out.push({ removed: op.id });
@@ -208,6 +240,7 @@ function applyInternal(ops) {
           if (!f) throw notFound('fragment', op.fragmentId);
           f.notes = (op.notes || []).map((n, i) => normalizeNote(n, i));
           out.push({ fragmentId: f.id, noteCount: f.notes.length });
+          void pushFragmentPatch(f.id, { notes: f.notes });
           break;
         }
         case 'set_selection':
@@ -583,6 +616,8 @@ async function execute(m, p = {}) {
       f.pitchCurve = normalizePitchCurve(pc);
       markDirty();
       refreshAll();
+      // 同步给已打开的编辑器（否则它的防抖保存会把旧曲线写回来）
+      await pushFragmentPatch(f.id, { pitchCurve: f.pitchCurve });
       return {
         fragmentId: f.id,
         pitchCurve: {

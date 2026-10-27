@@ -4,6 +4,8 @@ import { showAlertDialog } from '../alertDialog.js';
 import { history } from './history.js';
 import {
   getCurrentParamMode, setCurrentParamMode,
+  // 自然度自检需要 BPM（缺这个 import 会让自检面板静默不工作）
+  getCurrentProject,
   getPitchCurve,
   getFragmentIsSynthesizing,
   getFragmentIsPlaying,
@@ -32,8 +34,14 @@ import {
 import { getTimbreDefault, getTimbreKeyframes } from './postprocessAccess.js';
 import { attachHoverTip, hideHoverTip, installHoverTipGlobalDismiss } from './paramTooltip.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { AUTO_PITCH_DEFAULTS, paramsForPreset } from '../shared/autoPitchCurve.js';
-import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
+import { AUTO_PITCH_DEFAULTS, paramsForPreset, resolvePitchRanges } from '../shared/autoPitchCurve.js';
+import { analyzeNaturalness } from '../shared/naturalness.js';
+import {
+  render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState,
+  applyPitchCurveSnapshot, genNoteId,
+  // 自然度自检要采样**实际**曲线（含自动层/手动覆盖/颤音）
+  getPitchAtTime, getClippedNotes,
+} from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
 import { exportFragmentMidi } from './midiExport.js';
 
@@ -187,6 +195,7 @@ export function setupUiControls() {
   }
 
   setupAutoPitchUi();
+  setupNaturalnessUi();
 
   const btnPitchReset = document.getElementById('btn-pitch-reset');
   if (btnPitchReset) {
@@ -804,4 +813,71 @@ export function setupAutoPitchUi() {
   document.addEventListener('sxse:fragment-loaded', sync);
   sync();
   return { sync };
+}
+
+/**
+ * 自然度自检面板。
+ *
+ * 与"参数面板"的分工：参数面板控制**生成规则**（改了立刻听得到），自检面板
+ * 测量**实际输出**（改完再测）。两者都读同一份曲线，所以自检结果自动包含
+ * 手动覆盖与颤音 —— 它评的是"最终听到的东西"，不是"参数好不好看"。
+ *
+ * 只在用户点击时运行：单个音符采样 200 点，300 音符 ≈ 6 万次求值，
+ * 放渲染循环里会拖慢拖拽。
+ */
+export function setupNaturalnessUi() {
+  const btn = document.getElementById('btn-nat-run');
+  const rows = document.getElementById('nat-rows');
+  const scoreTag = document.getElementById('nat-score-tag');
+  if (!btn || !rows) return null;
+
+  const render = () => {
+    const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+    const notes = getClippedNotes();
+    if (notes.length === 0) {
+      rows.innerHTML = `<div class="nat-row"><span class="nat-label">${t('fragment.natNoNotes')}</span></div>`;
+      if (scoreTag) scoreTag.textContent = '--';
+      return;
+    }
+    const ranges = resolvePitchRanges(notes);
+    const result = analyzeNaturalness({
+      pitchAt: (beat) => getPitchAtTime(beat),
+      notes,
+      bpm,
+      ranges,
+    });
+
+    if (scoreTag) {
+      scoreTag.textContent = String(result.score);
+      scoreTag.style.color = result.score >= 80 ? '#4ade80'
+        : result.score >= 50 ? '#facc15' : '#f87171';
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const item of result.items) {
+      const row = document.createElement('div');
+      row.className = `nat-row ${item.status}`;
+      const label = document.createElement('span');
+      label.className = 'nat-label';
+      label.textContent = t('fragment.' + item.label);
+      const value = document.createElement('span');
+      value.className = 'nat-value';
+      value.textContent = item.value === null
+        ? '—'
+        : `${typeof item.value === 'number' ? item.value.toFixed(1) : item.value} ${item.unit}`;
+      const target = document.createElement('span');
+      target.className = 'nat-target';
+      target.textContent = item.target;
+      row.append(label, value, target);
+      frag.appendChild(row);
+    }
+    rows.innerHTML = '';
+    rows.appendChild(frag);
+  };
+
+  btn.addEventListener('click', render);
+  // 打开分片后先算一次，避免用户看到空面板以为坏了
+  document.addEventListener('sxse:fragment-loaded', render);
+  render();
+  return { render };
 }

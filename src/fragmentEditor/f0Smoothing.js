@@ -433,7 +433,18 @@ export function applyF0Postprocess(f0, params, ctx) {
     const blend = new Float32Array(cur.length);
     for (let i = 0; i < cur.length; i++) {
       const w = Math.max(0, Math.min(100, pick(params.smooth, i))) / 100;
-      blend[i] = cur[i] + (filtered[i] - cur[i]) * w;
+      const a = cur[i];
+      const b = filtered[i];
+      // F14：混合必须在**对数（音分）域**做。Hz 域的算术平均是"能量中点"
+      // 而不是"音高中点"—— 一旦两个值差距大（换音处、或滤波窗口跨过跳进），
+      // 线性混合会系统性地偏向高频（实测 w=0.5 时偏高约 8 音分，听感上是
+      // "平滑后整体略微发飘"）。log2 域混合等价于音分域，且没有引入参考频率：
+      //   2^(log2(a) + (log2(b)-log2(a))·w) 与参考频率无关。
+      // 清音帧（0）与 w=0 直接取原值，避免 log(0)。
+      if (w <= 0 || !(a > 0) || !(b > 0)) { blend[i] = a; continue; }
+      const la = Math.log2(a);
+      const lb = Math.log2(b);
+      blend[i] = Math.pow(2, la + (lb - la) * w);
     }
     cur = blend;
   }

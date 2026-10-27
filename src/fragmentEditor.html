@@ -51,6 +51,14 @@
             <option value="off">关闭</option>
           </select>
           <button id="btn-auto-pitch-params" class="btn-pitch-tool" data-i18n="fragment.autoPitchParams">参数</button>
+          <select id="pitch-batch-action" class="auto-pitch-preset" title="批量操作（有选中锚点时只作用于选中项）">
+            <option value="" data-i18n="fragment.batchAction">批量…</option>
+            <option value="up" data-i18n="fragment.batchUp">整体 +1 半音</option>
+            <option value="down" data-i18n="fragment.batchDown">整体 −1 半音</option>
+            <option value="quantize" data-i18n="fragment.batchQuantize">贴合到半音</option>
+            <option value="simplify" data-i18n="fragment.batchSimplify">抽稀锚点</option>
+            <option value="smooth" data-i18n="fragment.batchSmooth">平滑锚点</option>
+          </select>
           <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键调节平滑 · 中键框选</span>
           <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
           <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
@@ -113,6 +121,20 @@
             <div class="insp-body">
               <div class="phoneme-preview" id="phoneme-preview">--</div>
               <div class="phoneme-grid" id="phoneme-grid"></div>
+            </div>
+          </div>
+          <!-- 自然度自检：把"听起来自然吗"变成可测量的数值 -->
+          <div class="insp-section" id="naturalness-section">
+            <div class="insp-head">
+              <span data-i18n="fragment.natTitle">自然度自检</span>
+              <span class="tag" id="nat-score-tag">--</span>
+            </div>
+            <div class="insp-body">
+              <div class="nat-actions">
+                <button type="button" id="btn-nat-run" data-i18n="fragment.natRun">运行自检</button>
+                <span class="nat-hint" data-i18n="fragment.natHint">对当前曲线采样，与真人歌唱区间比对</span>
+              </div>
+              <div id="nat-rows" class="nat-rows"></div>
             </div>
           </div>
           <!-- Expression / Timbre -->
@@ -267,6 +289,15 @@
         <button type="button" class="pitch-ctx-preset" data-smoothness="30" data-i18n="fragment.smoothSoft">柔和</button>
         <button type="button" class="pitch-ctx-preset" data-smoothness="60" data-i18n="fragment.smoothMedium">中等</button>
         <button type="button" class="pitch-ctx-preset" data-smoothness="100" data-i18n="fragment.smoothStrong">强烈</button>
+      </div>
+      <div class="pitch-ctx-divider"></div>
+      <div class="pitch-ctx-header">
+        <span data-i18n="fragment.anchorPitch">音高</span>
+        <span class="pitch-ctx-value" id="pitch-ctx-pitch-cents">+0¢</span>
+      </div>
+      <div class="pitch-ctx-numeric">
+        <input type="number" id="pitch-ctx-pitch-input" step="0.01" min="0" max="127" inputmode="decimal" title="半音数，小数部分 = 音分（60.25 = 60 半音 + 25 音分）">
+        <button type="button" id="pitch-ctx-pitch-apply" data-i18n="fragment.apply">应用</button>
       </div>
       <div class="pitch-ctx-divider"></div>
       <button type="button" id="pitch-ctx-delete" class="pitch-ctx-action pitch-ctx-danger" data-i18n="fragment.deleteAnchor">删除锚点</button>

@@ -22,6 +22,12 @@ const IPC_CHANNELS = {
   GET_FRAGMENT_DATA: 'getFragmentData',
   FRAGMENT_DATA_SAVED: 'fragmentDataSaved',
   LOAD_FRAGMENT: 'loadFragment',
+  // 主窗口 → 分片编辑器：**已打开**编辑器的增量补丁（MCP / 脚本 / 自动流程
+  // 从主窗口侧改了分片数据后，编辑器必须同步，否则它的 500ms 自动保存会把
+  // 旧数据写回去覆盖掉外部修改）。与 LOAD_FRAGMENT 的区别是只更新指定字段、
+  // 不重建编辑器状态，因此撤销栈与视口位置都保留。
+  PUSH_FRAGMENT_PATCH: 'pushFragmentPatch',
+  FRAGMENT_DATA_PATCH: 'fragmentDataPatch',
   UPDATE_FRAGMENT_BOUNDS: 'updateFragmentBounds',
   FRAGMENT_BOUNDS_CHANGED: 'fragmentBoundsChanged',
   UPDATE_PROJECT_SETTINGS: 'updateProjectSettings',

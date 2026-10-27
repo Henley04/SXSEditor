@@ -1208,9 +1208,11 @@ export function transposePitchCurve(semitones, anchorIndices) {
   const shift = Number(semitones);
   if (!Number.isFinite(shift) || shift === 0) return 0;
   const pc = getPitchCurve();
-  const idxs = Array.isArray(anchorIndices) && anchorIndices.length > 0
-    ? anchorIndices
-    : pc.anchorPoints.map((_, i) => i);
+  // 目标集语义：显式给了索引 = 用户在做"选区操作"，只动这些锚点，
+  // 派生段不跟着动（否则"我只选了两个点"会把整段导入曲线一起移调）。
+  // 没给索引 = 整体移调，锚点与派生段一起走。
+  const hasSelection = Array.isArray(anchorIndices) && anchorIndices.length > 0;
+  const idxs = hasSelection ? anchorIndices : pc.anchorPoints.map((_, i) => i);
   let moved = 0;
   for (const i of idxs) {
     const ap = pc.anchorPoints[i];
@@ -1218,14 +1220,105 @@ export function transposePitchCurve(semitones, anchorIndices) {
     ap.pitch = Math.max(0, Math.min(127, ap.pitch + shift));
     moved++;
   }
-  for (const seg of pc.bakedSegments || []) {
-    for (const pt of seg.points) pt.pitch = Math.max(0, Math.min(127, pt.pitch + shift));
+  if (!hasSelection) {
+    for (const seg of pc.bakedSegments || []) {
+      for (const pt of seg.points) pt.pitch = Math.max(0, Math.min(127, pt.pitch + shift));
+    }
   }
-  if (moved > 0 || (pc.bakedSegments || []).length > 0) {
-    invalidatePitchCurveCache();
-    scheduleAutoSaveSoon();
-  }
+  if (moved > 0) invalidatePitchCurveCache();
   return moved;
+}
+
+/**
+ * 批量：抽稀手动锚点（RDP，以"时间 × 音分"为平面）。
+ *
+ * 场景：从音频导入或长时间手绘后，几百个锚点里真正定义形状的只有十几个。
+ * 抽稀后曲线听感基本不变，但用户可以整体拖动/移调/改强度了。
+ *
+ * 只处理 `anchorPoints`；派生段（bakedSegments）是"某段自动曲线的快照"，
+ * 抽稀它会永久损失保真度，不做。
+ *
+ * @param {number} [toleranceCents=8] 容差（音分）：偏离直线小于它的点被合并
+ * @returns {{kept:number, removed:number}}
+ */
+export function simplifyPitchCurve(toleranceCents = 8) {
+  const pc = getPitchCurve();
+  const pts = pc.anchorPoints;
+  if (!Array.isArray(pts) || pts.length < 3) return { kept: pts ? pts.length : 0, removed: 0 };
+
+  // 按时间排序后再抽稀（抽稀是几何操作，乱序输入没有意义），最后按原顺序回填
+  const order = pts.map((ap, i) => ({ ap, i })).sort((a, b) => a.ap.time - b.ap.time);
+  const tol = Math.max(0.5, Number(toleranceCents) || 8) / 100;
+  const keep = new Uint8Array(order.length);
+  keep[0] = 1;
+  keep[order.length - 1] = 1;
+  const stack = [[0, order.length - 1]];
+  while (stack.length > 0) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const t0 = order[a].ap.time;
+    const p0 = order[a].ap.pitch;
+    const dt = order[b].ap.time - t0;
+    const dp = order[b].ap.pitch - p0;
+    let maxDev = -1;
+    let maxIdx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const t = order[i].ap.time;
+      const p = order[i].ap.pitch;
+      const proj = dt > 0 ? p0 + (dp * (t - t0)) / dt : p0;
+      const dev = Math.abs(p - proj);
+      if (dev > maxDev) { maxDev = dev; maxIdx = i; }
+    }
+    if (maxDev > tol && maxIdx > 0) {
+      keep[maxIdx] = 1;
+      stack.push([a, maxIdx]);
+      stack.push([maxIdx, b]);
+    }
+  }
+
+  const removedSet = new Set();
+  for (let i = 0; i < order.length; i++) if (!keep[i]) removedSet.add(order[i].i);
+  if (removedSet.size === 0) return { kept: pts.length, removed: 0 };
+
+  pc.anchorPoints = pts.filter((_, i) => !removedSet.has(i));
+  invalidatePitchCurveCache();
+  return { kept: pc.anchorPoints.length, removed: removedSet.size };
+}
+
+/**
+ * 批量：平滑手动锚点（邻域三点加权，首尾不动）。
+ *
+ * 与"平滑度 smoothness"不是一回事：smoothness 是**段内缓动**（形状参数），
+ * 这里改的是锚点**数值**本身。用途是把手绘的锯齿抖动画顺，或把导入的
+ * 毛刺锚点压平 —— 之前只能一个一个拖。
+ *
+ * @param {number} [strength=50] 0..100，越大越接近邻域均值
+ * @param {number[]} [indices] 只平滑这些锚点（缺省全部；需按时间相邻才合理）
+ * @returns {number} 改动的锚点数
+ */
+export function smoothPitchCurve(strength = 50, indices) {
+  const pc = getPitchCurve();
+  const pts = pc.anchorPoints;
+  if (!Array.isArray(pts) || pts.length < 3) return 0;
+  const w = Math.max(0, Math.min(100, Number(strength) || 50)) / 100;
+  if (w <= 0) return 0;
+
+  const targets = Array.isArray(indices) && indices.length > 0 ? new Set(indices) : null;
+  const order = pts.map((ap, i) => i).sort((a, b) => pts[a].time - pts[b].time);
+  // 先算出全部新值再回写，避免"边平滑边读已被改过的邻居"（顺序依赖）
+  const next = new Map();
+  for (let k = 1; k < order.length - 1; k++) {
+    const i = order[k];
+    if (targets && !targets.has(i)) continue;
+    const prev = pts[order[k - 1]].pitch;
+    const cur = pts[i].pitch;
+    const nxt = pts[order[k + 1]].pitch;
+    const target = (prev + 2 * cur + nxt) / 4;
+    next.set(i, cur + (target - cur) * w);
+  }
+  for (const [i, v] of next) pts[i].pitch = Math.max(0, Math.min(127, v));
+  if (next.size > 0) invalidatePitchCurveCache();
+  return next.size;
 }
 
 /**
@@ -1249,17 +1342,15 @@ export function quantizePitchCurve(grid = 1) {
   }
   if (changed > 0) {
     invalidatePitchCurveCache();
-    scheduleAutoSaveSoon();
   }
   return changed;
 }
 
-/** 延迟自动保存（批处理用；避免每次改动都触发一轮签名重算）。 */
-function scheduleAutoSaveSoon() {
-  try {
-    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
-  } catch (_e) { /* scheduleAutoSave 由调用方注入或不存在时忽略 */ }
-}
+// 注意：批量操作函数故意**不**在这里触发自动保存。本模块不 import projectIO
+// （避免渲染模块与 I/O 模块互相牵制），保存由调用方（eventHandlers 的批量执行器）
+// 在提交 history 之后统一 scheduleAutoSave()。上轮这里曾用
+// `typeof scheduleAutoSave === 'function'` 兜底，但本模块从未声明过该标识符，
+// 判断恒为 false —— 批量操作改了数据却不保存，属于静默失效。
 
 /**
  * 命中测试：点是否落在"自动曲线"上（用于拖动派生）。

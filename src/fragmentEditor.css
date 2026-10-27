@@ -1344,3 +1344,75 @@
   font-size: 11px;
   line-height: 1.45;
 }
+
+/* 右键菜单里的数值输入（F16：无形状库，但至少能精确输入） */
+.pitch-ctx-numeric {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 8px 6px;
+}
+.pitch-ctx-numeric input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-input, #1e1e2e);
+  color: var(--fg-primary, #f0f0ff);
+}
+.pitch-ctx-numeric button {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-elevated, #2a2a3d);
+  color: var(--fg-primary, #f0f0ff);
+  cursor: pointer;
+}
+.pitch-ctx-numeric button:hover { background: var(--accent, #5b8def); }
+
+/* ---- 自然度自检 ---- */
+.nat-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.nat-actions button {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-elevated, #2a2a3d);
+  color: var(--fg-primary, #f0f0ff);
+  cursor: pointer;
+}
+.nat-actions button:hover { background: var(--accent, #5b8def); }
+.nat-hint {
+  font-size: 10px;
+  color: var(--fg-muted, #8888a8);
+  line-height: 1.3;
+}
+.nat-rows { display: flex; flex-direction: column; gap: 3px; }
+.nat-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.nat-row .nat-label { color: var(--fg-secondary, #c8c8dc); }
+.nat-row .nat-value { font-variant-numeric: tabular-nums; color: var(--fg-primary, #f0f0ff); }
+.nat-row .nat-target { color: var(--fg-muted, #8888a8); font-size: 10px; }
+.nat-row.good { background: rgba(74, 222, 128, 0.08); }
+.nat-row.warn { background: rgba(250, 204, 21, 0.10); }
+.nat-row.bad  { background: rgba(248, 113, 113, 0.12); }
+.nat-row.good .nat-value { color: #4ade80; }
+.nat-row.warn .nat-value { color: #facc15; }
+.nat-row.bad  .nat-value { color: #f87171; }

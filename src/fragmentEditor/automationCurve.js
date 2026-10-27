@@ -25,7 +25,11 @@
  */
 
 export const ANCHOR_STRENGTH_DEFAULT = 100;
-export const ANCHOR_SMOOTHNESS_DEFAULT = 30;
+// F13：缺省必须与 snapshotAnchors()/pitchCurveState 的 0 一致。
+// 原来是 30，导致"经 insertAnchor 创建"与"经 snapshot 复制"的锚点在**同一条
+// 曲线上**缓动不同 —— 同一份数据两种解释。用户手绘锚点显式传
+// getBrushSmoothing()（画笔平滑，默认 30），不需要这个缺省代劳。
+export const ANCHOR_SMOOTHNESS_DEFAULT = 0;
 
 export function clampStrength(v) {
   if (v === null || v === undefined || v === '') return ANCHOR_STRENGTH_DEFAULT;

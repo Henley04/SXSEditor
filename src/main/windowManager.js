@@ -881,6 +881,27 @@ function registerWindowIpc() {
     return { success: true };
   });
 
+  // 主窗口 → 已打开的分片编辑器：增量同步（见 IPC_CHANNELS.PUSH_FRAGMENT_PATCH 注释）
+  safeHandle(IPC_CHANNELS.PUSH_FRAGMENT_PATCH, async (event, fragmentId, patch) => {
+    if (!fragmentId || !patch || typeof patch !== 'object') return { pushed: false };
+    // 同步 pendingFragmentData 快照 —— 编辑器重新打开时走 getFragmentData
+    // 兜底，若快照不更新就会把补丁"回退"掉（与 UPDATE_FRAGMENT_BOUNDS 同理）。
+    const snap = pendingFragmentData[fragmentId];
+    if (snap && snap.fragment) {
+      pendingFragmentData[fragmentId] = {
+        ...snap,
+        fragment: { ...snap.fragment, ...patch },
+      };
+    }
+    const win = fragmentWindows[fragmentId];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC_CHANNELS.FRAGMENT_DATA_PATCH, { fragmentId, patch });
+      return { pushed: true };
+    }
+    // 没有打开的编辑器不算失败：快照已更新，下次打开即是最新数据
+    return { pushed: false };
+  });
+
   safeHandle(IPC_CHANNELS.FRAGMENT_CLOSE, async (event, fragmentId) => {
     closeFragmentEditor(fragmentId);
     return { success: true };

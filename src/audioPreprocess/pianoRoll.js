@@ -219,6 +219,72 @@ export function initPianoRoll() {
       return clampedPx / pxPerBeat;
     },
 
+    // ---- F0 曲线编辑辅助（F15）----
+
+    /** F0 区 y → 频率（与 _drawF0Curve 的 50–1500Hz 对数刻度一致）。 */
+    _f0YToFreq(y) {
+      const areaHeight = getF0AreaHeight();
+      const minF0 = 50;
+      const maxF0 = 1500;
+      const minLogF0 = Math.log2(minF0);
+      const logRange = Math.log2(maxF0) - minLogF0;
+      const bottom = HEADER_HEIGHT + areaHeight;
+      const normalized = Math.max(0, Math.min(1, (bottom - y) / Math.max(1, areaHeight)));
+      return Math.pow(2, minLogF0 + normalized * logRange);
+    },
+
+    /** x → f0Data 帧索引（按 time 二分，帧距可能不是常数）。 */
+    _f0FrameIndexAtX(x) {
+      const data = this.f0Data;
+      if (!data || data.length === 0) return -1;
+      const t = this._xToTime(x);
+      let lo = 0;
+      let hi = data.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        if (data[mid].time < t) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      return Math.max(0, Math.min(data.length - 1, lo));
+    },
+
+    /**
+     * 把上一帧到当前帧之间的所有帧设成光标频率。
+     *
+     * 为什么要填满区间而不是只改一帧：鼠标快速拖动时 mousemove 是稀疏的
+     * （每秒几十个），只改当前帧会在曲线上留下"点状"孔洞。填满区间 = 拖过
+     * 的地方都被覆盖，符合"刷子"的直觉。
+     */
+    _applyF0Brush(x, y) {
+      const data = this.f0Data;
+      if (!data || data.length === 0) return;
+      const idx = this._f0FrameIndexAtX(x);
+      if (idx < 0) return;
+      const freq = this._f0YToFreq(y);
+      const prev = Number.isFinite(this._f0LastFrameIdx) && this._f0LastFrameIdx >= 0
+        ? this._f0LastFrameIdx
+        : idx;
+      const from = Math.min(prev, idx);
+      const to = Math.max(prev, idx);
+      let touched = false;
+      for (let i = from; i <= to; i++) {
+        if (Math.abs(data[i].f0 - freq) > 0.01) {
+          data[i].f0 = freq;
+          touched = true;
+        }
+      }
+      this._f0LastFrameIdx = idx;
+      this._f0BrushFreq = freq;
+      if (touched) {
+        this._f0BrushMoved = true;
+        // pianoRoll.f0Data 与 state.f0Data 通常同一引用，但保存流程读的是
+        // state.f0Data —— 显式写回，避免将来某处改成副本后编辑"看不见"。
+        state.f0Data = data;
+        this._staticCacheDirty = true;
+        this.render();
+      }
+    },
+
     _findNoteAt(x, y) {
       // Hit-test the exact rectangles users see. Converting y back to a rounded
       // MIDI pitch made the top/bottom pixels of a drawn note resolve to the
@@ -308,6 +374,23 @@ export function initPianoRoll() {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
       if (x < PIANO_KEY_WIDTH) return;
+
+      // ---- F0 曲线区（F15）：拖动修正 F0 ----
+      // 原来是只读的（画布上直接写着"只读"），于是"提取出错八度/倍频"只能
+      // 回到别的工具里改，或者干脆带着错数据去训练。这里做成笔刷：
+      // 按住左键水平刷过一段，就把这段 F0 拉到光标所在频率。
+      const f0H = getF0AreaHeight();
+      if (f0H > 0 && y >= HEADER_HEIGHT && y < HEADER_HEIGHT + f0H) {
+        if (e.button !== 0) return;
+        if (!this.f0Data || this.f0Data.length === 0) return;
+        this.dragMode = 'f0-brush';
+        this._f0BrushMoved = false;
+        this._f0LastFrameIdx = this._f0FrameIndexAtX(x);
+        this._f0BrushFreq = this._f0YToFreq(y);
+        this.canvas.style.cursor = 'ns-resize';
+        return;
+      }
+
       if (y < HEADER_HEIGHT + getF0AreaHeight()) return;
       if (e.button !== 0) return;
 
@@ -365,6 +448,12 @@ export function initPianoRoll() {
     _onMouseMove(e) {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
+
+      if (this.dragMode === 'f0-brush') {
+        this._applyF0Brush(x, y);
+        return;
+      }
+
       if (!this.dragMode) {
         const hit = this._findNoteAt(x, y);
         if (hit) {
@@ -415,6 +504,14 @@ export function initPianoRoll() {
     },
 
     _onMouseUp() {
+      if (this.dragMode === 'f0-brush') {
+        this.dragMode = null;
+        this._f0LastFrameIdx = -1;
+        this.canvas.style.cursor = 'default';
+        this._staticCacheDirty = true;
+        this.render();
+        return;
+      }
       if (this.dragMode && this._dragMoved) {
         updateMidiInfo();
       } else if (this.dragMode && !this._dragMoved) {
@@ -693,7 +790,7 @@ export function initPianoRoll() {
       ctx.fillStyle = c.timeText;
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(t('preprocess.f0CurveReadOnly'), PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
+      ctx.fillText(t('preprocess.f0CurveEditable'), PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
 
       ctx.strokeStyle = c.borderStrong;
       ctx.lineWidth = 1;

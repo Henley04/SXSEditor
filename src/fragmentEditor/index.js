@@ -6,7 +6,7 @@ import { hydrateIcons } from '../icons/iconHelper.js';
 import { initPipeline } from './pipeline.js';
 import { registerEditorMcpAutomation } from './mcpAutomation.js';
 import { resizeCanvases } from './canvasRenderer.js';
-import { setupEventListeners, _invalidateCanvasRect } from './eventHandlers.js';
+import { setupEventListeners, _invalidateCanvasRect, setupPitchBatchTools } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
 import { setupUiControls, refreshPostprocessLabels } from './uiControls.js';
 import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
@@ -58,6 +58,9 @@ setupIpcHandlers();
 
 // Setup UI controls
 setupUiControls();
+
+// 批量操作（音高曲线移调/贴合/抽稀/平滑）与 Alt+↑↓ 快捷键
+setupPitchBatchTools();
 
 // Wire up param lane tabs with hidden select
 {

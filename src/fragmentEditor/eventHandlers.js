@@ -91,6 +91,10 @@ import {
   _getCanvasRendererNotesIndex,
   _markNotesIndexDirty,
   ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
+  transposePitchCurve, quantizePitchCurve, simplifyPitchCurve, smoothPitchCurve,
+  // 拖动自动曲线 → 派生副本（上一轮漏了这两个 import：点到自动曲线会抛
+  // ReferenceError 而不是派生，功能等于不可用。eslint no-undef 抓到了）
+  hitAutoCurveAt, createBakedSegmentAt,
 } from './canvasRenderer.js';
 import { computeMultiDragResult, findAdjacentBoundary, notesInRange } from './notesIndex.js';
 import {
@@ -286,27 +290,38 @@ function applyNoteDrag(pos) {
   return true;
 }
 
-function applyPitchAnchorDrag(pos) {
+/**
+ * @param {{x:number,y:number}} pos
+ * @param {{shiftKey?:boolean}} [mods] 按住 Shift = 半音吸附（F16）
+ */
+function applyPitchAnchorDrag(pos, mods) {
   if (getDragMode() !== 'pitch-anchor' || getPitchDragAnchorIdx() < 0) return false;
 
+  const snapSemitone = !!(mods && mods.shiftKey);
   const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
   const dyPitch = yToPitchContinuous(pos.y) - getDragStartMousePitch();
   const selectedAnchorIndices = getSelectedAnchorIndices();
   const pitchCurve = getPitchCurve();
+  // 吸附在**绝对音高**上做（四舍五入到整半音），而不是在位移量上做：
+  // 用户想要的是"这个点落在准音上"，不是"这次拖了整数个半音"。
+  const clampPitch = (v) => {
+    const p = Math.max(0, Math.min(127, v));
+    return snapSemitone ? Math.round(p) : p;
+  };
   if (selectedAnchorIndices.size > 1 && getPitchDragAnchorStarts().size > 0) {
     for (const idx of selectedAnchorIndices) {
       const ap = pitchCurve.anchorPoints[idx];
       const start = getPitchDragAnchorStarts().get(idx);
       if (ap && start) {
         ap.time = Math.max(0, start.time + dxBeats);
-        ap.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+        ap.pitch = clampPitch(start.pitch + dyPitch);
       }
     }
   } else {
     const ap = pitchCurve.anchorPoints[getPitchDragAnchorIdx()];
     if (ap) {
       ap.time = Math.max(0, getPitchDragStartTime() + dxBeats);
-      ap.pitch = Math.max(0, Math.min(127, getPitchDragStartValue() + dyPitch));
+      ap.pitch = clampPitch(getPitchDragStartValue() + dyPitch);
     }
   }
   invalidatePitchCurveCache();
@@ -425,6 +440,24 @@ function _finalizePitchSmoothnessDrag(commitHistory) {
 }
 
 // ==================== Pitch Anchor Context Menu ====================
+/**
+ * 同步右键菜单的音高输入框：绝对半音值 + 相对最近半音的音分偏差。
+ * 输入语义是"半音数，小数部分 = 音分"（60.25 = 60 半音 + 25 音分），
+ * 与锚点的内部单位（pitch，半音）一致，不需要换算。
+ */
+function _syncPitchCtxPitchInput(ap) {
+  const input = document.getElementById('pitch-ctx-pitch-input');
+  const cents = document.getElementById('pitch-ctx-pitch-cents');
+  if (!ap) return;
+  if (input && document.activeElement !== input) {
+    input.value = Number(ap.pitch).toFixed(2);
+  }
+  if (cents) {
+    const off = Math.round((ap.pitch - Math.round(ap.pitch)) * 100);
+    cents.textContent = (off >= 0 ? '+' : '') + off + '¢';
+  }
+}
+
 function showPitchContextMenu(clientX, clientY, anchorIdx) {
   const menu = document.getElementById('pitch-anchor-context-menu');
   if (!menu) return;
@@ -451,6 +484,9 @@ function showPitchContextMenu(clientX, clientY, anchorIdx) {
   if (strengthSlider) strengthSlider.value = String(strength);
   if (strengthLabel) strengthLabel.textContent = String(strength);
   _updateStrengthPresetActiveState(strength);
+
+  // 音高数值输入（F16）：右键菜单里能精确填数，不必靠拖
+  _syncPitchCtxPitchInput(ap);
 
   // 计算菜单位置，避免溢出窗口
   const vw = window.innerWidth;
@@ -632,6 +668,39 @@ function _setupPitchContextMenuListeners() {
       _applyStrengthToAnchor(anchorIdx, parseInt(btn.getAttribute('data-strength') || '100', 10), true);
     });
   });
+
+  const pitchInput = document.getElementById('pitch-ctx-pitch-input');
+  const pitchApply = document.getElementById('pitch-ctx-pitch-apply');
+  const applyPitchInput = () => {
+    const anchorIdx = getContextMenuAnchorIdx();
+    if (anchorIdx < 0 || !pitchInput) return;
+    const ap = getPitchCurve().anchorPoints[anchorIdx];
+    if (!ap) return;
+    const raw = Number(pitchInput.value);
+    if (!Number.isFinite(raw)) { _syncPitchCtxPitchInput(ap); return; }
+    const next = Math.max(0, Math.min(127, raw));
+    if (Math.abs(next - ap.pitch) < 1e-9) return;
+    const oldSnapshot = clonePitchCurveState();
+    ap.pitch = next;
+    invalidatePitchCurveCache();
+    const newSnapshot = clonePitchCurveState();
+    history.push({
+      undo() { applyPitchCurveSnapshot(oldSnapshot); render(); },
+      redo() { applyPitchCurveSnapshot(newSnapshot); render(); },
+    });
+    _syncPitchCtxPitchInput(ap);
+    render();
+    scheduleAutoSave();
+  };
+  if (pitchApply) pitchApply.addEventListener('click', applyPitchInput);
+  if (pitchInput) {
+    // Enter 提交、Esc 放弃（与"改完就走"的肌肉记忆一致）
+    pitchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); applyPitchInput(); }
+      else if (e.key === 'Escape') { e.preventDefault(); hidePitchContextMenu(); }
+    });
+    pitchInput.addEventListener('change', applyPitchInput);
+  }
 
   const deleteBtn = document.getElementById('pitch-ctx-delete');
   if (deleteBtn) {
@@ -2525,11 +2594,11 @@ export function setupEventListeners() {
     }
 
     if (dragMode === 'pitch-anchor' && getPitchDragAnchorIdx() >= 0) {
-      applyPitchAnchorDrag(pos);
+      applyPitchAnchorDrag(pos, e);
       return;
     }
 
-    // 拖动派生段：整体垂直平移（Alt = 局部高斯变形留给后续版本）
+    // 拖动派生段：默认整体平移；按住 Alt = 以按下点为圆心的局部高斯变形
     if (dragMode === 'pitch-baked') {
       const op = getDragOperation();
       if (op && op.type === 'pitchBakedCreate') {
@@ -2537,11 +2606,31 @@ export function setupEventListeners() {
         if (seg && Array.isArray(op.basePitches)) {
           const dy = yToPitchContinuous(pos.y) - op.startPitch;
           const shift = Math.max(-36, Math.min(36, dy));
-          for (let i = 0; i < seg.points.length; i++) {
-            const base = op.basePitches[i] ?? seg.points[i].pitch;
-            seg.points[i].pitch = Math.max(0, Math.min(127, base + shift));
+          if (e.altKey) {
+            // Alt：局部高斯变形 —— 光标附近改得多、远处几乎不动。
+            // 用途是"这一句我只想把中间那个音挑起来"，而不是整段升降。
+            // σ 取段长的 15%（约 ±1σ 覆盖 68% 长度），下限 0.05 拍避免段极短时
+            // 退化成单点尖刺。
+            const center = getDragStartMouseTime();
+            const span = Math.max(1e-6, seg.end - seg.start);
+            const sigma = Math.max(0.05, span * 0.15);
+            const inv2s2 = 1 / (2 * sigma * sigma);
+            for (let i = 0; i < seg.points.length; i++) {
+              const pt = seg.points[i];
+              const base = op.basePitches[i] ?? pt.pitch;
+              const w = Math.exp(-((pt.time - center) ** 2) * inv2s2);
+              pt.pitch = Math.max(0, Math.min(127, base + shift * w));
+            }
+            op.moved = Math.abs(shift) > 0.01;
+            op.bendMode = 'gauss';
+          } else {
+            for (let i = 0; i < seg.points.length; i++) {
+              const base = op.basePitches[i] ?? seg.points[i].pitch;
+              seg.points[i].pitch = Math.max(0, Math.min(127, base + shift));
+            }
+            op.moved = Math.abs(shift) > 0.01;
+            op.bendMode = 'shift';
           }
-          op.moved = Math.abs(shift) > 0.01;
           invalidatePitchCurveCache();
         }
       }
@@ -3424,4 +3513,88 @@ export function setupEventListeners() {
   _setupPitchContextMenuListeners();
   _setupKanjiContextMenuListeners();
   _setupNoteContextMenuListeners();
+}
+
+/**
+ * 批量操作音高曲线（工具栏下拉 / Alt+↑↓ 快捷键共用）。
+ *
+ * 统一在这里做三件事：**快照 → 执行 → 提交一次 history**。逐个操作各自
+ * 入栈会让"整体移调 12 次"变成 12 个撤销步骤，用户按 Ctrl+Z 要按 12 下。
+ *
+ * 目标集：有选中锚点时只作用于选中项（派生段不动），否则锚点 + 派生段全动。
+ *
+ * @param {'up'|'down'|'quantize'|'simplify'|'smooth'} action
+ * @returns {boolean} 是否真的改变了数据（false = 无事可做，不入栈）
+ */
+export function runPitchBatchAction(action) {
+  const pitchCurve = getPitchCurve();
+  if (!pitchCurve.enabled) return false;
+  const hasManual = pitchCurve.anchorPoints.length > 0
+    || (pitchCurve.bakedSegments || []).length > 0;
+  if (!hasManual) return false;
+
+  const selection = [...getSelectedAnchorIndices()];
+  const selectionIsUseful = selection.length > 0;
+
+  const before = clonePitchCurveState();
+  let changed = false;
+  switch (action) {
+    case 'up':
+      changed = transposePitchCurve(1, selectionIsUseful ? selection : undefined) > 0;
+      break;
+    case 'down':
+      changed = transposePitchCurve(-1, selectionIsUseful ? selection : undefined) > 0;
+      break;
+    case 'quantize':
+      changed = quantizePitchCurve(1) > 0;
+      break;
+    case 'simplify':
+      changed = simplifyPitchCurve(8).removed > 0;
+      break;
+    case 'smooth':
+      // 选区平滑：选中就只平滑选中（至少 3 个才有邻域意义），否则全部
+      changed = smoothPitchCurve(50, selectionIsUseful && selection.length >= 3 ? selection : undefined) > 0;
+      break;
+    default:
+      return false;
+  }
+  if (!changed) return false;
+
+  const after = clonePitchCurveState();
+  history.push({
+    undo() { applyPitchCurveSnapshot(before); render(); scheduleAutoSave(); },
+    redo() { applyPitchCurveSnapshot(after); render(); scheduleAutoSave(); },
+  });
+  render();
+  scheduleAutoSave();
+  return true;
+}
+
+/**
+ * 绑定批量下拉与快捷键。与 setupEventListeners 分开，方便单测/截图脚本单独调用。
+ */
+export function setupPitchBatchTools() {
+  const select = document.getElementById('pitch-batch-action');
+  if (select && !select.dataset.bound) {
+    select.dataset.bound = '1';
+    select.addEventListener('change', () => {
+      const action = select.value;
+      select.value = ''; // 立即复位：同一个动作可以连续执行（例如连按两次 +1）
+      if (action) runPitchBatchAction(action);
+    });
+  }
+
+  if (!window.__sxsePitchBatchKeys) {
+    window.__sxsePitchBatchKeys = true;
+    document.addEventListener('keydown', (e) => {
+      const tag = e.target && e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (getCurrentParamMode() !== 'Pitch') return;
+      // Alt+↑ / Alt+↓ = 整体移调 1 个半音（选中则只动选中）
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        runPitchBatchAction(e.key === 'ArrowUp' ? 'up' : 'down');
+      }
+    });
+  }
 }

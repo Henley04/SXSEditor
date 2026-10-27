@@ -125,6 +125,13 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.LOAD_FRAGMENT, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.LOAD_FRAGMENT, handler);
   },
+  // 主窗口侧改完分片数据后推给已打开的编辑器（MCP / 自动流程用）
+  pushFragmentPatch: (fragmentId, patch) => ipcRenderer.invoke(IPC_CHANNELS.PUSH_FRAGMENT_PATCH, fragmentId, patch),
+  onFragmentDataPatched: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.FRAGMENT_DATA_PATCH, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_DATA_PATCH, handler);
+  },
   updateFragmentBounds: (fragmentId, data) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_FRAGMENT_BOUNDS, fragmentId, data),
   onFragmentBoundsChanged: (callback) => {
     const handler = (event, data) => callback(data);

@@ -27,6 +27,8 @@ import {
   getPhonemeCache,
   setCurrentParamMode,
   setNotes,
+  bumpNotesVersion,
+  getAutoSaveTimer, setAutoSaveTimer,
   setEnvelopes,
   setPitchCurve,
   setCurrentFragment,
@@ -97,6 +99,14 @@ export function setupIpcHandlers() {
     if (cleanup) _ipcCleanups.push(cleanup);
   }
 
+  // 主窗口 → 编辑器：增量补丁（MCP / 脚本 / 自动流程改了分片数据）
+  if (window.electronAPI?.onFragmentDataPatched) {
+    const cleanup = window.electronAPI.onFragmentDataPatched((payload) => {
+      applyFragmentPatch(payload);
+    });
+    if (cleanup) _ipcCleanups.push(cleanup);
+  }
+
   if (window.electronAPI?.onProjectSettingsChanged) {
     const cleanup = window.electronAPI.onProjectSettingsChanged((data) => {
       const currentProject = getCurrentProject();
@@ -107,6 +117,89 @@ export function setupIpcHandlers() {
     });
     if (cleanup) _ipcCleanups.push(cleanup);
   }
+}
+
+/**
+ * 应用主窗口推来的增量补丁（MCP / 脚本 / 自动流程从主窗口侧改了分片数据）。
+ *
+ * 为什么必须"先取消本地待执行的自动保存"：
+ * 编辑器的保存是 500ms 防抖。若此刻队列里还压着一次保存，它会在补丁应用后
+ * 把**编辑器内存里的旧数据**写回主窗口 —— 外部修改被静默回退。实机复现过：
+ * MCP 写入手动锚点 → 界面上 3 秒后自己消失。
+ *
+ * 取消之后不补发保存：远端数据此刻就是权威，本地 state 已与之一致；
+ * 用户下一次编辑会正常触发自动保存。
+ *
+ * 与 handleFragmentData 的区别：只更新指定字段，不重建编辑器（撤销栈、
+ * 视口位置、选区都保留）。
+ */
+function applyFragmentPatch(payload) {
+  const patch = payload && payload.patch;
+  const currentFragment = getCurrentFragment();
+  if (!patch || typeof patch !== 'object' || !currentFragment) return;
+  if (payload.fragmentId && payload.fragmentId !== currentFragment.id) return;
+
+  const timer = getAutoSaveTimer();
+  if (timer) {
+    clearTimeout(timer);
+    setAutoSaveTimer(null);
+  }
+
+  let changed = false;
+
+  if (Array.isArray(patch.notes)) {
+    // 与 handleFragmentData 同样的默认值补全，避免旧 note 缺 fadeIn/fadeOut
+    const nextNotes = patch.notes.map((n) => ({
+      ...n,
+      fadeIn: typeof n.fadeIn === 'number' ? n.fadeIn : 0,
+      fadeOut: typeof n.fadeOut === 'number' ? n.fadeOut : 0,
+    }));
+    setNotes(nextNotes);
+    currentFragment.notes = nextNotes;
+    bumpNotesVersion();
+    setNextNoteId(nextNotes.reduce((max, n) => Math.max(max, (n.id || 0) + 1), 1));
+    // 音符变了，锚点索引可能越界
+    getSelectedAnchorIndices().clear();
+    changed = true;
+  }
+
+  if (patch.pitchCurve) {
+    const pc = normalizePitchCurve(patch.pitchCurve);
+    setPitchCurve(pc);
+    currentFragment.pitchCurve = pc;
+    invalidatePitchCurveCache();
+    changed = true;
+  }
+
+  if (patch.envelopes) {
+    setEnvelopes(patch.envelopes);
+    currentFragment.envelopes = patch.envelopes;
+    changed = true;
+  }
+  if (patch.postprocess) {
+    setPostprocess(normalizePostprocessState(patch.postprocess));
+    currentFragment.postprocess = patch.postprocess;
+    invalidateTimbreCache();
+    syncPostprocessUi();
+    changed = true;
+  }
+  if (patch.kanjiGroups) {
+    setKanjiGroups(patch.kanjiGroups);
+    currentFragment.kanjiGroups = patch.kanjiGroups;
+    changed = true;
+  }
+  if (typeof patch.startTime === 'number') { currentFragment.startTime = patch.startTime; changed = true; }
+  if (typeof patch.duration === 'number') { currentFragment.duration = patch.duration; changed = true; }
+  if (typeof patch.name === 'string') {
+    currentFragment.name = patch.name;
+    document.getElementById('fragment-name').textContent = patch.name;
+    changed = true;
+  }
+
+  if (!changed) return;
+  // 刷新自动曲线控件（开关/预设/参数面板）与画布
+  try { document.dispatchEvent(new CustomEvent('sxse:fragment-loaded')); } catch (_e) { /* 非 DOM 环境忽略 */ }
+  render();
 }
 
 async function handleFragmentData(data) {

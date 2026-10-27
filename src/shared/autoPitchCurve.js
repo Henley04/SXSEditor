@@ -31,8 +31,12 @@ export const AUTO_PITCH_DEFAULTS = {
   attackMs: 60,
   attackCents: -60,
   // 过冲与预备
-  overshootRatio: 0.25,
-  overshootMaxCents: 40,
+  // 过冲 = 音程 × ratio，上限 cap。真人歌唱的过冲约 3–4% 音程：
+  // 7 半音跳进 ~25 音分、5 半音 ~20、3 半音 ~12，都落在"10–25 音分"的
+  // 自然区间；原来的 ratio 0.25 会让任何 ≥2 半音的跳进直接顶到上限（40），
+  // 听起来像刻意滑上去再拉回来。
+  overshootRatio: 0.04,
+  overshootMaxCents: 25,
   overshootMs: 120,
   prepCents: -15,
   prepMs: 30,
@@ -335,7 +339,29 @@ export function autoPitchAt(ctx, beat, options = {}) {
     v += _jitterSemitones(p, note, ageSec);
   }
 
-  // ---- 6) 半音吸附 + 音域夹紧
+  // ---- 6) 自动颤音
+  //       长音没有颤音是"机械感"的最大来源。这里只在 note 本身**没有**启用
+  //       逐音符颤音时叠加，避免与 computeVibratoOffset 双重叠加 ——
+  //       两条路径互斥，用户手设的颤音永远优先。
+  //       注意：不改写 note.vibrato（那是用户资产），完全由参数派生。
+  const av = p.autoVibrato || AUTO_PITCH_DEFAULTS.autoVibrato;
+  const vibratoOn = av.enabled && durSec * (bpm / 60) >= av.minDurationBeats
+    && !(note.vibrato && note.vibrato.enabled);
+  if (vibratoOn && av.depth > 0) {
+    // 渐入：起音/滑音还没结束时不上颤音（否则会和滑音打架）
+    const fadeIn = Number.isFinite(av.fadeIn) ? av.fadeIn : 0.35;
+    const ramp = Math.min(1, Math.max(0, (ageSec - fadeIn) / 0.5));
+    if (ramp > 0) {
+      // rateDrift：真人颤音在周期末尾常略加快。用"相位 = 2π·rate·t·(1+drift·t/dur)"
+      // 表达，等价于速率从 rate 线性增长到 rate·(1+drift)，不需要改相位累加器。
+      const drift = (Number.isFinite(av.drift) ? av.drift : 0) / 100;
+      const tNorm = durSec > 0 ? Math.min(1, ageSec / durSec) : 0;
+      const phase = 2 * Math.PI * av.rate * ageSec * (1 + drift * tNorm);
+      v += (av.depth / 100) * ramp * Math.sin(phase);
+    }
+  }
+
+  // ---- 7) 半音吸附 + 音域夹紧
   if (p.quantize > 0) v = Math.round(v / p.quantize) * p.quantize;
   if (ranges && Number.isFinite(ranges.min) && Number.isFinite(ranges.max)) {
     v = Math.max(ranges.min, Math.min(ranges.max, v));
@@ -571,13 +597,25 @@ function _jitterSemitones(p, note, ageSec) {
   if (!(p.jitterCents > 0)) return 0;
   const salt = typeof note.id === 'number' ? note.id : String(note.id).length;
   const s = (p.seed | 0) + salt * 7919;
+
+  // ---- 高频抖动（jitter 的本义）：声带逐周期随机，约 5ms 一格 ----
+  // 必须是**宽带随机**而不是慢正弦：原来的实现只有 3–6Hz 两路正弦，与颤音
+  // 落在同一频段，既测不出来（自检用高通分离时会被当成颤音减掉），听感上也
+  // 只是"音高在飘"而不是"声音有颗粒感"。用 (seed, 网格) 派生 → 导出/撤销可复现。
+  const grid = Math.floor(ageSec * 200); // 5ms
+  const rnd = hash01(s + grid * 131, 7) * 2 - 1; // -1..1
+
+  // ---- 低频漂移：气息导致的缓慢游移（权重小，保留"不是机器"的底噪）----
   const f1 = 3.1 + hash01(s, 1) * 1.8;
   const f2 = 5.7 + hash01(s, 2) * 2.2;
   const ph1 = hash01(s, 3) * Math.PI * 2;
   const ph2 = hash01(s, 4) * Math.PI * 2;
-  const j = 0.65 * Math.sin(2 * Math.PI * f1 * ageSec + ph1)
-    + 0.35 * Math.sin(2 * Math.PI * f2 * ageSec + ph2);
-  return (p.jitterCents / 100) * j;
+  const drift = 0.12 * Math.sin(2 * Math.PI * f1 * ageSec + ph1)
+    + 0.08 * Math.sin(2 * Math.PI * f2 * ageSec + ph2);
+
+  // jitterCents 的定义：逐点抖动的**标准差量级**（均匀分布 std ≈ 0.577×幅度），
+  // 所以 6¢ 的默认值对应"每帧随机 ±6¢"，落在真人 3–10¢ 的区间内。
+  return (p.jitterCents / 100) * (rnd + drift);
 }
 
 /**

@@ -5,6 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fragment Editor — SXSEditor Docs</title>
   <link rel="icon" href="../images/icon.png" />
+  <style>
+    /* 文档内的小色块：用于三色语义说明（不依赖主题） */
+    .color-chip {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 4px;
+      vertical-align: baseline;
+      border: 1px solid rgba(128, 128, 128, 0.5);
+    }
+  </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -354,8 +366,8 @@
         <span data-lang="en">Pitch Curves</span>
         <span data-lang="zh">音高曲线</span>
       </h2>
-      <p data-lang="en">Pitch curves are stored as <strong>absolute MIDI pitches</strong>: wherever the curve covers a frame, that pitch replaces the frame outright — it is <em>not</em> an offset added on top of the note. Frames outside the anchor range fall back to the note's own MIDI pitch. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
-      <p data-lang="zh">音高曲线的锚点存的是<strong>绝对 MIDI 音高</strong>：曲线覆盖到的帧直接采用该音高，<em>不是</em>在音符音高上叠加偏移。锚点范围之外的帧回落到音符自身的 MIDI 音高。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
+      <p data-lang="en">Pitch curves are stored as <strong>absolute MIDI pitches</strong>: wherever the curve covers a frame, that pitch replaces the frame outright — it is <em>not</em> an offset added on top of the note. Inside the manual range, frames before the first / after the last anchor <strong>hold</strong> the first / last anchor value (they do not jump back to the note pitch — that used to produce an audible step of up to 12 semitones at the tail). Outside the manual range the <a href="#auto-pitch-curve">auto layer</a> takes over. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
+      <p data-lang="zh">音高曲线的锚点存的是<strong>绝对 MIDI 音高</strong>：曲线覆盖到的帧直接采用该音高，<em>不是</em>在音符音高上叠加偏移。在手动范围内，首个/末个锚点之外的时间会<strong>保持</strong>首/末锚点的值（不再跳回音符音高——旧行为会在尾部造成最多 12 半音的突变）。手动范围之外由<a href="#auto-pitch-curve">自动层</a>接管。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
       <p data-lang="en">Switch to Pitch mode by pressing <kbd class="kbd">2</kbd> or clicking the <strong>Pitch</strong> button in the toolbar.</p>
       <p data-lang="zh">按 <kbd class="kbd">2</kbd> 或点击工具栏的 <strong>Pitch</strong> 按钮切换到音高模式。</p>
       <h3>
@@ -400,6 +412,88 @@
       </h3>
       <p data-lang="en">Click <strong>↺ Reset</strong> to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.</p>
       <p data-lang="zh">点击 <strong>↺ Reset</strong> 可清除所有音高曲线修改，回到基于 MIDI 音符的自动生成曲线。</p>
+
+      <h2 id="auto-pitch-curve">
+        <span data-lang="en">Auto Pitch Curve</span>
+        <span data-lang="zh">自动音高曲线</span>
+      </h2>
+      <p data-lang="en">The <strong>Auto</strong> switch in the pitch toolbar makes every note sing with a natural contour: a short attack scoop into the note, a portamento between notes, an overshoot after big leaps, a reverse preparation before them, a fall-off at the end, vibrato on long notes, and a little jitter everywhere. It is on by default for new fragments and <strong>off</strong> for projects saved by older versions, so old projects sound exactly as before.</p>
+      <p data-lang="zh">音高工具栏的 <strong>自动</strong> 开关会让每个音符带上自然的起伏：起音时的短滑入、音符之间的滑音、大跳进后的过冲、跳进前的反向预备、句尾下滑、长音颤音，以及全程的细微抖动。新建分片默认开启，<strong>旧版本保存的工程默认关闭</strong>，因此老工程听感完全不变。</p>
+      <p data-lang="en"><strong>Auto never blocks manual editing.</strong> The curve you see is drawn in three colours:</p>
+      <p data-lang="zh"><strong>自动层永远不会妨碍手动编辑。</strong> 曲线用三种颜色表示：</p>
+      <ul>
+        <li><span data-lang="en"><span class="color-chip" style="background:#ffffff"></span><strong>White</strong> — auto curve in effect.</span><span data-lang="zh"><span class="color-chip" style="background:#ffffff"></span><strong>白色</strong> — 自动曲线在此生效。</span></li>
+        <li><span data-lang="en"><span class="color-chip" style="background:#aab2c2"></span><strong>Grey (dashed)</strong> — auto curve suppressed because a manual curve covers this range. It stays visible for reference and comes back the moment you delete the manual content.</span><span data-lang="zh"><span class="color-chip" style="background:#aab2c2"></span><strong>灰色（虚线）</strong> — 该段被手动曲线覆盖，自动曲线暂不生效。它仍然保留作为参考，删掉手动内容就立刻恢复。</span></li>
+        <li><span data-lang="en"><span class="color-chip" style="background:#5b8def"></span><strong>Accent colour</strong> — manual anchors / derived segments. Manual always wins inside its range.</span><span data-lang="zh"><span class="color-chip" style="background:#5b8def"></span><strong>强调色</strong> — 手动锚点/派生段。手动内容在其范围内永远优先。</span></li>
+      </ul>
+      <p data-lang="en">Clicking an empty spot creates a normal manual anchor and turns just that note's range into manual territory — every other note keeps singing with the auto curve. Hand-editing one phrase does not silently disable auto for the whole fragment.</p>
+      <p data-lang="zh">在空白处点击就是普通的新建锚点，只会把<strong>该音符所在的范围</strong>变成手动区，其他音符继续走自动曲线。改一个乐句不会悄悄让整段的自动曲线失效。</p>
+      <figure class="fig">
+        <img src="../images/verify/editor-manual-covered.png" alt="Manual anchors covering one note while the others keep the auto curve" loading="lazy">
+        <figcaption><span data-lang="en">The tinted band is manual territory (two anchors). Outside it every note still runs the auto curve — nothing was switched off globally.</span><span data-lang="zh">淡色带是手动区（两个锚点）。区域之外每个音符仍在走自动曲线——没有任何东西被全局关掉。</span></figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="../images/verify/editor-auto-curve.png" alt="Auto pitch curve over the notes, with the naturalness panel on the right" loading="lazy">
+        <figcaption><span data-lang="en">Auto curve on every note (attack scoop, portamento, vibrato, fall-off). The toolbar shows the Auto switch, preset, Params and Batch; the inspector shows the naturalness check.</span><span data-lang="zh">每个音符上的自动曲线（起音滑入、滑音、颤音、句尾下滑）。工具栏显示 自动 开关、预设、参数与批量；检查器里是自然度自检。</span></figcaption>
+      </figure>
+
+      <p data-lang="en">You do not have to open the fragment editor to know which state a fragment is in: the main window draws a badge on every fragment card.</p>
+      <p data-lang="zh">不用打开分片编辑器也能知道分片处于哪种状态：主窗口会在分片卡片上画一个徽标。</p>
+      <figure class="fig">
+        <img src="../images/verify/badge-states.png" alt="Fragment badge: Auto / Mixed / Manual" loading="lazy">
+        <figcaption><span data-lang="en"><strong>Auto</strong> = auto only · <strong>Mixed</strong> = auto + manual overrides · <strong>Manual</strong> = auto off, manual only.</span><span data-lang="zh"><strong>Auto</strong> = 只有自动 · <strong>Mixed</strong> = 自动 + 手动覆盖 · <strong>Manual</strong> = 自动关闭、仅手动。</span></figcaption>
+      </figure>
+
+      <h3 id="auto-pitch-drag">
+        <span data-lang="en">Dragging the Auto Curve</span>
+        <span data-lang="zh">拖动自动曲线</span>
+      </h3>
+      <p data-lang="en">Press and drag directly on a <em>white</em> auto curve: a copy of that note's auto shape is created as a <strong>derived segment</strong> in the manual colour, and you drag the copy. The original auto curve is not deleted — it simply turns grey inside that range and can always be restored by deleting the derived segment. Hold <kbd class="kbd">Alt</kbd> while dragging to bend only the part near the cursor (Gaussian falloff) instead of moving the whole segment. Hold <kbd class="kbd">Ctrl</kbd>/<kbd class="kbd">Cmd</kbd> and click to force a plain anchor instead.</p>
+      <p data-lang="zh">直接按在<strong>白色</strong>自动曲线上拖动：会把该音符的自动形状<strong>复制</strong>成一个派生段（手动颜色），你拖的是这份副本。原自动曲线不会被删除——它只是在该范围内转为灰色，删掉派生段即可恢复。拖动时按住 <kbd class="kbd">Alt</kbd> 只弯折光标附近的一段（高斯衰减），而不是整体平移。按住 <kbd class="kbd">Ctrl</kbd>/<kbd class="kbd">Cmd</kbd> 点击则强制新建普通锚点。</p>
+
+      <h3 id="auto-pitch-params">
+        <span data-lang="en">Parameters</span>
+        <span data-lang="zh">参数</span>
+      </h3>
+      <p data-lang="en">Every number behind the auto curve is editable in the <strong>Params</strong> panel; nothing is hidden or read-only. Changing a parameter never touches your manual anchors — only the auto layer re-derives.</p>
+      <p data-lang="zh">自动曲线背后的每个数值都能在 <strong>参数</strong> 面板里改，没有任何隐藏项或只读项。改参数不会碰你的手动锚点，只有自动层重新生成。</p>
+      <table>
+        <tr><th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th><th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th><th><span data-lang="en">What it does</span><span data-lang="zh">作用</span></th></tr>
+        <tr><td>attackMs / attackCents</td><td>60 / −60</td><td><span data-lang="en">Short scoop into the note from below.</span><span data-lang="zh">从下方滑入音符的起音。</span></td></tr>
+        <tr><td>overshootRatio / overshootMaxCents</td><td>0.04 / 25</td><td><span data-lang="en">Overshoot after a leap: ratio × interval, capped. 7 semitones ≈ 25¢.</span><span data-lang="zh">跳进后的过冲：音程 × 比例，带上限。7 半音约 25 音分。</span></td></tr>
+        <tr><td>prepCents / prepMs</td><td>−15 / 30</td><td><span data-lang="en">Tiny reverse move right before a leap.</span><span data-lang="zh">跳进前的反向小预备。</span></td></tr>
+        <tr><td>glideMs / glideMinSemitones</td><td>90 / 2</td><td><span data-lang="en">Portamento time (auto-scaled by tempo).</span><span data-lang="zh">滑音时间（随速度自动缩放）。</span></td></tr>
+        <tr><td>releaseCents</td><td>−25</td><td><span data-lang="en">Fall-off at the end of a note.</span><span data-lang="zh">句尾下滑。</span></td></tr>
+        <tr><td>jitterCents</td><td>6</td><td><span data-lang="en">Random pitch noise (the "not a machine" texture).</span><span data-lang="zh">随机抖动（"不像机器"的质感）。</span></td></tr>
+        <tr><td>autoVibrato.depth / rate / drift</td><td>22¢ / 5.5Hz / 6%</td><td><span data-lang="en">Vibrato filled into <code>note.vibrato</code>; still editable per note. Drift makes the rate non-constant.</span><span data-lang="zh">自动填充到 <code>note.vibrato</code>，仍可逐音符改。漂移让速率不是恒定正弦。</span></td></tr>
+        <tr><td>glideOwnership</td><td>auto</td><td><span data-lang="en">Who handles note transitions: the auto curve, the timbre panel's glide, or both stacked.</span><span data-lang="zh">换音过渡由谁负责：自动曲线、音色面板的过渡参数，或两者叠加。</span></td></tr>
+      </table>
+
+      <h3 id="pitch-batch-tools">
+        <span data-lang="en">Batch Tools, Snapping &amp; Numeric Input</span>
+        <span data-lang="zh">批量工具、吸附与数值输入</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">The <strong>batch</strong> dropdown transposes the whole curve by ±1 semitone, snaps it to semitones, simplifies it (RDP, keeps the shape, drops redundant points) or smooths it. With anchors selected it only affects the selection.</span><span data-lang="zh"><strong>批量</strong> 下拉可整体移调 ±1 半音、贴合到半音、抽稀（RDP，保留形状、去掉冗余点）或平滑。有选中锚点时只作用于选中项。</span></li>
+        <li><span data-lang="en"><kbd class="kbd">Alt</kbd>+<kbd class="kbd">↑</kbd>/<kbd class="kbd">↓</kbd> transposes by a semitone — repeatable, and each run is a single undo step.</span><span data-lang="zh"><kbd class="kbd">Alt</kbd>+<kbd class="kbd">↑</kbd>/<kbd class="kbd">↓</kbd> 移调一个半音，可连按，每次只占一个撤销步骤。</span></li>
+        <li><span data-lang="en">Hold <kbd class="kbd">Shift</kbd> while dragging an anchor to snap it to the nearest semitone (the snap is on the absolute pitch, not on the drag distance).</span><span data-lang="zh">拖动锚点时按住 <kbd class="kbd">Shift</kbd> 吸附到最近的半音（吸附的是绝对音高，不是拖动量）。</span></li>
+        <li><span data-lang="en">The right-click menu has a <strong>pitch field</strong> for exact input (60.25 = 60 semitones + 25 cents), plus the live cent offset.</span><span data-lang="zh">右键菜单里有<strong>音高输入框</strong>可精确填数（60.25 = 60 半音 + 25 音分），旁边显示实时音分偏差。</span></li>
+      </ul>
+      <figure class="fig">
+        <img src="../images/verify/editor-batch-tools.png" alt="Pitch toolbar: reset, auto switch, preset, params, batch dropdown, brush smoothing" loading="lazy">
+        <figcaption><span data-lang="en">Pitch toolbar: Reset · Auto switch · preset · Params · <strong>Batch…</strong> (transpose / snap / simplify / smooth) · brush smoothing.</span><span data-lang="zh">音高工具栏：重置 · 自动开关 · 预设 · 参数 · <strong>批量…</strong>（移调 / 贴合 / 抽稀 / 平滑）· 画笔平滑。</span></figcaption>
+      </figure>
+
+      <h3 id="naturalness-check">
+        <span data-lang="en">Naturalness Check</span>
+        <span data-lang="zh">自然度自检</span>
+      </h3>
+      <p data-lang="en">The inspector's <strong>Naturalness check</strong> panel samples the curve you actually hear (auto layer + manual overrides + vibrato) and compares it with human singing ranges: vibrato depth and rate, share of dead-flat long notes, leap overshoot, attack time, jitter, tuning offset and range violations. Green = inside the human range, yellow = borderline, red = mechanical. It runs on demand — the score is a measurement, not a style grade.</p>
+      <p data-lang="zh">检查器里的 <strong>自然度自检</strong> 面板会对"你实际听到的曲线"（自动层 + 手动覆盖 + 颤音）采样，与真人歌唱的统计区间比对：颤音深度与速率、死平长音占比、跳进过冲、起音时间、抖动、调音偏差、音域越界。绿色=落在真人区间，黄色=临界，红色=机械。点击才运行——分数是测量结果，不是风格评分。</p>
+      <figure class="fig">
+        <img src="../images/verify/editor-naturalness.png" alt="Naturalness check panel with per-metric status" loading="lazy">
+        <figcaption><span data-lang="en">Each metric shows the measured value, the human range and a colour-coded status.</span><span data-lang="zh">每项指标显示实测值、真人区间与颜色状态。</span></figcaption>
+      </figure>
 
       <h2 id="f0-and-spectral-postprocess">
         <span data-lang="en">F0 Smoothing &amp; Spectral Post-Processing</span>

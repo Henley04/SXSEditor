@@ -122,12 +122,15 @@ describe('automationCurve (锚点强度 / 平滑过渡)', () => {
       expect(anchors[0].value).to.equal(72);
       expect(anchors.length).to.equal(1);
     });
-    it('新增锚点带默认强度 100 / 平滑 30', () => {
+    // F13：smoothness 缺省必须是 0（线性），与下面的 snapshotAnchors 用例、
+    // 以及 pitchCurveState.normalizePoint 保持同一口径。原来这里是 30，
+    // 导致"经 insertAnchor 新建"和"经 snapshot 复制"的同一条曲线缓动不同。
+    it('新增锚点带默认强度 100 / 平滑 0（与 snapshotAnchors 同口径）', () => {
       const anchors = [];
       const res = insertAnchor(anchors, 2.5, 40);
       expect(res.created).to.equal(true);
       expect(anchors[0].strength).to.equal(100);
-      expect(anchors[0].smoothness).to.equal(30);
+      expect(anchors[0].smoothness).to.equal(0);
     });
     it('snapshotAnchors 补齐缺省字段并复制（不与原对象共享引用）', () => {
       const anchors = [{ time: 0, value: 1 }];

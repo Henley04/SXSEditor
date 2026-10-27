@@ -7,7 +7,7 @@
   "description": "温暖羊皮纸风格亮色主题，青绿强调色，ACG 美学",
   "tags": ["builtin", "light", "acg"],
   "tokens": {
-    "--pitch-auto-active":   "#ffffff",
+    "--pitch-auto-active":   "#2b2438",
     "--pitch-auto-muted":    "rgba(180, 170, 220, 0.55)",
     "--pitch-manual-region": "rgba(168, 85, 247, 0.08)",
     "--color-blue-50":  "#e8f6f8",

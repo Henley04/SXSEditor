@@ -12,7 +12,9 @@
 
 import { normalizeAutoConfig, AUTO_PITCH_DEFAULTS } from './autoPitchCurve.js';
 
-const ANCHOR_SMOOTHNESS_DEFAULT = 30;
+// 只保留实际使用的默认值。smoothness 缺省 0（线性），与
+// automationCurve.ANCHOR_SMOOTHNESS_DEFAULT 同源 —— 这里原本还有一个
+// 从未被引用的 `= 30`，正是 F13 那种"两处口径不一致"的温床。
 const ANCHOR_STRENGTH_DEFAULT = 100;
 
 function num(v, fallback) {
