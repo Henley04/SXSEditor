@@ -2,6 +2,19 @@ import { state, dom } from './state.js';
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { drawWaveformWithPlayhead } from './canvasRenderer.js';
+// 播放头/时间码按"耳朵听到的位置"走：直接读 ctx.currentTime 会稳定跑在声音
+// 前面一个设备缓冲（20–120 ms），这正是"进度条和声音不同步"的观感来源。
+import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
+
+/**
+ * 已播秒数（可听域）。无 audioContext 时回落 0 —— 没有音频就没有延迟可言。
+ * @returns {number}
+ */
+function _elapsedSec() {
+  const ctx = state.audioContext;
+  if (!ctx || ctx.state === 'closed') return 0;
+  return getAudibleElapsedSec(ctx, state.playStartTime);
+}
 
 export function togglePlayback() {
   if (state.isPlaying) {
@@ -27,18 +40,22 @@ export async function startPlayback() {
     source.buffer = state.wavAudioBuffer;
     source.connect(state.audioContext.destination);
 
+    // 时间基准必须与 source 真正开始发声的时刻对齐：先取基准、再用 start(when)
+    // 精确落在该时刻。start(0) 只保证"下一个渲染量子"，基准取 start 之后的
+    // currentTime 会让播放头从一开始就略微超前。
+    const startAt = state.audioContext.currentTime;
     if (state.playStartOffset > 0 && state.playStartOffset < state.wavAudioBuffer.duration) {
-      source.start(0, state.playStartOffset);
+      source.start(startAt, state.playStartOffset);
     } else {
-      source.start();
+      source.start(startAt);
     }
 
     // 记录播放启动时刻，用于 onended 触发时判断是否"刚启动就结束"
     // （用户拖拽到接近末尾时 source 会几乎立即结束，此时不应重置位置到 0，
     // 否则 playhead 会从拖拽位置跳回开头）。
-    // 时钟基准必须取 audioContext.currentTime（与音频输出同一基准），
-    // 用 performance.now() 会随缓冲区/调度延迟与听到的声音漂移。
-    const playbackStartWallTime = state.audioContext.currentTime;
+    // 这里用**渲染域**时长（startAt 起算）：它回答的是"调度是否刚发生"，
+    // 与可听位置无关，混用可听时钟会让 0.2s 阈值随设备延迟漂移。
+    const playbackStartWallTime = startAt;
 
     source.onended = () => {
       if (!state.isPlaying) return;
@@ -63,8 +80,9 @@ export async function startPlayback() {
 
     state.audioSource = source;
     state.isPlaying = true;
-    // 同上：与音频输出共用 audioContext.currentTime 作为播放时钟基准。
-    state.playStartTime = state.audioContext.currentTime;
+    // 与 start(when) 同一个 startAt：这是渲染域基准，显示位置由 _elapsedSec()
+    // 换算到可听域（扣设备输出延迟）。
+    state.playStartTime = startAt;
     setLabel(dom.btnPlayPause, t('preprocess.pause'), { icon: 'pause' });
 
     // 统一播放循环，确保waveform和pianoRoll使用同一个时间源
@@ -94,9 +112,9 @@ export function pausePlayback() {
     state.audioSource = null;
   }
 
-  // playStartTime 现在是 audioContext.currentTime 基准，elapsed 也必须用它。
-  const elapsed = state.audioContext ? state.audioContext.currentTime - state.playStartTime : 0;
-  state.playStartOffset += elapsed;
+  // 续播点取"听到的位置"：playStartTime 在渲染域，必须换算到可听域再累加，
+  // 否则每次暂停/续播都把设备延迟重复计一次，位置会越暂停越靠前。
+  state.playStartOffset += _elapsedSec();
 
   if (state.playStartOffset >= state.wavAudioBuffer.duration) {
     state.playStartOffset = 0;
@@ -177,9 +195,8 @@ export function stopPlaybackRaf() {
 export function startPlaybackLoop() {
   if (!state.isPlaying) return;
 
-  // 与 startPlayback 相同的时钟基准（audioContext.currentTime）。
-  const elapsed = state.audioContext ? state.audioContext.currentTime - state.playStartTime : 0;
-  const currentTime = state.playStartOffset + elapsed;
+  // 与 startPlayback 相同的时钟基准（渲染域 startAt）→ 换算成可听位置。
+  const currentTime = state.playStartOffset + _elapsedSec();
 
   drawWaveformWithPlayhead(currentTime);
 

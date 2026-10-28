@@ -8,6 +8,9 @@ import { drawWaveformWithPlayhead, getMaxScrollX, getMaxScrollY, updateScrollbar
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
 import { getOptions } from './extractionOptions.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
+// 播放头画的是"耳朵听到的位置"，不是渲染线程的位置：输出设备缓冲会让声音晚
+// 20–120 ms 才到喇叭，直接用 ctx.currentTime 画，指示器会稳定跑在声音前面。
+import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
 
 // visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
 // Registered once per module; resumes _tickPlayback when visible again.
@@ -624,10 +627,21 @@ export function initPianoRoll() {
     // 播放时钟基准：优先用 audioContext.currentTime（与音频输出同一时钟，
     // 见 fragmentEditor/audioPlayback.js 的做法），避免 performance.now()
     // 与音频缓冲区调度之间的漂移。
+    // 注意：这是**渲染域**时钟，只用作基准；算已播位置必须过 _elapsedSinceStart()。
     _clockNow() {
       const audioCtx = state.audioContext;
       if (audioCtx && audioCtx.state !== 'closed') return audioCtx.currentTime;
       return performance.now() / 1000;
+    },
+
+    // 已播秒数（可听域）：扣除设备输出延迟，播放头才与耳朵听到的位置一致。
+    // 有 audioContext 时走共享的可听时钟；没有（纯网格试听）时退回渲染时钟差值。
+    _elapsedSinceStart() {
+      const audioCtx = state.audioContext;
+      if (audioCtx && audioCtx.state !== 'closed') {
+        return getAudibleElapsedSec(audioCtx, this.playStartTime);
+      }
+      return this._clockNow() - this.playStartTime;
     },
 
     startPlayback() {
@@ -646,7 +660,7 @@ export function initPianoRoll() {
         cancelAnimationFrame(this.playbackRaf);
         this.playbackRaf = null;
       }
-      const elapsed = this._clockNow() - this.playStartTime;
+      const elapsed = this._elapsedSinceStart();
       this.currentTime = this.playStartOffset + elapsed;
     },
 
@@ -662,10 +676,12 @@ export function initPianoRoll() {
 
     _tickPlayback() {
       if (!this.isPlaying) return;
-      const elapsed = this._clockNow() - this.playStartTime;
-      this.currentTime = this.playStartOffset + elapsed;
+      // 一帧只取一次时间：网格与波形两个画布必须画在**同一时刻**，
+      // 否则 rAF 回调里的第二次取钟会让两条播放头差出零点几毫秒，
+      // 高缩放下看起来就是"波形播放头和网格播放头错开一像素"。
+      this.currentTime = this.playStartOffset + this._elapsedSinceStart();
       this.render();
-      drawWaveformWithPlayhead(this.getCurrentTime());
+      drawWaveformWithPlayhead(this.currentTime);
       this.playbackRaf = requestAnimationFrame(() => this._tickPlayback());
     },
 
@@ -676,7 +692,7 @@ export function initPianoRoll() {
 
     getCurrentTime() {
       if (this.isPlaying) {
-        return this.playStartOffset + (this._clockNow() - this.playStartTime);
+        return this.playStartOffset + this._elapsedSinceStart();
       }
       return this.currentTime;
     },

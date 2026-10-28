@@ -663,9 +663,12 @@ export async function playAll() {
             // 即首 chunk 的全局位置就是首音符的全局位置，playhead 直接从该位置开始。
 
             // 第一个 chunk：初始化时间基准。
-            // playbackStartTime = startCtxTime + 0.05 - chunkStartSec，使得首 chunk
-            // 在 startCtxTime+0.05 发声时，elapsed = chunkStartSec，playhead 跳到
-            // 首音符的全局位置（而非 0），与 MIDI note 对齐。
+            // playbackStartTime 的语义是"时间线 0 秒对应的 ctx 渲染时刻"，
+            // 与 startSharedPlayback() 的 `startAt - offset` 同义。这里取
+            // currentTime + 0.05，首 chunk 随后按 `基准 + chunkStartSec` 调度，
+            // 于是第 N 秒的内容就在第 N 秒发声；elapsed 自然从 0 开始走。
+            // （旧注释写的是 `+ 0.05 - chunkStartSec`，那是被改掉的旧实现：
+            //   那样减一次会让首 chunk 提前 chunkStartSec 秒发声。）
             if (!streamingStarted) {
               streamingStarted = true;
               _streamingFirstChunkOffsetSec = chunkStartSec;
@@ -1255,7 +1258,15 @@ export async function startExclusivePlayback(offset) {
     state.isPlaying = true;
     setTransport(TRANSPORT.PLAYING);
     clearTransportStatus();
-    state.playbackStartTime = Date.now() / 1000 - offset;
+    // 独占走主进程的 decibri(WASAPI) 输出，没有 AudioContext 可以问 outputLatency，
+    // 只能按一个设备周期估下界：start() 返回时首个缓冲才交给设备，真正出声还要
+    // 再等一个 buffer（1024 帧 @48k ≈ 21 ms）。墙钟从"返回那一刻"起算就会稳定
+    // 超前这么多。补偿量取这个**下界**——真实延迟只会更大，所以宁可少补也不会
+    // 把播放头推到声音之后。
+    const _bufFrames = Number(state.audioSettings?.audioBufferSize) || 1024;
+    const _outRate = Number(state.audioSettings?.audioSampleRate) || SAMPLE_RATE;
+    const _exclusiveLatency = _outRate > 0 ? Math.min(0.2, Math.max(0, _bufFrames / _outRate)) : 0;
+    state.playbackStartTime = Date.now() / 1000 - offset + _exclusiveLatency;
     state.playbackPauseOffset = offset;
     // 记录播放启动时刻，用于 onAudioEnded 触发时判断是否"刚启动就结束"
     // （用户拖拽到接近末尾时音频几乎立即结束，此时不应重置位置到 0，
