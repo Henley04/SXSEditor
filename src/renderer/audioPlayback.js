@@ -931,7 +931,7 @@ export async function playAll() {
         // 相对 fragment），而非 fragment 起点。前置零样本使 paddedAudio[0] 对齐到
         // fragment 起点，与下游 startSample = fragment.startTime→sample 的混音逻辑
         // 协作，最终将 audioData[0] 放置在首音符的全局位置，与 MIDI note 对齐。
-        const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
+        const expectedSamples = Math.ceil((fragment.duration / state.project.bpm) * 60 * SAMPLE_RATE);
         // F2：取 min(start) 而非首元素 —— 乱序时首元素可能不是最早的音符，
       // 会让整段音频被前置静音平移（实测乱序首元素 start=8 拍 → 偏移 4.00s）。
       const firstNoteOffsetSample = Math.floor((firstNoteStart(clippedNotes) / state.project.bpm) * 60 * SAMPLE_RATE);
@@ -1810,7 +1810,7 @@ export async function runExportJob(opts) {
       // 相对 fragment），而非 fragment 起点。前置零样本使 paddedAudio[0] 对齐到
       // fragment 起点，与下游 startSample = fragment.startTime→sample 的混音逻辑
       // 协作，最终将 audioData[0] 放置在首音符的全局位置，与 MIDI note 对齐。
-      const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
+      const expectedSamples = Math.ceil((fragment.duration / state.project.bpm) * 60 * SAMPLE_RATE);
       // F2：取 min(start) 而非首元素 —— 乱序时首元素可能不是最早的音符，
       // 会让整段音频被前置静音平移（实测乱序首元素 start=8 拍 → 偏移 4.00s）。
       const firstNoteOffsetSample = Math.floor((firstNoteStart(clippedNotes) / state.project.bpm) * 60 * SAMPLE_RATE);
@@ -1824,7 +1824,7 @@ export async function runExportJob(opts) {
 
       // 与 playAll 的 globalLastEnd 一致：结束位置 = 分片起点 + 相对时长，
       // 否则起点靠后的分片会被静默截断丢弃。
-      const fragEndSec = ((fragment.startTime + fragDuration) / state.project.bpm) * 60;
+      const fragEndSec = ((fragment.startTime + fragment.duration) / state.project.bpm) * 60;
       if (fragEndSec > maxDuration) maxDuration = fragEndSec;
 
       // 完成一个分片后更新总体进度（onSVSProgress 只在推理过程中触发，
