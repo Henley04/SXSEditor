@@ -129,11 +129,11 @@
 
 ![分片编辑器：白色自动曲线](docs/images/verify/editor-auto-curve.png)
 
-![主窗口：Auto 徽标](docs/images/verify/fragment-badge-auto.png)
+![主窗口徽标：Auto / Mixed / Manual](docs/images/verify/badge-states.png)
 
 ### MCP 核验中发现的一个边界
 
-`fragment.setPitchCurve` 修改主窗口的 fragment 数据后，**已打开的分片编辑器窗口不会自动刷新**（原项目的同步是单向的：编辑器→主窗口）。若编辑器窗口开着，之后编辑器的 500ms 自动保存会用旧数据覆盖。当前用法：MCP 写入前先关闭该分片的编辑器窗口（`fragment.open` 重新打开即可拿到新数据）。补一条"主窗口→编辑器"的推送通道在任务 #9 里跟踪。
+`fragment.setPitchCurve` 修改主窗口的 fragment 数据后，**已打开的分片编辑器窗口不会自动刷新**（原项目的同步是单向的：编辑器→主窗口）。若编辑器窗口开着，之后编辑器的 500ms 自动保存会用旧数据覆盖。当前用法：MCP 写入前先关闭该分片的编辑器窗口（`fragment.open` 重新打开即可拿到新数据）。已补上推送通道：`fragment.setPitchCurve` 落库后调用 `pushFragmentPatch()`，把新的 `pitchCurve` 直接推给已打开的编辑器窗口（否则编辑器的 500ms 防抖保存会把旧曲线写回来）。
 
 ### 测试回归
 
