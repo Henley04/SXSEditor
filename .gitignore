@@ -293,3 +293,6 @@ scripts/mel_proj_train_output/
 
 # 本地工具日志目录（slidep 命令记录等）
 .slidep/
+
+# 崩溃转储（Electron/Xvfb 调试时产生）
+core.*

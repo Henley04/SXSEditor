@@ -437,6 +437,8 @@
         <figcaption><span data-lang="en">Auto curve on every note (attack scoop, portamento, vibrato, fall-off). The toolbar shows the Auto switch, preset, Params and Batch; the inspector shows the naturalness check.</span><span data-lang="zh">每个音符上的自动曲线（起音滑入、滑音、颤音、句尾下滑）。工具栏显示 自动 开关、预设、参数与批量；检查器里是自然度自检。</span></figcaption>
       </figure>
 
+      <p data-lang="en"><strong>It is not "every note, the same way".</strong> Auto decides per note whether a gesture happens at all: a long, high, phrase-final note is likely to get vibrato; a short detached one is not. Leaps overshoot only sometimes, and the amount varies note to note. Fall-offs are reserved for phrase ends, rests and long legato tails — otherwise every note end would dip and the line would wobble. All of this is deterministic: the same project always sounds the same, and undo/redo/export stay reproducible.</p>
+      <p data-lang="zh"><strong>它不是"每个音都照同一个模板做一遍"。</strong> 自动层会逐音符判断"这个音要不要做"：长、高、句尾的音更可能有颤音，短促断开的音多半没有；跳进只是<em>有时候</em>过冲，幅度也逐音不同；下滑只留给乐句尾、休止前和连奏长音的收尾——否则每个音尾都往下掉，整条旋律会一直在晃。这些判断全部是确定性的：同一个工程每次听起来都一样，撤销/重做/导出都可复现。</p>
       <p data-lang="en">You do not have to open the fragment editor to know which state a fragment is in: the main window draws a badge on every fragment card.</p>
       <p data-lang="zh">不用打开分片编辑器也能知道分片处于哪种状态：主窗口会在分片卡片上画一个徽标。</p>
       <figure class="fig">
@@ -465,9 +467,18 @@
         <tr><td>glideMs / glideMinSemitones</td><td>90 / 2</td><td><span data-lang="en">Portamento time (auto-scaled by tempo).</span><span data-lang="zh">滑音时间（随速度自动缩放）。</span></td></tr>
         <tr><td>releaseCents</td><td>−25</td><td><span data-lang="en">Fall-off at the end of a note.</span><span data-lang="zh">句尾下滑。</span></td></tr>
         <tr><td>jitterCents</td><td>6</td><td><span data-lang="en">Random pitch noise (the "not a machine" texture).</span><span data-lang="zh">随机抖动（"不像机器"的质感）。</span></td></tr>
-        <tr><td>autoVibrato.depth / rate / drift</td><td>22¢ / 5.5Hz / 6%</td><td><span data-lang="en">Vibrato filled into <code>note.vibrato</code>; still editable per note. Drift makes the rate non-constant.</span><span data-lang="zh">自动填充到 <code>note.vibrato</code>，仍可逐音符改。漂移让速率不是恒定正弦。</span></td></tr>
+        <tr><td>autoVibrato.depth / rate / drift / depthDrift</td><td>22¢ / 5.5Hz / 6% / 8%</td><td><span data-lang="en">Derived vibrato, applied after F0 smoothing so its depth survives. Rate and depth drift slowly and randomly (never a fixed ramp). Not written into <code>note.vibrato</code>; see <a href="#note-effects-vibrato-fade">Note Effects</a> for how to take it over per note.</span><span data-lang="zh">派生的颤音，在 F0 平滑<em>之后</em>叠加，深度不会被削。速率与幅度做慢变随机（不是固定加速）。不写入 <code>note.vibrato</code>；如何逐音符接管见<a href="#note-effects-vibrato-fade">音符效果</a>。</span></td></tr>
+        <tr><td>vibratoProbability / overshootProbability / prepProbability / releaseProbability</td><td>0.82 / 0.55 / 0.40 / 0.65</td><td><span data-lang="en">How often each gesture happens at all. Real singers do <em>not</em> vibrate every long note, overshoot every leap or fall off every note end. The value is a baseline; longer / higher / phrase-final notes are more likely, short detached ones less. 1 = always, 0 = never.</span><span data-lang="zh">每种"表情"发生的基准概率。真人<strong>不会</strong>每个长音都颤、每个跳进都过冲、每个音尾都下滑。该值是基准，随后按上下文调制：更长、更高、句尾的音更容易做，短促断开的音更少做。1 = 一定做，0 = 从不。</span></td></tr>
+        <tr><td>releaseScope / releaseMinBeats</td><td>phrase / 2 拍</td><td><span data-lang="en"><code>phrase</code> = fall off only at phrase ends, before rests and (subtly) on long legato notes; <code>always</code> = every note end (the old behaviour).</span><span data-lang="zh"><code>phrase</code> = 只在乐句尾、休止前、以及连奏长音的收尾轻微下滑；<code>always</code> = 每个音尾都下滑（旧行为）。</span></td></tr>
+        <tr><td>legatoGapBeats / staccatoGapBeats / phraseGapBeats</td><td>0.12 / 0.45 / 1.2 拍</td><td><span data-lang="en">Gap thresholds that decide legato (weak attack, micro glide on stepwise moves), detached (no glide, full attack) and phrase boundaries.</span><span data-lang="zh">用"与相邻音的间隙"判定连奏（弱起音、级进微滑）、断奏（不滑、正常起音）与乐句分界。</span></td></tr>
+        <tr><td>microGlideMs</td><td>45</td><td><span data-lang="en">Very short glide for a one-semitone legato step — a hard cut sounds synthetic, a full 90 ms glide smears.</span><span data-lang="zh">连奏级进（1 半音）的微滑时长——硬切太假，90ms 又会糊。</span></td></tr>
+        <tr><td>variation</td><td>60%</td><td><span data-lang="en">Per-note variation of depth, rate, attack, jitter and overshoot (plus a per-phrase factor). 0 = every note identical (useful for A/B), 100 = maximum human scatter.</span><span data-lang="zh">逐音符的深度/速率/起音/抖动/过冲浮动（另有一个乐句级系数）。0 = 每个音完全一致（适合 A/B），100 = 最大离散度。</span></td></tr>
         <tr><td>glideOwnership</td><td>auto</td><td><span data-lang="en">Who handles note transitions: the auto curve, the timbre panel's glide, or both stacked.</span><span data-lang="zh">换音过渡由谁负责：自动曲线、音色面板的过渡参数，或两者叠加。</span></td></tr>
       </table>
+      <figure class="fig">
+        <img src="../images/verify/editor-auto-params-natural.png" alt="Auto pitch curve parameters, naturalness group: gesture probabilities, release scope, legato gaps, micro-glide and per-note variation" loading="lazy">
+        <figcaption><span data-lang="en">The <strong>naturalness</strong> group at the bottom of the parameter panel: how often each gesture happens, where fall-offs are allowed, what counts as legato, and how much notes may differ from each other.</span><span data-lang="zh">参数面板底部的<strong>自然度</strong>分组：每种表情发生的概率、下滑允许出现在哪里、什么算连奏，以及音符之间允许有多大差异。</span></figcaption>
+      </figure>
 
       <h3 id="pitch-batch-tools">
         <span data-lang="en">Batch Tools, Snapping &amp; Numeric Input</span>
@@ -488,8 +499,8 @@
         <span data-lang="en">Naturalness Check</span>
         <span data-lang="zh">自然度自检</span>
       </h3>
-      <p data-lang="en">The inspector's <strong>Naturalness check</strong> panel samples the curve you actually hear (auto layer + manual overrides + vibrato) and compares it with human singing ranges: vibrato depth and rate, share of dead-flat long notes, leap overshoot, attack time, jitter, tuning offset and range violations. Green = inside the human range, yellow = borderline, red = mechanical. It runs on demand — the score is a measurement, not a style grade.</p>
-      <p data-lang="zh">检查器里的 <strong>自然度自检</strong> 面板会对"你实际听到的曲线"（自动层 + 手动覆盖 + 颤音）采样，与真人歌唱的统计区间比对：颤音深度与速率、死平长音占比、跳进过冲、起音时间、抖动、调音偏差、音域越界。绿色=落在真人区间，黄色=临界，红色=机械。点击才运行——分数是测量结果，不是风格评分。</p>
+      <p data-lang="en">The inspector's <strong>Naturalness check</strong> panel samples the curve you actually hear (auto layer + manual overrides + vibrato) and compares it with human singing ranges: vibrato depth, rate and <em>coverage</em> (share of long notes that vibrate), share of dead-flat long notes, leap overshoot (share of leaps that overshoot, not "every leap must"), attack time, jitter, tuning offset and range violations. Green = inside the human range, yellow = borderline, red = mechanical. It runs on demand — the score is a measurement, not a style grade.</p>
+      <p data-lang="zh">检查器里的 <strong>自然度自检</strong> 面板会对"你实际听到的曲线"（自动层 + 手动覆盖 + 颤音）采样，与真人歌唱的统计区间比对：颤音深度、速率与<em>覆盖率</em>（长音里带颤音的比例）、死平长音占比、跳进过冲（看"有多少跳进过冲"，而不是"每个都必须过冲"）、起音时间、抖动、调音偏差、音域越界。绿色=落在真人区间，黄色=临界，红色=机械。点击才运行——分数是测量结果，不是风格评分。</p>
       <figure class="fig">
         <img src="../images/verify/editor-naturalness.png" alt="Naturalness check panel with per-metric status" loading="lazy">
         <figcaption><span data-lang="en">Each metric shows the measured value, the human range and a colour-coded status.</span><span data-lang="zh">每项指标显示实测值、真人区间与颜色状态。</span></figcaption>
@@ -678,6 +689,12 @@
       <p data-lang="en">Vibrato adds a sinusoidal pitch modulation on top of the note's base pitch. It is layered over any existing pitch curve (anchor points / brush strokes), so slides and manual pitch edits are preserved — the vibrato simply oscillates around the curve's current value.</p>
       <p data-lang="zh">颤音在音符基础音高之上叠加正弦调制。它会叠加在任何已有的音高曲线（锚点 / 画笔笔触）之上，因此滑音与手动音高编辑都会保留——颤音只是围绕曲线当前值上下振荡。</p>
       <p data-lang="en">Toggle the switch at the top of the menu to enable/disable vibrato, then fine-tune the following parameters:</p>
+      <p data-lang="en"><strong>Auto / Manual badge.</strong> When the auto curve is on and you have not touched this note, the menu shows the values you are actually hearing, tagged <em>Auto</em> — these are derived from the note and the auto parameters, not stored on the note. Move any slider and the same values are copied onto the note and tagged <em>Manual</em>: from then on the auto layer leaves this note alone. Turning the switch <strong>off</strong> also pins it to manual (otherwise auto would simply turn it back on). The badge has three states: <em>Auto</em>, <em>Manual</em> and <em>Manual · off</em> (and <em>Auto · off</em> when the auto layer itself decided this note gets no vibrato). Use <em>Clear Effects</em> to hand the note back to the auto layer.</p>
+      <p data-lang="zh"><strong>自动 / 手动 徽标。</strong> 自动曲线开着、而这个音你没动过时，菜单里显示的就是你<em>实际听到</em>的那组值，标记为「自动」——它们由音符与自动参数派生，不存储在这个音符上。拖动任一滑块，这组值会被抄到音符上并标记为「手动」，此后自动层不再碰这个音。<strong>关掉开关</strong>同样会钉成手动（否则自动层下一帧又会打开），此时徽标显示「手动·不颤」，和自动层自己判定「这个音不颤」的「自动·不颤」区分开。想交还给自动层，用「清除效果」。</p>
+      <figure class="fig">
+        <img src="../images/verify/editor-note-vibrato-source.png" alt="Note context menu showing the Auto badge and the derived vibrato values" loading="lazy">
+        <figcaption><span data-lang="en">The menu shows what you actually hear. <strong>Auto</strong> means the values were derived by the auto layer and are not stored on the note; move any slider and they are copied onto the note as <strong>Manual</strong>.</span><span data-lang="zh">菜单里显示的是你实际听到的值。<strong>自动</strong> 表示这些值由自动层派生、不存储在音符上；拖动任一滑块，同一组值会被抄到音符上并标记为 <strong>手动</strong>。</span></figcaption>
+      </figure>
       <p data-lang="zh">在菜单顶部切换开关以启用 / 关闭颤音，然后微调以下参数：</p>
       <table class="doc-table">
         <thead>

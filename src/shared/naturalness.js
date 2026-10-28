@@ -78,10 +78,12 @@ function sampleNote(pitchAt, note, bpm, samplesPerBeat = SAMPLES_PER_BEAT) {
 /**
  * 颤音分析：去趋势后看振荡。
  *
- * 用"残差的 2.5%–97.5% 分位差 / 2"作为振幅，比 max-min 抗单点毛刺；
- * 再用零交叉数估频率（残差过均值次数 / 2 / 时长）。
+ * 用"残差的 2.5%–97.5% 分位差 / 2"作为振幅，比 max-min 抗单点毛刺。
+ * 频率不用过零计数 —— 过零在"颤音渐入"段会被抖动带偏（实测把 5.5Hz 测成
+ * 8Hz），改用**归一化自相关**找周期：对幅度包络与噪声都不敏感，再用抛物线
+ * 插值提高分辨率。
  */
-function analyzeVibrato(samples, note, bpm) {
+function analyzeVibrato(samples, note, bpm, sampleRate) {
   const { beats, cents } = samples;
   if (cents.length < 16) return null;
   const durSec = (note.duration / bpm) * 60;
@@ -96,8 +98,7 @@ function analyzeVibrato(samples, note, bpm) {
   // 9 点滑动平均（400Hz 采样下 ≈ 22Hz 低通）：压掉 jitter 的宽带成分，
   // 只留 3–9Hz 的颤音。
   // 为什么不是 5 点：jitter 是 5ms 一格的随机（≈2 个采样点），5 点窗（12.5ms）
-  // 只压掉一半，残余过零仍会把 5.5Hz 的颤音测成 9Hz（自检里 rate 判 warn 但
-  // 参数完全正确 —— 属于测量伪影）。9 点窗 22.5ms 对 5.5Hz（周期 182ms）
+  // 只压掉一半，残余会在自相关里形成伪峰。9 点窗 22.5ms 对 5.5Hz（周期 182ms）
   // 几乎无衰减，对 jitter 足够。
   const resid = new Array(residRaw.length);
   for (let i = 0; i < residRaw.length; i++) {
@@ -114,15 +115,51 @@ function analyzeVibrato(samples, note, bpm) {
   const hi = sorted[Math.floor(sorted.length * 0.975)];
   const depth = Math.abs(hi - lo) / 2;
 
-  const mean = resid.reduce((x, y) => x + y, 0) / resid.length;
-  let crossings = 0;
-  for (let i = 1; i < resid.length; i++) {
-    if ((resid[i - 1] - mean) * (resid[i] - mean) < 0) crossings++;
-  }
-  // 每周期两次穿越 → 频率 = 穿越数 / 2 / **分析段时长**（不是整音时长）
-  const segSec = Math.max(1e-6, ((segBeats[segBeats.length - 1] - segBeats[0]) / bpm) * 60);
-  const rate = crossings / 2 / segSec;
+  const rate = autocorrRate(resid, sampleRate);
   return { depth, rate, residualSpread: Math.abs(hi - lo) };
+}
+
+/**
+ * 归一化自相关估周期，返回 Hz（无法判定时返回 null）。
+ *
+ * @param {number[]} resid 去趋势 + 低通后的残差
+ * @param {number} sampleRate 采样率（Hz）
+ */
+function autocorrRate(resid, sampleRate) {
+  const n = resid.length;
+  if (!(sampleRate > 0) || n < 32) return null;
+  const mean = resid.reduce((a, b) => a + b, 0) / n;
+  const x = resid.map((v) => v - mean);
+  const minLag = Math.max(2, Math.floor(sampleRate / 10));   // 10Hz 上限
+  const maxLag = Math.min(Math.floor(sampleRate / 2.5), Math.floor(n / 2));
+  if (maxLag <= minLag + 1) return null;
+  const r = new Array(maxLag + 2).fill(0);
+  let best = -1;
+  let bestLag = 0;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let num = 0;
+    let d1 = 0;
+    let d2 = 0;
+    for (let i = 0; i + lag < n; i++) {
+      const vi = x[i];
+      const vj = x[i + lag];
+      num += vi * vj;
+      d1 += vi * vi;
+      d2 += vj * vj;
+    }
+    const den = Math.sqrt(d1 * d2);
+    const v = den > 1e-12 ? num / den : 0;
+    r[lag] = v;
+    if (v > best) { best = v; bestLag = lag; }
+  }
+  if (best < 0.25 || bestLag === 0) return null;
+  const y0 = r[bestLag - 1] || 0;
+  const y1 = r[bestLag];
+  const y2 = r[bestLag + 1] || 0;
+  const den = y0 - 2 * y1 + y2;
+  const delta = Math.abs(den) > 1e-9 ? (0.5 * (y0 - y2)) / den : 0;
+  const lag = bestLag + Math.max(-0.5, Math.min(0.5, delta));
+  return lag > 0 ? sampleRate / lag : null;
 }
 
 /** 起音：从音符开始到首次进入目标 ±tol 音分所需时间（ms）；未进入返回 null。 */
@@ -161,6 +198,7 @@ export function analyzeNaturalness(ctx) {
   const vibratos = [];
   const attacks = [];
   const flats = [];
+  let notesWithVibrato = 0;
   let outOfRange = 0;
   const tuningCents = [];
   let jitterDiffs = [];
@@ -196,8 +234,14 @@ export function analyzeNaturalness(ctx) {
       }
     }
 
-    const v = analyzeVibrato(s, note, bpm);
-    if (v && v.rate >= 2.5 && v.rate <= 12) vibratos.push({ note, ...v });
+    // 采样率 = 每拍采样数 × 拍/秒（120BPM → 400Hz），自相关用它换算周期
+    const v = analyzeVibrato(s, note, bpm, (SAMPLES_PER_BEAT * bpm) / 60);
+    // 门槛 4¢：低于它的是抖动的慢分量，不是"颤音"。不设门槛会把直声长音
+    // 也算成"有颤音"，覆盖率和深度都会被稀释。
+    if (v && v.rate && v.rate >= 2.5 && v.rate <= 12 && v.depth >= 4) {
+      vibratos.push({ note, ...v });
+      notesWithVibrato++;
+    }
 
     const atk = analyzeAttack(s, bpm);
     if (atk !== null) attacks.push(atk);
@@ -263,15 +307,34 @@ export function analyzeNaturalness(ctx) {
     push('vibratoRate', 'vibratoRate', vibRate, 'Hz', '3–9 (5–7)', st, 'vibratoRateHint', 0.5);
   }
 
+  // 颤音覆盖率：真人不给每个长音都加颤音（大约 60%–95%），全部 100% 反而是
+  // "参数化机械"的信号。这一项只在长音足够多（≥4）时才有统计意义。
+  if (longNotes.length >= 4) {
+    const cov = (notesWithVibrato / longNotes.length) * 100;
+    const st = cov < 25 ? NAT_STATUS.BAD
+      : cov < 45 ? NAT_STATUS.WARN
+        : cov <= 98 ? NAT_STATUS.GOOD : NAT_STATUS.WARN;
+    push('vibratoCoverage', 'vibratoCoverage', cov, '%', '45–98', st, 'vibratoCoverageHint', 0.5);
+  }
+
   const flatRatio = longNotes.length > 0 ? flats.length / longNotes.length : 0;
   push('flat', 'deadFlat', flatRatio * 100, '%', '< 20',
     flatRatio <= 0.2 ? NAT_STATUS.GOOD : flatRatio <= 0.5 ? NAT_STATUS.WARN : NAT_STATUS.BAD,
     'deadFlatHint');
 
   if (overshoots.length > 0) {
-    const mid = median(overshoots.map((o) => o.overshoot));
-    const st = mid >= 8 && mid <= 30 ? NAT_STATUS.GOOD
-      : mid > 0 ? NAT_STATUS.WARN : NAT_STATUS.BAD;
+    // 过冲不再"每个跳进都必须有"（auto 用概率闸门控制），所以判档看两件事：
+    //   · 有过多冲的比例（太少 = 每个跳进都硬切，太多 = 每个跳进都在"抻"）
+    //   · 真正发生过冲的那些，峰值是否落在 10–25¢
+    const hit = overshoots.filter((o) => o.overshoot >= 6);
+    const share = hit.length / overshoots.length;
+    const mid = hit.length > 0 ? median(hit.map((o) => o.overshoot)) : 0;
+    let st;
+    if (overshoots.length < 2) st = NAT_STATUS.INFO;   // 样本太小，不下结论
+    else if (hit.length === 0) st = NAT_STATUS.WARN;
+    else if (share >= 0.3 && mid >= 8 && mid <= 30) st = NAT_STATUS.GOOD;
+    else if (mid > 0) st = NAT_STATUS.WARN;
+    else st = NAT_STATUS.BAD;
     push('overshoot', 'overshoot', mid, '¢', '10–25', st, 'overshootHint');
   }
 
@@ -283,11 +346,12 @@ export function analyzeNaturalness(ctx) {
 
   // 逐点高频残差的 std ≈ 抖动幅度（正弦抖动 → std = amp/√2，取保守值直接比较）
   const jitterCents = jitterDiffs.length > 1 ? stdev(jitterDiffs) : 0;
-  // 判档与 target 对齐：默认 6¢ 的 jitter 经高通残差后实测约 2–4¢
-  // （宽带随机在高通/标准差下会衰减），所以 good 下界取 2¢ 而不是 3¢。
-  push('jitter', 'jitter', jitterCents, '¢', '2–14',
-    jitterCents >= 2 && jitterCents <= 14 ? NAT_STATUS.GOOD
-      : jitterCents > 0.5 ? NAT_STATUS.WARN : NAT_STATUS.BAD,
+  // 判档与 target 对齐：默认 6¢ 的 jitter 经高通残差后实测约 1.5–4¢
+  // （宽带随机在高通/标准差下会衰减，且高音区按音分折算更小），所以 good
+  // 下界取 1.5¢ 而不是 3¢。
+  push('jitter', 'jitter', jitterCents, '¢', '1.5–14',
+    jitterCents >= 1.5 && jitterCents <= 14 ? NAT_STATUS.GOOD
+      : jitterCents > 0.8 ? NAT_STATUS.WARN : NAT_STATUS.BAD,
     'jitterHint');
 
   const tune = tuningCents.length > 0 ? median(tuningCents) : 0;

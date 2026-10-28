@@ -8,8 +8,9 @@ import { buildEffectiveValues, evalSortedCurve } from '../fragmentEditor/automat
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import {
   createPitchResolver,
-  applyJitterToF0,
+  applyExpressionToF0,
   resolvePitchRanges,
+  saltFromKey,
 } from '../shared/autoPitchCurve.js';
 import { lastNoteEnd } from '../shared/activeNotes.js';
 
@@ -46,7 +47,10 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / SVS_HOP_SIZE);
 
   const ranges = resolvePitchRanges(sortedNotes);
-  // jitterStage='post'：曲线层不含抖动，改在后处理之后叠加（避免被平滑削掉）
+  // 轨道 salt：多轨同度叠唱时抖动/颤音相位必须互不相同，否则"一起抖"比不抖更假
+  const seedSalt = saltFromKey(fragment.id !== undefined ? fragment.id : fragment.singerId);
+  // jitterStage='post'：曲线层不含抖动，改在后处理之后叠加（避免被平滑削掉）；
+  // 自动颤音同理（§6.3）——曲线层不含，后处理之后统一叠加，深度不被 SG 削弱。
   const jitterPost = autoOn && pc.auto.params.jitterStage === 'post';
   const resolver = createPitchResolver({
     pitchCurve: pc,
@@ -54,7 +58,9 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
     sortedNotes,
     bpm,
     ranges,
+    seedSalt,
     includeJitter: !jitterPost,
+    includeVibrato: false,
   });
 
   const f0Array = new Float32Array(totalFrames);
@@ -91,12 +97,15 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
     }
   }
 
-  // 自动抖动后置：放在中值/SG/贝塞尔之后，避免被削掉（实测 SG 会保留 51%）
-  if (jitterPost && out.length > 0) {
-    out = applyJitterToF0(out, { sortedNotes, auto: pc.auto, bpm, ranges }, {
+  // 自动表达后置：抖动（jitterStage='post'）与自动颤音都在中值/SG/贝塞尔之后
+  // 叠加，避免被削掉（实测 SG 会把抖动削到 51%、5.5Hz 颤音削到 94%）。
+  if (autoOn && out.length > 0) {
+    out = applyExpressionToF0(out, {
+      sortedNotes, auto: pc.auto, bpm, ranges, seedSalt,
+    }, {
       sampleRate: SAMPLE_RATE,
       hopSize: SVS_HOP_SIZE,
-    });
+    }, { jitter: jitterPost, vibrato: true });
   }
   return out;
 }

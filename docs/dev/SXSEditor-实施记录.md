@@ -240,3 +240,80 @@
    - F0→锚点默认带 `strength: 80` 与滤波，导入曲线不再"原样含噪"。
 3. **风险点**：`canvasRenderer.getPitchAtTime` 现在依赖 shared resolver，缓存键少了 `auto.version`（已由 `pitchCurveVersion` 覆盖，因为改 auto 会 `invalidatePitchCurveCache()`）。若将来有其他路径在**不 bump 版本**时改 auto，需要补键。
 4. **未跑仓库测试套件**：环境未安装 `node_modules`（Electron 依赖体积大），本次用等价纯函数脚本验证。建议在 CI 上先跑 `npm run test:ci`，重点关注 `test/rendererPostprocessParity.test.js`（F4 改动会影响其中"区间外回落到 note.pitch"的断言，但该用例的末锚点与 note.pitch 同为 60，应仍通过）。
+
+---
+
+## 五、v2：自然度增强（把"参数化机械"逐条拆掉）
+
+### 5.1 这一轮改的是什么
+
+上一轮把四大波动做了出来，但**做法是"每个音都按同一套参数执行"**：每个 ≥1.5 拍的长音都颤、
+每个 ≥2 半音的跳进都过冲、每个音尾都 -25¢。参数越精细，机械感越强——因为听感上的"人味"
+来自**差异**，不是来自"更细致的规则"。
+
+本轮按七条批判逐条落地（设计细节见设计方案 §15）：
+
+| # | 问题 | 处置 | 关键实现 |
+|---|---|---|---|
+| 1 | 每个长音都颤 / 每个跳进都过冲 / 每音都 attack-release | 概率闸门 × 上下文系数（时长/音高/乐句位置/句首/音程），并给出 `variation` 逐音浮动 | `buildNoteTraits()` |
+| 2 | release 不分"音符尾"和"乐句尾" | 作用域：乐句尾 1.0 / 短休止前 0.7 / 连奏长音 0.32 / 连奏短音 0；连奏起音 ×0.35 | `releaseScale`、`attackScale` |
+| 3 | 自动颤音写 `note.vibrato` 与"后置叠加"矛盾，且会覆盖用户手改 | 改为**派生 + 后置**；菜单显示影子参数，一动即转 `source:'manual'`；删除 `applyAutoVibrato()` | `autoVibratoOffset()`、`applyExpressionToF0()`、`resolveAutoVibratoForNote()` |
+| 4 | 抖动种子单一，长曲/多轨会规律 | 种子 = (seed, 轨道 salt, note.id)；音高缩放；起振 30ms 保护 | `_jitterSemitones()`、`saltFromKey()` |
+| 5 | rateDrift 固定 6% 可预测 | 低频随机调制速率/幅度 + 解析积分保相位连续（0.5–1.4Hz） | `driftComps()` / `driftIntegral()` |
+| 6 | 缺连奏/断奏语义 | 用间隙判定 `onset`：legato（弱起音 + 级进微滑）/ detached（不滑）/ normal；乐句分界 1.2 拍 | `onset`、`microGlideMs` |
+| 7 | 多轨同步抖动 | `ctx.seedSalt = saltFromKey(fragment.id ?? singerId)`，逐轨相位不同 | `createPitchResolver({ seedSalt })` |
+
+### 5.2 顺手修掉的真 bug
+
+- **`paramsForPreset()` 浅拷贝**：`merged.autoVibrato` 与 `AUTO_PITCH_DEFAULTS.autoVibrato` 是同一个对象，
+  UI 改一次"自动颤音深度"就把全局默认值改了，新建工程/重置/归一化全部跟着变，撤销也回不来。
+- **`applyAutoVibrato()` 死代码**：导出但从未调用；一旦有人接上就会把用户手动颤音冲掉。已删除。
+- **`articulation` 用错方向**（本轮引入后又自查发现）：最初用"与下一音的间隙"判断起音，
+  导致句尾长音被判成 `isolated`、起音不再弱化。改成"起音侧 `onset`"与"结尾侧 `gapAfter`"两个维度。
+  这个错误是 `test/autoPitchNaturalness.test.js` 的"连奏起音 35%"用例抓出来的。
+- **自然度自检的颤音速率用零交叉估计**：颤音渐入段幅度与抖动同量级，过零被带偏（5.5Hz 测成 8Hz）。
+  改为**归一化自相关 + 抛物线插值**（`autocorrRate()`），三音实测 5.56/5.79/6.13Hz。
+- **自检指标与设计脱节**：新增"颤音覆盖率"（45–98%）；"跳进过冲"改为看**有过冲的比例**，
+  不再要求每个跳进都过冲（否则我们刚做的"概率过冲"会被自己的自检判红）。
+
+### 5.3 兼容性
+
+| 场景 | 结果 |
+|---|---|
+| 旧工程（无 auto） | `auto.enabled=false`，行为逐位不变 |
+| 1.2.0 工程（有 auto，无自然度参数） | 新参数全部回落默认；听感变成"更有人味"，但不丢数据 |
+| 本版本存 → 1.2.0 读 | 版本 1.3.0、`features` 含未知项 → 提示；读得进，重存丢自然度参数（回落默认） |
+| 手动颤音 | 完全不受影响：`isManualVibrato()` 优先，`source:'manual'` 连"关掉"都算手动 |
+
+### 5.4 数字
+
+- 全量测试：**2031 passing / 7 failing**（7 条全部是 Windows 专属：NPU PnP ×3、WinML ortBridge ×4，
+  与本次改动无关，上一轮基线相同）。新增 15 条（`autoPitchNaturalness` 14 条 + 自检覆盖率 1 条）。
+- 自然度（3 音 / 120BPM）：默认参数 **92 分**（颤音 18.9¢ / 5.8Hz / 过冲按概率分布）；
+  闸门全开 + `variation=0` 时 **100 分** —— 扣分来自"故意的不均匀"，不是算法退化。
+
+### 5.5 实机核验（v2，第二轮）
+
+用 MCP automation 在真实 Electron 实例上跑了一遍配置链路与右键菜单，45 条断言全通过。
+过程中抓到 6 个单测覆盖不到的问题（详见设计方案 §15.10），其中 3 个在自动化路径、
+1 个在协议层、1 个在 UI 分支、1 个是通用布局缺陷：
+
+1. **MCP 换预设只改标签不换参数** — `fragment.setPitchCurve({auto:{preset:'soft'}})` 之后
+   `preset='soft'` 但 `vibratoProbability` 还是 0.82（natural 的值）。UI 走的是
+   `a.params = paramsForPreset(id)`，自动化路径漏了这一步。现在语义与 UI 完全对齐：
+   换预设=换整组参数、同批带 `params` 以 `params` 为准、只改参数则 `preset` 落 `custom`。
+2. **非法枚举静默回默认** — `{releaseScope:'bogus'}` 把用户原来的 `'always'` 改成了 `'phrase'`。
+   新增 `sanitizeAutoParamPatch()` 在补丁层剔除非法键，非法输入变成无操作。
+3. **嵌套 `autoVibrato` 被整体替换** — 只改 `depth` 会丢掉 `rate`/`drift`。改为深合并。
+4. **协议层拿不到 `note.vibrato`** — NOTE 的 `additionalProperties:false` 把它挡在门外，
+   导致"手动标记是否持久化"无法脚本化验证。已把 `vibrato`（含 `source`）写进 schema，
+   `docs/MCP.md` / `docs/dev/mcp.html` 由 `npm run mcp:docs` 重新生成。
+5. **手动关颤音时徽标消失** — "手动关闭"落在三态分支的 `else` 里（因为手动时 `derived` 被置空）。
+   补成 `手动·不颤`，与自动层的 `自动·不颤` 区分；实测三态 + "清除效果"回自动全部正确。
+6. **窗口变窄把右侧 inspector 挤出屏幕** — `#app` 只定义了行，隐式列是 `auto`（子项 max-content），
+   画布被 `resizeCanvases()` 写成固定像素宽度后整列撑到 1707px。改 `minmax(0,1fr)` +
+   `min-width:0` + `max-width:100%`。这条与 v2 无关，属于之前就存在的通用缺陷。
+
+数字更新：全量 **2041 passing / 7 failing**（7 条仍是 Windows 专属）；`autoPitchNaturalness`
+由 14 条增至 24 条。实机演示片段（6 音、96BPM）自然度自检 **100 分**，
+颤音覆盖率 50%（6 个长音里 3 个颤音）——正好落在 45–98% 的"像人"区间。

@@ -27,6 +27,21 @@ describe('naturalness analyse', () => {
   }
 
   /**
+   * "每个音都做"的确定性参数。
+   *
+   * 自动曲线默认带概率闸门（不是每个长音都颤、不是每个跳进都过冲），
+   * 断言"深度/速率/过冲的数值对不对"时必须把闸门打开，否则断言的是
+   * 抽签结果而不是算法。
+   */
+  const ALWAYS = {
+    vibratoProbability: 1,
+    overshootProbability: 1,
+    prepProbability: 1,
+    releaseProbability: 1,
+    variation: 0,
+  };
+
+  /**
    * 完整曲线 = 自动层（**已含自动颤音**）。
    * 传 vibrato 时在自动层之上**再叠一层**，用于测"用户手设颤音"的情形；
    * 不传就是纯自动曲线的默认表现。
@@ -75,13 +90,15 @@ describe('naturalness analyse', () => {
     expect(r.score).to.be.lessThan(50);
   });
 
-  it('默认自动曲线（自带 22¢/5.5Hz 颤音）→ 深度与速率都落在真人区间', () => {
+  it('自动曲线（22¢/5.5Hz 颤音，闸门全开）→ 深度与速率都落在真人区间', () => {
     const notes = [
       { id: 1, pitch: 60, start: 0, duration: 2, lyric: 'la' },
       { id: 2, pitch: 67, start: 2, duration: 2, lyric: 'la' },
       { id: 3, pitch: 64, start: 4, duration: 2, lyric: 'la' },
+      // 第二个跳进（64→60）让"过冲比例"这一项有统计意义（1 个跳进只给 info）
+      { id: 4, pitch: 60, start: 6, duration: 2, lyric: 'la' },
     ];
-    const auto = makeCtx(notes).auto;
+    const auto = makeCtx(notes, ALWAYS).auto;
     const pitchAt = makePitchAt(auto, notes); // 不额外叠加：验的是 auto 自己的颤音
     const r = analyzeNaturalness({ pitchAt, notes, bpm, ranges });
 
@@ -99,12 +116,37 @@ describe('naturalness analyse', () => {
     expect(over.status).to.equal(NAT_STATUS.GOOD);
   });
 
+  it('默认参数（带概率闸门）下，长音不是"个个都颤"但覆盖率仍在真人区间', () => {
+    // 12 个同长度长音：默认 vibratoProbability=0.82 × 上下文系数
+    const notes = [];
+    for (let i = 0; i < 12; i++) {
+      notes.push({ id: 100 + i, pitch: 60 + (i % 5), start: i * 2, duration: 2, lyric: 'la' });
+    }
+    const auto = makeCtx(notes).auto;
+    const ctx = { sortedNotes: notes, auto, bpm, ranges };
+    const r = analyzeNaturalness({
+      pitchAt: (b) => autoPitchAt(ctx, b),
+      notes,
+      bpm,
+      ranges,
+    });
+    const cov = item(r, 'vibratoCoverage');
+    expect(cov).to.exist;
+    // 覆盖 45%–98%：既不是 0（全直声）也不是 100%（每个都颤 → 机械）
+    expect(cov.value).to.be.within(45, 98);
+    expect(cov.value).to.be.lessThan(100);
+    // 同一个音符重复求值结果完全一致（确定性）
+    const a1 = autoPitchAt(ctx, 1.3);
+    const a2 = autoPitchAt(ctx, 1.3);
+    expect(a1).to.equal(a2);
+  });
+
   it('颤音过深 / 过浅会被判档区分开', () => {
     const notes = [{ id: 1, pitch: 60, start: 0, duration: 2, lyric: 'la' }];
 
     // 直接改 autoVibrato.depth（auto 自带颤音，不需要在采样器里再叠加）
     const shallow = analyzeNaturalness({
-      pitchAt: makePitchAt(makeCtx(notes, { autoVibrato: { depth: 4 } }).auto, notes),
+      pitchAt: makePitchAt(makeCtx(notes, { ...ALWAYS, autoVibrato: { depth: 4 } }).auto, notes),
       notes,
       bpm,
       ranges,
@@ -112,7 +154,7 @@ describe('naturalness analyse', () => {
     expect(item(shallow, 'vibrato').status).to.equal(NAT_STATUS.BAD);
 
     const deep = analyzeNaturalness({
-      pitchAt: makePitchAt(makeCtx(notes, { autoVibrato: { depth: 90 } }).auto, notes),
+      pitchAt: makePitchAt(makeCtx(notes, { ...ALWAYS, autoVibrato: { depth: 90 } }).auto, notes),
       notes,
       bpm,
       ranges,

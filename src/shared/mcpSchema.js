@@ -28,12 +28,28 @@ const num = (description, extra = {}) => ({ type: 'number', description, ...extr
 const bool = (description) => ({ type: 'boolean', description });
 const int = (description, extra = {}) => ({ type: 'integer', description, ...extra });
 
+const NOTE_VIBRATO = {
+  type: 'object',
+  description: 'Per-note vibrato. `source` marks who owns it: "manual" = the user (or automation) pinned it, "auto" = written by the auto layer.',
+  properties: {
+    enabled: bool('Vibrato on/off for this note'),
+    depth: num('Peak deviation in cents', { minimum: 0, maximum: 100 }),
+    rate: num('Rate in Hz', { minimum: 1, maximum: 12 }),
+    start: num('Start position inside the note (0-1)'),
+    length: num('Length as a fraction of the note (0-1)'),
+    fadeIn: num('Fade-in as a fraction of the vibrato span (0-1)'),
+    source: { type: 'string', enum: ['auto', 'manual'], description: 'Owner of this override' },
+  },
+  additionalProperties: true,
+};
+
 const NOTE = obj({
   pitch: int('MIDI note number 0-127', { minimum: 0, maximum: 127 }),
   start: num('Start position in beats', { minimum: 0 }),
   duration: num('Duration in beats', { exclusiveMinimum: 0 }),
   lyric: str('Lyric for this note'),
   id: str('Optional stable id; derived from content when omitted'),
+  vibrato: NOTE_VIBRATO,
 }, ['pitch', 'start', 'duration']);
 
 const FRAGMENT = {

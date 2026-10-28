@@ -216,8 +216,8 @@ curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
         <span data-lang="en">Method Reference</span>
         <span data-lang="zh">方法参考</span>
       </h2>
-<p data-lang="en">All 44 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
-      <p data-lang="zh">全部 44 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
+<p data-lang="en">All 46 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
+      <p data-lang="zh">全部 46 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
       <h3>
         <span data-lang="en">Schema &amp; Capabilities</span>
         <span data-lang="zh">架构与能力</span>
@@ -1069,6 +1069,81 @@ curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
   "method": "fragment.open",
   "params": {
     "fragmentId": "${fragmentId}"
+  }
+}</code></pre>
+
+      <h4><code>fragment.getPitchCurve</code></h4>
+      <p data-lang="en">Read a fragment pitch curve: auto config, manual anchors/brush/derived segments, and the manual coverage ranges.</p>
+      <p data-lang="zh">Read a fragment pitch curve: auto config, manual anchors/brush/derived segments, and the manual coverage ranges.</p>
+      <p><em><span data-lang="en">target: <code>renderer</code></span><span data-lang="zh">目标：<code>renderer</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>fragmentId</code></td>
+            <td><span data-lang="en">string · required · Fragment id</span><span data-lang="zh">string · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>includePoints</code></td>
+            <td><span data-lang="en">boolean · optional · Include every point of derived segments (default false: only id/range/pointCount)</span><span data-lang="zh">boolean · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "fragment.getPitchCurve",
+  "params": {
+    "fragmentId": "${fragmentId}",
+    "includePoints": true
+  }
+}</code></pre>
+
+      <h4><code>fragment.setPitchCurve</code></h4>
+      <p data-lang="en">Update a fragment pitch curve: auto params, on/off, preset, manual anchors, derived segments.</p>
+      <p data-lang="zh">Update a fragment pitch curve: auto params, on/off, preset, manual anchors, derived segments.</p>
+      <p><em><span data-lang="en">target: <code>renderer</code> · mutates project</span><span data-lang="zh">目标：<code>renderer</code> · 修改项目</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>fragmentId</code></td>
+            <td><span data-lang="en">string · required · Fragment id</span><span data-lang="zh">string · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>auto</code></td>
+            <td><span data-lang="en">object · optional · Partial auto config: { enabled, preset, params }</span><span data-lang="zh">object · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>anchorPoints</code></td>
+            <td><span data-lang="en">object[] · optional · Replace manual anchors (omit to keep)</span><span data-lang="zh">object[] · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>bakedSegments</code></td>
+            <td><span data-lang="en">object[] · optional · Replace derived segments (omit to keep)</span><span data-lang="zh">object[] · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>reset</code></td>
+            <td><span data-lang="en">`manual` | `all` · optional · manual = clear manual layers; all = also disable auto</span><span data-lang="zh">`manual` | `all` · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "fragment.setPitchCurve",
+  "params": {
+    "fragmentId": "${fragmentId}",
+    "auto": {},
+    "anchorPoints": [],
+    "bakedSegments": [],
+    "reset": "manual"
   }
 }</code></pre>
 

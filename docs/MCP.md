@@ -634,6 +634,58 @@ Legacy aliases: `id` → `fragmentId` (accepted with a deprecation warning).
 }
 ```
 
+### `fragment.getPitchCurve`
+
+Read a fragment pitch curve: auto config, manual anchors/brush/derived segments, and the manual coverage ranges.
+
+Anchors store ABSOLUTE MIDI pitches. Manual content wins inside its coverage; the auto layer fills the rest.
+
+_target: `renderer`_
+
+| Parameter | Type / notes |
+|---|---|
+| `fragmentId` | string · required · Fragment id |
+| `includePoints` | boolean · optional · Include every point of derived segments (default false: only id/range/pointCount) |
+
+```json
+{
+  "method": "fragment.getPitchCurve",
+  "params": {
+    "fragmentId": "${fragmentId}",
+    "includePoints": true
+  }
+}
+```
+
+### `fragment.setPitchCurve`
+
+Update a fragment pitch curve: auto params, on/off, preset, manual anchors, derived segments.
+
+Omitted fields stay untouched. reset="manual" clears manual content (back to auto); reset="all" also disables auto.
+
+_target: `renderer` · mutates project_
+
+| Parameter | Type / notes |
+|---|---|
+| `fragmentId` | string · required · Fragment id |
+| `auto` | object · optional · Partial auto config: { enabled, preset, params } |
+| `anchorPoints` | object[] · optional · Replace manual anchors (omit to keep) |
+| `bakedSegments` | object[] · optional · Replace derived segments (omit to keep) |
+| `reset` | `manual` | `all` · optional · manual = clear manual layers; all = also disable auto |
+
+```json
+{
+  "method": "fragment.setPitchCurve",
+  "params": {
+    "fragmentId": "${fragmentId}",
+    "auto": {},
+    "anchorPoints": [],
+    "bakedSegments": [],
+    "reset": "manual"
+  }
+}
+```
+
 ### `fragment.exportTo`
 
 Synthesize one fragment and write a WAV.

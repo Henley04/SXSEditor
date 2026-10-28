@@ -6,9 +6,10 @@ import { computeActiveClippedNotes, computeInactiveNoteIds, lastNoteEnd } from '
 import {
   createPitchResolver,
   resolvePitchRanges,
-  applyJitterToF0,
+  applyExpressionToF0,
   buildAutoCurve,
   coverageAt,
+  saltFromKey,
   findNoteAtBeat as findNoteAtBeatShared,
 } from '../shared/autoPitchCurve.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
@@ -564,9 +565,12 @@ export function buildPitchCurveF0Data(options = {}) {
   const sampleRate = getSampleRate();
   const totalFrames = Math.floor(totalSeconds * sampleRate / hopSize);
 
-  // jitterStage='post'：曲线层不含抖动，放到滤波之后叠加（否则会被 SG/中值削掉）
+  // jitterStage='post'：曲线层不含抖动，放到滤波之后叠加（否则会被 SG/中值削掉）。
+  // 自动颤音一律后置（§6.3）：曲线层不含，避免被 f0Smooth 削弱 6%。
   const jitterPost = autoOn && pcNorm.auto.params.jitterStage === 'post';
-  const resolver = _getPitchResolver(jitterPost ? 'f0-nojitter' : 'render');
+  const seedSalt = saltFromKey(currentFragment ? (currentFragment.id !== undefined
+    ? currentFragment.id : currentFragment.singerId) : 0);
+  const resolver = _getPitchResolver(!jitterPost, false);
 
   // 逐帧判断"这一帧是否落在某个音符内"。
   //
@@ -626,14 +630,15 @@ export function buildPitchCurveF0Data(options = {}) {
     }
   }
 
-  // 自动抖动后置（与主窗口 f0Utils 同一策略）
-  if (jitterPost && f0Array.length > 0) {
-    f0Array = applyJitterToF0(f0Array, {
+  // 自动表达后置（与主窗口 f0Utils 同一策略）：抖动 + 颤音放在滤波之后
+  if (autoOn && f0Array.length > 0) {
+    f0Array = applyExpressionToF0(f0Array, {
       sortedNotes,
       auto: pcNorm.auto,
       bpm,
       ranges: resolvePitchRanges(sortedNotes),
-    }, { sampleRate: getSampleRate(), hopSize });
+      seedSalt,
+    }, { sampleRate: getSampleRate(), hopSize }, { jitter: jitterPost, vibrato: true });
   }
 
   return f0Array;
@@ -1121,14 +1126,16 @@ export function invalidatePitchResolver() {
 }
 
 /**
- * @param {'render'|'f0-nojitter'} variant
- *   render       —— 渲染用，抖动计入曲线（视觉与听感同源）
- *   f0-nojitter  —— F0 构建用；jitterStage='post' 时抖动在滤波之后叠加，曲线层先不含
+ * @param {boolean} [includeJitter] 抖动是否计入曲线层（渲染计入；F0 构建在
+ *   jitterStage='post' 时不计入，改在滤波之后叠加）
+ * @param {boolean} [includeVibrato] 自动颤音是否计入曲线层（渲染计入；F0 构建
+ *   不计入，改在滤波之后叠加 —— 见设计方案 §6.3）
  */
-function _getPitchResolver(variant = 'render') {
+function _getPitchResolver(includeJitter = true, includeVibrato = true) {
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const frag = getCurrentFragment();
-  const key = `${getNotesVersion()}|${getPitchCurveVersion()}|${frag ? frag.duration : 0}|${bpm}|${variant}`;
+  const flags = `${includeJitter ? 1 : 0}${includeVibrato ? 1 : 0}`;
+  const key = `${getNotesVersion()}|${getPitchCurveVersion()}|${frag ? frag.duration : 0}|${bpm}|${flags}`;
   const cached = _pitchResolverCache.get(key);
   if (cached) return cached;
   // 只在缓存失效时做过滤/排序（getClippedNotes 本身也有 inactive 缓存）
@@ -1141,7 +1148,9 @@ function _getPitchResolver(variant = 'render') {
     sortedNotes: clipped,
     bpm,
     ranges: resolvePitchRanges(clipped),
-    includeJitter: variant === 'render',
+    seedSalt: saltFromKey(frag ? (frag.id !== undefined ? frag.id : frag.singerId) : 0),
+    includeJitter,
+    includeVibrato,
   });
   // 只保留最近 4 个变体，避免长会话里无限增长
   if (_pitchResolverCache.size > 4) _pitchResolverCache.clear();

@@ -92,6 +92,7 @@ import {
   _markNotesIndexDirty,
   ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
   transposePitchCurve, quantizePitchCurve, simplifyPitchCurve, smoothPitchCurve,
+  getResolvedAuto, getClippedNotes,
   // 拖动自动曲线 → 派生副本（上一轮漏了这两个 import：点到自动曲线会抛
   // ReferenceError 而不是派生，功能等于不可用。eslint no-undef 抓到了）
   hitAutoCurveAt, createBakedSegmentAt,
@@ -107,6 +108,9 @@ import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlaybac
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
 import { snapshotAnchors, clampStrength, clampSmoothness } from './automationCurve.js';
+import {
+  isManualVibrato, resolveAutoVibratoForNote, saltFromKey,
+} from '../shared/autoPitchCurve.js';
 import { getTimbreKeyframes } from './postprocessAccess.js';
 import { POSTPROCESS_PARAMS, quantizeParamValue, formatParamValue } from './postprocessParams.js';
 
@@ -1039,17 +1043,85 @@ function _firstCtxNote() {
   return getNoteById(ids[0]) || null;
 }
 
+/**
+ * 自动颤音在当前音符上的"影子参数"。
+ *
+ * 用户没有手动设过颤音、但自动层会给这个音符颤音时，菜单里显示的应该是
+ * **实际听到的那组值**，而不是 DEFAULT_VIBRATO（80¢ 直上直下）—— 否则
+ * 用户看到 80¢、听到 22¢，会以为参数不生效。
+ */
+function _autoVibratoForNote(note) {
+  const auto = getResolvedAuto();
+  if (!auto || !auto.enabled) return null;
+  const frag = getCurrentFragment();
+  return resolveAutoVibratoForNote({
+    auto,
+    sortedNotes: getClippedNotes(),
+    bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
+    seedSalt: saltFromKey(frag ? (frag.id !== undefined ? frag.id : frag.singerId) : 0),
+  }, note);
+}
+
+/**
+ * 把颤音切到"手动"来源，并把自动派生值**先抄过来**再改。
+ * 不抄的话，用户拖一下灵敏度会从 22¢ 跳到 DEFAULT_VIBRATO 的 80¢。
+ */
+function _pinManualVibrato(note) {
+  let v = note.vibrato;
+  if (v && v.source === 'manual') return v;
+  const derived = isManualVibrato(note) ? null : _autoVibratoForNote(note);
+  v = ensureVibrato(note);
+  if (derived && derived.enabled) {
+    v.enabled = true;
+    v.depth = derived.depth;
+    v.rate = derived.rate;
+    v.start = derived.start;
+    v.length = derived.length;
+    v.fadeIn = derived.fadeIn;
+  }
+  v.source = 'manual';
+  return v;
+}
+
 function _syncNoteCtxMenuFromNotes() {
   const note = _firstCtxNote();
   if (!note) return;
 
   // Vibrato params
   ensureVibrato(note);
-  const v = note.vibrato;
+  const manualVib = isManualVibrato(note);
+  const derived = manualVib ? null : _autoVibratoForNote(note);
+  const showingAuto = !!(derived && derived.enabled);
+  const v = showingAuto ? derived : note.vibrato;
   const toggle = document.getElementById('note-ctx-vibrato-toggle');
   const params = document.getElementById('note-ctx-vibrato-params');
   if (toggle) toggle.checked = !!v.enabled;
   if (params) params.hidden = !v.enabled;
+
+  const src = document.getElementById('note-ctx-vibrato-src');
+  if (src) {
+    if (showingAuto) {
+      src.hidden = false;
+      src.className = 'note-ctx-src';
+      src.textContent = t('fragment.vibSrcAuto');
+      src.title = t('fragment.vibSrcAutoHint');
+    } else if (manualVib) {
+      // 手动打开 / 手动关掉都要有徽标：关掉同样是用户意图，显示"手动"会让
+      // 人以为它还在颤，所以分成两档文案。
+      src.hidden = false;
+      src.className = 'note-ctx-src manual';
+      src.textContent = note.vibrato.enabled ? t('fragment.vibSrcManual') : t('fragment.vibSrcManualOff');
+      src.title = note.vibrato.enabled ? t('fragment.vibSrcManualHint') : t('fragment.vibSrcManualOffHint');
+    } else if (derived && !derived.enabled) {
+      src.hidden = false;
+      src.className = 'note-ctx-src';
+      src.textContent = t('fragment.vibSrcAutoOff');
+      src.title = t('fragment.vibSrcAutoOffHint');
+    } else {
+      src.hidden = true;
+      src.textContent = '';
+    }
+  }
 
   const setSlider = (id, valueId, value, formatter) => {
     const s = document.getElementById(id);
@@ -1203,8 +1275,9 @@ function _setupNoteContextMenuListeners() {
     toggle.addEventListener('change', () => {
       const enabled = toggle.checked;
       _applyToCtxNotes((n) => {
-        ensureVibrato(n);
-        n.vibrato.enabled = enabled;
+        // 关掉也是一次显式决定：钉成手动，否则自动层下一帧又会把它打开
+        const v = _pinManualVibrato(n);
+        v.enabled = enabled;
       }, true);
     });
   }
@@ -1236,8 +1309,8 @@ function _setupNoteContextMenuListeners() {
       if (lbl) lbl.textContent = spec.format(x);
       _ensureCtxSnapshot();
       _applyToCtxNotes((n) => {
-        ensureVibrato(n);
-        spec.set(n.vibrato, x);
+        const v = _pinManualVibrato(n);
+        spec.set(v, x);
       }, false);
     });
     slider.addEventListener('change', () => {
@@ -1277,8 +1350,9 @@ function _setupNoteContextMenuListeners() {
       const preset = VIBRATO_PRESETS[key];
       if (!preset) return;
       _applyToCtxNotes((n) => {
-        ensureVibrato(n);
-        Object.assign(n.vibrato, deepClone(preset));
+        const v = _pinManualVibrato(n);
+        Object.assign(v, deepClone(preset));
+        v.source = 'manual';
       }, true);
     });
   });
@@ -1304,6 +1378,9 @@ function _setupNoteContextMenuListeners() {
       _applyToCtxNotes((n) => {
         ensureVibrato(n);
         n.vibrato.enabled = false;
+        // 清除 = 回到自动层（若 auto 开着，这个音重新由自动曲线决定颤音）；
+        // 想彻底不颤请用上面的开关关掉 —— 那会钉成手动。
+        delete n.vibrato.source;
         n.fadeIn = 0;
         n.fadeOut = 0;
       }, true);

@@ -97,31 +97,51 @@ mousedown 命中自动曲线（且不在 coverage 内）:
 
 ## 4. 四大波动的参数化（自然度的来源）
 
-### 4.1 颤音 Vibrato —— 复用现有 `note.vibrato`，不另起炉灶
+### 4.1 颤音 Vibrato —— 派生 + 后置叠加，UI 映射到 `note.vibrato` 影子参数
 
-**关键决策**：auto **不自己实现颤音**，而是**自动填充 `note.vibrato`**。理由：现有颤音已是每音符可编辑参数、UI/合成路径完整；再做一个自动颤音层必然双重叠加且不可编辑。
+**决策（v2 修订）**：自动颤音**不写 `note.vibrato`**，而是
 
-| 参数 | 真人典型 | 现有默认值 | 建议默认值 | 建议 UI 范围 |
+1. **派生**：由 `autoPitchAt()` / `autoVibratoOffset()` 按「音符 + 参数 + 逐音符特征」实时算出，不落字段；
+2. **后置**：F0 路径在「中值 → SG → 贝塞尔」之后再叠加（与 jitter 同一条管道），所以深度不被平滑削弱；
+3. **可接管**：右键菜单显示的是"如果用户不干预就会生效"的那组值（影子参数），用户动任一滑块 → 写入 `note.vibrato` 并打 `source:'manual'`，此后该音符由手动层接管。
+
+**为什么改掉 v1 的"自动填充 `note.vibrato`"**：
+
+| 问题 | 说明 |
+|---|---|
+| 与 §6.3 语义冲突 | 文档说颤音在"后处理之后"叠加，写进 `note.vibrato` 就变成了曲线层（会被 SG 削 6%） |
+| 会覆盖用户资产 | 逐音符刷新时无法区分"用户改过的颤音"和"上次自动填的"，改一次参数整段用户手调就没了 |
+| 撤销/重做边界模糊 | 自动填充属于派生量，却混进了"音符数据"，撤销栈里会出现用户没做过的动作 |
+| 参数语义丢失 | `note.vibrato` 只有 5 个字段，装不下速率/深度慢变、逐音相位、概率闸门 |
+
+v1 的 `applyAutoVibrato()`（写入 `note.vibrato`）已删除——它从未被调用，但留着就是定时炸弹：任何人接上它就会把用户的手动颤音冲掉。
+
+**参数与真人区间**（默认值即"自然"预设）：
+
+| 参数 | 真人典型 | 旧默认 | 现默认 | UI 范围 |
 |---|---|---|---|---|
-| `rate` (Hz) | 3–9，常用 5–7 | 5.5 ✅ | **5.5** | 3.0–9.0，步进 0.1 |
-| `depth` (cents) | **15–30** | **80** ❌ | **22** | 0–60 |
-| `start` (音符占比) | 中后段起 | 0.2 ✅ | 0.25 | 0–1 |
-| `length` (占比) | — | 0.8 ✅ | 0.75 | 0–1 |
-| `fadeIn` (占比) | 渐入 | 0.3 ✅ | 0.35 | 0–1 |
-| **`rateDrift`** (新增, %) | 周期末细微加减速 | — | **6** | 0–20，0 = 旧行为 |
-| **`depthDrift`** (新增, %) | 深度随气息起伏 | — | 8 | 0–30，0 = 旧行为 |
+| `autoVibrato.rate` (Hz) | 3–9，常用 5–7 | 5.5 ✅ | **5.5** | 1–12，步进 0.1 |
+| `autoVibrato.depth` (cents) | **15–30** | **80** ❌ | **22** | 0–100 |
+| `autoVibrato.start` (音符占比) | 中后段起 | 0.2 | **0.25** | 0–1 |
+| `autoVibrato.length` (占比) | — | 0.8 | **0.75** | 0–1 |
+| `autoVibrato.fadeIn` (占比) | 渐入 | 0.3 | **0.35** | 0–1 |
+| `autoVibrato.drift` (%) | 速率周期到周期变化 | — | **6** | 0–30 |
+| `autoVibrato.depthDrift` (%) | 深度随气息起伏 | — | **8** | 0–40 |
+| `vibratoProbability` | 不是每个长音都颤 | — | **0.82** | 0–1 |
 
-> ⚠️ 实测：`DEFAULT_VIBRATO.depth = 80` 音分 = 0.80 半音，而真人典型是 15–30 音分。**现有默认值偏高约 3.2 倍**，这是"开个颤音就像抖嗓子"的根因。建议把默认值降到 22，并在 UI 上把 15–30 标为"自然区间"底色带。
-> `rateDrift` / `depthDrift` 缺省 0，保证旧工程逐位不变。
+> ⚠️ `DEFAULT_VIBRATO.depth = 80`（手动颤音默认值）保持不变——那是用户主动打开颤音时的起点，
+> 与自动层的 22 是两套语义；改它会破坏旧工程。
 
-**速率非恒定**（用户点名的细节）：相位改为
+**速率非恒定**（v2 不再是固定线性漂移）：
 
 ```js
-phase = 2π * rate * (t + (rateDrift/100) * 0.5 * t² / T)   // T = 颤音总时长
-// rateDrift = 6% → 一个颤音周期内速率缓慢加快约 6%，末尾比开头略急
+// 瞬时速率被低频随机调制，相位用解析积分保证连续（不会"咔"）
+rate(t)  = rate * (1 + drift * Σ aₖ·sin(2πfₖt + φₖ))     // f ∈ 0.5–1.4Hz
+phase(t) = phase₀ + 2π·rate·(t + drift·∫Σ…)               // ∫ 有闭式解
+depth(t) = depth * (1 + depthDrift * Σ bₖ·sin(2πgₖt + ψₖ)) // g ≈ rate/3 … rate/2
 ```
 
-自动填充规则（auto 侧参数）：`autoVibrato: { enabled, minDurationBeats: 1.5, depth, rate, drift }` → 时长 ≥ 阈值的音符自动写入 `note.vibrato`，**用户仍可逐音符改**（它是普通音符参数，不是 auto 的私有数据）。
+固定的 `1 + 0.06·t/T` 两小节就能听出规律；改成慢变随机后，"这一段抖得急一点、那一段幅度大一点"不可预测但完全可复现（种子由轨道 + 音符派生）。
 
 ### 4.2 过冲 Overshoot 与预备 Preparation —— 跳进的"惯性"
 
@@ -288,8 +308,10 @@ UI 上不做阻断，只做**显式的归属提示 + 一键切换**（契约 C7�
 新：曲线（不含 auto 抖动） → 中值 → SG → 贝塞尔 → 【叠加 auto jitter + 自动颤音】 → 输出
 ```
 
-- auto 生成的 jitter 与**自动填充的颤音**默认在**后处理之后**叠加 → 完全不被平滑/中值削弱
-- 用户手动设置的 `note.vibrato` 保持 `'pre'`（在曲线层），保证旧工程逐位不变
+- auto 生成的 jitter 与**自动颤音**都在**后处理之后**叠加 → 完全不被平滑/中值削弱
+  （v2 实装：`applyExpressionToF0(f0, ctx, fmt, { jitter, vibrato })` 一条管道两路叠加）
+- 用户手动设置的 `note.vibrato` 保持 `'pre'`（在曲线层），保证旧工程逐位不变；
+  自动颤音只在**没有手动颤音**的音符上叠加（`isManualVibrato()` 判定，见 §15.3）
 - 面板显示实时提示："当前平滑设置会把手动颤音削弱至 94%（5.5Hz）／把后处理前抖动削弱至 51%"，并给一个「把自动抖动放到后处理之后」的开关（默认开）
 
 这样两者各司其职：**后处理管"信号清洁"（去掉导入 F0 的噪声、手绘曲线的毛刺），auto 管"表现力生成"**，互不抵消。
@@ -309,8 +331,9 @@ UI 上不做阻断，只做**显式的归属提示 + 一键切换**（契约 C7�
 |---|---|---|
 | 长音（≥1.5 拍）颤音深度 | 15–30 音分 | "长音过于平直" |
 | 长音颤音速率 | 3–9 Hz | "颤音过快/过慢" |
+| **颤音覆盖率**（长音中带颤音的比例） | 45%–98% | 100% = "每个长音都在颤"（§15.2） |
 | 持续段 jitter RMS | ≥ 1.5 音分 | "过于规律，缺少人味" |
-| 跳进（≥2 半音）过冲 | 10–25 音分 | "缺少惯性感" |
+| 跳进（≥2 半音）过冲 | 有过多冲的跳进 ≥30%，其中位峰值 10–25 音分 | "缺少惯性感" |
 | 跳进预备 | 8–20 音分 | — |
 | 音符间过渡时长 | 60–140 ms（随速度缩放） | "存在台阶式跳变" |
 | 帧间最大跳变（滑音段内） | < 120 音分/帧 | "过渡太陡" |
@@ -344,7 +367,13 @@ fragment.pitchCurve = {
       releaseRatio: 0.15, releaseCents: -25,
       // 抖动
       jitterCents: 6, jitterSource: 'synth', jitterStage: 'post', seed: 0,
-      // 自动颤音填充（写入 note.vibrato，不是私有层）
+      // 自然度（v2，见 §15；缺省即默认，旧工程读入后行为不变）
+      vibratoProbability: 0.82, overshootProbability: 0.55,
+      prepProbability: 0.40, releaseProbability: 0.65,
+      releaseScope: 'phrase', releaseMinBeats: 2,
+      legatoGapBeats: 0.12, staccatoGapBeats: 0.45, phraseGapBeats: 1.2,
+      microGlideMs: 45, variation: 60,
+      // 自动颤音（派生 + 后置叠加，不写 note.vibrato）
       autoVibrato: { enabled: true, minDurationBeats: 1.5, depth: 22, rate: 5.5,
                      drift: 6, depthDrift: 8, start: 0.25, length: 0.75, fadeIn: 0.35 },
       // 其它
@@ -368,7 +397,7 @@ fragment.pitchCurve = {
 note.autoPitch = { enabled: false }     // 这个音不要自动曲线
 note.autoPitch = { preset: 'power' }    // 这个音换预设
 note.vibrato   = { enabled, depth, rate, start, length, fadeIn,
-                   rateDrift, depthDrift }   // 新增两个 drift，缺省 0
+                   source: 'manual' | 'auto' }  // v2：来源标记，manual 时自动层不叠加
 ```
 
 **向后兼容**：无 `auto` → `enabled: false`、`bakedSegments: []`；`note.vibrato` 无 drift → 0。求值路径与 v2.0.2 逐位相同。工程文件层面的落地（存什么、怎么归一化、版本号）见 **§9**。
@@ -447,7 +476,8 @@ auto 是否存活: false | bakedSegments: false
 | 场景 | 会发生什么 | 处置 |
 |---|---|---|
 | 新版存 → 新版开 | 全字段往返（实测通过） | ✅ 加回归测试 |
-| **新版存（1.2.0）→ 旧版开（1.1.0）** | ① minor 更高 → 弹**已有**确认框"新版字段会被旧代码忽略，重存即丢数据"；② 确认后主窗口只画锚点，**自动曲线不可见**；③ 一旦打开分片编辑器 → auto 被抹掉 → 保存即永久丢失 | ⚠️ 靠确认框 + 文档；建议提供"导出旧版兼容工程"（见下） |
+| **新版存（1.3.0）→ 1.2.0 开** | ① `features` 含 `autoPitchNaturalness` → 提示"未知特性"；② 读得进、听感基本一致，但重存会丢 §15 的概率/连奏参数（回落默认值） | ⚠️ 靠提示 + 文档 |
+| **新版存（1.2.0/1.3.0）→ 旧版开（1.1.0）** | ① minor 更高 → 弹**已有**确认框"新版字段会被旧代码忽略，重存即丢数据"；② 确认后主窗口只画锚点，**自动曲线不可见**；③ 一旦打开分片编辑器 → auto 被抹掉 → 保存即永久丢失 | ⚠️ 靠确认框 + 文档；建议提供"导出旧版兼容工程"（见下） |
 | 旧版存（1.1.0）→ 新版开 | 无 `auto` 字段 → 归一化后 `enabled = false` → **听感与旧版逐位一致** | ✅ 必须保证（§9.6） |
 | 旧版存 → 旧版开 | 不涉及 auto | — |
 
@@ -476,10 +506,10 @@ auto 是否存活: false | bakedSegments: false
 
 ```js
 // src/shared/projectFormat.js（新增）
-export const PROJECT_FORMAT_VERSION = '1.2.0';
-export const PROJECT_FORMAT_PARTS = [1, 2, 0];
-export const PROJECT_MIN_READER = '1.2.0';      // 低于它重存会丢 autoPitchCurve
-export const PROJECT_FEATURES = ['autoPitchCurve'];
+export const PROJECT_FORMAT_VERSION = '1.3.0';   // 1.3.0 新增 §15 的自然度参数
+export const PROJECT_FORMAT_PARTS = [1, 3, 0];
+export const PROJECT_MIN_READER = '1.2.0';       // 低于它重存会丢 autoPitchCurve 本身
+export const PROJECT_FEATURES = ['autoPitchCurve', 'autoPitchNaturalness'];
 ```
 
 写入：`{ version, minReader, features, project, singers, fragments }`
@@ -592,3 +622,186 @@ export const PROJECT_FEATURES = ['autoPitchCurve'];
 ## 14. 一句话总结
 
 把"自动"做成**不落盘的派生层**（四大波动由音符实时派生），把"手动"做成**显式的作用域资产**，用**白/灰/强调色**把覆盖关系画出来；auto 与音色面板按"有音符语义 vs 无音符语义"分工、用施加顺序错开冲突；用户点一下就切手动、拖一下就把自动曲线复制成手动副本，而自动曲线永远不会被删掉。
+
+---
+
+## 15. 自然度增强（v2）：从"参数化机械"到"条件化人味"
+
+> 本章是对第一版设计的**批判性修订**。v1 把四大波动做成了"每个音都按同一套参数执行"，
+> 参数再精细也只是同一个模板复制 N 遍。v2 的核心改动是：**先判断"这个音要不要做"，再决定"做多少"**，
+> 且所有随机都是 `(全局 seed, 轨道 salt, note.id)` 的确定性函数（可复现、不落盘）。
+
+### 15.1 三类"新机械"与其根因
+
+| 症状 | 根因（v1 实现） | v2 处置 |
+|---|---|---|
+| 每个长音都颤 | `vibratoOn = duration >= minDuration` —— 只有时长一个条件 | 概率闸门 × 时长/音高/乐句位置系数（§15.2） |
+| 每个 ≥2 半音跳进都过冲 | `amp = min(max, |interval|·ratio)` —— 只要有音程就一定有值 | 概率闸门 × 音程/句首系数 + 逐音幅度浮动 |
+| 每个音尾都 -25¢ | `release` 无条件生效 | 作用域限定：乐句尾 > 后接休止 > 长音收尾（§15.2） |
+| 所有轨一起抖 | 抖动种子只含 `note.id`，多轨同度时 id 相同 | 混入轨道 salt + 逐音相位（§15.5） |
+| 颤音"越唱越快"很规律 | `phase = 2π·rate·t·(1+drift·t/T)` 是固定线性加速 | 低频随机调制 + 解析积分保相位连续（§15.5） |
+
+### 15.2 概率 + 上下文条件（`buildNoteTraits`）
+
+对每个音符先算一张**特征表**（`src/shared/autoPitchCurve.js → buildNoteTraits`）：
+
+```js
+{
+  onset: 'legato' | 'normal' | 'detached' | 'start',  // 起音侧
+  gapAfter, isPhraseEnd, isPhraseStart, phrase,
+  gateVibrato, gateOvershoot, gatePrep, gateRelease, releaseScale,
+  depthScale, rateScale, attackScale, jitterScale, overshootScale,
+  vibratoStartShift, phase0, seed,
+}
+```
+
+**闸门公式**（`gateBy(rnd, userProb, ctxFactor)`）：
+
+```
+gate = rnd < userProb × ctxFactor        // userProb = 用户滑块；=1 时直接放行
+```
+
+| 闸门 | 默认 userProb | 上下文系数 |
+|---|---|---|
+| 颤音 | 0.82 | 时长 0.72–1.27、音高 0.86–1.16、句尾 1.15（长音/高音/句尾更容易颤） |
+| 过冲 | 0.55 | 音程 0.55–1.0、句首 1.1（大跳进、重音位置更容易过冲） |
+| 预备 | 0.40 | 目标音程 0.65–1.0；且**后接长休止时不做**（提前压低毫无意义） |
+| 句尾 | 0.65 | 见下表的 `releaseScale` |
+
+> **概率 = 1 必须等于"一定做"**。上下文系数只在 `0 < p < 1` 时相乘——否则用户把滑块拉到
+> 100% 仍会有四分之一的音"没反应"，会被当成 bug。
+
+**逐音变化幅度** `variation`（0–100，默认 60）：深度 ±45%、速率 ±16%、起音 ±35%、抖动 ±40%、
+过冲 ±40%，另有一个**乐句级**系数（同一句整体更收敛或更外放）。`variation=0` 时回到"每个音完全一致"，
+用于 A/B 对比与回归测试。
+
+### 15.3 句尾下滑：区分"音符尾"和"乐句尾"
+
+| 条件 | `releaseScale` | 听感 |
+|---|---|---|
+| 乐句尾（后接 ≥1.2 拍休止 / 无后续 / 歌词以标点结尾） | 1.0 | 正常的句末下落 |
+| 后接 ≥0.25 拍休止（乐句未结束） | 0.7 | 呼吸口的小落 |
+| 连奏且时长 ≥ `releaseMinBeats` | 0.32 | 只是"松一口气"，不是下滑 |
+| 连奏的短音 | 0 | **完全不做** |
+
+同时：**连奏时起音弱化到 35%**（前一个音的余音还在响，重新"咬"一次会很假）。
+`releaseScope: 'always'` 保留旧行为（每个音尾都下滑），给需要"老派抒情"的用户一个开关。
+
+### 15.4 颤音来源标记（`vibratoSource`）
+
+`note.vibrato.source` 三态：
+
+| 值 | 含义 | 自动层行为 |
+|---|---|---|
+| 缺省 | 旧工程 | 按 `enabled` 判断：`true` = 手动 |
+| `'manual'` | 用户在右键菜单动过（**包括关掉**） | 不叠加，尊重用户 |
+| `'auto'` | v1 遗留的自动填充 | 可被派生量覆盖 |
+
+- **关掉也算手动**：`{enabled:false, source:'manual'}` 必须挡住自动层，否则用户关一次、下一帧又被打开。
+- **影子参数**：菜单显示 `resolveAutoVibratoForNote()` 的结果（含逐音 `depthScale`/`rateScale`），
+  用户拖动滑块时先把影子值**抄进** `note.vibrato` 再改——否则会从 22¢ 突跳到 `DEFAULT_VIBRATO` 的 80¢。
+- **"清除效果"回到自动**：删除 `source` 且 `enabled=false`，音符号重新由自动层决定；
+  想彻底不颤就用开关关掉（钉成手动）。
+
+### 15.5 抖动与颤音的去相关
+
+1. **逐音符**：种子 `= hash(seed, 轨道 salt, note.id)`；`note.id` 缺失时退化为 `start|pitch|duration`。
+   刻意**不用 start**：横向拖动音符会让"抽签"整体重掷，颤音忽有忽无。
+2. **逐轨道**：`ctx.seedSalt = saltFromKey(fragment.id ?? singerId)`。多轨同度叠唱时，
+   若只按 `note.id` 派生，两条轨会**完全同步**地抖——比不抖更假。
+3. **音高缩放**：低音区的音分抖动天然更大（同样的 Hz 波动折合更多音分），`pitchScale ∈ [0.65, 1.15]`。
+4. **起振保护**：前 30ms 线性进入（声带还没稳定起振）。
+5. **颤音相位** `phase0 = 2π·hash(...)`：不同音、不同轨的颤音起始相位不同。
+
+**关于"用歌手 F0 残差模板"**：本仓库的歌手是 ONNX 模型，**没有**可读的逐帧 F0 模板资产
+（`state.f0Data` 只存在于"音频转 MIDI"向导，且不随分片保存）。要实现"按歌手音色取抖动纹理"，
+需要新增模型侧输出或 `.sxssinger` 资产字段——属于独立课题，本轮不做，也不假装做了。
+当前用"逐音/逐轨去相关 + 慢变"达到同一目的：**没有两条轨、两个音在用同一段噪声**。
+
+### 15.6 慢变速率与幅度
+
+```js
+rate(t)  = rate · (1 + drift·Σ aₖ·sin(2πfₖt + φₖ))          f ∈ 0.5–1.4Hz
+phase(t) = phase₀ + 2π·rate·(t + drift·∫Σ…)                  // 闭式积分，相位连续
+depth(t) = depth · (1 + depthDrift·Σ bₖ·sin(2πgₖt + ψₖ))     g ∈ [rate/3.2, rate/2.2]
+```
+
+- `f ∈ 0.5–1.4Hz` 对应"每 2–4 个颤音周期换一次方向/幅度"，正是真人"周期到周期不完全一样"的尺度。
+- 相位用**解析积分**而不是逐帧累加：速率变化时不会产生相位跳变（听感上是"咔"）。
+- `depthDrift` 的高频分量（`g ≈ rate/3`）制造"这一下深一点"，而不是整体音量包络。
+
+### 15.7 连奏 / 断奏
+
+MIDI 没有力度（本仓库音符模型只有 `pitch/start/duration/lyric/noteType/vibrato/fadeIn/fadeOut`），
+所以判定只用**间隙 + 重叠 + 歌词**：
+
+| 条件（与前一音的间隙 `gapBefore`） | `onset` | 行为 |
+|---|---|---|
+| 无前音 | `start` | 正常起音 |
+| `≤ legatoGapBeats`（默认 0.12 拍，负值 = 重叠） | `legato` | 起音 ×0.35；级进（1 半音）走 `microGlideMs` 微滑；可走微预备（35% 幅度） |
+| `≥ staccatoGapBeats`（默认 0.45 拍） | `detached` | **不滑**（这不是过渡，是重新起音）；起音保持原幅度 |
+| 中间 | `normal` | 按音程阈值决定是否滑 |
+
+> v1 的 `articulation` 误用了**与下一音**的间隙来判断起音，导致句尾长音被判成 `isolated`、
+> 起音不再弱化。v2 拆成"起音侧 `onset`"与"结尾侧 `gapAfter`"两个独立维度。
+
+**没做的**：用 MIDI velocity 做力度分档（音符模型无此字段，加字段会牵动合成/导出/工程格式，
+收益不足）；用音节类型（汉字/假名）做连奏判定（实听差异小于间隙判定，且会让同一句的换音行为
+依赖歌词录入方式，不可预期）。
+
+### 15.8 新增参数一览（工程字段全部可选，缺省即默认）
+
+| 参数 | 默认 | 范围 | 作用 |
+|---|---|---|---|
+| `vibratoProbability` | 0.82 | 0–1 | 颤音闸门基准 |
+| `overshootProbability` | 0.55 | 0–1 | 过冲闸门基准 |
+| `prepProbability` | 0.40 | 0–1 | 预备闸门基准 |
+| `releaseProbability` | 0.65 | 0–1 | 句尾闸门基准 |
+| `releaseScope` | `'phrase'` | phrase/always | 句尾作用域 |
+| `releaseMinBeats` | 2 | 0–8 | 连奏长音允许轻微下滑的门槛 |
+| `legatoGapBeats` | 0.12 | 0–1 | 连奏判定 |
+| `staccatoGapBeats` | 0.45 | 0–2 | 断奏判定 |
+| `phraseGapBeats` | 1.2 | 0–4 | 乐句分界 |
+| `microGlideMs` | 45 | 0–150 | 级进微滑时长 |
+| `variation` | 60 | 0–100 | 逐音变化幅度 |
+
+工程格式因此升到 **1.3.0**（`features` 增 `autoPitchNaturalness`，`minReader` 仍为 1.2.0）。
+缺字段时全部回落默认值——1.2.0 的工程读进来听感不变，只是"更机械"。
+
+### 15.9 验证
+
+自然度自检新增/修改两项指标，把"不机械"变成可回归的数字：
+
+| 指标 | 区间 | 说明 |
+|---|---|---|
+| **颤音覆盖率** | 45%–98% | 100% 说明每个长音都在颤（v1 的机械感）；<25% 说明基本没颤音 |
+| **跳进过冲** | 有过冲的比例 ≥30%，其中位峰值 8–30¢ | 不再要求"每个跳进都过冲" |
+
+`test/autoPitchNaturalness.test.js` 14 条断言分别锁定：闸门 0/1/默认三态、短音不颤、
+句尾作用域、标点断句、连奏起音 35%、级进微滑/断奏不滑、慢变漂移、多轨去相关、手动颤音优先、
+影子参数、后置颤动深度。`test/naturalness.test.js` 的 7 条守住"数值落在真人区间"。
+
+**实测（120BPM / 3 音）**：默认参数自然度 92 分（颤音 18.9¢、速率 5.8Hz、覆盖率合规）；
+把闸门全开 + `variation=0` 后 100 分——说明扣分来自"故意的不均匀"，不是算法退化。
+
+### 15.10 实机核验暴露的六个问题（v2 补丁）
+
+单测全绿不等于功能可用。用 MCP automation 在真实 Electron 实例上跑一遍"改参数 → 落盘 →
+重开 → 读回"和"右键 → 拨开关 → 看徽标"，抓到六个问题，全部已修：
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | MCP 把 `preset` 改成 `soft`，参数却还是 natural 的值 | 自动化路径只合并 `auto` 对象，没有像 UI 那样调 `paramsForPreset()` | 换预设 = 换整组参数；同批带 `params` 时以 `params` 为准；只改参数则落到 `custom` |
+| 2 | 传非法枚举（`releaseScope:'bogus'`）会把原来的 `'always'` 悄悄改回 `'phrase'` | `normalizeAutoConfig` 拿不到"改动前的值"，非法枚举只能回落全局默认 | 新增 `sanitizeAutoParamPatch()`：补丁层先剔非法键，非法输入 = 无操作 |
+| 3 | 只改 `autoVibrato.depth` 时，同层的 `rate`/`drift` 被重置成默认 | 参数合并是浅拷贝，嵌套对象被整体替换 | `autoVibrato` 单独深合并 |
+| 4 | 音符级 `vibrato` 完全无法通过 MCP 读写 | `mcpSchema` 的 NOTE 定义了 `additionalProperties:false` 且没有 `vibrato` | NOTE 增 `vibrato`（enabled/depth/rate/start/length/fadeIn/source） |
+| 5 | 手动关掉某音的颤音后，右键菜单的徽标直接消失 | 三态分支里"手动关闭"落在 `else`（因为 `derived` 在手动时被置空） | 手动两档：`手动` / `手动·不颤`，与自动层的 `自动·不颤` 区分 |
+| 6 | 窗口变窄后右侧 inspector（含自然度自检）被挤出屏幕 | `#app` 只有行定义 → 隐式列是 `auto`（= 子项 max-content）；画布被 `resizeCanvases()` 写成固定像素宽度，把整列顶到 1707px，且 grid/flex 项默认 `min-width:auto` 不允许收缩 | `#app` 用 `grid-template-columns: minmax(0,1fr)`；`#main-content`/`#piano-roll-container` 加 `min-width:0`；`#piano-roll` 加 `max-width:100%` |
+
+第 6 条是通用布局缺陷（与 v2 无关，任何窗口缩放都会触发），顺手修掉。
+第 4 条顺带解决了"手动标记能否被脚本验证"——现在可以：写入
+`notes[].vibrato.source='manual'` → `project.saveTo` → 读文件 → `project.loadFrom`，标记仍在。
+
+**核验结果**：45 条实机断言全通过（默认值 12 项、预设 6 项、夹紧/枚举 5 项、锚点共存 3 项、
+落盘格式 4 项、往返 1 项、开关 2 项、音符级 source 持久化 4 项，其余为同批断言）。
+`test/autoPitchNaturalness.test.js` 增至 24 条（新增 `sanitizeAutoParamPatch` 7 条、`paramsForPreset` 3 条）。

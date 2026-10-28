@@ -218,7 +218,7 @@ module.exports = [
     // 用 ESM 写的新测试（其余 test/ 文件是 CJS，靠上面的 commonjs 档覆盖）。
     // babel/mocha 两种写法都支持，但 eslint 需要知道 sourceType。
     {
-        files: ['test/naturalness.test.js'],
+        files: ['test/naturalness.test.js', 'test/autoPitchNaturalness.test.js'],
         languageOptions: {
             sourceType: 'module',
             globals: {

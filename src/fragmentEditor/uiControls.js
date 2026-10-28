@@ -719,6 +719,7 @@ export function setupAutoPitchUi() {
   const panel = document.getElementById('auto-pitch-panel');
   const btnClose = document.getElementById('btn-auto-pitch-close');
   const glideOwnEl = document.getElementById('auto-glide-ownership');
+  const releaseScopeEl = document.getElementById('auto-release-scope');
   const inputs = Array.from(document.querySelectorAll('[data-auto-param]'));
   if (!enabledEl || !presetEl || !panel) return null;
 
@@ -735,10 +736,12 @@ export function setupAutoPitchUi() {
 
   function ensureAuto() {
     const pc = getPitchCurve();
+    // 一律走 paramsForPreset 的深拷贝：浅拷贝会让 autoVibrato 与全局默认值
+    // 共享同一个对象，UI 改一项就把 AUTO_PITCH_DEFAULTS 改了。
     if (!pc.auto) {
-      pc.auto = { enabled: false, preset: 'natural', version: 1, params: { ...AUTO_PITCH_DEFAULTS } };
+      pc.auto = { enabled: false, preset: 'natural', version: 1, params: paramsForPreset('natural') };
     } else if (!pc.auto.params) {
-      pc.auto.params = { ...AUTO_PITCH_DEFAULTS };
+      pc.auto.params = paramsForPreset('natural');
     }
     if (!pc.auto.params.autoVibrato) {
       pc.auto.params.autoVibrato = { ...AUTO_PITCH_DEFAULTS.autoVibrato };
@@ -756,6 +759,7 @@ export function setupAutoPitchUi() {
       if (typeof v === 'number') inp.value = String(Number(v.toFixed(3)));
     }
     if (glideOwnEl) glideOwnEl.value = params.glideOwnership || 'auto';
+    if (releaseScopeEl) releaseScopeEl.value = params.releaseScope || 'phrase';
   }
 
   function commit(mutator) {
@@ -806,6 +810,12 @@ export function setupAutoPitchUi() {
   if (glideOwnEl) {
     glideOwnEl.addEventListener('change', () => {
       commit((a) => { a.params.glideOwnership = glideOwnEl.value; });
+    });
+  }
+
+  if (releaseScopeEl) {
+    releaseScopeEl.addEventListener('change', () => {
+      commit((a) => { a.params.releaseScope = releaseScopeEl.value; });
     });
   }
 

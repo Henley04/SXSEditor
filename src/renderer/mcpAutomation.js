@@ -7,7 +7,10 @@ import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 // F2/F3：MCP 导出与主窗口播放走同一套音符集合真源
 import { computeActiveClippedNotes } from '../shared/activeNotes.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
-import { normalizeAutoConfig, computeManualCoverage } from '../shared/autoPitchCurve.js';
+import {
+  normalizeAutoConfig, computeManualCoverage, paramsForPreset,
+  sanitizeAutoParamPatch, AUTO_PITCH_PRESET_IDS,
+} from '../shared/autoPitchCurve.js';
 import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { buildProjectLrc, exportProjectLrc } from './lrcExport.js';
 import { resampleForExport } from './exportDialog.js';
@@ -603,11 +606,26 @@ async function execute(m, p = {}) {
         if (p.reset === 'all') pc.auto.enabled = false;
       }
       if (p.auto && typeof p.auto === 'object') {
-        const merged = {
-          ...pc.auto,
-          ...p.auto,
-          params: { ...pc.auto.params, ...(p.auto.params || {}) },
-        };
+        // 预设语义与 UI 对齐：换预设 = 换整组参数（否则只剩标签变了，参数还是旧的，
+        // 工程里就会出现"preset=soft 但参数是 natural"的自相矛盾状态）。
+        const presetId = typeof p.auto.preset === 'string' && AUTO_PITCH_PRESET_IDS.includes(p.auto.preset)
+          ? p.auto.preset
+          : null;
+        const presetChanged = !!presetId && presetId !== pc.auto.preset;
+        const patch = sanitizeAutoParamPatch(p.auto.params);
+        const hasPatch = Object.keys(patch).length > 0;
+        const baseParams = presetChanged ? paramsForPreset(presetId) : pc.auto.params;
+        const nextParams = { ...baseParams, ...patch };
+        // autoVibrato 是嵌套对象，浅合并会把同一层里没提到的字段（rate/drift…）冲掉
+        if (patch.autoVibrato) {
+          nextParams.autoVibrato = { ...(baseParams.autoVibrato || {}), ...patch.autoVibrato };
+        }
+        const merged = { ...pc.auto, ...p.auto, params: nextParams };
+        // 'off' 预设等价于"关掉自动层"；换到别的预设默认打开
+        if (presetId === 'off') merged.enabled = false;
+        else if (presetChanged && p.auto.enabled === undefined) merged.enabled = true;
+        // 只改参数不动预设 → 落到 custom，和 UI 一致
+        if (hasPatch && !presetId && merged.preset !== 'custom') merged.preset = 'custom';
         pc.auto = normalizeAutoConfig(merged);
         pc.auto.version = (pc.auto.version || 0) + 1;
       }

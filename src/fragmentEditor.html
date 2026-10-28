@@ -314,6 +314,7 @@
     <div id="note-context-menu" class="note-ctx-menu" role="menu" aria-hidden="true" style="display:none">
       <div class="note-ctx-header">
         <span data-i18n="fragment.noteCtxVibrato">颤音</span>
+        <span id="note-ctx-vibrato-src" class="note-ctx-src" hidden></span>
         <label class="note-ctx-toggle" aria-hidden="true">
           <input type="checkbox" id="note-ctx-vibrato-toggle">
           <span class="note-ctx-toggle-track"><span class="note-ctx-toggle-thumb"></span></span>
@@ -402,6 +403,7 @@
         <label>自动颤音深度 ¢<input type="number" data-auto-param="autoVibrato.depth" min="0" max="100" step="2"></label>
         <label>自动颤音速率 Hz<input type="number" data-auto-param="autoVibrato.rate" min="1" max="12" step="0.1"></label>
         <label>颤音速率漂移 %<input type="number" data-auto-param="autoVibrato.drift" min="0" max="30" step="1"></label>
+        <label>颤音幅度漂移 %<input type="number" data-auto-param="autoVibrato.depthDrift" min="0" max="40" step="1"></label>
         <label>边界过渡 ms<input type="number" data-auto-param="crossfadeMs" min="0" max="100" step="5"></label>
         <label>换音过渡归属
           <select id="auto-glide-ownership">
@@ -410,6 +412,26 @@
             <option value="both">两者叠加</option>
           </select>
         </label>
+      </div>
+
+      <div class="auto-pitch-subhead">自然度：不是每个音都做同一件事</div>
+      <div class="auto-pitch-grid">
+        <label>颤音概率 0–1<input type="number" data-auto-param="vibratoProbability" min="0" max="1" step="0.05"></label>
+        <label>过冲概率 0–1<input type="number" data-auto-param="overshootProbability" min="0" max="1" step="0.05"></label>
+        <label>预备概率 0–1<input type="number" data-auto-param="prepProbability" min="0" max="1" step="0.05"></label>
+        <label>句尾概率 0–1<input type="number" data-auto-param="releaseProbability" min="0" max="1" step="0.05"></label>
+        <label>句尾作用域
+          <select id="auto-release-scope" data-auto-enum="releaseScope">
+            <option value="phrase">只在乐句尾/休止前</option>
+            <option value="always">每个音尾都下滑</option>
+          </select>
+        </label>
+        <label>长音下滑阈值 拍<input type="number" data-auto-param="releaseMinBeats" min="0" max="8" step="0.5"></label>
+        <label>连奏间隙 拍<input type="number" data-auto-param="legatoGapBeats" min="0" max="1" step="0.02"></label>
+        <label>断奏间隙 拍<input type="number" data-auto-param="staccatoGapBeats" min="0" max="2" step="0.05"></label>
+        <label>乐句间隙 拍<input type="number" data-auto-param="phraseGapBeats" min="0" max="4" step="0.1"></label>
+        <label>级进微滑 ms<input type="number" data-auto-param="microGlideMs" min="0" max="150" step="5"></label>
+        <label>逐音变化 %<input type="number" data-auto-param="variation" min="0" max="100" step="5"></label>
       </div>
       <div class="auto-pitch-note">换音过渡归属 = 自动曲线接管时，音色面板的「过渡」参数会被暂时忽略，避免双重过冲。</div>
     </div>

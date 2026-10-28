@@ -10,14 +10,20 @@
  */
 
 /** 当前写入的工程格式版本。新增可选字段 → minor+1；改语义/删字段 → major+1。 */
-export const PROJECT_FORMAT_VERSION = '1.2.0';
-export const PROJECT_FORMAT_PARTS = [1, 2, 0];
+export const PROJECT_FORMAT_VERSION = '1.3.0';
+export const PROJECT_FORMAT_PARTS = [1, 3, 0];
 
-/** 低于此版本读写本文件会丢字段（autoPitchCurve 于 1.2.0 引入）。 */
+/**
+ * 低于此版本读写本文件会丢字段。
+ *
+ * 仍是 1.2.0：1.2.0 的读者能完整读出自动曲线（锚点/作用域/全部核心参数），
+ * 只会在重存时丢掉 1.3.0 新增的"自然度"参数（概率闸门/连奏判定/逐音变化），
+ * 这些字段缺失时等价于默认值 —— 听感变化有限，所以降级加载、不硬拦。
+ */
 export const PROJECT_MIN_READER = '1.2.0';
 
 /** 本版本写入的能力清单。 */
-export const PROJECT_FEATURES = ['autoPitchCurve'];
+export const PROJECT_FEATURES = ['autoPitchCurve', 'autoPitchNaturalness'];
 
 /** 解析 "1.2.0" → [1,2,0]；非法/空串返回 null。 */
 export function parseVersion(v) {
