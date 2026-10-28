@@ -6,6 +6,8 @@ import { midiToNoteName } from '../utils/midiUtils.js';
 import { getCanvasColors } from '../themes/canvasTheme.js';
 import { drawWaveformWithPlayhead, getMaxScrollX, getMaxScrollY, updateScrollbars } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
+import { getOptions } from './extractionOptions.js';
+import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
 
 // visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
 // Registered once per module; resumes _tickPlayback when visible again.
@@ -36,6 +38,13 @@ function _ensureVisibilityHandler() {
 export function initPianoRoll() {
   if (state.pianoRoll) return Promise.resolve();
 
+  // 卷帘一出生就必须和面板显示同一个 BPM。
+  // 面板在模块加载时（initPanel）就把已保存的 BPM 写进输入框了，而本函数要等到
+  // 音频解码完成才调用；这中间若用常量 BPM，波形 / 节拍线 / 播放头会按 120 画，
+  // 面板却显示 96 —— 用户看到的就是"网格和音频对不齐"。
+  const savedBpm = Number(getOptions().bpm);
+  const initialBpm = savedBpm > 0 ? savedBpm : BPM;
+
   const notes = [];
   state.pianoRoll = {
     canvas: dom.midiCanvas,
@@ -57,8 +66,8 @@ export function initPianoRoll() {
     // 本次按下是否新建了音符（id）。mouseup 后清空，用于只在真正新建时刷新计数。
     _dragCreatedNoteId: null,
     hoverNoteId: null,
-    bpm: BPM,
-    projectSettings: { bpm: BPM, timeSignature: [4, 4] },
+    bpm: initialBpm,
+    projectSettings: { bpm: initialBpm, timeSignature: [4, 4] },
     // Snap grid in beats per cell. Default 1/16 (sixteenth note) matches the
     // historical behavior. Mutators below read this so the grid is configurable.
     snapGrid: 1 / 16,
@@ -759,7 +768,7 @@ export function initPianoRoll() {
       ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, areaHeight);
 
       // 在F0区域背景之上重绘节拍网格线
-      const beatsPerMeasure = this.projectSettings.timeSignature[0];
+      const beatsPerMeasure = beatsPerMeasureOf(this.projectSettings.timeSignature);
       const startBeat = this._xToTime(PIANO_KEY_WIDTH);
       const endBeat = this._xToTime(f0BgEndX);
       ctx.lineWidth = 1;
@@ -767,7 +776,7 @@ export function initPianoRoll() {
         const x = this._timeToX(b);
         if (x < PIANO_KEY_WIDTH) continue;
         if (x > f0BgEndX) break;
-        const isMeasureLine = (b % beatsPerMeasure === 0);
+        const isMeasureLine = isMeasureBoundary(b, beatsPerMeasure);
         ctx.strokeStyle = isMeasureLine ? c.gridLineMajor : c.gridLineMinor;
         ctx.beginPath();
         ctx.moveTo(x, f0AreaTop);
@@ -896,7 +905,7 @@ export function initPianoRoll() {
     },
 
     _drawGrid(ctx, w, h, c) {
-      const beatsPerMeasure = this.projectSettings.timeSignature[0];
+      const beatsPerMeasure = beatsPerMeasureOf(this.projectSettings.timeSignature);
       const startBeat = this._xToTime(PIANO_KEY_WIDTH);
       const endBeat = this._xToTime(w);
 
@@ -904,7 +913,7 @@ export function initPianoRoll() {
       for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
         const x = this._timeToX(b);
         if (x < PIANO_KEY_WIDTH) continue;
-        const isMeasureLine = (b % beatsPerMeasure === 0);
+        const isMeasureLine = isMeasureBoundary(b, beatsPerMeasure);
         ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
         ctx.beginPath();
         ctx.moveTo(x, HEADER_HEIGHT);
@@ -919,7 +928,7 @@ export function initPianoRoll() {
           ctx.fillStyle = c.timeText;
           ctx.font = '11px sans-serif';
           ctx.textAlign = 'center';
-          const measureNum = Math.floor(b / beatsPerMeasure) + 1;
+          const measureNum = measureNumberAt(b, beatsPerMeasure);
           ctx.fillText(String(measureNum), x, HEADER_HEIGHT - 6);
         }
       }

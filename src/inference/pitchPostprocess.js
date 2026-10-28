@@ -412,50 +412,189 @@ function detectVoiceQuality(f0Array) {
 
 // ==================== 8. 自动 BPM 检测 ====================
 
+/** BPM 搜索范围。低于 55 的流行歌几乎不存在；高于 180 的多半是八分/十六分音符误判。 */
+const BPM_MIN = 55;
+const BPM_MAX = 180;
+/** 节拍先验中心与宽度（八度）。人写歌集中在 80–150，用对数正态先验压住 55/200 两端。 */
+const BPM_PRIOR_CENTER = 110;
+const BPM_PRIOR_SIGMA_OCT = 0.85;
+
 /**
- * 基于短时能量包络 + 自相关的轻量 BPM 估计。失稳时返回 fallback。
+ * 基于短时能量包络 + 归一化自相关的轻量 BPM 估计。失稳时返回 fallback。
+ *
+ * v2 改动（旧版会"有时准有时不准"）：
+ *  1. 分析窗按**时间**定长（≈23ms）而不是按样本数，24k 与 48k 下的时间分辨率一致。
+ *  2. 包络取 RMS 后做对数压缩。旧版用能量，强拍（底鼓）把弱拍（军鼓/八分音符）
+ *     压掉两三个数量级，自相关只认强拍 → 结果常常是真实值的一半（120 测成 60）。
+ *  3. 自相关做**归一化**（除以两段能量）。旧版累加后除以 count，长 lag 的样本少、
+ *     短 lag 的样本多，天然偏向快的一侧；归一化后各 lag 可比。
+ *  4. 乘对数正态先验并做抛物线插值，返回 0.1 精度。旧版 `Math.round` 到整数，
+ *     长曲末尾会累积成秒级偏移（120 与 119 相差 3 分钟约 1.5 秒）。
+ *
  * @param {Float32Array} audio
  * @param {number} sampleRate
  * @param {number} fallback
+ * @returns {number} BPM（0.1 精度）
  */
 function detectBpm(audio, sampleRate, fallback = 120) {
-  const win = 1024;
-  const hop = 512;
-  const nWindows = Math.floor((audio.length - win) / hop);
-  if (nWindows < 20) return fallback;
+  const fb = Number.isFinite(fallback) && fallback > 0 ? fallback : 120;
+  if (!audio || audio.length === 0) return fb;
+  const sr = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 44100;
 
-  const energy = new Float32Array(nWindows);
-  for (let i = 0; i < nWindows; i++) {
+  // 1) 定长分析窗：约 23ms（512 @22.05k / 1024 @44.1k / 2048 @96k）
+  const win = Math.max(256, 1 << Math.round(Math.log2(sr * 0.023)));
+  // hop 取窗长的 1/4（≈5.8ms）。1/2 时一个 ≈9ms 的鼓点只覆盖一两帧，取整误差
+  // 会让 1 拍间隔的相关值比 2 拍还低（2 拍恰好落在整数帧上）；1/4 后 lag 精度
+  // 从 3.4% 提到 1.7%，倍频裁决才有可比性。
+  const hop = win >> 2;
+  const nFrames = Math.floor((audio.length - win) / hop) + 1;
+  if (nFrames < 24) return fb;
+
+  const env = new Float32Array(nFrames);
+  let maxRms = 0;
+  for (let i = 0; i < nFrames; i++) {
     let s = 0;
     const start = i * hop;
-    for (let j = start; j < start + win; j++) s += audio[j] * audio[j];
-    energy[i] = s / win;
-  }
-  const onset = new Float32Array(nWindows - 1);
-  for (let i = 1; i < nWindows; i++) {
-    const d = energy[i] - energy[i - 1];
-    onset[i - 1] = d > 0 ? d : 0;
-  }
-  const frameRate = sampleRate / hop;
-  const minLag = Math.max(1, Math.floor(frameRate * 60 / 180));
-  const maxLag = Math.ceil(frameRate * 60 / 55);
-  let bestLag = -1;
-  let bestScore = 0;
-  for (let lag = minLag; lag <= maxLag && lag < onset.length; lag++) {
-    let score = 0;
-    let count = 0;
-    for (let i = 0; i + lag < onset.length; i++) {
-      score += onset[i] * onset[i + lag];
-      count++;
+    for (let j = start; j < start + win; j++) {
+      const v = audio[j];
+      s += v * v;
     }
-    const norm = count > 0 ? score / count : 0;
-    if (norm > bestScore) { bestScore = norm; bestLag = lag; }
+    const rms = Math.sqrt(s / win);
+    env[i] = rms;
+    if (rms > maxRms) maxRms = rms;
   }
-  if (bestLag <= 0 || bestScore < 1e-7) return fallback;
-  let bpm = frameRate * 60 / bestLag;
-  while (bpm < 60) bpm *= 2;
-  while (bpm > 180) bpm /= 2;
-  return Math.round(bpm);
+  if (!(maxRms > 1e-7)) return fb;
+
+  // 对数压缩：−60dB 处设软膝，避免把底噪也抬成"弱拍"
+  const knee = maxRms * 1e-3;
+  for (let i = 0; i < nFrames; i++) env[i] = Math.log(knee + env[i]);
+
+  // 2) onset = 半波整流差分，再减去均值（抑制长音内的缓慢爬升）
+  const onset = new Float32Array(nFrames);
+  let sum = 0;
+  for (let i = 1; i < nFrames; i++) {
+    const d = env[i] - env[i - 1];
+    if (d > 0) {
+      onset[i] = d;
+      sum += d;
+    }
+  }
+  const mean = sum / Math.max(1, nFrames - 1);
+  for (let i = 1; i < nFrames; i++) {
+    onset[i] = Math.max(0, onset[i] - mean);
+  }
+
+  const frameRate = sr / hop;
+  // 下界放宽到 1.15×BPM_MAX：快歌的 1 拍 lag 正好落在 180 的边界上，相关峰是
+  // 一个跨边界的鼓包，贴着边界截断就取不到峰顶（180 BPM 会被判成 90）。
+  const minLag = Math.max(2, Math.floor((frameRate * 60) / (BPM_MAX * 1.15)));
+  const maxLag = Math.min(onset.length - 1, Math.ceil((frameRate * 60) / BPM_MIN));
+  if (maxLag <= minLag) return fb;
+
+  // 3) 归一化自相关
+  const ac = new Float32Array(maxLag + 2);
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let num = 0;
+    let ea = 0;
+    let eb = 0;
+    const n = onset.length - lag;
+    for (let i = 0; i < n; i++) {
+      const a = onset[i];
+      const b = onset[i + lag];
+      num += a * b;
+      ea += a * a;
+      eb += b * b;
+    }
+    ac[lag] = ea > 0 && eb > 0 ? num / Math.sqrt(ea * eb) : 0;
+  }
+
+  // 4) 粗筛：整数 lag 的归一化自相关 × 对数正态先验，收集局部极大
+  const prior = (lag) => {
+    const bpm = (frameRate * 60) / lag;
+    const oct = Math.log2(bpm / BPM_PRIOR_CENTER) / BPM_PRIOR_SIGMA_OCT;
+    return Math.exp(-0.5 * oct * oct);
+  };
+  const peaks = [];
+  // 从 minLag 而不是 minLag+1 开始：快歌（≈180 BPM）的 1 拍 lag 正好贴在搜索下界，
+  // 跳过下界会把整个"每拍"候选丢掉，只能退而选 2 拍（结果就是一半 BPM）。
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    const v = ac[lag];
+    if (v <= 0 || v < ac[lag - 1] || v < ac[lag + 1]) continue; // 只取局部极大
+    const bpm = (frameRate * 60) / lag;
+    // 边界留 1% 余量：55 与 180 的峰正好压在搜索边界上，取整后会是 54.98 / 180.1。
+    if (bpm > BPM_MAX * 1.01 || bpm < BPM_MIN * 0.99) continue;
+    peaks.push({ lag, ac: v, score: v * prior(lag) });
+  }
+  if (peaks.length === 0) return fb;
+  peaks.sort((a, b) => b.score - a.score);
+
+  // 5) 细搜：整数 lag 的量化误差在高 BPM 下可达 3%（150 BPM 的 1 拍是 34.45 帧，
+  //    取整到 34 就错位 5ms，归一化相关从 0.99 掉到 0.54，于是两拍间隔反而"更像"
+  //    节拍）。对前几个候选在 ±1 帧内用线性插值重采 onset，0.1 帧精度求峰值。
+  const acAt = (lagF) => {
+    const n = Math.floor(onset.length - lagF) - 1;
+    if (n <= 0) return 0;
+    let num = 0;
+    let ea = 0;
+    let eb = 0;
+    for (let i = 0; i < n; i++) {
+      const j = i + lagF;
+      const j0 = j | 0;
+      const f = j - j0;
+      const b = onset[j0] * (1 - f) + onset[j0 + 1] * f;
+      const a = onset[i];
+      num += a * b;
+      ea += a * a;
+      eb += b * b;
+    }
+    return ea > 0 && eb > 0 ? num / Math.sqrt(ea * eb) : 0;
+  };
+
+  const refined = [];
+  for (const p of peaks.slice(0, 6)) {
+    let best = { lag: p.lag, ac: p.ac };
+    for (let d = -1; d <= 1.0001; d += 0.1) {
+      const lagF = p.lag + d;
+      if (lagF < minLag || lagF > maxLag) continue;
+      const v = acAt(lagF);
+      if (v > best.ac) best = { lag: lagF, ac: v };
+    }
+    refined.push(best);
+  }
+  if (refined.length === 0) return fb;
+
+  // 6) 倍频裁决。1 拍与 2 拍间隔在"每拍一个 onset"的信号上几乎同样相关——这是
+  //    数学上的同一性，纯节拍信号无法区分，只能看相关值的细微差别：
+  //      · 比值 > 0.95：两拍一循环与一拍一循环完全等价，交给先验（保持当前值）；
+  //      · 比值 0.7–0.95：一拍位置**确实有** onset，只是被帧量化削掉一截，
+  //        真实周期更短，取快的一层（这是 160–180 BPM 常被写成一半的原因）；
+  //      · 比值 < 0.7：一拍位置基本没有 onset，当前值就是基本周期。
+  //    之前按"相关值 ≥ 0.8×最大值里取最短周期"判断，在 168 BPM 上会失败：
+  //    一拍的相关值只有 0.72、两拍是 0.98，差得太多，直接被判成 84。
+  const top = refined.reduce((a, b) => (b.ac > a.ac ? b : a), refined[0]);
+  let chosen = top;
+  const halfLag = top.lag / 2;
+  if (halfLag >= minLag) {
+    let bestHalf = null;
+    for (const r of refined) {
+      if (Math.abs(r.lag - halfLag) > 1.5) continue;
+      if (!bestHalf || r.ac > bestHalf.ac) bestHalf = r;
+    }
+    if (bestHalf) {
+      const ratio = bestHalf.ac / top.ac;
+      const fastBpm = (frameRate * 60) / bestHalf.lag;
+      // 细搜后可能比上限高出零点几（180.1），按 1% 容差放行。
+      if (ratio >= 0.7 && ratio < 0.95 && fastBpm <= BPM_MAX * 1.01) chosen = bestHalf;
+    }
+  }
+
+  // 边界留余量：搜索下限 55 时 lag 取整可能落到 54.9，不能用 55 直接判"太慢"，
+  // 否则 55 BPM 会被翻成 110。
+  let outBpm = (frameRate * 60) / chosen.lag;
+  while (outBpm < BPM_MIN * 0.92 && outBpm * 2 <= BPM_MAX) outBpm *= 2;
+  while (outBpm > BPM_MAX * 1.08 && outBpm / 2 >= BPM_MIN) outBpm /= 2;
+  if (!(outBpm > 0) || !Number.isFinite(outBpm)) return fb;
+  return Math.round(outBpm * 10) / 10;
 }
 
 module.exports = {

@@ -317,3 +317,114 @@
 数字更新：全量 **2041 passing / 7 failing**（7 条仍是 Windows 专属）；`autoPitchNaturalness`
 由 14 条增至 24 条。实机演示片段（6 音、96BPM）自然度自检 **100 分**，
 颤音覆盖率 50%（6 个长音里 3 个颤音）——正好落在 45–98% 的"像人"区间。
+
+## 六、时间基准修复（BPM 与对齐）
+
+用户反馈"有时 BPM 不对、时间对齐不稳"。查下来是四个互相独立的缺陷，叠在一起表现为"有时候准、有时候不准"。
+
+### 6.1 自动 BPM 检测（`src/inference/pitchPostprocess.js`）
+
+旧实现：
+
+```
+energy → 半波整流差分 → 未归一化自相关 → 取最大 → Math.round
+```
+
+四个问题：
+
+1. **用能量而非对数包络**。强拍（底鼓）比弱拍（军鼓/八分音符）大两三个数量级，自相关只认强拍，
+   于是 120 BPM 的歌测成 60（"两拍一循环"）。
+2. **自相关未归一化**。累加后除以 count，长 lag 样本少、短 lag 样本多，天然偏向快的一侧。
+3. **整数 lag 的量化误差**。150 BPM 的 1 拍是 34.45 帧（hop=512@44.1k），取整到 34 就错位 5ms，
+   相关值从 0.99 掉到 0.54，反而让 2 拍间隔（68.9 帧）更像节拍。
+4. **`Math.round` 到整数**。127.4 → 127，5 分钟累积约 1 秒。
+
+新实现（保留 `detectBpm(audio, sampleRate, fallback)` 签名）：
+
+- 分析窗按时间定长（≈23ms → 512@22.05k / 1024@44.1k / 2048@96k），hop 取窗长 1/4（≈5.8ms）。
+- RMS 包络 + `log(knee + rms)` 压缩，软膝在 −60dB，先抑制底噪再抬弱拍。
+- onset = 半波整流差分 − 均值；归一化自相关（除以两段能量）。
+- 局部极大 + 对数正态先验（中心 110，σ 0.85 八度）粗筛前 6 个候选；
+  每个候选在 lag±1 内以 0.1 帧步长、线性插值重采 onset 做细搜。
+- 倍频裁决：取相关值最高者；若其一半 lag 处相关值落在 **0.7–0.95** 区间，说明半拍位置确实有
+  onset（只是被量化削掉一截），取快的一层；>0.95 视为两拍与一拍完全等价，交给先验；
+  <0.7 说明半拍处没有 onset，保持当前值。
+- 边界留 1% 余量（55 与 180 的峰正好压在搜索边界上，取整后是 54.98 / 180.1）。
+- 返回 0.1 精度。
+
+**测量**：55–180 BPM 共 18 条合成节拍轨（含 24kHz、含八分音符弱拍），18/18 误差 ≤ 3%；
+旧实现同样条件下 9/18（120→60、160→80、180→90 等）。单次耗时约 8ms / 12 秒音频。
+
+**已知不可解**：84 BPM（每两拍一个重音）与 168 BPM 在信号上完全等价，任何算法都无法只凭音频
+区分。本实现按"最短周期，除非半拍没有 onset"处理，并在 FAQ 里写明"想要快的一侧请手动填写"。
+
+### 6.2 波形/播放头的时间基准（`src/audioPreprocess/canvasRenderer.js`）
+
+波形层、播放头、`getPlayheadXForTime`、`xToWaveformTime`、`getMaxScrollX`、`updateScrollbars`
+全部用常量 `BPM = 120`（`constants.js`）。而音符、F0 曲线、试听用 `pianoRoll.bpm`，
+提取面板的 BPM 输入只写进 `state.extractOptions`（`panel.js` 的 change 只做 persist）。
+
+结果：BPM ≠ 120 时波形与音符横向错开，播放头不在声音的真实位置，"时间对齐看起来不稳"。
+
+修法：新增 `currentBpm()`（卷帘 → 面板 → 默认），六处换算全部改用它；静态波形缓存 key 加入
+BPM（否则改 BPM 后不重画）；`panel.js` 的 BPM change 新增 `applyBpmToPianoRoll()`，
+同步 `pianoRoll.bpm` + 失效两层缓存 + 重绘。
+
+还有一处同源缺口：`initPianoRoll()` 里写的是 `bpm: BPM`（常量 120），而它要等到音频解码完才被
+调用；`initPanel()` 早在模块加载时就把已保存的 BPM 写进输入框了。于是"面板显示 96、网格按 120 画"
+在**打开窗口的那一刻**就成立，用户不动输入框就永远对不上。改为从 `getOptions().bpm` 取初值
+（默认值仍是 120，行为不变）。
+
+另：自动检测出的 BPM 回填（`midiExtraction.js` 的 `autoBpm` 分支）本来就是直接写
+`pianoRoll.bpm`，配合新的缓存 key（含 BPM）已经自洽，不必再走 `applyBpmToPianoRoll()`。
+
+### 6.3 检测器时间轴校正（`src/audioPreprocess/midiExtraction.js`）
+
+旧代码用首两帧步长外推检测器时长：
+
+```js
+const step = result.f0Array[1].time - result.f0Array[0].time;
+const detectorDuration = last.time + step;
+```
+
+首帧步长受重采样插值与前置 padding 影响，偏几十分之一就会把整段音符拉长/压缩。改为
+**中位帧步长**，并把 `wavDuration / detectorDuration` 夹在 `[0.8, 1.25]`：超出区间说明时间轴
+本身不可信（尾部帧缺失 / 前导静音被裁），此时取 1，宁可不缩放。
+
+### 6.4 复合拍号的小节计算
+
+`timeSignature[0]` 被当成"每小节拍数"，但 MIDI beat 是四分音符：6/8 的每小节是 3 拍而不是 6 拍，
+9/8 是 4.5 拍，2/2 是 4 拍。新增 `src/shared/timeSignature.js`：
+
+```js
+beatsPerMeasureOf(sig) = sig[0] * 4 / sig[1]
+isMeasureBoundary(beat, bpm)   // 容忍浮点
+measureNumberAt(beat, bpm)     // 1-based
+```
+
+四处调用点全部换掉：主时间线网格（`timelineRenderer` 两处）、片段标签的小节范围、音频预处理
+卷帘（两处）、分片编辑器网格。`bpm % beatsPerMeasure === 0` 这种取模在 4.5 上会失效，改走
+`isMeasureBoundary`。
+
+### 6.5 MIDI 导入的时长换算
+
+`importMidiFile` 写 `singerData.duration` 时用常量 `BPM`：
+
+```js
+notes.map((n) => (n.duration * (60 / BPM)).toFixed(2))
+```
+
+96 BPM 的工程导入后整段短约 20%。改用工程 BPM。
+
+### 6.6 测试
+
+新增 `test/bpmAndTimebase.test.js`（25 条）：
+
+- `detectBpm`：太短/静音回落、11 个 BPM 点 ±3%、55 边界不翻倍、168 不半速、
+  0.1 精度、24kHz 一致、八分音符歧义落在两个合法值之一；
+- `beatsPerMeasureOf` / `isMeasureBoundary` / `measureNumberAt`：4/4、3/4、2/2、6/8、9/8、12/8，
+  非法输入回落 4/4；
+- 时间基准：`pianoRoll.bpm = 96` 时播放头按 96 拍计算（不再是 120），像素↔秒往返一致，
+  卷帘未就绪时回落面板 BPM。
+
+全量 **2066 passing / 7 failing**（7 条仍为 Windows 专属：NPU PnP ×3、WinML ortBridge ×4）。

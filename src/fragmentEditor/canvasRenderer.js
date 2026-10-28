@@ -13,6 +13,7 @@ import {
   findNoteAtBeat as findNoteAtBeatShared,
 } from '../shared/autoPitchCurve.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
 import { applyGlideOwnership } from '../shared/postprocessCurves.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
@@ -2745,7 +2746,7 @@ function _doRenderImpl(w, h) {
   const pixelH = Math.floor(h * dprVal);
 
   const currentProject = getCurrentProject();
-  const beatsPerMeasure = currentProject ? currentProject.timeSignature[0] : 4;
+  const beatsPerMeasure = beatsPerMeasureOf(currentProject && currentProject.timeSignature);
   const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
@@ -2775,7 +2776,7 @@ function _doRenderImpl(w, h) {
     for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
       const x = timeToX(b);
       if (x < 0) continue;
-      const isMeasure = (b % beatsPerMeasure === 0);
+      const isMeasure = isMeasureBoundary(b, beatsPerMeasure);
       cacheCtx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
       cacheCtx.beginPath();
       cacheCtx.moveTo(x, HEADER_HEIGHT);
@@ -2785,7 +2786,7 @@ function _doRenderImpl(w, h) {
         cacheCtx.fillStyle = c.timeText;
         cacheCtx.font = '11px sans-serif';
         cacheCtx.textAlign = 'center';
-        cacheCtx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
+        cacheCtx.fillText(String(measureNumberAt(b, beatsPerMeasure)), x, HEADER_HEIGHT - 6);
       }
     }
 

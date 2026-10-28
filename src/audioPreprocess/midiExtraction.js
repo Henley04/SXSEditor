@@ -138,12 +138,17 @@ export async function importMidiFile() {
 
     const fields = buildSingerFields(notes);
     const importTrimOffsetMs = Math.floor((state.trimOffsetSec || 0) * 1000);
+    // 音符时值是拍，换回秒必须用当前工程的 BPM。这里原先是常量 120，
+    // 工程设成 96 时导入的 singerData 时长会整体短 20%，与音频对不上。
+    const importBpm = (state.pianoRoll && state.pianoRoll.bpm)
+      || (state.extractOptions && state.extractOptions.bpm)
+      || BPM;
     state.singerData = {
       index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
       language: 'Mandarin',
       time: [importTrimOffsetMs, importTrimOffsetMs + Math.floor(state.wavDuration * 1000)],
       trimOffsetSec: state.trimOffsetSec || 0,
-      duration: notes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+      duration: notes.map((n) => (n.duration * (60 / importBpm)).toFixed(2)).join(' '),
       text: fields.text,
       phoneme: fields.phoneme,
       note_pitch: notes.map((n) => n.pitch).join(' '),
@@ -228,14 +233,31 @@ export async function extractF0BasicPitch() {
       throw new Error(result.error || 'MIDI extraction failed');
     }
 
-    // Detector frame counts may be based on resampled/padded model input. Map
-    // the returned timeline back to the decoded WAV duration once, then use the
-    // same scale for F0 and notes so waveform, preview curve and MIDI agree.
+    // 检测器的帧数可能基于重采样 / padding 后的输入。把时间轴映射回解码后的 WAV
+    // 时长，并且 F0 与音符共用同一个 scale，波形、预览曲线、MIDI 才会对齐。
+    //
+    // 旧实现用"首两帧步长 × 帧数"外推。首帧步长受抖动影响大（重采样插值、前置
+    // padding），算出的 scale 偏离几十分之一就会把整段音符拉长或压缩——这正是
+    // 用户反馈的"时间对齐有时不稳"。现改为中位帧步长，并把结果夹在可信区间内：
+    // 超出区间说明时间轴本身不可信（模型输入被裁剪 / 补齐过头），此时宁可不缩放。
     let timeScale = 1;
-    if (result.f0Array && result.f0Array.length > 1 && state.wavDuration > 0) {
-      const step = Math.max(1e-6, result.f0Array[1].time - result.f0Array[0].time);
-      const detectorDuration = result.f0Array[result.f0Array.length - 1].time + step;
-      if (detectorDuration > 0) timeScale = state.wavDuration / detectorDuration;
+    if (Array.isArray(result.f0Array) && result.f0Array.length > 2 && state.wavDuration > 0) {
+      const steps = [];
+      for (let i = 1; i < result.f0Array.length; i++) {
+        const d = result.f0Array[i].time - result.f0Array[i - 1].time;
+        if (d > 1e-6) steps.push(d);
+      }
+      if (steps.length) {
+        steps.sort((a, b) => a - b);
+        const step = steps[steps.length >> 1];
+        const detectorDuration = result.f0Array[result.f0Array.length - 1].time + step;
+        if (detectorDuration > 0.1) {
+          const raw = state.wavDuration / detectorDuration;
+          // ±20% / +25% 之外不再当作"时间轴缩放误差"处理：那多半是尾部帧缺失
+          // 或前导静音被裁，缩放只会把错误放大。
+          timeScale = raw > 0.8 && raw < 1.25 ? raw : 1;
+        }
+      }
       result.f0Array = result.f0Array.map(frame => ({ ...frame, time: Math.max(0, frame.time * timeScale) }));
     }
     if (result.notes && Math.abs(timeScale - 1) > 1e-6) {

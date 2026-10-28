@@ -572,6 +572,25 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
   }, null, hasEmbeddedPayload ? undefined : 2);
 }
 
+/**
+ * 把 state.project 的 BPM / 拍号写回工具栏控件。
+ *
+ * 只改 state 不改 DOM，界面会显示旧值（实际 96、显示 120）；更麻烦的是用户随后
+ * 任何触发 updateProjectSettings() 的操作都会读 DOM，把 state 里的正确值覆盖回去。
+ * 载入工程、MCP 脚本改工程、导入 MIDI 同步工程信息都要走这里。
+ */
+export function syncProjectControls() {
+  if (!dom.bpmInput) return;
+  dom.bpmInput.value = state.project.bpm;
+  if (dom.timeSigNum) dom.timeSigNum.value = state.project.timeSignature[0];
+  if (dom.timeSigDen) dom.timeSigDen.value = state.project.timeSignature[1];
+  if (dom.bpmDisplayBadge) {
+    const bpmText = dom.bpmDisplayBadge.querySelector('#bpm-display-text')
+      || document.getElementById('bpm-display-text');
+    if (bpmText) bpmText.textContent = `${state.project.bpm} BPM`;
+  }
+}
+
 export function updateProjectSettings(options = {}) {
   const markProjectDirty = options.markDirty !== false;
   const bpm = parseInt(dom.bpmInput.value, 10) || 120;
@@ -941,14 +960,7 @@ export async function loadProject() {
         if (obj.project) {
           state.project.bpm = obj.project.bpm ?? 120;
           state.project.timeSignature = obj.project.timeSignature ?? [4, 4];
-          dom.bpmInput.value = state.project.bpm;
-          dom.timeSigNum.value = state.project.timeSignature[0];
-          dom.timeSigDen.value = state.project.timeSignature[1];
-          if (dom.bpmDisplayBadge) {
-            const bpmText = dom.bpmDisplayBadge.querySelector('#bpm-display-text') ||
-              document.getElementById('bpm-display-text');
-            if (bpmText) bpmText.textContent = `${state.project.bpm} BPM`;
-          }
+          syncProjectControls();
         }
         if (obj.singers) {
           trackManager.singers.length = 0;

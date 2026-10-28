@@ -3,6 +3,7 @@ import { getOptions, saveOptions, applyPreset, resolveOptions } from './extracti
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { toggleSynth } from './synthPreview.js';
+import { drawWaveformWithPlayhead, invalidateWaveformCache } from './canvasRenderer.js';
 
 /** 根据 MIDI 提取工具显示/隐藏 FCPE 参数面板 */
 export async function updateFcpePanelVisibility() {
@@ -41,6 +42,24 @@ export function collectOptions() {
   };
 }
 
+/**
+ * 把面板里的 BPM 同步到卷帘。
+ *
+ * 波形、播放头、F0 曲线、音量包络的 beat↔秒换算全部读 `pianoRoll.bpm`；只改输入框
+ * 而不回写，就会出现"面板显示 96、网格还是 120"的错位——这是用户反馈的
+ * "时间对齐不稳定"来源之一。
+ */
+function applyBpmToPianoRoll() {
+  const bpm = Number(dom.bpmInput.value);
+  const pr = state.pianoRoll;
+  if (!pr || !(bpm > 0) || pr.bpm === bpm) return;
+  pr.bpm = bpm;
+  pr._staticCacheDirty = true;
+  pr.render();
+  invalidateWaveformCache();
+  drawWaveformWithPlayhead(pr.getCurrentTime());
+}
+
 function bindControls() {
   const persist = () => saveOptions(collectOptions());
 
@@ -63,7 +82,10 @@ function bindControls() {
   dom.f0Max.addEventListener('change', persist);
   dom.minNote.addEventListener('change', persist);
   dom.bpmAuto.addEventListener('change', persist);
-  dom.bpmInput.addEventListener('change', persist);
+  dom.bpmInput.addEventListener('change', () => {
+    persist();
+    applyBpmToPianoRoll();
+  });
   dom.normalizeCheck.addEventListener('change', persist);
 
   dom.btnAudition.addEventListener('click', toggleSynth);

@@ -16,6 +16,7 @@ import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFil
 import { createIcon } from '../icons/iconHelper.js';
 import { describeTrackBackend, ensurePluginCatalog, hasPluginCatalog } from './pluginBackend.js';
 import { isPluginTrack } from '../editor/trackManager.js';
+import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
@@ -69,14 +70,14 @@ function _buildGridLayer(key, view) {
   const lastBeat = Math.min(view.totalBeats, Math.ceil(view.viewRight / view.beatWidth));
   for (let i = firstBeat; i <= lastBeat; i++) {
     const x = i * view.beatWidth;
-    const isMeasureLine = (i % view.beatsPerMeasure === 0);
+    const isMeasureLine = isMeasureBoundary(i, view.beatsPerMeasure);
     g.strokeStyle = isMeasureLine ? view.colors.gridLineMeasure : view.colors.gridLineMajor;
     g.beginPath();
     g.moveTo(x, view.viewTop);
     g.lineTo(x, view.viewBottom);
     g.stroke();
     if (isMeasureLine && HEADER_HEIGHT >= view.viewTop) {
-      const measureNum = Math.floor(i / view.beatsPerMeasure) + 1;
+      const measureNum = measureNumberAt(i, view.beatsPerMeasure);
       g.fillStyle = view.colors.timeText;
       g.font = '10px sans-serif';
       g.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
@@ -452,7 +453,7 @@ export function renderFragmentTimeline() {
   ctx.translate(-state.fragmentScrollX, -state.fragmentScrollY);
 
   const c = getCanvasColors();
-  const beatsPerMeasure = state.project.timeSignature ? state.project.timeSignature[0] : 4;
+  const beatsPerMeasure = beatsPerMeasureOf(state.project.timeSignature);
   const _viewLeft = state.fragmentScrollX;
   const _viewRight = state.fragmentScrollX + viewportWidth;
   const _viewTop = state.fragmentScrollY;
@@ -702,9 +703,10 @@ export function renderFragmentTimeline() {
 
       ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
-      const bps = state.project.timeSignature ? state.project.timeSignature[0] : 4;
-      const measStart = Math.floor(fragment.startTime / bps) + 1;
-      const measEnd = Math.floor((fragment.startTime + fragment.duration - 0.001) / bps) + 1;
+      // 每小节的拍数要按拍号换算（MIDI 的 beat 是四分音符）：6/8 是 3 拍而不是 6 拍。
+      const beatsPerBar = beatsPerMeasureOf(state.project.timeSignature);
+      const measStart = measureNumberAt(fragment.startTime, beatsPerBar);
+      const measEnd = measureNumberAt(fragment.startTime + fragment.duration - 0.001, beatsPerBar);
       drawClippedText(
         ctx,
         t('main.measureRange', { start: measStart, end: measEnd }),

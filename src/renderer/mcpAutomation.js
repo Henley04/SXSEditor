@@ -1,6 +1,6 @@
 import { state, trackManager, history } from './state.js';
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
-import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject } from './projectManager.js';
+import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject, syncProjectControls } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
@@ -207,6 +207,10 @@ function applyInternal(ops) {
       switch (op.op) {
         case 'set_project':
           state.project = { ...state.project, ...op.value };
+          // state 变了还要落到界面上：工具栏的 BPM / 拍号输入框若留着旧值，
+          // 用户下一次编辑 BPM 就会把旧值写回 state；网格也不会按新 BPM / 新拍号重画。
+          syncProjectControls();
+          refreshAll();
           out.push(state.project);
           break;
         case 'add_singer':
@@ -327,6 +331,7 @@ function replace(doc, { dryRun = false } = {}) {
     normalized.fragments.forEach((f) => trackManager.addFragment(f));
     history.clear();
     markDirty();
+    syncProjectControls();
     refreshAll();
     emit('project.changed', { reason: 'replace', singers: normalized.singers.length, fragments: normalized.fragments.length });
     return snapshot();

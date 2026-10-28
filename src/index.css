@@ -20,9 +20,17 @@
 #bpm-input {
   width: 58px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--fg-bpm);
   border-color: var(--accent-soft);
   background: var(--accent-softer);
+}
+
+/* 上下箭头挤占数字宽度，BPM 又是三位数，去掉后三位才完整可见 */
+#bpm-input::-webkit-inner-spin-button,
+#bpm-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 #bpm-input:focus {
@@ -528,7 +536,11 @@
     margin-right: 2px;
   }
   #toolbar input[type="number"] { width: 38px; }
-  #bpm-input { width: 44px; }
+  /* 44px 装不下三位数（BPM 100–999），末尾会被裁掉——用户读到的数字直接是错的。
+     数字输入框的上下箭头在窄屏下没有意义，隐藏后把宽度留给数字本身。 */
+  /* 选择器要带 #toolbar：#toolbar input[type="number"]（1 ID + 1 属性）比
+     裸 #bpm-input（1 ID）更具体，不加会一直吃到 38px。 */
+  #toolbar #bpm-input { width: 52px; font-variant-numeric: tabular-nums; }
   #time-display { min-width: 78px; letter-spacing: 0; }
 }
 

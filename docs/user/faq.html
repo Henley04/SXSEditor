@@ -398,6 +398,21 @@
       <p data-lang="en">Yes. When using Audio to MIDI, choose "Extract Pitch (RMVPE)" to also extract an F0 pitch curve that is applied to the fragment.</p>
       <p data-lang="zh">可以。使用音频转 MIDI 时，选择 "Extract Pitch (RMVPE)" 可同时提取 F0 音高曲线并应用到片段。</p>
 
+      <h3>
+        <span data-lang="en">Why is the detected BPM sometimes exactly double or half?</span>
+        <span data-lang="zh">自动检测出的 BPM 为什么有时正好是一倍或一半？</span>
+      </h3>
+      <p data-lang="en">A track whose accents land every two beats at 84 BPM is <em>physically identical</em> to 168 BPM, so no detector can tell them apart from the audio alone. SXSEditor picks the interpretation whose beat period matches the strongest onset periodicity, and only prefers the faster reading when the mid-beat position genuinely carries an onset; a pure two-beat pattern stays at the slower value. If the result is still not what you want, type the BPM into the field manually — it is remembered and used for every later extraction. Detection is accurate to 0.1 BPM now; the old build rounded to whole numbers, which drifted several seconds over a long take.</p>
+      <p data-lang="zh">如果一首歌的重音每两拍落一次（84 BPM），它与 168 BPM 在物理上<strong>完全等价</strong>，任何算法都无法只凭音频区分。SXSEditor 会选择"拍周期与最强起音周期性一致"的那种解释，只有当半拍位置<strong>确实</strong>有起音时才取快的一倍；纯粹的两拍循环会保持慢的那侧。如果结果仍不合意，直接在 BPM 输入框里手动改即可——它会被记住，并用于之后的所有提取。检测精度现在到 0.1 BPM；旧版四舍五入到整数，长一点的曲子末尾会漂好几秒。</p>
+
+      <h3>
+        <span data-lang="en">The extracted notes do not line up with the waveform</span>
+        <span data-lang="zh">提取出来的音符和波形对不齐</span>
+      </h3>
+      <p data-lang="en">Fixed in v2.0.3. Three things used to shift the time base: the waveform and playhead layer used a hard-coded 120 BPM while notes and the pitch curve used the project BPM; typing a new BPM in the extraction panel did not update the piano roll until the next extraction; and the detector-timeline correction extrapolated from a single frame step, so a jittery first frame could stretch the whole take. All three now share one BPM source, and the correction uses a median frame step clamped to a sane range. If you still see a shift, check that the BPM field matches the song — changing BPM after extraction changes note lengths in beats, not their musical positions.</p>
+      <p data-lang="zh">v2.0.3 已修复。此前有三处会让时间基准错开：波形与播放头层用了写死的 120 BPM，而音符与音高曲线用工程 BPM；在提取面板里改 BPM 不会立刻更新卷帘，要等下次提取；检测器时间轴校正只取首两帧的步长外推，首帧抖动会把整段拉长或压缩。现在三者共用同一个 BPM 来源，校正改用中位帧步长并夹在合理区间内。如果仍有偏移，请确认 BPM 输入框与歌曲一致——提取之后改 BPM 改变的是音符时值（拍），不是它在音乐里的位置。</p>
+
+
       <h2>
         <span data-lang="en">Projects</span>
         <span data-lang="zh">项目</span>
