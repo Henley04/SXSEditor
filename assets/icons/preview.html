@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SXSEditor 图标预览</title>
+<style>
+  :root{
+    --bg:#f2f4f8; --fg:#1b2340; --muted:#6b7691; --card:#ffffff;
+    --line:rgba(27,35,64,.10);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:48px 40px 72px;
+    font:14px/1.6 -apple-system,"Segoe UI","Noto Sans SC",sans-serif;
+    background:var(--bg); color:var(--fg);
+  }
+  h1{font-size:22px; margin:0 0 6px; letter-spacing:.2px}
+  h2{font-size:13px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
+     color:var(--muted); margin:44px 0 16px}
+  .lede{color:var(--muted); margin:0 0 8px; max-width:64ch}
+  .row{display:flex; gap:28px; flex-wrap:wrap; align-items:flex-end}
+  .item{display:flex; flex-direction:column; align-items:center; gap:10px}
+  .item span{font-size:11px; color:var(--muted); letter-spacing:.04em}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:16px;
+        padding:28px; display:flex; gap:36px; align-items:center; flex-wrap:wrap}
+  .on-dark{background:#141824; border-color:transparent}
+  .on-dark .item span{color:#8b97b5}
+  .on-light{background:#ffffff}
+  .scenes{display:flex; gap:20px; flex-wrap:wrap}
+  .win{border-radius:10px; overflow:hidden; border:1px solid var(--line);
+       background:#fff; box-shadow:0 8px 24px rgba(27,35,64,.10); width:420px}
+  .titlebar{display:flex; align-items:center; gap:10px; padding:10px 14px;
+            background:#f6f7fb; border-bottom:1px solid var(--line); font-size:13px}
+  .titlebar img{width:16px;height:16px; border-radius:3px}
+  .body{height:150px; background:
+     repeating-linear-gradient(90deg,#fafbfe 0 1px,transparent 1px 28px),
+     repeating-linear-gradient(0deg,#fafbfe 0 1px,transparent 1px 24px),#fff}
+  .taskbar{display:flex; align-items:center; gap:14px; background:#1c1f26;
+           border-radius:8px; padding:8px 14px; width:460px}
+  .taskbar img{width:24px;height:24px; border-radius:4px}
+  .dock{display:flex; gap:10px; align-items:center; background:rgba(255,255,255,.72);
+        backdrop-filter:blur(14px); border-radius:18px; padding:10px 14px;
+        border:1px solid rgba(255,255,255,.6); box-shadow:0 10px 30px rgba(27,35,64,.16)}
+  .dock img{width:52px;height:52px; border-radius:12px}
+  .caption{font-size:12px; color:var(--muted); margin-top:10px}
+  code{background:rgba(27,35,64,.06); padding:1px 6px; border-radius:5px; font-size:12px}
+</style>
+</head>
+<body>
+
+<h1>SXSEditor · 应用图标</h1>
+<p class="lede">八分音符。符头是斜椭圆，符干笔直；符尾从符干顶端扬起、向右划一道长弧再垂落——
+它既是乐谱里的「旗」，也是被风吹起的一缕长发。用动势而不是五官去暗示虚拟歌姬，所以不显幼稚。</p>
+
+<h2>三种配色</h2>
+<div class="row">
+  <div class="item"><img src="sxseditor-aurora-256.png" width="160" height="160" alt="aurora"><span>Aurora · 主推</span></div>
+  <div class="item"><img src="sxseditor-ink-256.png" width="160" height="160" alt="ink"><span>Ink · 纯扁平</span></div>
+  <div class="item"><img src="sxseditor-brand-256.png" width="160" height="160" alt="brand"><span>Brand · 亮色</span></div>
+</div>
+
+<h2>尺寸阶梯（真实像素）</h2>
+<div class="card">
+  <div class="item"><img src="sxseditor-aurora-16.png" width="16" height="16"><span>16</span></div>
+  <div class="item"><img src="sxseditor-aurora-24.png" width="24" height="24"><span>24</span></div>
+  <div class="item"><img src="sxseditor-aurora-32.png" width="32" height="32"><span>32</span></div>
+  <div class="item"><img src="sxseditor-aurora-48.png" width="48" height="48"><span>48</span></div>
+  <div class="item"><img src="sxseditor-aurora-64.png" width="64" height="64"><span>64</span></div>
+  <div class="item"><img src="sxseditor-aurora-128.png" width="128" height="128"><span>128</span></div>
+</div>
+
+<h2>深色 / 浅色背景</h2>
+<div class="row">
+  <div class="card on-dark">
+    <div class="item"><img src="sxseditor-aurora-96.png" width="96" height="96"><span>aurora · 96</span></div>
+    <div class="item"><img src="sxseditor-ink-96.png" width="96" height="96"><span>ink · 96</span></div>
+    <div class="item"><img src="sxseditor-brand-96.png" width="96" height="96"><span>brand · 96</span></div>
+  </div>
+  <div class="card on-light">
+    <div class="item"><img src="sxseditor-aurora-96.png" width="96" height="96"><span>aurora · 96</span></div>
+    <div class="item"><img src="sxseditor-ink-96.png" width="96" height="96"><span>ink · 96</span></div>
+    <div class="item"><img src="sxseditor-brand-96.png" width="96" height="96"><span>brand · 96</span></div>
+  </div>
+</div>
+
+<h2>放进界面里</h2>
+<div class="scenes">
+  <div>
+    <div class="win">
+      <div class="titlebar"><img src="sxseditor-aurora-16.png" alt="">SXSEditor</div>
+      <div class="body"></div>
+    </div>
+    <div class="caption">窗口标题栏（16px）</div>
+  </div>
+  <div>
+    <div class="taskbar">
+      <img src="sxseditor-aurora-24.png" alt="">
+      <img src="sxseditor-ink-24.png" alt="">
+      <img src="sxseditor-brand-24.png" alt="">
+    </div>
+    <div class="caption">任务栏（24px，深色）</div>
+  </div>
+  <div>
+    <div class="dock">
+      <img src="sxseditor-aurora-128.png" alt="">
+      <img src="sxseditor-brand-128.png" alt="">
+    </div>
+    <div class="caption">程序坞（128px）</div>
+  </div>
+</div>
+
+<p class="caption" style="margin-top:36px">
+  源文件：<code>sxseditor-aurora.svg</code> / <code>-ink.svg</code> / <code>-brand.svg</code>，
+  位图与 <code>.ico</code> 由 <code>generate.py</code> 生成。
+</p>
+
+</body>
+</html>

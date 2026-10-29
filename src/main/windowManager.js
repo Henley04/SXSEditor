@@ -21,6 +21,27 @@ let audioPreprocessWindow = null;
 let pendingPreprocessData = null;
 let preprocessWavBuffer = null;
 
+const fs = require('node:fs');
+
+/**
+ * 窗口图标路径。
+ *
+ * webpack.main.config.js 的 CopyPlugin 把 assets/SXS.png 复制到
+ * `.webpack/main/SXS.png`（主 bundle 同目录），但此前这里读的是
+ * `path.join(__dirname, '..', 'SXS.png')`——多退了一层，文件根本不存在，
+ * 于是每个窗口都静默落回 Electron 的默认图标。
+ *
+ * 两种布局都要认：构建产物（bundle 同目录）与个别打包布局（上一级）。
+ * 都取不到时返回 undefined，交给 Electron 自己决定，不抛错。
+ */
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, 'SXS.png'),
+    path.join(__dirname, '..', 'SXS.png'),
+  ];
+  return candidates.find((p) => fs.existsSync(p));
+}
+
 let isDirty = false;
 let closePending = false;
 
@@ -280,7 +301,7 @@ function createWindow(opts = {}) {
     width: 1280,
     height: 800,
     title: 'SXSEditor',
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     backgroundColor: '#14141f',
     show,
     webPreferences: {
@@ -368,7 +389,7 @@ function openSettingsWindow() {
     minWidth: 960,
     minHeight: 720,
     title: t('menu.settings'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: false,
     maximizable: false,
@@ -405,7 +426,7 @@ function openResourceManagerWindow() {
     width: 700,
     height: 750,
     title: t('resourceManager.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: true,
     maximizable: false,
@@ -447,7 +468,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
     minHeight: 560,
     // W20: use i18n key instead of hardcoded Chinese window title.
     title: t('modelDownload.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: true,
     maximizable: true,
@@ -505,7 +526,7 @@ function openUpdateNotificationWindow(data) {
     minWidth: 420,
     minHeight: 520,
     title: t('update.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: false,
     maximizable: false,
@@ -557,7 +578,7 @@ function openFragmentEditor(fragment, project, wavBuffer, backend) {
     height: 600,
     // W20: use i18n key with name param instead of hardcoded Chinese title.
     title: t('fragment.title', { name: fragment.name }),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     backgroundColor: '#14141f',
     show: false,
     webPreferences: {
@@ -676,7 +697,7 @@ function openSingerCreator() {
     width: 900,
     height: 600,
     title: t('singerCreator.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     minWidth: 700,
     minHeight: 500,
     backgroundColor: '#14141f',
@@ -728,7 +749,7 @@ function openSingerMarket() {
     width: 1200,
     height: 800,
     title: t('singerMarket.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#14141f',
@@ -797,7 +818,7 @@ function openAudioPreprocess(data) {
     height: 800,
     // W20: use i18n key instead of hardcoded Chinese window title.
     title: t('preprocess.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     minWidth: 800,
     minHeight: 600,
     backgroundColor: '#14141f',
