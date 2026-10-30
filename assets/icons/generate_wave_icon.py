@@ -126,6 +126,49 @@ def build_svg():
     )
 
 
+def mark_bbox():
+    """圆盘 + 两侧溢出胶囊 的包围盒（已应用 scale/translate，单位=1024 画布）。"""
+    left = DISC["cx"] - DISC["r"]
+    right = DISC["cx"] + DISC["r"]
+    for cfg in (CAP_IN, CAP_OUT):
+        for sgn in (-1, 1):
+            cx = DISC["cx"] + sgn * abs(cfg["cx"] - DISC["cx"])
+            left = min(left, cx - cfg["w"] / 2)
+            right = max(right, cx + cfg["w"] / 2)
+    top = DISC["cy"] - DISC["r"]
+    bottom = DISC["cy"] + DISC["r"]
+    return (left * SCALE + TX, top * SCALE + TY,
+            right * SCALE + TX, bottom * SCALE + TY)
+
+
+def build_mark_svg():
+    """无底板版本，给网页页头/页脚用。
+
+    app 图标带白色圆角卡，放在深色导航条上像贴纸；网页 logo 只要图形本身，
+    透明背景，两种主题下都成立。viewBox 贴紧内容，不留空边。
+    """
+    x0, y0, x1, y1 = mark_bbox()
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x0:.1f} {y0:.1f} '
+        f'{x1 - x0:.1f} {y1 - y0:.1f}" role="img" aria-label="SXSEditor">'
+        '<title>SXSEditor</title><defs>'
+        '<linearGradient id="disc" x1="0.1" y1="0" x2="0.9" y2="1">'
+        f'<stop offset="0" stop-color="{AMBER}"/>'
+        f'<stop offset="1" stop-color="{ORANGE}"/></linearGradient>'
+        '<linearGradient id="ember" x1="0.2" y1="0" x2="0.8" y2="1">'
+        f'<stop offset="0" stop-color="{EMBER_A}"/>'
+        f'<stop offset="1" stop-color="{EMBER_B}"/></linearGradient>'
+        f'<clipPath id="disc_clip"><circle cx="{DISC["cx"]}" cy="{DISC["cy"]}" '
+        f'r="{DISC["r"]}"/></clipPath></defs>'
+        f'<g transform="translate({TX:.2f},{TY:.2f}) scale({SCALE})">'
+        f'<circle cx="{DISC["cx"]}" cy="{DISC["cy"]}" r="{DISC["r"]}" fill="url(#disc)"/>'
+        '<g clip-path="url(#disc_clip)">'
+        '<circle cx="1180" cy="1225" r="800" fill="url(#ember)"/></g>'
+        f'<g fill="{CREAM}">{bars()}</g>'
+        '</g></svg>'
+    )
+
+
 ICNS_TYPES = {
     b"icp4": 16, b"icp5": 32, b"icp6": 64,
     b"ic07": 128, b"ic08": 256, b"ic09": 512, b"ic10": 1024,
@@ -152,6 +195,8 @@ def main(argv):
     svg = build_svg()
     with open(os.path.join(OUT, "sxseditor.svg"), "w", encoding="utf-8") as f:
         f.write(svg + "\n")
+    with open(os.path.join(OUT, "mark.svg"), "w", encoding="utf-8") as f:
+        f.write(build_mark_svg() + "\n")
 
     for s in SIZES:
         cairosvg.svg2png(bytestring=svg.encode(),
