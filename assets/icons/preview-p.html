@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SXSEditor 图标候选 · P 形音符</title>
+<style>
+  :root{
+    --bg:#eef1f7; --card:#ffffff; --fg:#141a2e; --muted:#68728c;
+    --line:rgba(20,26,46,.10); --accent:#4F6BE0;
+    --radius:18px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-font-smoothing:antialiased}
+  body{
+    margin:0; padding:56px 40px 96px; max-width:1120px; margin-inline:auto;
+    font:14.5px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+    background:var(--bg); color:var(--fg);
+  }
+  .eyebrow{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); font-weight:600}
+  h1{font-size:30px; line-height:1.25; margin:10px 0 12px; letter-spacing:-.01em}
+  h1 em{font-style:normal; color:var(--accent)}
+  .lede{color:var(--muted); max-width:70ch; margin:0 0 6px; font-size:15px}
+  .lede code{background:rgba(20,26,46,.06); padding:1px 5px; border-radius:5px; font-size:13px}
+
+  h2{font-size:12px; font-weight:700; letter-spacing:.16em; text-transform:uppercase;
+     color:var(--muted); margin:56px 0 18px; display:flex; align-items:center; gap:12px}
+  h2::after{content:""; flex:1; height:1px; background:var(--line)}
+
+  .hero{display:flex; gap:40px; align-items:center; flex-wrap:wrap; margin-top:32px}
+  .hero .mark{background:linear-gradient(160deg,#1d2748,#0e1428); border-radius:44px; padding:0;
+              box-shadow:0 26px 60px -20px rgba(20,26,46,.55), 0 0 0 1px rgba(255,255,255,.06) inset}
+  .hero .mark img{display:block; width:220px; height:220px}
+  .hero .copy{flex:1; min-width:280px}
+  .hero .copy p{margin:0 0 12px}
+  .hero .copy b{font-weight:600}
+  .hero .copy .dim{color:var(--muted); font-size:13.5px}
+
+  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:20px}
+  @media (max-width:860px){ .grid{grid-template-columns:1fr} }
+  .opt{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+       padding:24px; display:flex; flex-direction:column; gap:14px}
+  .opt.pick{border-color:rgba(79,107,224,.45); box-shadow:0 0 0 3px rgba(79,107,224,.10)}
+  .opt .plate{background:linear-gradient(160deg,#1d2748,#0e1428); border-radius:26px; align-self:center;
+              padding:0; box-shadow:0 14px 34px -14px rgba(20,26,46,.6)}
+  .opt .plate img{display:block; width:148px; height:148px}
+  .opt h3{margin:0; font-size:16px; display:flex; align-items:center; gap:8px}
+  .opt h3 .badge{font-size:10px; letter-spacing:.1em; font-weight:700; color:#fff; background:var(--accent);
+                 border-radius:99px; padding:2px 8px; text-transform:uppercase}
+  .opt p{margin:0; color:var(--muted); font-size:13px}
+  .opt ul{margin:0; padding-left:18px; color:var(--muted); font-size:13px}
+  .opt li{margin:3px 0}
+
+  .ladder{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:22px 26px}
+  .ladder .row{display:flex; flex-wrap:wrap; align-items:flex-end; gap:20px; padding:16px 0; border-bottom:1px dashed var(--line)}
+  .ladder .row:last-child{border-bottom:none}
+  .ladder .tag{width:86px; flex:none; font-size:12px; color:var(--muted); letter-spacing:.06em; padding-bottom:2px}
+  .ladder .row img{image-rendering:auto; flex:none}
+  .ladder .row .cap{margin-left:auto; font-size:11.5px; color:var(--muted)}
+
+  .scenes{display:grid; grid-template-columns:repeat(3,1fr); gap:20px; align-items:start}
+  @media (max-width:860px){ .scenes{grid-template-columns:1fr} }
+  .win{width:100%; border-radius:12px; overflow:hidden; background:#fff; border:1px solid rgba(0,0,0,.08);
+       box-shadow:0 14px 34px -16px rgba(20,26,46,.45)}
+  .win .tb{display:flex; align-items:center; gap:9px; padding:0 12px; height:36px; background:#f7f8fb;
+           border-bottom:1px solid rgba(0,0,0,.07); font-size:12.5px; color:#2a3350}
+  .win .tb img{width:16px; height:16px; border-radius:3px}
+  .win .tb .dots{margin-left:auto; display:flex; gap:6px}
+  .win .tb .dots i{width:10px; height:10px; border-radius:50%; background:#d7dae3}
+  .win .body{height:132px; background:linear-gradient(180deg,#fbfcfe,#f2f5fa)}
+  .taskbar{display:flex; align-items:center; gap:6px; background:#1b1e26; border-radius:10px; padding:7px 10px;
+           box-shadow:0 10px 26px -12px rgba(0,0,0,.6)}
+  .taskbar .app{width:34px; height:34px; border-radius:7px; display:grid; place-items:center}
+  .taskbar .app.on{background:rgba(255,255,255,.10)}
+  .taskbar .app img{width:22px; height:22px; border-radius:4px}
+  .taskbar .app.ph{background:rgba(255,255,255,.07)}
+  .dock{display:inline-flex; gap:12px; align-items:center; padding:10px 14px; border-radius:20px;
+        background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.8);
+        backdrop-filter:blur(16px); box-shadow:0 16px 40px -18px rgba(20,26,46,.5)}
+  .dock img{width:50px; height:50px; border-radius:11px}
+  .dock .ph{width:50px; height:50px; border-radius:11px; background:#dfe4ee}
+  .scene-wrap{display:flex; flex-direction:column; gap:9px; align-items:stretch}
+  .scene-wrap .taskbar,.scene-wrap .dock{align-self:flex-start}
+  .scene-wrap .cap{display:block}
+  .scene-wrap .cap{font-size:12px; color:var(--muted)}
+
+  .palettes{display:grid; grid-template-columns:repeat(3,1fr); gap:20px}
+  @media (max-width:860px){ .palettes{grid-template-columns:1fr} }
+  .pal{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px;
+       display:flex; flex-direction:column; align-items:center; gap:12px}
+  .pal img{width:120px; height:120px; border-radius:24px}
+  .pal b{font-size:13.5px}
+  .pal span{font-size:12px; color:var(--muted)}
+
+  .compare{display:flex; gap:36px; align-items:center; flex-wrap:wrap;
+           background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:28px}
+  .compare figure{margin:0; text-align:center}
+  .compare img{width:120px; height:120px; border-radius:26px; display:block}
+  .compare figcaption{font-size:12px; color:var(--muted); margin-top:10px}
+  .arrow{font-size:22px; color:var(--muted)}
+
+  .note{background:#fff; border:1px solid var(--line); border-left:3px solid var(--accent);
+        border-radius:12px; padding:16px 20px; margin-top:26px; font-size:13.5px; color:#2b3450}
+  .note b{font-weight:600}
+  footer{margin-top:64px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="eyebrow">Icon candidates · v1</div>
+<h1>一个音符，也是 <em>P</em></h1>
+<p class="lede">
+  去掉了那缕"头发"。符干顶端右侧那道旗，现在是一个 D 形环——它站在旗的位置上，同时是字母 P 的肚子。
+  竖干既是符干也是 P 的竖笔，斜椭圆符头既是符头也是笔画收尾的重量。不画人，也不靠比喻：<b>认不出 P 的人，看到的仍是一个干净的音符</b>。
+</p>
+
+<div class="hero">
+  <div class="mark"><img src="candidates/p-line-512.png" alt="P 形音符"></div>
+  <div class="copy">
+    <p><b>P 指向 Producer。</b>VOCALOID / 歌声合成圈里，写歌的人叫 P 主；产品名 SXSEditor 的首字母也是 S / P 音系。这一层含义对圈内人是会心一笑，对圈外人只是一个好看的 P 形音符。</p>
+    <p class="dim">三种做法只在"环"的处理上不同：环宽、是否留白、是否一笔画成。都在下方按真实尺寸排了阶梯，请按 16px 的表现来选，而不是按 1024 的表现。</p>
+  </div>
+</div>
+
+<h2>三个方案</h2>
+<div class="grid">
+  <div class="opt pick">
+    <div class="plate"><img src="candidates/p-line-256.png" alt=""></div>
+    <h3>Line <span class="badge">推荐</span></h3>
+    <p>一笔画成：符干直上，到顶后绕成右半圆，再落回符干中线。笔画粗细处处相等，16px 下也不会断。</p>
+    <ul>
+      <li>最"手写"，肩部是自然圆角</li>
+      <li>小尺寸衰减最小</li>
+      <li>环与干之间没有接缝可挑</li>
+    </ul>
+  </div>
+  <div class="opt">
+    <div class="plate"><img src="candidates/p-solid-256.png" alt=""></div>
+    <h3>Solid</h3>
+    <p>实心 D 环，环宽 70。最稳、最像排版字体里的 P，远看识别率最高。</p>
+    <ul>
+      <li>块面重，压在深色底上很有分量</li>
+      <li>16px 时环孔缩成一点，接近实心</li>
+      <li>整体偏"字体感"，个性弱一些</li>
+    </ul>
+  </div>
+  <div class="opt">
+    <div class="plate"><img src="candidates/p-ring-256.png" alt=""></div>
+    <h3>Ring</h3>
+    <p>细环，环宽 44。最轻、最线性，接近当代工具类产品的图标语言。</p>
+    <ul>
+      <li>大尺寸下最透气</li>
+      <li>16px 环壁约 0.7px，会糊</li>
+      <li>只适合大图场景</li>
+    </ul>
+  </div>
+</div>
+
+<h2>尺寸阶梯（原始像素，未缩放）</h2>
+<div class="ladder">
+  <div class="row">
+    <div class="tag">Line</div>
+    <img src="candidates/p-line-16.png" width="16" height="16" alt="16">
+    <img src="candidates/p-line-20.png" width="20" height="20" alt="20">
+    <img src="candidates/p-line-24.png" width="24" height="24" alt="24">
+    <img src="candidates/p-line-32.png" width="32" height="32" alt="32">
+    <img src="candidates/p-line-40.png" width="40" height="40" alt="40">
+    <img src="candidates/p-line-48.png" width="48" height="48" alt="48">
+    <img src="candidates/p-line-64.png" width="64" height="64" alt="64">
+    <img src="candidates/p-line-96.png" width="96" height="96" alt="96">
+    <img src="candidates/p-line-128.png" width="128" height="128" alt="128">
+  </div>
+  <div class="row">
+    <div class="tag">Solid</div>
+    <img src="candidates/p-solid-16.png" width="16" height="16" alt="16">
+    <img src="candidates/p-solid-20.png" width="20" height="20" alt="20">
+    <img src="candidates/p-solid-24.png" width="24" height="24" alt="24">
+    <img src="candidates/p-solid-32.png" width="32" height="32" alt="32">
+    <img src="candidates/p-solid-40.png" width="40" height="40" alt="40">
+    <img src="candidates/p-solid-48.png" width="48" height="48" alt="48">
+    <img src="candidates/p-solid-64.png" width="64" height="64" alt="64">
+    <img src="candidates/p-solid-96.png" width="96" height="96" alt="96">
+    <img src="candidates/p-solid-128.png" width="128" height="128" alt="128">
+  </div>
+  <div class="row">
+    <div class="tag">Ring</div>
+    <img src="candidates/p-ring-16.png" width="16" height="16" alt="16">
+    <img src="candidates/p-ring-20.png" width="20" height="20" alt="20">
+    <img src="candidates/p-ring-24.png" width="24" height="24" alt="24">
+    <img src="candidates/p-ring-32.png" width="32" height="32" alt="32">
+    <img src="candidates/p-ring-40.png" width="40" height="40" alt="40">
+    <img src="candidates/p-ring-48.png" width="48" height="48" alt="48">
+    <img src="candidates/p-ring-64.png" width="64" height="64" alt="64">
+    <img src="candidates/p-ring-96.png" width="96" height="96" alt="96">
+    <img src="candidates/p-ring-128.png" width="128" height="128" alt="128">
+  </div>
+  <div class="cap" style="text-align:right">从上到下：线稿方案、实心方案、细环方案</div>
+</div>
+
+<h2>放进界面里</h2>
+<div class="scenes">
+  <div class="scene-wrap">
+    <div class="win">
+      <div class="tb">
+        <img src="candidates/p-line-32.png" alt="">
+        <span>SXSEditor — 未命名工程</span>
+        <span class="dots"><i></i><i></i><i></i></span>
+      </div>
+      <div class="body"></div>
+    </div>
+    <span class="cap">窗口标题栏 · 16px</span>
+  </div>
+
+  <div class="scene-wrap">
+    <div class="taskbar">
+      <span class="app ph"></span>
+      <span class="app on"><img src="candidates/p-line-64.png" alt=""></span>
+      <span class="app ph"></span>
+      <span class="app ph"></span>
+    </div>
+    <span class="cap">Windows 任务栏 · 24px</span>
+  </div>
+
+  <div class="scene-wrap">
+    <div class="dock">
+      <span class="ph"></span>
+      <img src="candidates/p-line-256.png" alt="">
+      <span class="ph"></span>
+    </div>
+    <span class="cap">macOS Dock · 50px</span>
+  </div>
+</div>
+
+<h2>三种底色</h2>
+<div class="palettes">
+  <div class="pal">
+    <img src="candidates/p-line-256.png" alt="">
+    <b>Aurora</b>
+    <span>跟随应用默认深色主题，主推</span>
+  </div>
+  <div class="pal">
+    <img src="candidates/p-line-ink-256.png" alt="">
+    <b>Ink</b>
+    <span>纯扁平单色底，最安静</span>
+  </div>
+  <div class="pal">
+    <img src="candidates/p-line-brand-256.png" alt="">
+    <b>Brand</b>
+    <span>亮蓝底，任务栏里最容易找到</span>
+  </div>
+</div>
+
+<h2>与现有图标对比</h2>
+<div class="compare">
+  <figure>
+    <img src="legacy/SXS-original.png" alt="旧图标">
+    <figcaption>现在：灰底 SX_S 文字</figcaption>
+  </figure>
+  <span class="arrow">→</span>
+  <figure>
+    <img src="candidates/p-line-256.png" alt="新图标">
+    <figcaption>候选：P 形音符</figcaption>
+  </figure>
+</div>
+
+<div class="note">
+  <b>还没有替换。</b>这一版只放在 <code>assets/icons/candidates/</code> 里，
+  <code>assets/SXS.png / .ico</code> 与文档站的 favicon 仍是原来的图标，安装包、窗口、文档站都没有改动。
+  等你从 Line / Solid / Ring 里挑一个（或者指出要改的地方，比如环再小一点、符头再斜一点、竖干再长一点），
+  我再把它落到正式路径并重新打包 ico / icns。
+</div>
+
+<footer>SXSEditor · 图标候选 v1 · 生成脚本 assets/icons/generate_p_icon.py</footer>
+
+</body>
+</html>
