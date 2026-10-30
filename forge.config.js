@@ -118,7 +118,31 @@ module.exports = {
     // It must live OUTSIDE app.asar: the docs are opened with the system
     // default browser via file:// and a browser cannot read inside an asar.
     // src/main/docs.js resolves this directory at runtime.
-    ...(skipDocs ? {} : { extraResource: ['docs'] }),
+    // docs 与文件图标都必须落在 asar 之外：前者要给系统浏览器以 file:// 打开，
+    // 后者要给 Windows 注册表的 DefaultIcon 引用（系统读不了 asar 内部路径）。
+    extraResource: skipDocs
+      ? ['assets/fileicons']
+      : ['docs', 'assets/fileicons'],
+    // macOS 靠 Info.plist 声明"哪些文件归我"，Windows 靠注册表，Linux 靠 .desktop。
+    // 这里只写 macOS 的一份；图标文件随 extraResource 进 Contents/Resources。
+    extendInfo: {
+      CFBundleDocumentTypes: [
+        {
+          CFBundleTypeName: 'SXSEditor Project',
+          CFBundleTypeRole: 'Editor',
+          LSHandlerRank: 'Owner',
+          CFBundleTypeExtensions: ['sxsproj'],
+          CFBundleTypeIconFile: 'fileicons/project.icns',
+        },
+        {
+          CFBundleTypeName: 'SXSEditor Singer',
+          CFBundleTypeRole: 'Editor',
+          LSHandlerRank: 'Owner',
+          CFBundleTypeExtensions: ['sxssinger'],
+          CFBundleTypeIconFile: 'fileicons/singer.icns',
+        },
+      ],
+    },
     // Keep only Chromium locales that match the app's supported UI languages
     // (src/i18n ships 'zh-CN' and 'en'). All other *.pak locale files would
     // otherwise account for ~45 MB of dead bytes in out/SXSEditor-win32-x64/locales.

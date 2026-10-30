@@ -90,8 +90,21 @@ async function openSingerFileForEdit() {
     return { success: false, canceled: true };
   }
 
-  const filePath = path.resolve(result.filePaths[0]);
+  return openSingerFileAt(result.filePaths[0]);
+}
+
+/**
+ * 按路径打开歌手文件并进入编辑 —— 对话框版与系统"双击/打开方式"共用。
+ *
+ * 路径可能来自注册表命令行，属于外部输入，所以这里再校验一次扩展名：
+ * 上层（fileAssociation）已经按扩展名筛过，但那是分发逻辑，不该是唯一防线。
+ */
+async function openSingerFileAt(rawPath) {
   try {
+    const filePath = path.resolve(rawPath);
+    if (!filePath.toLowerCase().endsWith('.sxssinger')) {
+      return { success: false, error: t('dialog.singerFileInvalid') };
+    }
     const stat = await fs.promises.stat(filePath);
     if (!stat.isFile()) return { success: false, error: t('dialog.singerFileInvalid') };
     if (stat.size > MAX_SINGER_FILE_BYTES) {
@@ -119,6 +132,8 @@ async function openSingerFileForEdit() {
 
 function registerSingerIpc() {
   safeHandle(IPC_CHANNELS.OPEN_SINGER_EDITOR, () => openSingerFileForEdit());
+  // 系统"打开方式"/双击 .sxssinger：路径由主进程分发过来，不再弹选择框
+  safeHandle(IPC_CHANNELS.SINGER_OPEN_AT, (event, filePath) => openSingerFileAt(filePath));
 
   safeHandle(IPC_CHANNELS.SAVE_SINGER_FILE, async (event, singerData) => {
     try {
@@ -227,6 +242,7 @@ function registerSingerIpc() {
 module.exports = {
   registerSingerIpc,
   openSingerFileForEdit,
+  openSingerFileAt,
   validateSingerFileData,
   SXSSINGER_FORMAT_VERSION,
 };

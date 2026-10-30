@@ -34,6 +34,8 @@ const IPC_CHANNELS = {
   PROJECT_SETTINGS_CHANGED: 'projectSettingsChanged',
   OPEN_SINGER_CREATOR: 'openSingerCreator',
   OPEN_SINGER_EDITOR: 'openSingerEditor',
+  // 主进程 → 歌手编辑：直接按路径打开（用于系统"打开方式"/双击 .sxssinger）
+  SINGER_OPEN_AT: 'singer:openAt',
   SAVE_SINGER_FILE: 'saveSingerFile',
   SINGER_CREATED: 'singerCreated',
   // 主进程 → 主窗口：已存在的歌手文件被编辑保存，按 filePath 就地更新
@@ -49,6 +51,14 @@ const IPC_CHANNELS = {
   // 主进程 → 渲染进程：内容区尺寸可能已变化，请重新布局/重绘。
   // 覆盖停靠式 DevTools 开关这类 window 'resize' 不触发的场景。
   RELAYOUT: 'app:relayout',
+
+  // ==================== OS "open with" ====================
+  // 系统把 .sxsproj / .sxssinger 交给应用（双击、拖到图标、"打开方式"）。
+  // 文件路径先存在主进程，渲染层就绪后主动来取，取走即清空 —— 只走这一条
+  // 数据通道，避免"启动参数"和"运行时事件"两套逻辑各写一遍还互相打架。
+  APP_TAKE_PENDING_FILE: 'app:takePendingOpenFile',
+  // 主进程 → 渲染层：有新文件待取（仅通知，不携带路径）
+  APP_FILE_REQUESTED: 'app:fileRequested',
 
   // ==================== SVS Pipeline ====================
   SVS_INIT: 'svs:init',

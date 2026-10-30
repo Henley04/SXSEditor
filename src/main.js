@@ -2,6 +2,42 @@ const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { IPC_CHANNELS } = require('./shared/ipcChannels');
+const {
+  extractOpenPath,
+  classify,
+  setPendingTarget,
+  takePendingTarget,
+  ensureWindowsFileAssociations,
+} = require('./main/fileAssociation');
+
+/**
+ * 通知渲染层"有文件待取"。只发通知、不带路径 —— 路径留在 pending 槽里，
+ * 渲染层就绪后自己来取，避免"通知先到、监听还没挂上"把文件弄丢。
+ */
+function notifyRendererOfPendingFile() {
+  try {
+    const { getMainWindow } = require('./main/windowManager');
+    const win = getMainWindow();
+    if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
+    win.webContents.send(IPC_CHANNELS.APP_FILE_REQUESTED);
+  } catch (_) {
+    /* 窗口还没建好：渲染层启动时会主动 take，不需要这条通知 */
+  }
+}
+
+// 冷启动时双击文件：路径在 argv 里。先存起来，等渲染层来取。
+const launchTarget = classify(extractOpenPath(process.argv));
+if (launchTarget) setPendingTarget(launchTarget);
+
+// macOS 的"双击文件"不走 argv，走 open-file；且可能在 ready 之前就触发，
+// 所以这个监听必须挂在模块顶层，不能等 whenReady。
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  const target = classify(filePath);
+  if (!target) return;
+  setPendingTarget(target);
+  notifyRendererOfPendingFile();
+});
 
 // Fix Windows console encoding for Chinese log output.
 //
@@ -185,7 +221,7 @@ let resetBasicPitch = () => {};
 let resetRosvot = () => {};
 let resetAudioManagers = () => {};
 
-app.on('second-instance', () => {
+app.on('second-instance', (event, argv) => {
   // Lazy require: getMainWindow is in windowManager which is loaded in
   // STEP 1.5 inside app.whenReady(). By the time a second instance can
   // fire this event, STEP 1.5 has completed, but using lazy require keeps
@@ -197,6 +233,13 @@ app.on('second-instance', () => {
       mainWindow.restore();
     }
     mainWindow.focus();
+  }
+
+  // 双击第二个文件时，系统起的是同一个 exe，新路径在 second-instance 的 argv 里
+  const target = classify(extractOpenPath(argv));
+  if (target) {
+    setPendingTarget(target);
+    notifyRendererOfPendingFile();
   }
 });
 
@@ -300,6 +343,9 @@ app.whenReady().then(() => {
   registerSingerIpc();
   registerSingerMarketIpc();
   registerWebnnIpc();
+
+  // 系统投递进来的文件（双击 / 打开方式）。取走即清空，天然幂等。
+  ipcMain.handle(IPC_CHANNELS.APP_TAKE_PENDING_FILE, () => takePendingTarget());
   const { registerMcpReplyIpc, startMcpBridge } = require('./main/mcpBridge');
   registerMcpReplyIpc(ipcMain);
 
@@ -422,6 +468,11 @@ app.whenReady().then(() => {
     // 应用菜单：30+ 项的 buildFromTemplate + setApplicationMenu，同样移到显示之后
     const { buildAppMenuDeferred } = require('./main/windowManager');
     buildAppMenuDeferred();
+    // 文件关联：要 spawn 若干次 reg.exe，合计几十毫秒。界面已经显示出来了，
+    // 再缓 3 秒，避开首帧渲染与模型加载的 I/O 高峰。
+    setTimeout(() => {
+      ensureWindowsFileAssociations().catch(() => {});
+    }, 3000);
   };
 
   /**

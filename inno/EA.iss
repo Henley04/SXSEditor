@@ -6,9 +6,10 @@
 #define MyAppVersion "1.0.0_EA"
 #define MyAppPublisher "SXSEditor dev."
 #define MyAppExeName "SXSEditor.exe"
-#define MyAppAssocName MyAppName + " File"
-#define MyAppAssocExt ".sxsproject"
-#define MyAppAssocKey StringChange(MyAppAssocName, " ", "") + MyAppAssocExt
+#define MyAppProjectExt ".sxsproj"
+#define MyAppSingerExt ".sxssinger"
+#define MyAppProjectKey "SXSEditor.Project"
+#define MyAppSingerKey "SXSEditor.Singer"
 #expr EmitLanguagesSection
 
 [Setup]
@@ -49,10 +50,21 @@ Source: "D:\Document\electron\SXSEditor\out\SXSEditor-win32-x64\*"; DestDir: "{a
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Registry]
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}\OpenWithProgids"; ValueType: string; ValueName: "{#MyAppAssocKey}"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppAssocName}"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
-Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+; 工程文件
+; 默认值指向 ProgId —— 这一条才是"双击直接打开"，只写 OpenWithProgids 的话
+; 文件仍然没有默认程序，双击只会弹出"选择应用"。
+Root: HKA; Subkey: "Software\Classes\{#MyAppProjectExt}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppProjectKey}"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#MyAppProjectExt}\OpenWithProgids"; ValueType: string; ValueName: "{#MyAppProjectKey}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#MyAppProjectKey}"; ValueType: string; ValueName: ""; ValueData: "SXSEditor 工程"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{#MyAppProjectKey}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\resources\fileicons\project.ico"
+Root: HKA; Subkey: "Software\Classes\{#MyAppProjectKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+
+; 歌手文件
+Root: HKA; Subkey: "Software\Classes\{#MyAppSingerExt}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppSingerKey}"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#MyAppSingerExt}\OpenWithProgids"; ValueType: string; ValueName: "{#MyAppSingerKey}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#MyAppSingerKey}"; ValueType: string; ValueName: ""; ValueData: "SXSEditor 歌手"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{#MyAppSingerKey}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\resources\fileicons\singer.ico"
+Root: HKA; Subkey: "Software\Classes\{#MyAppSingerKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -72,6 +72,9 @@ const HIGH_RISK_METHOD_WINDOWS = [
   { path: ['showItemInFolder'], windows: ['index', 'settings', 'singermarket'] },
   // 插件合成：只有主窗口与分片编辑器会真正驱动第三方歌声后端
   { path: ['pluginAPI', 'synthesize'], windows: ['index', 'fragmenteditor'] },
+  // 系统投递的文件只属于主窗口：它会读盘、还会新建预处理窗口
+  { path: ['takePendingOpenFile'], windows: ['index'] },
+  { path: ['openSingerFileAt'], windows: ['index'] },
 ];
 
 function denyCapability(name) {
@@ -104,6 +107,14 @@ const _fullElectronAPI = {
   sendMcpAutomationEvent: event => ipcRenderer.send(IPC_CHANNELS.MCP_AUTOMATION_EVENT,event),
   showSaveDialog: (options) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SAVE, options),
   showOpenDialog: (options) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN, options),
+  // 系统投递进来的文件（双击 / 打开方式）。take 取走即清空，重复调用只会拿到一次。
+  takePendingOpenFile: () => ipcRenderer.invoke(IPC_CHANNELS.APP_TAKE_PENDING_FILE),
+  onFileRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.APP_FILE_REQUESTED, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_FILE_REQUESTED, handler);
+  },
+  openSingerFileAt: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.SINGER_OPEN_AT, filePath),
   saveFile: (filePath, data) => ipcRenderer.invoke(IPC_CHANNELS.FILE_SAVE, filePath, data),
   readFile: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ, filePath),
   readFileBuffer: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ_BUFFER, filePath),

@@ -906,7 +906,7 @@ export async function saveProjectAs() {
   return { saved: false, canceled: true };
 }
 
-export async function loadProject() {
+export async function loadProject(filePath = null) {
   // 立刻取消在途的自动保存。否则：
   //   · 用户确认"丢弃未保存改动"的对话框停留期间，400ms 定时器会把即将被丢弃的
   //     改动写回旧工程文件；
@@ -917,142 +917,152 @@ export async function loadProject() {
     const discard = await showConfirmDialog(t('main.unsavedChangesConfirm') || 'Unsaved changes will be lost. Continue?');
     if (!discard) return { loaded: false, canceled: true };
   }
-  if (window.electronAPI?.showOpenDialog) {
-    try {
-      const result = await window.electronAPI.showOpenDialog({
-        filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj', 'sxs'] }],
-        properties: ['openFile'],
-      });
-      if (!result.canceled && result.filePaths.length > 0) {
-        // 加载新工程前关闭所有分片编辑器窗口，避免旧窗口持有已失效的 fragment id
-        // 导致 onFragmentSaved 的 find(f => f.id === fragmentId) 失败、编辑静默丢失
-        if (window.electronAPI?.closeAllFragmentEditors) {
-          await window.electronAPI.closeAllFragmentEditors();
-        }
-        const data = await window.electronAPI.readFile(result.filePaths[0]);
-        const obj = JSON.parse(data);
-        if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
-        // 版本判定收敛到 shared/projectFormat.checkProjectHeader（可单测）：
-        //   reject  —— major 更高，或 minReader 高于当前版本（会算错/丢数据）
-        //   confirm —— major 相同、minor 更高（新字段会被忽略，重存即丢）
-        //   ok      —— 正常/降级加载
-        const compat = checkProjectHeader(obj);
-        if (compat.action === 'reject') {
-          showAlertDialog(t(
-            compat.reason === 'min-reader' ? 'main.projectMinReaderTooHigh' : 'main.projectVersionTooHigh',
-            { version: obj.version, minReader: obj.minReader, currentVersion: PROJECT_FORMAT_VERSION },
-          ));
-          return;
-        }
-        if (compat.action === 'confirm') {
-          const proceed = await showConfirmDialog(
-            t('main.projectMinorVersionTooHigh', { version: obj.version })
-          );
-          if (!proceed) return { loaded: false, canceled: true };
-        }
-        if (compat.reason === 'lower') {
-          console.warn(`Project file version(${obj.version}) is low, will try downgrade load`);
-        }
-        if (compat.unknownFeatures.length > 0) {
-          // 前向兼容：未知特性不阻断，只记录（将来可在 UI 上提示）
-          console.warn('[project] 未知特性（可能来自更新版本）:', compat.unknownFeatures.join(', '));
-        }
-        if (obj.project) {
-          state.project.bpm = obj.project.bpm ?? 120;
-          state.project.timeSignature = obj.project.timeSignature ?? [4, 4];
-          syncProjectControls();
-        }
-        if (obj.singers) {
-          trackManager.singers.length = 0;
-          // 先清后端缺失标记：下面的校验会按当前插件清单重新判定
-          for (const s of obj.singers) {
-            if (s && typeof s === 'object') delete s.backendMissing;
-          }
-          for (const s of obj.singers) {
-            const singer = trackManager.addSinger(s);
-            // Accompaniment track: load from embedded data or file path
-            if (singer.type === 'accompaniment') {
-              if (s.embeddedAudioData) {
-                await applyAccompanimentDataToSinger(singer, s.embeddedAudioData);
-              } else if (s.audioFilePath) {
-                await window.electronAPI.authorizePath(s.audioFilePath);
-                const exists = await window.electronAPI.fileExists(s.audioFilePath);
-                if (!exists) {
-                  singer.audioFileMissing = true;
-                } else {
-                  try {
-                    const buffer = await window.electronAPI.readFileBuffer(s.audioFilePath);
-                    const decoded = await decodeAudioPreserveChannels(buffer);
-                    singer.audioChannels = decoded.audioChannels;
-                    singer.analysisMono = null;
-                    singer.audioBuffer = decoded.audioChannels[0];
-                    singer.audioSampleRate = decoded.sampleRate;
-                    singer.audioDuration = decoded.duration;
-                    singer.audioFileMissing = false;
-                  } catch (_err) {
-                    singer.audioFileMissing = true;
-                  }
-                }
-              }
-              continue;
-            }
-            // Singer track: existing load logic
-            if (s.embeddedSingerData) {
-              await applySingerDataToSinger(singer, s.embeddedSingerData);
-              if (s.embeddedSingerData.wavDuration) {
-                singer.wavDuration = s.embeddedSingerData.wavDuration;
-              }
-            }
-            if (s.singerFilePath && !s.embeddedSingerData) {
-              await window.electronAPI.authorizePath(s.singerFilePath);
-              const exists = await window.electronAPI.fileExists(s.singerFilePath);
-              if (!exists) {
-                singer.singerFileMissing = true;
-              } else {
-                try {
-                  const buffer = await window.electronAPI.readFileBuffer(s.singerFilePath);
-                  const text = new TextDecoder().decode(buffer);
-                  const singerData = JSON.parse(text);
-                  const validation = validateSingerData(singerData);
-                  if (validation.warnings.length > 0) {
-                     console.warn('File load validation warnings:', validation.warnings);
-                  }
-                  if (validation.valid) {
-                    await applySingerDataToSinger(singer, singerData);
-                    if (singerData.wavDuration) {
-                      singer.wavDuration = singerData.wavDuration;
-                    }
-                    singer.singerFileMissing = false;
-                  }
-                } catch (err) {
-                  console.warn('Unable to restore singer file:', err);
-                  singer.singerFileMissing = true;
-                }
-              }
-            }
-          }
-        }
-        // 插件后端存在性校验：插件被删掉时只标记，不阻断工程加载
-        await validatePluginBackends();
-        if (obj.fragments) {
-          trackManager.fragments.length = 0;
-          // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），
-          // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
-          for (const f of obj.fragments) trackManager.addFragment(f);
-        }
-        state.currentProjectFilePath = result.filePaths[0];
-        history.clear();
-        state.selectedFragmentId = null;
-        markClean();
-        // refreshAll will be called by the caller
-        console.log('Project loaded', result.filePaths[0]);
-      }
-    } catch (err) {
-      console.error('Load failed', err);
-      showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
+  // 系统"打开方式"投递的路径由主进程给出，此时不弹选择框
+  let targetPath = filePath;
+  if (!targetPath) {
+    if (!window.electronAPI?.showOpenDialog) return { loaded: false, canceled: true };
+    const result = await window.electronAPI.showOpenDialog({
+      filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj', 'sxs'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { loaded: false, canceled: true };
     }
+    targetPath = result.filePaths[0];
+  }
+
+  try {
+    // 投递进来的路径不在授权列表里，读之前显式授权，否则 readFile 会被拒
+    if (window.electronAPI?.authorizePath) await window.electronAPI.authorizePath(targetPath);
+
+    // 加载新工程前关闭所有分片编辑器窗口，避免旧窗口持有已失效的 fragment id
+    // 导致 onFragmentSaved 的 find(f => f.id === fragmentId) 失败、编辑静默丢失
+    if (window.electronAPI?.closeAllFragmentEditors) {
+      await window.electronAPI.closeAllFragmentEditors();
+    }
+    const data = await window.electronAPI.readFile(targetPath);
+    const obj = JSON.parse(data);
+    if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
+    // 版本判定收敛到 shared/projectFormat.checkProjectHeader（可单测）：
+    //   reject  —— major 更高，或 minReader 高于当前版本（会算错/丢数据）
+    //   confirm —— major 相同、minor 更高（新字段会被忽略，重存即丢）
+    //   ok      —— 正常/降级加载
+    const compat = checkProjectHeader(obj);
+    if (compat.action === 'reject') {
+      showAlertDialog(t(
+        compat.reason === 'min-reader' ? 'main.projectMinReaderTooHigh' : 'main.projectVersionTooHigh',
+        { version: obj.version, minReader: obj.minReader, currentVersion: PROJECT_FORMAT_VERSION },
+      ));
+      return;
+    }
+    if (compat.action === 'confirm') {
+      const proceed = await showConfirmDialog(
+        t('main.projectMinorVersionTooHigh', { version: obj.version })
+      );
+      if (!proceed) return { loaded: false, canceled: true };
+    }
+    if (compat.reason === 'lower') {
+      console.warn(`Project file version(${obj.version}) is low, will try downgrade load`);
+    }
+    if (compat.unknownFeatures.length > 0) {
+      // 前向兼容：未知特性不阻断，只记录（将来可在 UI 上提示）
+      console.warn('[project] 未知特性（可能来自更新版本）:', compat.unknownFeatures.join(', '));
+    }
+    if (obj.project) {
+      state.project.bpm = obj.project.bpm ?? 120;
+      state.project.timeSignature = obj.project.timeSignature ?? [4, 4];
+      syncProjectControls();
+    }
+    if (obj.singers) {
+      trackManager.singers.length = 0;
+      // 先清后端缺失标记：下面的校验会按当前插件清单重新判定
+      for (const s of obj.singers) {
+        if (s && typeof s === 'object') delete s.backendMissing;
+      }
+      for (const s of obj.singers) {
+        const singer = trackManager.addSinger(s);
+        // Accompaniment track: load from embedded data or file path
+        if (singer.type === 'accompaniment') {
+          if (s.embeddedAudioData) {
+            await applyAccompanimentDataToSinger(singer, s.embeddedAudioData);
+          } else if (s.audioFilePath) {
+            await window.electronAPI.authorizePath(s.audioFilePath);
+            const exists = await window.electronAPI.fileExists(s.audioFilePath);
+            if (!exists) {
+              singer.audioFileMissing = true;
+            } else {
+              try {
+                const buffer = await window.electronAPI.readFileBuffer(s.audioFilePath);
+                const decoded = await decodeAudioPreserveChannels(buffer);
+                singer.audioChannels = decoded.audioChannels;
+                singer.analysisMono = null;
+                singer.audioBuffer = decoded.audioChannels[0];
+                singer.audioSampleRate = decoded.sampleRate;
+                singer.audioDuration = decoded.duration;
+                singer.audioFileMissing = false;
+              } catch (_err) {
+                singer.audioFileMissing = true;
+              }
+            }
+          }
+          continue;
+        }
+        // Singer track: existing load logic
+        if (s.embeddedSingerData) {
+          await applySingerDataToSinger(singer, s.embeddedSingerData);
+          if (s.embeddedSingerData.wavDuration) {
+            singer.wavDuration = s.embeddedSingerData.wavDuration;
+          }
+        }
+        if (s.singerFilePath && !s.embeddedSingerData) {
+          await window.electronAPI.authorizePath(s.singerFilePath);
+          const exists = await window.electronAPI.fileExists(s.singerFilePath);
+          if (!exists) {
+            singer.singerFileMissing = true;
+          } else {
+            try {
+              const buffer = await window.electronAPI.readFileBuffer(s.singerFilePath);
+              const text = new TextDecoder().decode(buffer);
+              const singerData = JSON.parse(text);
+              const validation = validateSingerData(singerData);
+              if (validation.warnings.length > 0) {
+                 console.warn('File load validation warnings:', validation.warnings);
+              }
+              if (validation.valid) {
+                await applySingerDataToSinger(singer, singerData);
+                if (singerData.wavDuration) {
+                  singer.wavDuration = singerData.wavDuration;
+                }
+                singer.singerFileMissing = false;
+              }
+            } catch (err) {
+              console.warn('Unable to restore singer file:', err);
+              singer.singerFileMissing = true;
+            }
+          }
+        }
+      }
+    }
+    // 插件后端存在性校验：插件被删掉时只标记，不阻断工程加载
+    await validatePluginBackends();
+    if (obj.fragments) {
+      trackManager.fragments.length = 0;
+      // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），
+      // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
+      for (const f of obj.fragments) trackManager.addFragment(f);
+    }
+    state.currentProjectFilePath = targetPath;
+    history.clear();
+    state.selectedFragmentId = null;
+    markClean();
+    // refreshAll will be called by the caller
+    console.log('Project loaded', targetPath);
+  } catch (err) {
+    console.error('Load failed', err);
+    showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
   }
 }
+
 
 /**
  * 生成「旧版兼容工程」（1.1.0）。
