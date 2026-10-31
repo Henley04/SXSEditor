@@ -1386,6 +1386,7 @@ if(firstAcc)firstAcc.style.maxHeight=firstAcc.scrollHeight+'px';
 /* ---------- 钢琴卷帘构建 ---------- */
 var MELODY=[{r:2,c:0,l:2},{r:4,c:2,l:2},{r:3,c:4,l:2},{r:4,c:6,l:2},{r:0,c:8,l:2},{r:1,c:10,l:2},{r:2,c:12,l:4}];
 function buildRoll(el,notes,withPlayhead){
+  if(!el)return{notes:[],ph:null};
   el.classList.add('roll');
   var out=[];
   notes.forEach(function(n){
@@ -1399,18 +1400,6 @@ function buildRoll(el,notes,withPlayhead){
   return {notes:out,ph:ph};
 }
 var heroRoll=buildRoll(document.getElementById('heroRoll'),MELODY,true);
-var featNotes=[{r:5,c:0,l:2},{r:4,c:2,l:1},{r:3,c:3,l:1},{r:2,c:4,l:2},{r:3,c:6,l:2},{r:4,c:8,l:1},{r:5,c:9,l:1},{r:4,c:10,l:2},{r:2,c:12,l:2},{r:1,c:14,l:2}];
-buildRoll(document.getElementById('featRoll'),featNotes,false);
-(function(){
-  var fr=document.getElementById('featRoll');
-  var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
-  svg.setAttribute('class','curve');svg.setAttribute('viewBox','0 0 100 100');svg.setAttribute('preserveAspectRatio','none');
-  var pl=document.createElementNS('http://www.w3.org/2000/svg','polyline');
-  pl.setAttribute('points','0,70 9,66 15,45 22,34 28,30 40,42 47,58 53,60 59,52 66,38 72,30 78,26 88,44 100,30');
-  pl.setAttribute('fill','none');pl.setAttribute('stroke','var(--yellow)');pl.setAttribute('stroke-width','2');
-  pl.setAttribute('vector-effect','non-scaling-stroke');pl.setAttribute('stroke-linecap','round');pl.setAttribute('stroke-linejoin','round');
-  svg.appendChild(pl);fr.appendChild(svg);
-})();
 
 /* ---------- 音频试听（洛天依示例音频） ---------- */
 var AC=null,master=null,analyser=null,srcNode=null,freqData=null,timeData=null,playing=false;
