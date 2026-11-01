@@ -38,7 +38,7 @@ import {
   getEnvelopes,
   getTrackBackend,
 } from './state.js';
-import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
+import { getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render } from './canvasRenderer.js';
 import { firstNoteStart } from '../shared/activeNotes.js';
 import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
@@ -857,6 +857,17 @@ function _hashArrayFNV(arr) {
  * 用于判断 fragmentAudioData 是否可复用，避免重复 IPC 合成调用。
  * 注意：签名不包含 playStartPosition — 起始位置变化不影响音频内容。
  */
+/**
+ * 下发给管线的音高来源。
+ *
+ * score 时 pitchCurveF0 已经是 null（buildPitchCurveF0Data 里直接返回），
+ * 这里再带一个显式标记 —— 否则管线分不清"没有曲线"和"要 score"，
+ * 会把 note.pitch 填成逐音符恒定的平直 F0 再喂给模型。
+ */
+function currentPitchControl() {
+  return isScorePitchMode() ? 'score' : 'manual';
+}
+
 export function computeFragmentAudioSignature() {
   const notes = getClippedNotes();
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
@@ -915,7 +926,11 @@ export function computeFragmentAudioSignature() {
     refHash = _hashArrayFNV(refBytes);
   }
 
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}`;
+  // 音高来源也必须进签名：manual 空曲线（平直 F0）与 score（f0 条件全 0）都
+  // 产出 pitchCurveF0=null、f0Hash 都是 0，只靠曲线哈希区分不出来 —— 切模式后
+  // 会命中上一模式的音频，听起来像"切换没生效"。
+  const pitchControl = currentPitchControl();
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}`;
 }
 
 export async function playFragment() {
@@ -1120,6 +1135,7 @@ export async function playFragment() {
       options: attachPluginBackend({
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0Serializable,
+        pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
@@ -1284,6 +1300,7 @@ export async function synthesizeFragmentInBackground(opts = {}) {
         background: true,
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0 || null,
+        pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
@@ -1365,6 +1382,7 @@ export async function exportFragment() {
       options: attachPluginBackend({
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0Serializable,
+        pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,

@@ -59,6 +59,7 @@ async function _runSynthesisUnlocked(params) {
         sampler = 'euler',
         cfgScheduleOpts = null,
         dynamicThresholdOpts = null,
+        scoreMode = false,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -93,7 +94,7 @@ async function _runSynthesisUnlocked(params) {
     if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
     const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
-        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq,
+        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq, scoreMode,
     });
 
     // ===== Stage 2: Diffusion Loop =====

@@ -13,6 +13,7 @@ import {
   findNoteAtBeat as findNoteAtBeatShared,
 } from '../shared/autoPitchCurve.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { resolvePitchMode } from '../shared/pitchControl.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
 import { applyGlideOwnership } from '../shared/postprocessCurves.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
@@ -40,6 +41,7 @@ import {
   getSelectedNoteIds,
   getSelectedAnchorIndices,
   getPitchCurve,
+  getPitchMode,
   getPitchDragAnchorIdx,
   getCurrentBrushStroke,
   getIsBoxSelecting,
@@ -538,11 +540,34 @@ export function getClippedNotes() {
  *   后处理链的结果已由 ppHash（曲线序列化）单独覆盖，无需在 400ms 轮询里
  *   反复跑整条滤波（长分片实测每次 7–15ms）。
  */
+/**
+ * 该分片是否含"有信息量"的音高曲线内容。
+ *
+ * 与 buildPitchCurveF0Data() 里那条 `!hasCustom && !smoothingActive && !autoOn`
+ * 必须等价 —— 这条判断同时决定"发不发曲线"和"是不是 score 模式"，
+ * 两处分叉会让编辑器与主窗口对同一个分片给出不同结论。
+ */
+export function hasPitchCurveContent() {
+  const pitchCurve = normalizePitchCurve(getPitchCurve());
+  if (pitchCurve.enabled === false) return true; // 显式关掉 = 用户的选择，按 manual 平直处理
+  if (isPitchCurveCustomized()) return true;
+  if (pitchCurve.auto && pitchCurve.auto.enabled) return true;
+  return hasF0PostprocessEffect();
+}
+
+/** 本次合成是否走 score（不向模型提供 F0 条件）。 */
+export function isScorePitchMode() {
+  return resolvePitchMode(getPitchMode(), hasPitchCurveContent()) === 'score';
+}
+
 export function buildPitchCurveF0Data(options = {}) {
   const applyPostprocess = options.postprocess !== false;
   const pitchCurve = getPitchCurve();
   const notes = getNotes();
   if (!pitchCurve.enabled || notes.length === 0) return null;
+  // score 模式：曲线不参与条件，交给 diffusion 自己生成 F0。
+  // 返回 null 让管线走 score 分支（f0Ids 全 0），而不是被预处理填成平直。
+  if (isScorePitchMode()) return null;
 
   const pcNorm = normalizePitchCurve(pitchCurve);
   const autoOn = !!(pcNorm.auto && pcNorm.auto.enabled);
@@ -3029,7 +3054,7 @@ function _doRenderImpl(w, h) {
   // Draw kanji group brackets and labels above kana notes
   _drawKanjiGroups(ctx, c);
 
-  if (currentParamMode === 'Pitch') {
+  if (currentParamMode === 'Pitch' && !isScorePitchMode()) {
     renderPitchCurve(c);
   }
 

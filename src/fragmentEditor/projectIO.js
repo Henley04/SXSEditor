@@ -3,6 +3,7 @@ import {
   getNotes,
   getEnvelopes,
   getPitchCurve,
+  getPitchMode,
   getKanjiGroups,
   getPostprocess,
   getAutoSaveTimer, setAutoSaveTimer,
@@ -29,9 +30,11 @@ export async function saveFragmentData() {
     const pitchCurve = getPitchCurve();
     const kanjiGroups = getKanjiGroups();
     const postprocess = getPostprocess();
+    const pitchMode = getPitchMode();
     currentFragment.notes = notes;
     currentFragment.envelopes = envelopes;
     currentFragment.pitchCurve = pitchCurve;
+    currentFragment.pitchMode = pitchMode;
     currentFragment.kanjiGroups = kanjiGroups;
     currentFragment.postprocess = postprocess;
     if (window.electronAPI?.saveFragmentData) {
@@ -42,6 +45,7 @@ export async function saveFragmentData() {
           notes,
           envelopes,
           pitchCurve,
+          pitchMode,
           kanjiGroups,
           postprocess,
           startTime: currentFragment.startTime,

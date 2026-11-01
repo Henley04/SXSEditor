@@ -7,6 +7,7 @@ import {
   // 自然度自检需要 BPM（缺这个 import 会让自检面板静默不工作）
   getCurrentProject,
   getPitchCurve,
+  getPitchMode, setPitchMode,
   getFragmentIsSynthesizing,
   getFragmentIsPlaying,
   getFragmentIsAutoInferring,
@@ -41,6 +42,7 @@ import {
   applyPitchCurveSnapshot, genNoteId,
   // 自然度自检要采样**实际**曲线（含自动层/手动覆盖/颤音）
   getPitchAtTime, getClippedNotes,
+  isScorePitchMode,
 } from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
 import { exportFragmentMidi } from './midiExport.js';
@@ -48,6 +50,12 @@ import { exportFragmentMidi } from './midiExport.js';
 
 export function updateParamModeButtons() {
   const modes = ['MIDI', 'Pitch'];
+  // score 模式下曲线不参与条件，Pitch 视图既画不出东西也不该能编辑：
+  // 强行留在 Pitch 会让人以为手绘的线还有效，实际全被丢掉。
+  const scoreMode = isScorePitchMode();
+  if (scoreMode && getCurrentParamMode() === 'Pitch') {
+    setCurrentParamMode('MIDI');
+  }
   const currentParamMode = getCurrentParamMode();
   modes.forEach(mode => {
     const btn = document.getElementById(`btn-param-${mode}`);
@@ -61,19 +69,47 @@ export function updateParamModeButtons() {
     }
   });
 
+  const pitchBtn = document.getElementById('btn-param-Pitch');
+  if (pitchBtn) {
+    pitchBtn.disabled = scoreMode;
+    pitchBtn.classList.toggle('disabled-mode', scoreMode);
+    pitchBtn.setAttribute('aria-disabled', scoreMode ? 'true' : 'false');
+    pitchBtn.title = scoreMode ? t('fragment.pitchLockedInScore') : '2';
+  }
+
   // 音高工具原先挂在工具栏上，Pitch 模式一开就把工具栏挤爆；现在整组挪进
   // inspector 的独立分区，这里是它的显隐开关（hidden 属性比 inline display 干净）。
   const pitchSection = document.getElementById('pitch-curve-section');
   const pitchCurve = getPitchCurve();
-  if (currentParamMode === 'Pitch') {
+  if (currentParamMode === 'Pitch' && !scoreMode) {
     if (!pitchCurve.enabled) {
       pitchCurve.enabled = true;
       scheduleAutoSave();
     }
   }
-  if (pitchSection) pitchSection.hidden = currentParamMode !== 'Pitch';
+  if (pitchSection) pitchSection.hidden = currentParamMode !== 'Pitch' || scoreMode;
 
   updatePitchToolButtons();
+  updatePitchModeButtons();
+}
+
+/**
+ * 刷新 Manual / Score 切换按钮的高亮。
+ *
+ * 高亮的是**生效**模式，而不是 pitchMode 字段：字段为 auto 时按曲线内容判定，
+ * 所以"新建分片没画过任何东西"显示的是 Score，这与实际下发给管线的一致。
+ */
+export function updatePitchModeButtons() {
+  const effective = isScorePitchMode() ? 'score' : 'manual';
+  for (const mode of ['manual', 'score']) {
+    const btn = document.getElementById(`btn-pitch-mode-${mode}`);
+    if (!btn) continue;
+    const active = mode === effective;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+  const group = document.getElementById('pitch-mode-group');
+  if (group) group.dataset.mode = effective;
 }
 
 export function updateParamPanelState() {
@@ -154,6 +190,9 @@ export function setupUiControls() {
     const btn = document.getElementById(`btn-param-${mode}`);
     if (btn) {
       btn.addEventListener('click', () => {
+        // score 模式下 Pitch 是禁用的：曲线不参与条件，切过去只会显示一条
+        // 不生效的线。按钮 disabled 已挡住鼠标，这里兜住键盘与脚本触发。
+        if (mode === 'Pitch' && isScorePitchMode()) return;
         setCurrentParamMode(mode);
         updateParamModeButtons();
         updateParamPanelState();
@@ -161,6 +200,22 @@ export function setupUiControls() {
       });
     }
   });
+
+  // Pitch 来源切换：Manual（跟随曲线）/ Score（交给模型生成）
+  ['manual', 'score'].forEach(mode => {
+    const btn = document.getElementById(`btn-pitch-mode-${mode}`);
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (getPitchMode() === mode) return;
+      setPitchMode(mode);
+      scheduleAutoSave();
+      updateParamModeButtons();
+      updateParamPanelState();
+      resizeCanvases();
+      render();
+    });
+  });
+  updatePitchModeButtons();
 
   // Param panel toggle button
   const btnToggle = document.getElementById('btn-param-toggle');

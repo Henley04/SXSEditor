@@ -31,6 +31,7 @@ import {
   getAutoSaveTimer, setAutoSaveTimer,
   setEnvelopes,
   setPitchCurve,
+  setPitchMode,
   setCurrentFragment,
   setCurrentProject,
   setTrackBackend,
@@ -238,6 +239,9 @@ async function handleFragmentData(data) {
     // 极旧工程没有 pitchCurve 字段：按"无自动曲线"处理，保持听感不变
     setPitchCurve(normalizePitchCurve(null));
   }
+  // 音高来源：缺省 = auto（按曲线内容判定），旧工程因此会落到"什么都没设
+  // → score"，这正是想要的行为；显式选过 manual/score 的则原样恢复。
+  setPitchMode(data.fragment.pitchMode);
   invalidatePitchCurveCache();
   // 通知 UI 刷新自动曲线控件（开关/预设/参数面板）
   try { document.dispatchEvent(new CustomEvent('sxse:fragment-loaded')); } catch (_e) { /* 非 DOM 环境忽略 */ }

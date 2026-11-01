@@ -18,7 +18,7 @@ import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trim
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @returns {{ combinedCond: Float32Array, totalCondFrames: number, totalFramesWithPrompt: number }}
  */
-export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null }) {
+export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null, scoreMode = false }) {
     await ensureOrt();
     const ort = getOrt();
 
@@ -42,8 +42,12 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
             pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
             typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
         }
-        for (let i = 0; i < ptFrameCount; i++) {
-            f0IdsArr[i] = BigInt(promptSeq.f0Ids[i]);
+        if (!scoreMode) {
+            // score 模式下 prompt 侧 f0 同样置 0 —— 官方 control="score" 把
+            // gt_f0 / pt_f0 一起 zeros_like，参考音频的音高不参与条件。
+            for (let i = 0; i < ptFrameCount; i++) {
+                f0IdsArr[i] = BigInt(promptSeq.f0Ids[i]);
+            }
         }
     }
     for (let i = 0; i < tokenCount; i++) {
@@ -51,8 +55,10 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
         pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
         typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
     }
-    for (let i = 0; i < totalFrames; i++) {
-        f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+    if (!scoreMode) {
+        for (let i = 0; i < totalFrames; i++) {
+            f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+        }
     }
     const tEncPrep = performance.now();
 

@@ -38,6 +38,9 @@ let currentProject = null;
 // 为 null 表示分片数据还没到（此时一律按内置轨道处理）。
 let trackBackend = null;
 let currentParamMode = PARAM_MODES.MIDI;
+// 音高来源：'auto'（未选择，按曲线内容判定）/ 'manual' / 'score'。
+// 与 fragment.pitchMode 同步；'auto' 时不写回工程（保持字段缺省的语义）。
+let pitchMode = 'auto';
 let notes = [];
 // Snap grid for the fragmentEditor piano roll, in beats per grid cell.
 // 1/4 = quarter note, 1/8 = eighth, 1/16 = sixteenth, 1/32 = thirty-second.
@@ -253,6 +256,11 @@ export function setEnvelopes(v) { envelopes = v; }
 
 export function getPitchCurve() { return pitchCurve; }
 export function setPitchCurve(v) { pitchCurve = v; }
+
+export function getPitchMode() { return pitchMode; }
+export function setPitchMode(v) {
+    pitchMode = (v === 'manual' || v === 'score') ? v : 'auto';
+}
 
 export function getAutoSaveTimer() { return autoSaveTimer; }
 export function setAutoSaveTimer(v) { autoSaveTimer = v; }

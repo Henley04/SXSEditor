@@ -6,6 +6,7 @@ import { applyF0Postprocess, medianFilterFrames, savitzkyGolayFilter } from '../
 // 这里保留 autoCurve 的 import 仅供 @internal 的 computePitchCurveF0 使用。
 import { buildEffectiveValues, evalSortedCurve } from '../fragmentEditor/automationCurve.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { fragmentPitchMode, PITCH_MODE_SCORE } from '../shared/pitchControl.js';
 import {
   createPitchResolver,
   applyExpressionToF0,
@@ -25,6 +26,9 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   const pc = normalizePitchCurve(fragment.pitchCurve);
   if (!pc.enabled) return null;
   if (!clippedNotes || clippedNotes.length === 0) return null;
+  // score 模式不产出曲线：主窗口必须和分片编辑器给出同一个结论，否则
+  // "编辑器里听着是 Score、主页播放却按平直曲线唱"。
+  if (fragmentPitchMode(fragment, hasF0PostprocessEffect) === PITCH_MODE_SCORE) return null;
 
   const sortedNotes = clippedNotes
     .slice()

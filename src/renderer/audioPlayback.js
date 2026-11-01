@@ -1,12 +1,13 @@
 import { state, dom, trackManager } from './state.js';
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
-import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
+import { buildMelPostprocessPayload, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
 import { t } from '../i18n/index.js';
 import { TRANSPORT, getTransportState, setTransport, setTransportProgress, clearTransportStatus } from './transport.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
+import { fragmentPitchMode } from '../shared/pitchControl.js';
 // F2/F3：主窗口参与合成的音符集合必须与分片编辑器同一套（过滤未激活重叠 + 排序）。
 import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes.js';
 import { formatTime } from './uiControls.js';
@@ -564,6 +565,7 @@ export async function playAll() {
           options: attachPluginBackend({
             f0Envelope: null,
             pitchCurveF0,
+            pitchControl: fragmentPitchMode(fragment, hasF0PostprocessEffect),
             refAudioWavBuffer: singer?.wavBuffer || null,
             refMidiNotes: singer?.midiNotes || null,
             refF0Data: singer?.f0Data || null,
@@ -901,6 +903,7 @@ export async function playAll() {
           options: attachPluginBackend({
             f0Envelope: null,
             pitchCurveF0,
+            pitchControl: fragmentPitchMode(fragment, hasF0PostprocessEffect),
             refAudioWavBuffer: singer?.wavBuffer || null,
             refMidiNotes: singer?.midiNotes || null,
             refF0Data: singer?.f0Data || null,
@@ -1787,6 +1790,7 @@ export async function runExportJob(opts) {
           refF0Data: singer?.f0Data || null,
           singerId: singer?.id || null,
           pitchCurveF0,
+          pitchControl: fragmentPitchMode(fragment, hasF0PostprocessEffect),
           autoShift,
           smartSegmentation,
           nSteps,

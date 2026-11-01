@@ -7,6 +7,7 @@ import { showAlertDialog } from '../alertDialog.js';
 import { injectTokens } from '../themes/themeInit.js';
 import { refreshTransportLabels } from './transport.js';
 import { normalizePostprocessState } from '../shared/postprocessCurves.js';
+import { normalizePitchMode } from '../shared/pitchControl.js';
 
 // int8 旧版 diff_step 模型不兼容弹窗（主进程在 svs:init 时检测并推送一次）
 if (window.electronAPI?.onSVSDiffStepIncompatible) {
@@ -78,12 +79,15 @@ if (window.electronAPI?.onSingerUpdated) {
 // Fragment saved IPC handler
 if (window.electronAPI?.onFragmentSaved) {
   const cleanup = window.electronAPI.onFragmentSaved((data) => {
-    const { fragmentId, notes, envelopes, pitchCurve, kanjiGroups, postprocess, startTime, duration } = data;
+    const { fragmentId, notes, envelopes, pitchCurve, pitchMode, kanjiGroups, postprocess, startTime, duration } = data;
     const fragment = trackManager.getFragments().find(f => f.id === fragmentId);
     if (fragment) {
       if (notes) fragment.notes = notes;
       if (envelopes) fragment.envelopes = envelopes;
       if (pitchCurve) fragment.pitchCurve = pitchCurve;
+      // 音高来源：undefined 表示老版本编辑器没带这个字段，不能覆盖成 auto，
+      // 否则用户显式选的 manual/score 会在一次自动保存后被抹掉。
+      if (pitchMode !== undefined) fragment.pitchMode = normalizePitchMode(pitchMode);
       if (kanjiGroups) fragment.kanjiGroups = kanjiGroups;
       // 音色 / 后处理曲线（F0 平滑、频谱后处理）：随分片保存，主窗口只做透传持久化。
       // 归一化后再存：手改工程或跨版本字段越界时，越界值不会随保存回填进工程

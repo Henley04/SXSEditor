@@ -12,6 +12,7 @@
  */
 
 import { createDefaultPitchCurve, normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { normalizePitchMode } from '../shared/pitchControl.js';
 
 /** 内置后端（缺省）。每次返回新对象，避免调用方共享引用后互相污染。 */
 export function createBuiltinBackend() {
@@ -145,6 +146,10 @@ function createFragment(data = {}) {
     // 默认值，又保留未来新增的未知字段（否则下一版加字段又会重演 F2 的静默丢失）。
     // 有 pitchCurve 字段 = 来自工程/更新（缺 auto 即关闭）；没有 = 新建分片（自动开启）。
     pitchCurve: data.pitchCurve ? normalizePitchCurve(data.pitchCurve) : createPitchCurve(),
+    // 音高来源：'auto'（未选择，按内容判定）/ 'manual' / 'score'。
+    // 同样是白名单字段 —— 漏登记会让用户的选择在"存盘 → 重新打开"后丢失，
+    // 退回 auto，于是"显式 manual 的空曲线"会被判成 score 而变声。
+    pitchMode: normalizePitchMode(data.pitchMode),
     // 汉字分组与音色/后处理曲线都是分片的持久化字段：createFragment 是显式
     // 白名单对象，漏登记的字段会在工程 load→addFragment 时被静默丢弃
     // （postprocess 丢失后编辑器回退全默认，首次自动保存还会把默认值写回）。

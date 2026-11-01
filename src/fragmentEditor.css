@@ -100,6 +100,22 @@
 }
 #toolbar .param-group { gap: 3px; }
 
+/* 音高来源：Manual（跟随曲线）/ Score（交给模型生成 F0）。
+   两个按钮合计约 120px，1000px 默认窗口下工具栏仍留有余量。 */
+#toolbar .pitch-mode-group { gap: 3px; }
+#toolbar .btn-pitch-mode {
+  padding: 3px 8px;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  min-width: 54px;
+}
+#toolbar .btn-pitch-mode.active {
+  background: var(--bg-button-primary);
+  color: var(--fg-on-accent);
+  border-color: var(--accent-pressed);
+}
+
 /* ---------- 音高曲线工具（inspector 分区内） ----------
    原先这组控件挂在工具栏上：Pitch 模式一开就多出 8 个控件、合计约 500px，
    而窗口默认 1000px，装不下只能压扁或折行。挪进右侧后改为竖排，

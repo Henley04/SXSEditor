@@ -176,17 +176,50 @@ Float32Array PCM audio (24kHz model rate, output upsampled to 48kHz)</code></pre
       <p data-lang="en"><code>preprocessing.js</code> builds the frame-level inputs consumed by the encoders:</p>
       <p data-lang="zh"><code>preprocessing.js</code> 构建编码器消费的帧级输入：</p>
       <ul>
-        <li><span data-lang="en"><strong>F0 frame sequence</strong> — <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>. MIDI note → frequency via <code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>. Frame count = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>. Optional <code>f0Envelope</code> (pitch-bend keyframes) and <code>pitchCurveF0</code> (per-frame F0 override) are applied.</span><span data-lang="zh"><strong>F0 帧序列</strong>— <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>。MIDI 音符 → 频率：<code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>。帧数 = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>。可选的 <code>f0Envelope</code>（音高弯曲关键帧）与 <code>pitchCurveF0</code>（逐帧 F0 覆盖）会被应用。</span></li>
+        <li><span data-lang="en"><strong>F0 frame sequence</strong> — <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>. MIDI note → frequency via <code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>. Frame count = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>. Optional <code>f0Envelope</code> (pitch-bend keyframes) and <code>pitchCurveF0</code> (per-frame F0 override) are applied. With neither, every note gets a <em>constant</em> frequency — see the pitch-control note below.</span><span data-lang="zh"><strong>F0 帧序列</strong>— <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>。MIDI 音符 → 频率：<code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>。帧数 = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>。可选的 <code>f0Envelope</code>（音高弯曲关键帧）与 <code>pitchCurveF0</code>（逐帧 F0 覆盖）会被应用；两者都没有时每个音符拿到的是<em>恒定</em>频率——见下面的音高来源说明。</span></li>
         <li><span data-lang="en"><strong>F0 quantization</strong> — continuous F0 (Hz) → <code>F0_BIN=361</code> bins, anchored at <code>F0_MIN=32.703Hz</code>, for the <code>f0_encoder.onnx</code> lookup table.</span><span data-lang="zh"><strong>F0 量化</strong>— 连续 F0（Hz）→ <code>F0_BIN=361</code> 个 bin，锚点 <code>F0_MIN=32.703Hz</code>，供 <code>f0_encoder.onnx</code> 查表。</span></li>
         <li><span data-lang="en"><strong>mel2token</strong> — maps each mel frame to the phoneme that owns it, derived from the duration allocation above.</span><span data-lang="zh"><strong>mel2token</strong>— 将每个 mel 帧映射到其所属音素，由上面的时长分配得到。</span></li>
         <li><span data-lang="en"><strong>Note type ids</strong> — <code>rest</code> / <code>vocal</code> / <code>slur</code> classification, fed to <code>note_type_encoder.onnx</code>.</span><span data-lang="zh"><strong>音符类型 id</strong>— <code>rest</code> / <code>vocal</code> / <code>slur</code> 分类，送入 <code>note_type_encoder.onnx</code>。</span></li>
         <li><span data-lang="en"><strong>Continuation normalization</strong> — both lyric editors accept the ASCII hyphen <code>-</code>. On save it is normalized to <code>lyric: ''</code>, <code>noteType: 3</code>, <code>isContinuation: true</code>, and <code>isSlur: true</code>. Rendering converts that internal state back to <code>-</code>. Inference must test continuation flags before treating an empty lyric as <code>&lt;SP&gt;</code>.</span><span data-lang="zh"><strong>连音规范化</strong>——两个歌词编辑器都接受半角连字符 <code>-</code>。保存时规范化为 <code>lyric: ''</code>、<code>noteType: 3</code>、<code>isContinuation: true</code> 和 <code>isSlur: true</code>；渲染时再显示为 <code>-</code>。推理必须先判断连音标记，再把空歌词判断为 <code>&lt;SP&gt;</code>。</span></li>
       </ul>
 
+      <h3 id="pitch-control">
+        <span data-lang="en">Pitch control: melody vs. score</span>
+        <span data-lang="zh">音高来源：melody 与 score</span>
+      </h3>
+      <p data-lang="en">The upstream model exposes two mutually exclusive control modes, and they are not symmetric:</p>
+      <p data-lang="zh">上游模型提供两种互斥的控制模式，二者并不对称：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Mode</span><span data-lang="zh">模式</span></th>
+            <th><span data-lang="en">note_pitch</span><span data-lang="zh">note_pitch</span></th>
+            <th><span data-lang="en">f0 condition</span><span data-lang="zh">f0 条件</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>melody</code></td>
+            <td><span data-lang="en">zeros</span><span data-lang="zh">全 0</span></td>
+            <td><span data-lang="en">reference / supplied curve</span><span data-lang="zh">参考或给定的曲线</span></td>
+          </tr>
+          <tr>
+            <td><code>score</code></td>
+            <td><span data-lang="en">real MIDI pitches</span><span data-lang="zh">真实 MIDI 音高</span></td>
+            <td><span data-lang="en">zeros (bin 0, unvoiced)</span><span data-lang="zh">全 0（bin 0，unvoiced）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">In <code>score</code> mode the f0 encoder sees an all-unvoiced condition, so the diffusion model generates the contour itself — attacks, note transitions and vibrato all come from the model. The pipeline must therefore distinguish "no curve" from "leave f0 to the model": feeding a flat MIDI-traced curve is neither mode and sits outside the training distribution. <code>runEncoder(..., scoreMode)</code> zeroes <code>f0Ids</code> in the encoder input only; the real <code>f0Hz</code> sequence is kept for the SiFiGAN vocoder and for chunk-boundary selection.</p>
+      <p data-lang="zh">在 <code>score</code> 模式下 f0 编码器看到的是整条 unvoiced 条件，音高轮廓由扩散模型自己生成——起音、换音过渡、颤音都来自模型。因此管线必须区分"没有曲线"和"把 F0 交给模型"：按 MIDI 填一条平直曲线既不是 melody 也不是 score，落在训练分布之外。<code>runEncoder(..., scoreMode)</code> 只把编码器输入里的 <code>f0Ids</code> 清零；真实的 <code>f0Hz</code> 序列仍保留给 SiFiGAN vocoder 与分块边界选择使用。</p>
+      <p data-lang="en">Mode selection lives on the fragment (<code>pitchMode: 'auto' | 'manual' | 'score'</code>, see <code>src/shared/pitchControl.js</code>). <code>auto</code> resolves by content: any curve material → <code>manual</code>, nothing at all → <code>score</code>. Both the cache key and the renderer signature include the resolved mode, because <code>manual</code> with an empty curve and <code>score</code> both ship <code>pitchCurveF0 = null</code> and would otherwise collide.</p>
+      <p data-lang="zh">模式选择存在分片上（<code>pitchMode: 'auto' | 'manual' | 'score'</code>，见 <code>src/shared/pitchControl.js</code>）。<code>auto</code> 按内容判定：有任何曲线素材 → <code>manual</code>，什么都没有 → <code>score</code>。缓存键与渲染层签名都会带上解析后的模式，因为"manual 空曲线"和"score"都下发 <code>pitchCurveF0 = null</code>，不加区分会互相命中。</p>
+
       <h2>
         <span data-lang="en">Stage 4 — Encoders</span>
         <span data-lang="zh">第 4 阶段 — 编码器</span>
       </h2>
+
       <p data-lang="en">Five encoder models run in parallel to produce the conditioning tensor <code>cond</code> of dimension <code>COND_DIM=1024</code>:</p>
       <p data-lang="zh">五个编码器模型并行运行，生成维度为 <code>COND_DIM=1024</code> 的条件张量 <code>cond</code>：</p>
       <table class="doc-table">

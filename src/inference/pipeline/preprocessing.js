@@ -832,7 +832,7 @@ class Preprocessing {
     /**
      * Run all encoders and produce the combined condition embedding
      */
-    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false) {
+    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false, scoreMode = false) {
         const phonemeIds = new BigInt64Array(tokenCount);
         const pitchIds = new BigInt64Array(tokenCount);
         const typeIds = new BigInt64Array(tokenCount);
@@ -843,8 +843,17 @@ class Preprocessing {
             pitchIds[i] = BigInt(sequences.notePitchSeq[i]);
             typeIds[i] = BigInt(sequences.noteTypeSeq[i]);
         }
-        for (let i = 0; i < totalFrames; i++) {
-            f0IdsArr[i] = BigInt(sequences.f0Ids[i]);
+        if (scoreMode) {
+            // score 模式：f0 条件整条置 0（bin 0 = unvoiced），与官方
+            // SoulXSinger.infer(control="score") 中 gt_f0/pt_f0 被 zeros_like
+            // 覆盖后的结果逐位一致。音高只由 note_pitch_encoder 提供，F0 曲线
+            // 交给 diffusion 自己生成。注意序列里的 f0Hz（真实频率）不能清 ——
+            // SiFiGAN vocoder 与分块边界选择都还要用它。
+            f0IdsArr.fill(0n);
+        } else {
+            for (let i = 0; i < totalFrames; i++) {
+                f0IdsArr[i] = BigInt(sequences.f0Ids[i]);
+            }
         }
 
         const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;

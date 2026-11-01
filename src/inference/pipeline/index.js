@@ -2187,7 +2187,7 @@ class OnnxSVSPipeline {
     }
 
     async _runEncoder(sequences, tokenCount, totalFrames, ptFrameCount = 0) {
-        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes);
+        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes, this._pitchControlMode === 'score');
     }
 
     async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
@@ -2858,6 +2858,7 @@ class OnnxSVSPipeline {
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
+                scoreMode: this._pitchControlMode === 'score',
             }, webnnOnProgress);
             // Forward WebNN warnings (e.g. NPU static shape truncation)
             if (result.warnings && result.warnings.length > 0) {
@@ -3169,6 +3170,7 @@ class OnnxSVSPipeline {
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
                 dynamicThresholdOpts: this._currentDynamicThresholdOpts,
+                scoreMode: this._pitchControlMode === 'score',
             },
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
@@ -3177,6 +3179,7 @@ class OnnxSVSPipeline {
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
                 dynamicThresholdOpts: this._currentDynamicThresholdOpts,
+                scoreMode: this._pitchControlMode === 'score',
             },
         ], webnnOnProgress);
         const ms = performance.now() - t0;
@@ -3313,6 +3316,8 @@ class OnnxSVSPipeline {
         this._currentF0Hz = null;
         // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
         this._currentPitchCurveF0 = null;
+        // 逐 region 覆盖，这里先回到 manual，避免 regions 为空时沿用上一轮的 score
+        this._pitchControlMode = 'manual';
         const onProgress = options.onProgress || (() => {});
         const onChunkAudio = options.onChunkAudio || null;
         const abortSignal = options.abortSignal || null;
@@ -3452,7 +3457,11 @@ class OnnxSVSPipeline {
             const autoShift = fragOpts.autoShift || false;
             const pitchShift = fragOpts.pitchShift || 0;
             const refAudioWavBuffer = fragOpts.refAudioWavBuffer || null;
-            const pitchCurveF0 = fragOpts.pitchCurveF0 || null;
+            // 逐分片设置：本分片自己的 control 模式。多分片是 prepare→扩散两阶段，
+            // prepare 阶段按 frag 顺序同步执行并立刻跑 encoder，所以这里用实例字段
+            // 传下去是安全的（扩散阶段不再读它）。
+            this._pitchControlMode = fragOpts.pitchControl === 'score' ? 'score' : 'manual';
+            const pitchCurveF0 = this._pitchControlMode === 'score' ? null : (fragOpts.pitchCurveF0 || null);
             const f0Envelope = fragOpts.f0Envelope || null;
 
             const targetNotePitches = [];
@@ -4051,7 +4060,11 @@ class OnnxSVSPipeline {
         const abortSignal = options.abortSignal || null;
         throwIfCancelled(abortSignal);
         const f0Envelope = options.f0Envelope || null;
-        const pitchCurveF0 = options.pitchCurveF0 || null;
+        // score = 不给 f0 条件，音高只由 note_pitch 提供（官方 control="score"）。
+        // 每次入口都显式赋值（而不是只在 score 时写），否则上一段的 score 会残留
+        // 到下一条请求上，把 manual 分片静默唱成"无 F0"。
+        this._pitchControlMode = options.pitchControl === 'score' ? 'score' : 'manual';
+        const pitchCurveF0 = this._pitchControlMode === 'score' ? null : (options.pitchCurveF0 || null);
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
         const cfgStrength = options.cfg !== undefined ? options.cfg : CFG_STRENGTH;

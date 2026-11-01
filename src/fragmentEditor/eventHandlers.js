@@ -96,6 +96,7 @@ import {
   // 拖动自动曲线 → 派生副本（上一轮漏了这两个 import：点到自动曲线会抛
   // ReferenceError 而不是派生，功能等于不可用。eslint no-undef 抓到了）
   hitAutoCurveAt, createBakedSegmentAt,
+  isScorePitchMode,
 } from './canvasRenderer.js';
 import { computeMultiDragResult, findAdjacentBoundary, notesInRange } from './notesIndex.js';
 import {
@@ -3262,6 +3263,8 @@ export function setupEventListeners() {
       return;
     }
     if (e.key === '2') {
+      // score 模式下 Pitch 视图无意义（曲线不参与条件），快捷键同样不让切
+      if (isScorePitchMode()) return;
       setCurrentParamMode('Pitch');
       setParamPanelCollapsed(true);
       updateParamModeButtons();

@@ -370,6 +370,21 @@
       <p data-lang="zh">音高曲线的锚点存的是<strong>绝对 MIDI 音高</strong>：曲线覆盖到的帧直接采用该音高，<em>不是</em>在音符音高上叠加偏移。在手动范围内，首个/末个锚点之外的时间会<strong>保持</strong>首/末锚点的值（不再跳回音符音高——旧行为会在尾部造成最多 12 半音的突变）。手动范围之外由<a href="#auto-pitch-curve">自动层</a>接管。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
       <p data-lang="en">Switch to Pitch mode by pressing <kbd class="kbd">2</kbd> or clicking the <strong>Pitch</strong> button in the toolbar.</p>
       <p data-lang="zh">按 <kbd class="kbd">2</kbd> 或点击工具栏的 <strong>Pitch</strong> 按钮切换到音高模式。</p>
+
+      <h3 id="pitch-mode">
+        <span data-lang="en">Manual vs. Score</span>
+        <span data-lang="zh">Manual 与 Score</span>
+      </h3>
+      <p data-lang="en">The <strong>Manual / Score</strong> switch to the left of the MIDI/Pitch buttons decides where the pitch comes from.</p>
+      <p data-lang="zh">工具栏 MIDI / Pitch 左侧的 <strong>Manual / Score</strong> 开关决定音高从哪里来。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Manual</strong> — the synthesizer follows a pitch curve: drawn anchors, the auto layer, F0 smoothing, or (if the fragment has none of those and you picked Manual explicitly) a flat curve at the MIDI pitch of each note. Use this when you want to control the contour yourself.</span><span data-lang="zh"><strong>Manual</strong> — 按音高曲线唱：手绘锚点、自动层、F0 平滑；如果这个分片什么都没有而你仍显式选了 Manual，则按每个音符的 MIDI 音高给一条平直曲线。想自己控制音高走向时用它。</span></li>
+        <li><span data-lang="en"><strong>Score</strong> — no F0 curve is sent at all. The model receives only the MIDI notes and generates the pitch contour itself: note attacks, transitions between notes, vibrato and drift come from the model rather than from a curve. The <strong>Pitch</strong> button and the <kbd class="kbd">2</kbd> shortcut are disabled in this mode, because a curve would not be used.</span><span data-lang="zh"><strong>Score</strong> — 完全不发送 F0 曲线。模型只拿到 MIDI 音符，音高轮廓由模型自己生成：起音、换音过渡、颤音与漂移都来自模型，而不是来自曲线。此模式下 <strong>Pitch</strong> 按钮与 <kbd class="kbd">2</kbd> 快捷键置灰不可用——曲线本来就不会被使用。</span></li>
+      </ul>
+      <p data-lang="en"><strong>Default behaviour.</strong> If you never touched the switch, the fragment chooses by itself: anything with curve content (anchors, brush strokes, baked segments, the auto layer, F0 smoothing, note vibrato) is Manual; a fragment with nothing set up at all is <strong>Score</strong>. That way a fragment with no pitch work at all no longer gets a flat F0 traced from its MIDI notes — it gets the model's own phrasing. Explicitly turning the pitch curve <em>off</em> counts as a choice and stays Manual (flat), so projects that relied on that keep sounding the same. Note that a brand-new fragment has the <a href="#auto-pitch-curve">auto layer</a> switched on, so it counts as Manual from the start; clear the curve and turn Auto off and it falls back to Score.</p>
+      <p data-lang="zh"><strong>默认行为。</strong>从未碰过开关时由分片自行判断：有任何曲线内容（锚点、画笔笔触、派生段、自动层、F0 平滑、音符颤音）就是 Manual；什么都没有则为 <strong>Score</strong>。这样完全没做过音高处理的分片不会再被按 MIDI 描一条平直 F0，而是拿到模型自己的乐句处理。显式<em>关闭</em>音高曲线视为做过选择，仍按 Manual（平直）处理，依赖该行为的旧工程听感不变。注意：新建分片默认开启<a href="#auto-pitch-curve">自动层</a>，因此一开始就是 Manual；把曲线清空并关掉自动层后会回落到 Score。</p>
+      <p data-lang="en">Switching modes changes the synthesis input, so the fragment is re-synthesized on the next preview or export.</p>
+      <p data-lang="zh">切换模式会改变合成输入，下一次预览或导出会重新合成该分片。</p>
       <h3>
         <span data-lang="en">Anchor Points</span>
         <span data-lang="zh">锚点</span>
