@@ -122,24 +122,60 @@ function iconPath(name) {
   return candidates.find((p) => { try { return fs.existsSync(p); } catch (_) { return false; } }) || candidates[0];
 }
 
+/**
+ * 某个 ProgId 的打开命令是否指向当前可执行文件。
+ *
+ * 用来把"自家旧版本留下的陈旧关联"和"用户手动指定的第三方程序"区分开：
+ * 前者可以安全接管，后者必须尊重。
+ */
+async function progIdPointsToUs(progId) {
+  const cmd = await queryReg(`HKCU\\Software\\Classes\\${progId}\\shell\\open\\command`);
+  if (!cmd) return false;
+  const norm = (s) => s.replace(/"/g, '').toLowerCase().replace(/\//g, '\\');
+  return norm(cmd).includes(norm(process.execPath));
+}
+
 async function registerWindowsType(type) {
   const classes = `HKCU\\Software\\Classes`;
   const extKey = `${classes}\\${type.ext}`;
   const progKey = `${classes}\\${type.progId}`;
-
-  // 用户可能已经用"打开方式 → 始终使用"指定了别的程序。那种情况下 .ext 的
-  // 默认值不是我们的 progId，说明用户做过显式选择，不能覆盖。
-  const current = await queryReg(extKey);
-  if (current && current !== type.progId) return false;
-
   const exe = process.execPath;
-  const ok = await regAdd([extKey, '/ve', '/d', type.progId]);
+  const icon = iconPath(type.icon);
+  const hasIcon = (() => { try { return fs.existsSync(icon); } catch (_) { return false; } })();
+
+  // 1) ProgId 自身：标签 / 图标 / 打开命令。这三条无条件写 —— 即使默认关联
+  //    被别的程序占着，"打开方式"列表里也得有我们，而且得带图标。
   await regAdd([progKey, '/ve', '/d', type.label]);
-  if (fs.existsSync(iconPath(type.icon))) {
-    await regAdd([`${progKey}\\DefaultIcon`, '/ve', '/d', iconPath(type.icon)]);
+  if (hasIcon) {
+    // 末尾的 ,0 是图标索引：Windows 认这一种写法，裸路径在部分版本上取不到
+    await regAdd([`${progKey}\\DefaultIcon`, '/ve', '/d', `${icon},0`]);
   }
   await regAdd([`${progKey}\\shell\\open\\command`, '/ve', '/d', `"${exe}" "%1"`]);
-  return ok;
+
+  // 2) 扩展名的 OpenWithProgids。旧实现只在"默认值不是别人"时才写这条，
+  //    结果一旦被抢占，用户连右键"打开方式"里都找不到本程序，只能手动翻 exe。
+  await regAdd([`${extKey}\\OpenWithProgids`, '/v', type.progId, '/t', 'REG_SZ', '/d', '']);
+
+  // 3) 默认关联（决定双击行为 + 资源管理器用哪个图标）。
+  const current = await queryReg(extKey);
+  if (!current) {
+    await regAdd([extKey, '/ve', '/d', type.progId]);
+    return true;
+  }
+  if (current === type.progId) return true;
+
+  // 默认值指向别的 ProgId，分两种情况：
+  //   · 指向本程序的另一个 ProgId —— 旧版本遗留（工程扩展名早先用过
+  //     SXSEditor.sxsproj）。旧 ProgId 往往没有 DefaultIcon，资源管理器就一直
+  //     显示空白图标；而歌手扩展名是后加的、从没被旧 ProgId 占过，所以出现了
+  //     "sxssinger 有图标、sxsproj 没有"。这种情况安全接管。
+  //   · 指向第三方程序 —— 那是用户的显式选择，保留默认值，只补 OpenWithProgids。
+  const stale = await progIdPointsToUs(current);
+  if (stale) {
+    await regAdd([extKey, '/ve', '/d', type.progId]);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -157,6 +193,18 @@ async function ensureWindowsFileAssociations() {
       console.warn('[fileAssoc] register failed:', type.ext, err.message);
     }
   }
+  refreshShellIcons();
+}
+
+/**
+ * 关联改写后通知资源管理器重读图标。
+ *
+ * 只改注册表而不刷新的话，Windows 会继续用 IconCache 里的旧图标 —— 表现就是
+ * "注册表已经指到新 ico 了，文件夹里还是白纸"。ie4uinit -show 是系统自带的
+ * 刷新入口；失败无所谓，重启资源管理器同样能生效。
+ */
+function refreshShellIcons() {
+  execFile('ie4uinit.exe', ['-show'], { windowsHide: true }, () => {});
 }
 
 module.exports = {
