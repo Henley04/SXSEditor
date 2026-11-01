@@ -569,8 +569,12 @@ class TextProcessing {
      *
      * phone_set.json 只收了 1201 个中文音节（402 个基础音节），是训练语料里
      * 实际出现过的组合，并不覆盖普通话全部 400×5 个音节。例如 shui 只有
-     * 3/4 声，"谁"的 shui2 就没有。有这份索引才能在缺失时退到同一个音节的
-     * 其它声调，而不是直接 <UNK>。
+     * 3/4 声，"谁"的 shui2 就没有。这不是本项目裁剪的结果 —— 上游发布的
+     * soulxsinger/utils/phoneme/phone_set.json（2820 条）逐条比对与本文件
+     * 前 2820 条完全一致，官方词表本来就没有 shui2。
+     *
+     * 词表也不能补：ID 就是模型 embedding 的行号，插一条会让后面整体平移。
+     * 所以只能在缺失时退到同一个音节的其它声调，而不是直接 <UNK>。
      */
     _buildZhToneIndex() {
         this._zhToneIndex = new Map();

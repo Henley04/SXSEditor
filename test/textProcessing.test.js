@@ -100,6 +100,26 @@ describe('inference/pipeline/textProcessing - G2P', () => {
     describe('phoneme vocabulary gaps', () => {
       // 词表只有 1201 个中文音节，是训练语料里出现过的组合，覆盖不到全部
       // 400x5 个拼音；ü 在词表里写的是 u: 而不是 v。
+
+      it('should keep the upstream model ordering', () => {
+        // 前 2820 条与上游 soulxsinger/utils/phoneme/phone_set.json 逐条一致，
+        // 之后是 180 个 <UNUSED_*> 占位和 33 个 jp_ 音素（JP LoRA）。
+        // ID 就是模型 embedding 的行号，改顺序等于让整首歌的音素错位。
+        expect(tpEn.phone2idx['<PAD>']).to.equal(0);
+        expect(tpEn.phone2idx['<UNK>']).to.equal(3);
+        expect(tpEn.phone2idx['zh_a1']).to.equal(1609);
+        expect(tpEn.phone2idx['zh_lu:4']).to.equal(2155);
+        expect(tpEn._vocabSize).to.equal(3033);
+      });
+
+      it('should not invent syllables the model was never trained on', () => {
+        // 上游官方词表就没有 shui2（"谁"只收 shéi）。往这里塞条目会让后面
+        // 所有 ID 平移，只能靠 G2P 回退，不能补词表。
+        expect(tpEn.phone2idx['zh_shui2']).to.equal(undefined);
+        expect(tpEn.phone2idx['zh_lv4']).to.equal(undefined);
+        // zh_lu4 存在，但那是"路"；ü 走的是 zh_lu:4
+        expect(tpEn.phone2idx['zh_lu4']).to.not.equal(tpEn.phone2idx['zh_lu:4']);
+      });
       it('should spell ü as u: to match the vocabulary', () => {
         expect(tpEn.resolveLyricToPhonemes('绿')[0].name).to.equal('zh_lu:4');
         expect(tpEn.resolveLyricToPhonemes('吕')[0].name).to.equal('zh_lu:3');
