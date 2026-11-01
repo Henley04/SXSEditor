@@ -1283,7 +1283,52 @@ class OnnxSVSPipeline {
         }
 
         this.initialized = true;
+        this._logPrecisionSummary();
         return true;
+    }
+
+    /**
+     * 打印一行精度摘要，供用户对照官方实现排查"FP16 音质与官方不同"。
+     *
+     * 官方 SoulX-Singer 的 FP16 是 **CUDA 混合精度**：model.half() 之后
+     * model.mel.float()，再用 torch.autocast 包住编码器/扩散/vocoder
+     * （softmax、LayerNorm 等敏感算子自动回到 FP32）。本应用是 ONNX TrueFP16
+     * （权重与激活都是 fp16），两者数值路径不同，听感存在差异属于预期。
+     *
+     * 摘要把"实际生效"的四段精度与 Q-Drift 状态摊开，避免设置里选的是 FP16、
+     * 实际却因为加载回退跑成了别的组合（如 W16A32 的 diff_step）。
+     */
+    _logPrecisionSummary() {
+        const inputFloat = (key) => {
+            const s = this.sessions && this.sessions[key];
+            if (!s) return 'n/a';
+            try {
+                const meta = s.inputMetadata;
+                let entry = null;
+                if (Array.isArray(meta)) entry = meta[0];
+                else if (meta && typeof meta === 'object') entry = meta[Object.keys(meta)[0]];
+                const t = entry && entry.type;
+                if (typeof t === 'string') return t.includes('float16') ? 'fp16' : 'fp32';
+            } catch (_) { /* ignore */ }
+            return '?';
+        };
+        let qdrift = 'off';
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const s = loadSettings() || {};
+            const explicit = s.exportEnableQDrift;
+            const enabled = typeof explicit === 'boolean' ? explicit : s.modelPrecision === 'fp16';
+            qdrift = enabled && (s.modelPrecision === 'fp16' || s.modelPrecision === 'int8')
+                ? `${s.modelPrecision}` : 'off';
+        } catch (_) { /* 设置不可读时不猜 */ }
+        const ep = (key) => (this.sessionEPs && this.sessionEPs[key]) || '?';
+        console.log(
+            `[Precision] encoders=${inputFloat('preflow')}(${ep('preflow')}) ` +
+            `diff=${this.diffStepIsFP16 ? 'fp16' : 'fp32'}(${ep('diffStep')}) ` +
+            `vocoder=${this.vocoderIsFP16 ? 'fp16' : 'fp32'}(${ep('vocoder')}) ` +
+            `mel=${inputFloat('melTransform')}(${ep('melTransform')}) ` +
+            `qdrift=${qdrift} | official FP16 uses CUDA autocast + fp32 mel_transform`
+        );
     }
 
     /**
@@ -1887,12 +1932,29 @@ class OnnxSVSPipeline {
 
         const loadOne = async (i) => {
             const modelFile = resolvedModelFiles[i];
-            const modelPath = this._getModelPath(modelFile);
+            // mel_transform 精度覆盖：官方 FP16 推理是
+            //   model.half(); model.mel.float()
+            // 即整个网络半精度、唯独参考音频的 mel 变换保持 FP32。本应用此前的 FP16
+            // 精度会连 mel_transform 一起换成 fp16 变体，prompt 条件因此多一层量化
+            // 噪声（官方没有）。mel_transform 只有 0.25 MB、每个分片只跑一次，
+            // 用根目录的 FP32 版本换回与官方一致的 prompt，代价可以忽略。
+            let modelPath = this._getModelPath(modelFile);
+            let modelIsFP16 = this.isFP16;
+            if (sessionKeys[i] === 'melTransform' && this.isFP16 &&
+                this.baseModelDir && this.modelDir !== this.baseModelDir) {
+                const fp32MelPath = path.join(this.baseModelDir, modelFile);
+                try {
+                    if (fs.existsSync(fp32MelPath)) {
+                        modelPath = fp32MelPath;
+                        modelIsFP16 = false;
+                    }
+                } catch (_) { /* 读不到就沿用 fp16 版本 */ }
+            }
             // SiFiGAN 双输入 dummy（sessionKey 仍为 'vocoder'，通过 overrideDummyInputs 传入 mel+f0）
             const isSifigan = this._isSifiganVocoder(modelFile);
             const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;
             try {
-                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy);
+                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, modelIsFP16, this.useStaticShapes, sifiganDummy);
                 this.sessions[sessionKeys[i]] = session;
                 this.sessionEPs[sessionKeys[i]] = ep;
             } catch (loadErr) {

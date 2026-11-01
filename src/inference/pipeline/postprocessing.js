@@ -1085,6 +1085,37 @@ function _melTransformInputRank(session, inputName) {
 }
 
 /**
+ * 读取某个会话输入声明的浮点类型（'float16' | 'float32'）。
+ *
+ * 为什么不能直接用全局 isFP16：FP16 精度下 mel_transform 会被强制换成根目录的
+ * FP32 版本（对齐官方 `model.half(); model.mel.float()`，见 pipeline/index.js
+ * _loadModelsPartitioned），此时全局 isFP16=true 但该会话要的是 float32。
+ * 以会话自己的 inputMetadata 为准，两种情况都不会构造错张量。
+ *
+ * @param {Object} session
+ * @param {string} inputName
+ * @param {boolean} fallbackIsFP16 metadata 不可用时的回退（沿用全局精度）
+ * @returns {'float16'|'float32'}
+ */
+function _sessionInputFloatType(session, inputName, fallbackIsFP16) {
+    try {
+        const meta = session && session.inputMetadata;
+        let entry = null;
+        if (Array.isArray(meta)) {
+            entry = meta.find((m) => m && m.name === inputName) || null;
+        } else if (meta && typeof meta === 'object') {
+            entry = meta[inputName] || null;
+        }
+        const t = entry && entry.type;
+        if (typeof t === 'string') {
+            if (t.includes('float16')) return 'float16';
+            if (t.includes('float')) return 'float32';
+        }
+    } catch (_) { /* 元数据不可用 → 回退全局精度 */ }
+    return fallbackIsFP16 ? 'float16' : 'float32';
+}
+
+/**
  * 统计数组中的 NaN / Inf 数量。
  * @param {Float32Array} arr
  * @returns {{nan: number, inf: number}}
@@ -1191,10 +1222,11 @@ class Postprocessing {
         if (_melTransformBroken.has(melSession)) {
             throw new Error(`mel_transform session previously failed ("${_melTransformLastError}"), skipping to JS fallback`);
         }
-        const floatType = isFP16 ? 'float16' : 'float32';
         // 动态获取输入/输出名（不同导出版本名称不同）
         const melInputName = melSession.inputNames[0];   // 'waveform' | 'audio'
         const melOutputName = melSession.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
+        // 精度按会话自身的输入声明取（FP16 精度下该会话可能是根目录的 FP32 版本）
+        const floatType = _sessionInputFloatType(melSession, melInputName, isFP16);
         const inputRank = _melTransformInputRank(melSession, melInputName);
         const buildWaveform = (data) => createFloatTensor(
             floatType, data,
@@ -1964,6 +1996,7 @@ module.exports = {
     __test: {
         countNonFinite: _countNonFinite,
         melTransformInputRank: _melTransformInputRank,
+        sessionInputFloatType: _sessionInputFloatType,
         autocorrBestLag: _autocorrBestLag,
         // 抗混叠管线 / 流式共享增益：供单测直接验证增益与跨段连续性
         oversample2xAntiAlias: _oversample2xAntiAlias,

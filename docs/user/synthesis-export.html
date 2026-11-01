@@ -202,6 +202,151 @@
       <p data-lang="en">The CFG rescale coefficient mitigates over-guidance artifacts caused by high CFG strength. Recommended: 0.5–0.9. Range: 0–1.</p>
       <p data-lang="zh">CFG rescale 系数用于缓解高 CFG 强度造成的过度引导伪影。推荐：0.5–0.9。范围：0–1。</p>
 
+      <h2 id="postprocess-options">
+        <span data-lang="en">Post-Processing &amp; Quality Options</span>
+        <span data-lang="zh">后处理与音质选项</span>
+      </h2>
+      <p data-lang="en">Options that change the sound after (or during) the model run are often lumped together as "post-processing", but they act at three very different places. Knowing which stage a switch belongs to explains why some of them cannot be combined:</p>
+      <p data-lang="zh">改变"模型跑完之后"声音的选项常被统称为"后处理"，但它们其实作用在三个完全不同的位置。分清楚阶段，就能理解为什么有些开关不能同时开：</p>
+      <ol>
+        <li><span data-lang="en"><strong>Inside the diffusion loop</strong> — dynamic thresholding, CFG schedule, Q-Drift, the initial noise seed, SDEdit repair. They change what the model converges to, so they are the strongest and the most likely to conflict.</span><span data-lang="zh"><strong>扩散循环内部</strong>——动态阈值、CFG 调度、Q-Drift、初始噪声种子、SDEdit 修复。它们改变模型最终收敛到哪条轨迹，影响最大，也最容易互相冲突。</span></li>
+        <li><span data-lang="en"><strong>On the mel spectrogram, before the vocoder</strong> — the Timbre lane curves (spectral interpolation, time/freq Gaussian smoothing). They reshape the spectrum the vocoder sees.</span><span data-lang="zh"><strong>Mel 频谱上、vocoder 之前</strong>——音色 lane 的曲线（频谱插值、时频高斯平滑）。它们改变 vocoder 看到的频谱形状。</span></li>
+        <li><span data-lang="en"><strong>On the waveform, after the vocoder</strong> — vocoder chunk overlap, peak normalization, EBU R128 loudness, resampling and bit depth. They only touch level and seams, never pitch or timbre.</span><span data-lang="zh"><strong>波形上、vocoder 之后</strong>——vocoder 分块重叠、峰值归一化、EBU R128 响度、重采样与位深。它们只处理电平与接缝，不改变音高与音色。</span></li>
+      </ol>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Option</span><span data-lang="zh">选项</span></th>
+            <th><span data-lang="en">Stage</span><span data-lang="zh">阶段</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+            <th><span data-lang="en">What it does / side effect</span><span data-lang="zh">作用与副作用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Dynamic thresholding<br><span class="badge">mel percentile clip</span></span><span data-lang="zh">动态阈值截断<br><span class="badge">mel 分位截断</span></span></td>
+            <td><span data-lang="en">Diffusion, after CFG merge</span><span data-lang="zh">扩散，CFG 合并后</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+            <td><span data-lang="en">Per frame, measures the distribution of |mel|, takes the given percentile as a threshold and compresses everything above it back by the standard deviation (Imagen, arXiv:2205.11487). Suppresses the "over-exposed" sound of high CFG — spiky highs, crackle, sibilance that pops. Too low a percentile dulls consonants and kills breath.</span><span data-lang="zh">逐帧统计 |mel| 的分布，取给定分位点为阈值，把超过阈值的部分按标准差压回（Imagen, arXiv:2205.11487）。压掉高 CFG 的"过曝"——尖锐高频、爆音、齿音发炸。分位取得太低会让辅音发闷、气声消失。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Threshold percentile</span><span data-lang="zh">截断分位数</span></td>
+            <td><span data-lang="en">Diffusion</span><span data-lang="zh">扩散</span></td>
+            <td>0.995</td>
+            <td><span data-lang="en">0.900–0.999. 0.995 clips only the most extreme 0.5% of each frame; 0.99 is already audible, 0.90 sounds muffled. Try 0.99 when CFG is above 4.</span><span data-lang="zh">0.900–0.999。0.995 只压掉每帧最极端的 0.5%；0.99 已能听出变化，0.90 会明显发闷。CFG 高于 4 时可试 0.99。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">CFG schedule</span><span data-lang="zh">CFG 调度</span></td>
+            <td><span data-lang="en">Diffusion</span><span data-lang="zh">扩散</span></td>
+            <td><span data-lang="en">Constant</span><span data-lang="zh">恒定</span></td>
+            <td><span data-lang="en">Lets CFG strength drift across steps (start low → end high) instead of a fixed value. A low start leaves the model more freedom in the first, structure-forming steps; the tail re-tightens pronunciation. Overrides the fixed CFG value.</span><span data-lang="zh">让 CFG 强度在步间变化（起始低 → 结尾高），而不是恒定值。低起点给模型在最初的结构成形步更多自由，尾段再收紧发音。会覆盖固定 CFG 值。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Q-Drift correction</span><span data-lang="zh">Q-Drift 漂移校正</span></td>
+            <td><span data-lang="en">Diffusion (FP16 / INT8 only)</span><span data-lang="zh">扩散（仅 FP16 / INT8）</span></td>
+            <td><span data-lang="en">On for FP16</span><span data-lang="zh">FP16 下开启</span></td>
+            <td><span data-lang="en">Per-channel scaling of the velocity field, calibrated against FP32, to cancel the quantization error that accumulates over 32 steps. No effect on FP32. Enabling it <strong>locks</strong> the sampler to Euler @ 32 / CFG 3.0 / rescale 0.7 and disables CFG scheduling, dynamic thresholding and SDEdit. Upstream has no equivalent, so turn it off when comparing against the official FP16.</span><span data-lang="zh">按通道缩放速度场（用与 FP32 的配对校准测得的因子），抵消 32 步采样中累积的量化误差。FP32 下不生效。开启后会<strong>锁定</strong> Euler @ 32 步 / CFG 3.0 / rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit。官方没有对应实现，想和官方 FP16 对照时请关掉。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Noise seed</span><span data-lang="zh">噪声种子</span></td>
+            <td><span data-lang="en">Diffusion start</span><span data-lang="zh">扩散起点</span></td>
+            <td><span data-lang="en">Random</span><span data-lang="zh">随机</span></td>
+            <td><span data-lang="en">Diffusion starts from Gaussian noise; the seed picks <em>which</em> noise, not how much. This is not an "add noise" knob — the noise level is fixed by the model schedule. Fixing the seed makes renders reproducible (±3 dB phrase-level level variation between seeds is normal and all outputs are valid takes).</span><span data-lang="zh">扩散从高斯噪声起步，种子决定抽<em>哪一条</em>噪声，而不是噪声有多强。它<strong>不是</strong>"加噪"旋钮——噪声强度由模型调度固定。固定种子可复现合成结果（不同种子之间乐句响度有 ±3 dB 波动，都是合法演绎）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">SDEdit repair</span><span data-lang="zh">SDEdit 局部修复</span></td>
+            <td><span data-lang="en">Diffusion, after the loop</span><span data-lang="zh">扩散，循环之后</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+            <td><span data-lang="en">Finds frames that are NaN or whose energy exceeds 5× the median, re-noises them at t=0.3 and re-draws only those regions with 5 STORK-2 steps. A debugging aid: it changes timbre and phase locally, so leave it off for normal material.</span><span data-lang="zh">找出 NaN 或能量超过中位数 5 倍的帧，注入 t=0.3 的浅噪声，只用 5 步 STORK-2 重画这些片段。属于排障工具：会局部改变音色与相位，正常素材不要开。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Timbre lane curves</span><span data-lang="zh">音色 lane 曲线</span></td>
+            <td><span data-lang="en">Mel, before vocoder</span><span data-lang="zh">Mel，vocoder 前</span></td>
+            <td><span data-lang="en">All off</span><span data-lang="zh">全部关闭</span></td>
+            <td><span data-lang="en">Spectral interpolation across note/phoneme boundaries plus Gaussian smoothing along time and frequency. Removes clicks at note changes and diffusion grit; too much blurs consonants. Details in <a href="fragment-editor.html#f0-and-spectral-postprocess">Fragment Editor &gt; F0 &amp; spectral post-processing</a>.</span><span data-lang="zh">音符/音素边界处的频谱插值，以及沿时间、频率的高斯平滑。消除换音咔哒与扩散毛刺；过大会糊掉辅音。详见<a href="fragment-editor.html#f0-and-spectral-postprocess">分片编辑器 &gt; F0 平滑与频谱后处理</a>。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Vocoder overlap</span><span data-lang="zh">Vocoder 重叠帧</span></td>
+            <td><span data-lang="en">Waveform, chunk seams</span><span data-lang="zh">波形，分块接缝</span></td>
+            <td><span data-lang="en">32 frames</span><span data-lang="zh">32 帧</span></td>
+            <td><span data-lang="en">Adjacent vocoder chunks are cross-faded with a Hann window over this many mel frames (32 × 20 ms ≈ 0.64 s). Larger = smoother seams, slower. At 0, long renders can click or show a phase discontinuity at every chunk boundary.</span><span data-lang="zh">相邻 vocoder 分块按这个 mel 帧数做 Hann 窗交叉淡化（32 帧 × 20 ms ≈ 0.64 s）。越大接缝越平滑、越慢。设为 0 时，长音频在每个分块边界可能出现"咔"声或相位断层。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">EBU R128 loudness</span><span data-lang="zh">EBU R128 响度归一化</span></td>
+            <td><span data-lang="en">Waveform, final</span><span data-lang="zh">波形，最终</span></td>
+            <td><span data-lang="en">On (export)</span><span data-lang="zh">开启（导出）</span></td>
+            <td><span data-lang="en">Two-pass measurement, linear gain to −14 LUFS, then a true-peak limiter at −1 dBTP. −14 LUFS is the streaming target (Spotify / YouTube / Bilibili), so an upload will not be turned down again. It also flattens deliberate dynamics — for classical-style material, turn it off and master yourself.</span><span data-lang="zh">两遍测量，先线性增益到 −14 LUFS，再用 true-peak 限制器压住 −1 dBTP。−14 LUFS 是流媒体（Spotify / YouTube / B 站）的通用目标，上传后不会被二次压。它也会抹平刻意的强弱对比——动态大的作品建议关掉自行母带。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Peak normalization</span><span data-lang="zh">峰值归一化</span></td>
+            <td><span data-lang="en">Waveform, final</span><span data-lang="zh">波形，最终</span></td>
+            <td><span data-lang="en">Automatic</span><span data-lang="zh">自动</span></td>
+            <td><span data-lang="en">Only lowers a peak above 0.95; never boosts. Protects the DAC from clipping after mixing several fragments. It cannot make a quiet render louder — that is EBU R128's job.</span><span data-lang="zh">只在峰值超过 0.95 时下调，从不提升。防止多分片混合后削波。它不会把安静的渲染变响——那是 EBU R128 的职责。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Q-Drift wins over everything else in the diffusion stage.</strong> While it is active, the sampler, step count, CFG, rescale, CFG schedule, dynamic thresholding and SDEdit are all forced to the calibration contract (Euler / 32 / 3.0 / 0.7) — the export dialog greys them out and the console lists every override. On FP16 this is the default, so if a custom CFG schedule "does nothing", check Q-Drift first.</p>
+          <p data-lang="zh"><strong>Q-Drift 会压过扩散阶段的其他所有选项。</strong>它生效时，求解器、步数、CFG、rescale、CFG 调度、动态阈值与 SDEdit 都会被强制到校准合约（Euler / 32 / 3.0 / 0.7）——导出对话框会把它们置灰，控制台会逐条列出被覆盖的项。FP16 下这是默认状态，所以如果发现"CFG 调度没反应"，先看 Q-Drift。</p>
+        </div>
+      </div>
+
+      <h3 id="precision">
+        <span data-lang="en">Model precision, and why FP16 differs from the official FP16</span>
+        <span data-lang="zh">模型精度：为什么本应用的 FP16 与官方 FP16 不同</span>
+      </h3>
+      <p data-lang="en">The precision switch chooses which set of ONNX weights to load; it does not change any sampling parameter. Four variants are supported:</p>
+      <p data-lang="zh">精度开关决定加载哪一套 ONNX 权重，不改变任何采样参数。支持四种变体：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Precision</span><span data-lang="zh">精度</span></th>
+            <th><span data-lang="en">Weights / activations</span><span data-lang="zh">权重 / 激活</span></th>
+            <th><span data-lang="en">VRAM &amp; speed</span><span data-lang="zh">显存与速度</span></th>
+            <th><span data-lang="en">Use it when</span><span data-lang="zh">适用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>FP32</td>
+            <td>fp32 / fp32</td>
+            <td><span data-lang="en">1× / 1× (baseline)</span><span data-lang="zh">1× / 1×（基线）</span></td>
+            <td><span data-lang="en">Masters, A/B reference, anything you intend to publish.</span><span data-lang="zh">母带、A/B 参照、准备发布的作品。</span></td>
+          </tr>
+          <tr>
+            <td>FP16</td>
+            <td><span data-lang="en">fp16 / fp16 (TrueFP16)</span><span data-lang="zh">fp16 / fp16（TrueFP16）</span></td>
+            <td><span data-lang="en">≈0.5× / ≈2×</span><span data-lang="zh">≈0.5× / ≈2×</span></td>
+            <td><span data-lang="en">Everyday editing and preview on a discrete GPU.</span><span data-lang="zh">独显上的日常编辑与预览。</span></td>
+          </tr>
+          <tr>
+            <td>INT8</td>
+            <td><span data-lang="en">int8 / fp32 I/O</span><span data-lang="zh">int8 / fp32 I/O</span></td>
+            <td><span data-lang="en">≈0.4× / fastest</span><span data-lang="zh">≈0.4× / 最快</span></td>
+            <td><span data-lang="en">Low VRAM, integrated GPU.</span><span data-lang="zh">低显存、核显。</span></td>
+          </tr>
+          <tr>
+            <td>INT8-NPU</td>
+            <td><span data-lang="en">int8 / static shapes</span><span data-lang="zh">int8 / 静态 shape</span></td>
+            <td><span data-lang="en">NPU only</span><span data-lang="zh">仅 NPU</span></td>
+            <td><span data-lang="en">Machines with an NPU; fixed 2048/… sequence length.</span><span data-lang="zh">带 NPU 的机器；序列长度固定。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The official repository's <code>--fp16</code> flag is <strong>CUDA mixed precision</strong>: it calls <code>model.half()</code>, then immediately <code>model.mel.float()</code> to keep the mel transform in FP32, and wraps encoders, diffusion and vocoder in <code>torch.autocast</code> — which silently runs softmax, LayerNorm and similar sensitive ops in FP32. The ONNX FP16 models used here are <strong>TrueFP16</strong>: weights and activations are both fp16, with no automatic promotion. It also only runs on CUDA upstream (<code>use_fp16 = use_fp16 and pt_wav.is_cuda</code>), while here it runs on DirectML / TensorRT-RTX.</p>
+      <p data-lang="zh">官方仓库的 <code>--fp16</code> 是 <strong>CUDA 混合精度</strong>：先 <code>model.half()</code>，紧接着 <code>model.mel.float()</code> 让 mel 变换留在 FP32，再用 <code>torch.autocast</code> 包住编码器、扩散与 vocoder——autocast 会把 softmax、LayerNorm 一类敏感算子自动放回 FP32。本应用用的是 ONNX <strong>TrueFP16</strong>：权重与激活都是 fp16，没有这层自动提升；而且上游只在 CUDA 上启用（<code>use_fp16 = use_fp16 and pt_wav.is_cuda</code>），这里跑的是 DirectML / TensorRT-RTX。</p>
+      <p data-lang="en">Measured against FP32 on the same machine (cosine / SNR per model, <code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>): the diffusion step keeps <strong>cos ≈ 0.99999, SNR ≈ 47–48 dB</strong>, while the vocoder is the weakest link at <strong>cos ≈ 0.9997, SNR ≈ 32–33 dB</strong> (max abs error ≈ 1.1×10⁻³). That is why a faint background hiss in very quiet passages is the expected difference, not a bug — and why FP32 is still the right choice for a master. The block-level error of the diffusion step is far below the vocoder's, so lowering diffusion precision further (INT8) costs much more than FP16 does.</p>
+      <p data-lang="zh">同机实测（每个模型相对 FP32 的余弦 / 信噪比，见 <code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>）：扩散步为 <strong>cos ≈ 0.99999、SNR ≈ 47–48 dB</strong>，而 vocoder 是整条链路里最弱的一环——<strong>cos ≈ 0.9997、SNR ≈ 32–33 dB</strong>（最大绝对误差约 1.1×10⁻³）。因此"极安静段落有极轻的底噪"属于这一精度的预期差异，不是故障；也正因如此，母带仍应使用 FP32。扩散步的分块误差远低于 vocoder，所以继续降低扩散精度（INT8）的代价要比 FP16 大得多。</p>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">To compare with the official FP16 on equal footing: set the same sampler / steps / CFG / rescale (Euler, 32, 3.0, 0.7 is the upstream default), <strong>turn Q-Drift off</strong> (it is an SXSEditor-only correction), keep dynamic thresholding off, and fix a noise seed. The console prints one <code>[Precision]</code> line after loading — <code>encoders=… diff=… vocoder=… mel=… qdrift=…</code> — so you can verify that the precision you selected is the precision that actually loaded (a failed FP16 <code>diff_step</code> silently falls back to FP32 / W16A32).</p>
+          <p data-lang="zh">要与官方 FP16 对等比较：把求解器 / 步数 / CFG / rescale 设成同一组（官方默认 Euler、32、3.0、0.7），<strong>关闭 Q-Drift</strong>（它是本应用独有的校正），保持动态阈值关闭，并固定噪声种子。模型加载后控制台会打印一行 <code>[Precision]</code>——<code>encoders=… diff=… vocoder=… mel=… qdrift=…</code>——可据此确认"选的精度"与"实际加载的精度"是否一致（FP16 的 <code>diff_step</code> 加载失败时会静默回退到 FP32 / W16A32）。</p>
+        </div>
+      </div>
+
       <h2>
         <span data-lang="en">Exporting to WAV</span>
         <span data-lang="zh">导出为 WAV</span>

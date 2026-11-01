@@ -694,6 +694,85 @@ flush();</code></pre>
         </div>
       </div>
 
+      <h2 id="fp16-parity">
+        <span data-lang="en">FP16 Path vs Upstream</span>
+        <span data-lang="zh">FP16 精度路径与上游差异</span>
+      </h2>
+      <p data-lang="en">Upstream's FP16 is mixed precision, not TrueFP16. <code>cli/inference.py</code> does:</p>
+      <p data-lang="zh">上游的 FP16 是混合精度，而不是 TrueFP16。<code>cli/inference.py</code> 的实际顺序是：</p>
+      <pre><code>model.half()
+model.mel.float()      # mel transform stays FP32
+
+# soulxsinger.py: infer()
+use_fp16 = use_fp16 and pt_wav.is_cuda
+pt_mel = self.mel(pt_wav.float())      # FP32 mel transform
+if use_fp16:
+    pt_mel = pt_mel.half()
+    pt_f0 = pt_f0.half()
+    gt_f0 = gt_f0.half()
+
+with _autocast_if(use_fp16):           # torch.amp.autocast('cuda')
+    features = ... encoders ...
+    generated_mel = self.cfm_decoder.reverse_diffusion(...)
+    generated_audio = self.vocoder(...).float()</code></pre>
+      <p data-lang="en"><code>torch.autocast</code> keeps softmax, LayerNorm, exponentiation and reductions in FP32 even though the weights are half. Two consequences: (1) upstream FP16 is only ever active on CUDA (<code>pt_wav.is_cuda</code>), and (2) its numerics are not reproducible by a fully-half ONNX graph.</p>
+      <p data-lang="zh"><code>torch.autocast</code> 会在权重为 half 的情况下，把 softmax、LayerNorm、指数与归约类算子保持在 FP32。这带来两个后果：(1) 上游 FP16 只在 CUDA 上真正启用（<code>pt_wav.is_cuda</code>）；(2) 它的数值行为无法用一个"全 half"的 ONNX 图复现。</p>
+      <p data-lang="en">SXSEditor loads the <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> checkpoints, i.e. weights <em>and</em> activations in fp16, on DirectML / TensorRT-RTX. The pipeline compensates where the cost is negligible:</p>
+      <p data-lang="zh">SXSEditor 加载的是 <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> 权重，权重<em>与</em>激活都是 fp16，跑在 DirectML / TensorRT-RTX 上。管线在代价可以忽略的位置做了补偿：</p>
+      <ul>
+        <li><span data-lang="en"><strong>mel_transform stays FP32.</strong> <code>_loadModelsPartitioned</code> overrides the path for <code>melTransform</code> to the root-directory FP32 graph when base accuracy is FP16, mirroring <code>model.mel.float()</code>. The model is 0.25 MB and runs once per fragment, so the cost is noise. <code>extractRefMelOnnx</code> then picks the input dtype from the session's own <code>inputMetadata</code> rather than the global <code>isFP16</code>, because the two now disagree by design.</span><span data-lang="zh"><strong>mel_transform 保持 FP32。</strong>基础精度为 FP16 时，<code>_loadModelsPartitioned</code> 会把 <code>melTransform</code> 的路径改到根目录的 FP32 图，对应上游的 <code>model.mel.float()</code>。该模型只有 0.25 MB、每个分片只跑一次，代价可忽略。<code>extractRefMelOnnx</code> 随后按会话自己的 <code>inputMetadata</code> 选择输入 dtype，而不是全局 <code>isFP16</code>——因为这两者此时按设计就不一致。</span></li>
+        <li><span data-lang="en"><strong>Q-Drift is opt-out.</strong> A sampler-side per-channel correction (see <code>qdrift/</code>) that upstream does not have. It is on by default for FP16 and locks the sampler contract; for like-for-like comparison with upstream it must be switched off.</span><span data-lang="zh"><strong>Q-Drift 可关闭。</strong>采样器侧的逐通道校正（见 <code>qdrift/</code>），上游没有对应实现。FP16 下默认开启并锁定采样合约；要与上游做对等对比时必须关闭。</span></li>
+        <li><span data-lang="en"><strong>Everything else is identical arithmetic.</strong> CFG combine, variance rescale (<code>cfgRescale</code>), Euler update and the vocoder input are the same formulas as <code>reverse_diffusion</code>; only the dtype of the model evaluations differs.</span><span data-lang="zh"><strong>其余算术完全一致。</strong>CFG 合并、方差 rescale（<code>cfgRescale</code>）、Euler 更新与 vocoder 输入都使用与 <code>reverse_diffusion</code> 相同的公式，区别只在模型评估的 dtype。</span></li>
+      </ul>
+      <p data-lang="en">Measured error against FP32 on the same machine (<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>):</p>
+      <p data-lang="zh">同机实测相对 FP32 的误差（<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>）：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Model</span><span data-lang="zh">模型</span></th>
+            <th><span data-lang="en">cosine</span><span data-lang="zh">余弦</span></th>
+            <th><span data-lang="en">SNR</span><span data-lang="zh">信噪比</span></th>
+            <th><span data-lang="en">max abs error</span><span data-lang="zh">最大绝对误差</span></th>
+            <th><span data-lang="en">speed-up</span><span data-lang="zh">提速</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>diff_step</code> @256</td>
+            <td>0.999993</td>
+            <td>48.3 dB</td>
+            <td>4.5×10⁻²</td>
+            <td>1.65×</td>
+          </tr>
+          <tr>
+            <td><code>diff_step</code> @1024</td>
+            <td>0.999990</td>
+            <td>46.9 dB</td>
+            <td>5.1×10⁻²</td>
+            <td>2.25×</td>
+          </tr>
+          <tr>
+            <td><code>vocoder</code> @200 frames</td>
+            <td>0.999760</td>
+            <td>33.2 dB</td>
+            <td>1.1×10⁻³</td>
+            <td>9.9×</td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The vocoder dominates the error budget: 32–33 dB SNR is a low-level noise floor, audible only in near-silent passages. Do not "fix" it by raising diffusion precision — the diffusion step is already 15 dB cleaner than the vocoder it feeds.</p>
+      <p data-lang="zh">误差预算由 vocoder 主导：32–33 dB 的信噪比相当于一层很低的底噪，只在近乎无声的段落可闻。不要试图用"提高扩散精度"来修它——扩散步已经比它要喂的 vocoder 干净约 15 dB。</p>
+      <p data-lang="en">After loading, <code>_logPrecisionSummary()</code> emits one line so a silent fallback is visible:</p>
+      <p data-lang="zh">加载完成后，<code>_logPrecisionSummary()</code> 会打印一行，让静默回退无所遁形：</p>
+      <pre><code>[Precision] encoders=fp16(dml) diff=fp16(dml) vocoder=fp16(dml) mel=fp32(dml) qdrift=fp16 | official FP16 uses CUDA autocast + fp32 mel_transform</code></pre>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The reported <code>diff</code> / <code>vocoder</code> values come from the session loaders (<code>diffStepIsFP16</code> / <code>vocoderIsFP16</code>), not from the setting. If a FP16 <code>diff_step</code> silently falls back to the FP32 base directory (W16A32), this line shows <code>diff=fp32</code> while Settings still says FP16.</p>
+          <p data-lang="zh">其中的 <code>diff</code> / <code>vocoder</code> 来自会话加载结果（<code>diffStepIsFP16</code> / <code>vocoderIsFP16</code>），不是设置值。若 FP16 的 <code>diff_step</code> 静默回退到了 FP32 基础目录（W16A32），这一行会显示 <code>diff=fp32</code>，而设置里仍然写着 FP16。</p>
+        </div>
+      </div>
+
       <h2>
         <span data-lang="en">Model Loading &amp; Execution Providers</span>
         <span data-lang="zh">模型加载与执行提供者</span>

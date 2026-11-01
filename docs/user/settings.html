@@ -212,6 +212,58 @@
         </tbody>
       </table>
 
+      <h3 id="model-precision">
+        <span data-lang="en">Model Precision</span>
+        <span data-lang="zh">模型精度</span>
+      </h3>
+      <p data-lang="en">Chooses which set of ONNX weights the pipeline loads. It does not change sampler, steps or CFG — only numerical precision, speed and VRAM. All precisions are stored side by side, so switching does not re-download anything.</p>
+      <p data-lang="zh">选择管线加载哪一套 ONNX 权重。它不改变求解器、步数或 CFG，只影响数值精度、速度与显存。各精度独立存放、可共存，切换不需要重新下载。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Precision</span><span data-lang="zh">精度</span></th>
+            <th><span data-lang="en">Weights / activations</span><span data-lang="zh">权重 / 激活</span></th>
+            <th><span data-lang="en">Cost</span><span data-lang="zh">开销</span></th>
+            <th><span data-lang="en">Notes</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>FP32</td>
+            <td>fp32 / fp32</td>
+            <td><span data-lang="en">1× VRAM, 1× speed</span><span data-lang="zh">1× 显存，1× 速度</span></td>
+            <td><span data-lang="en">Reference quality. Use for masters and A/B comparison.</span><span data-lang="zh">参考音质。母带与 A/B 对比请用它。</span></td>
+          </tr>
+          <tr>
+            <td>FP16</td>
+            <td><span data-lang="en">fp16 / fp16 (TrueFP16)</span><span data-lang="zh">fp16 / fp16（TrueFP16）</span></td>
+            <td><span data-lang="en">≈0.5× VRAM, ≈2× speed</span><span data-lang="zh">≈0.5× 显存，≈2× 速度</span></td>
+            <td><span data-lang="en">Default for a discrete GPU. Slightly less detail than the official CUDA mixed-precision FP16; the vocoder is the limiting stage (~32 dB SNR vs FP32). Q-Drift turns on automatically.</span><span data-lang="zh">独显默认。细节略逊于官方的 CUDA 混合精度 FP16；瓶颈在 vocoder（相对 FP32 约 32 dB SNR）。Q-Drift 会自动开启。</span></td>
+          </tr>
+          <tr>
+            <td>INT8</td>
+            <td><span data-lang="en">int8 / fp32 I/O</span><span data-lang="zh">int8 / fp32 I/O</span></td>
+            <td><span data-lang="en">≈0.4× VRAM, fastest</span><span data-lang="zh">≈0.4× 显存，最快</span></td>
+            <td><span data-lang="en">Integrated GPU or low VRAM. Larger quality loss than FP16.</span><span data-lang="zh">核显或低显存。音质损失比 FP16 明显。</span></td>
+          </tr>
+          <tr>
+            <td>INT8-NPU</td>
+            <td><span data-lang="en">int8 / static shapes</span><span data-lang="zh">int8 / 静态 shape</span></td>
+            <td><span data-lang="en">NPU</span><span data-lang="zh">NPU</span></td>
+            <td><span data-lang="en">Only for machines with an NPU; sequence length is fixed.</span><span data-lang="zh">仅适用于带 NPU 的机器；序列长度固定。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Why FP16 sounds different from the official FP16.</strong> Upstream's <code>--fp16</code> is CUDA mixed precision: <code>model.half()</code> followed by <code>model.mel.float()</code>, then <code>torch.autocast</code>, which keeps softmax / LayerNorm and similar sensitive ops in FP32. Here the ONNX models are TrueFP16 — weights and activations are both fp16, with no automatic promotion — and they run on DirectML / TensorRT-RTX rather than CUDA. Measured against FP32: diffusion step cos ≈ 0.99999 (SNR ≈ 48 dB), vocoder cos ≈ 0.9997 (SNR ≈ 32 dB). A faint hiss in very quiet passages is therefore expected at this precision. Full comparison and a like-for-like checklist: <a href="synthesis-export.html#precision">Synthesis &amp; Export &gt; Model precision</a>.</p>
+          <p data-lang="zh"><strong>为什么本应用的 FP16 与官方 FP16 听感不同。</strong>上游的 <code>--fp16</code> 是 CUDA 混合精度：先 <code>model.half()</code>，再 <code>model.mel.float()</code>，然后用 <code>torch.autocast</code> 把 softmax / LayerNorm 一类敏感算子留在 FP32。这里用的是 ONNX TrueFP16——权重与激活都是 fp16，没有自动提升——且跑在 DirectML / TensorRT-RTX 而非 CUDA。相对 FP32 实测：扩散步 cos ≈ 0.99999（SNR ≈ 48 dB），vocoder cos ≈ 0.9997（SNR ≈ 32 dB）。因此极安静段落出现轻微底噪是该精度的预期表现。完整对比与"对等比较"清单见<a href="synthesis-export.html#precision">合成与导出 &gt; 模型精度</a>。</p>
+          <p data-lang="en">After models load, the console prints one <code>[Precision]</code> line listing the precision actually in use for encoders / diffusion / vocoder / mel and whether Q-Drift is active. Use it to confirm a fallback did not happen (an FP16 <code>diff_step</code> that fails to load silently falls back to FP32 / W16A32).</p>
+          <p data-lang="zh">模型加载后，控制台会打印一行 <code>[Precision]</code>，列出编码器 / 扩散 / vocoder / mel 各自实际使用的精度以及 Q-Drift 状态。可用它确认没有发生静默回退（FP16 的 <code>diff_step</code> 加载失败会自动回退到 FP32 / W16A32）。</p>
+        </div>
+      </div>
+
       <h3>
         <span data-lang="en">Export Inference Parameters</span>
         <span data-lang="zh">导出推理参数</span>

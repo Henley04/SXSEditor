@@ -1514,3 +1514,33 @@ details > summary { cursor: pointer; color: var(--accent); font-size: var(--font
 }
 
 .about-special-thanks { border-left: 3px solid var(--accent); }
+
+/* ==================== Long-form option cards ====================
+ * 后处理 / 修复 / 诊断这类开关的说明有两个以上分句，平铺的
+ * [checkbox][label][desc] 会把 label 挤成三四行、desc 也只剩一条窄柱。
+ * 改成两行网格：标题一行，说明在下面占满可用宽度。 */
+.setting-group > .device-mode-radio {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: 2px;
+    align-items: start;
+}
+
+.setting-group > .device-mode-radio input[type="radio"],
+.setting-group > .device-mode-radio input[type="checkbox"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    margin-top: 4px;
+}
+
+.setting-group > .device-mode-radio .radio-label {
+    grid-column: 2;
+    line-height: 1.45;
+}
+
+.setting-group > .device-mode-radio .radio-desc {
+    grid-column: 2;
+    margin-top: 0;
+    line-height: 1.6;
+}
