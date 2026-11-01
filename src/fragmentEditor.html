@@ -36,35 +36,7 @@
         <button id="btn-param-MIDI" class="btn-param active" title="1">MIDI</button>
         <button id="btn-param-Pitch" class="btn-param" title="2">Pitch</button>
       </div>
-      <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
-      <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
-          <button id="btn-pitch-reset" class="btn-pitch-tool" title="清除所有手动曲线，恢复到自动层" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
-          <label class="auto-pitch-toggle" title="自动生成音高曲线（不阻止手动编辑）">
-            <input type="checkbox" id="auto-pitch-enabled">
-            <span data-i18n="fragment.autoPitch">自动</span>
-          </label>
-          <select id="auto-pitch-preset" class="auto-pitch-preset" title="自动曲线预设">
-            <option value="natural">自然</option>
-            <option value="soft">柔和</option>
-            <option value="power">有力</option>
-            <option value="ballad">叙事</option>
-            <option value="off">关闭</option>
-          </select>
-          <button id="btn-auto-pitch-params" class="btn-pitch-tool" data-i18n="fragment.autoPitchParams">参数</button>
-          <select id="pitch-batch-action" class="auto-pitch-preset" title="批量操作（有选中锚点时只作用于选中项）">
-            <option value="" data-i18n="fragment.batchAction">批量…</option>
-            <option value="up" data-i18n="fragment.batchUp">整体 +1 半音</option>
-            <option value="down" data-i18n="fragment.batchDown">整体 −1 半音</option>
-            <option value="quantize" data-i18n="fragment.batchQuantize">贴合到半音</option>
-            <option value="simplify" data-i18n="fragment.batchSimplify">抽稀锚点</option>
-            <option value="smooth" data-i18n="fragment.batchSmooth">平滑锚点</option>
-          </select>
-          <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键调节平滑 · 中键框选</span>
-          <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
-          <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
-          <span class="pitch-hint" id="brush-smoothing-label">30</span>
-      </div>
-        <div class="toolbar-spacer"></div>
+      <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
           <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助"
                   data-icon="keyboard" data-icon-class="icon-only"
@@ -92,35 +64,53 @@
         </div>
         <div id="inspector-resize" class="inspector-resize"></div>
         <div id="inspector" class="inspector-panel">
-          <!-- Singer info -->
-          <div class="insp-section">
-            <div class="insp-head"><span data-i18n="fragment.inspSinger">歌手</span> <span class="tag" id="singer-tag">--</span></div>
+          <!-- Pitch curve tools：原先挂在工具栏右侧。Pitch 模式一开就多出 8 个
+               控件（约 500px），1000px 窗口的工具栏装不下，只能压扁或折行。
+               挪到这里：竖排后每个控件都有完整宽度，工具栏也不再溢出。
+               本节只在 Pitch 模式显示（见 uiControls.syncParamMode）。 -->
+          <div class="insp-section" id="pitch-curve-section" hidden>
+            <div class="insp-head"><span data-i18n="fragment.inspPitchCurve">音高曲线</span></div>
             <div class="insp-body">
-              <div class="singer-card">
-                <div class="singer-avatar" data-icon="microphone"></div>
-                <div class="singer-meta">
-                  <div class="singer-name" id="singer-name">--</div>
-                  <div class="singer-desc" id="singer-desc">--</div>
+              <div id="pitch-tools" class="pitch-tools-group">
+                <div class="field-row">
+                  <label class="lbl" for="auto-pitch-enabled" data-i18n="fragment.autoPitch">自动</label>
+                  <div class="ctrl">
+                    <input type="checkbox" id="auto-pitch-enabled">
+                    <select id="auto-pitch-preset" class="auto-pitch-preset" title="自动曲线预设">
+                      <option value="natural">自然</option>
+                      <option value="soft">柔和</option>
+                      <option value="power">有力</option>
+                      <option value="ballad">叙事</option>
+                      <option value="off">关闭</option>
+                    </select>
+                  </div>
                 </div>
+                <div class="field-row pitch-btn-row">
+                  <button id="btn-pitch-reset" class="btn-pitch-tool" title="清除所有手动曲线，恢复到自动层" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
+                  <button id="btn-auto-pitch-params" class="btn-pitch-tool" data-i18n="fragment.autoPitchParams">参数</button>
+                </div>
+                <div class="field-row">
+                  <label class="lbl" for="pitch-batch-action" data-i18n="fragment.inspBatch">批量</label>
+                  <div class="ctrl">
+                    <select id="pitch-batch-action" class="auto-pitch-preset" title="批量操作（有选中锚点时只作用于选中项）">
+                      <option value="" data-i18n="fragment.batchAction">批量…</option>
+                      <option value="up" data-i18n="fragment.batchUp">整体 +1 半音</option>
+                      <option value="down" data-i18n="fragment.batchDown">整体 −1 半音</option>
+                      <option value="quantize" data-i18n="fragment.batchQuantize">贴合到半音</option>
+                      <option value="simplify" data-i18n="fragment.batchSimplify">抽稀锚点</option>
+                      <option value="smooth" data-i18n="fragment.batchSmooth">平滑锚点</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <label class="lbl" for="brush-smoothing" data-i18n="fragment.smoothing">平滑</label>
+                  <div class="ctrl">
+                    <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
+                    <span class="pitch-smooth-value" id="brush-smoothing-label">30</span>
+                  </div>
+                </div>
+                <p class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键按住拖动调强度/平滑 · 中键框选</p>
               </div>
-            </div>
-          </div>
-          <!-- Note properties -->
-          <div class="insp-section" id="note-props-section">
-            <div class="insp-head"><span data-i18n="fragment.inspNote">音符属性</span> <span class="tag" id="note-select-tag" data-i18n="fragment.inspNoneSelected">未选中</span></div>
-            <div class="insp-body">
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspPitch">音高</div><div class="ctrl"><input type="text" id="note-pitch" value="--" style="flex:0 0 50px;text-align:center" readonly><div class="chip" id="note-freq"><span class="d"></span>-- Hz</div></div></div>
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspStart">起始</div><div class="ctrl"><input type="text" id="note-start" value="--" readonly></div></div>
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspDuration">时长</div><div class="ctrl"><input type="text" id="note-duration" value="--" readonly></div></div>
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspLyric">歌词</div><div class="ctrl"><input type="text" id="note-lyric" value="--"></div></div>
-            </div>
-          </div>
-          <!-- Phoneme info -->
-          <div class="insp-section" id="phoneme-section">
-            <div class="insp-head"><span data-i18n="fragment.inspPhoneme">音素</span> <span class="tag" id="phoneme-tag" data-i18n="fragment.inspAuto">自动</span></div>
-            <div class="insp-body">
-              <div class="phoneme-preview" id="phoneme-preview">--</div>
-              <div class="phoneme-grid" id="phoneme-grid"></div>
             </div>
           </div>
           <!-- 自然度自检：把"听起来自然吗"变成可测量的数值 -->

@@ -37,14 +37,15 @@ export const READONLY_CLASS = 'plugin-readonly';
 export const PANEL_NODES = Object.freeze({
   // 钢琴卷帘：左键拖动/框选/双击改歌词全在这块画布上
   pianoRoll: ['#left-sidebar', '#right-content', '#btn-param-MIDI'],
-  // 音高曲线：工具栏的 Pitch 切页 + Pitch 专属工具条
-  pitch: ['#btn-param-Pitch', '#pitch-tools', '#pitch-tools-divider'],
-  // 音素 / 歌词（inspector 分区）
-  phoneme: ['#phoneme-section'],
+  // 音高曲线：工具栏的 Pitch 切页 + inspector 里的音高曲线分区
+  pitch: ['#btn-param-Pitch', '#pitch-curve-section'],
+  // 音素 / 歌词：原先的占位分区（#phoneme-section）从未接线，已移除。
+  // 契约里的面板名保留，选择器留空 —— 插件照旧可以声明，只是没有对应 DOM 可关。
+  phoneme: [],
   // 音量 / 声像包络（底部 lane 区）
   envelope: ['#param-panel'],
-  // 侧边参数面板（inspector 里的音符属性）
-  params: ['#note-props-section'],
+  // 侧边参数面板：原 #note-props-section（音符音高/起始/时长/歌词）同样是死占位，已移除。
+  params: [],
 });
 
 /** 等后端字段到位的最大时间（毫秒）。分片数据没到就保持默认形态。 */

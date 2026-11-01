@@ -61,20 +61,17 @@ export function updateParamModeButtons() {
     }
   });
 
-  const pitchTools = document.getElementById('pitch-tools');
-  const pitchDivider = document.getElementById('pitch-tools-divider');
+  // 音高工具原先挂在工具栏上，Pitch 模式一开就把工具栏挤爆；现在整组挪进
+  // inspector 的独立分区，这里是它的显隐开关（hidden 属性比 inline display 干净）。
+  const pitchSection = document.getElementById('pitch-curve-section');
   const pitchCurve = getPitchCurve();
   if (currentParamMode === 'Pitch') {
     if (!pitchCurve.enabled) {
       pitchCurve.enabled = true;
       scheduleAutoSave();
     }
-    if (pitchTools) pitchTools.style.display = 'flex';
-    if (pitchDivider) pitchDivider.style.display = '';
-  } else {
-    if (pitchTools) pitchTools.style.display = 'none';
-    if (pitchDivider) pitchDivider.style.display = 'none';
   }
+  if (pitchSection) pitchSection.hidden = currentParamMode !== 'Pitch';
 
   updatePitchToolButtons();
 }

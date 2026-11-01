@@ -100,19 +100,80 @@
 }
 #toolbar .param-group { gap: 3px; }
 
-#toolbar .btn-pitch-tool {
-  padding: 3px 8px;
-  font-size: var(--font-sm);
+/* ---------- 音高曲线工具（inspector 分区内） ----------
+   原先这组控件挂在工具栏上：Pitch 模式一开就多出 8 个控件、合计约 500px，
+   而窗口默认 1000px，装不下只能压扁或折行。挪进右侧后改为竖排，
+   每行一个 field-row，控件拿满可用宽度，工具栏回到单行且不再溢出。 */
+#pitch-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-#toolbar .btn-pitch-tool:hover {
+#pitch-tools .field-row { margin-bottom: 0; }
+#pitch-tools .field-row .lbl {
+  flex: 0 0 30px;
+  min-width: 0;
+  cursor: pointer;
+}
+#pitch-tools .field-row .ctrl { min-width: 0; }
+#pitch-tools .auto-pitch-preset { flex: 1 1 auto; min-width: 0; }
+#pitch-tools input[type="checkbox"] { margin: 0; cursor: pointer; }
+#pitch-tools .brush-smoothing-slider {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.pitch-btn-row { gap: 6px; }
+.pitch-btn-row .btn-pitch-tool { flex: 1 1 0; }
+
+.btn-pitch-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  background: var(--bg-button);
+  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
+}
+/* 重置是破坏性操作，hover 走危险色；"参数"只是打开面板，别跟着变红 */
+#btn-pitch-reset:hover {
   background: var(--bg-button-danger);
   color: var(--fg-on-accent);
   border-color: var(--danger);
 }
-#toolbar .btn-pitch-tool.disabled-mode {
-  background: var(--bg-button);
+#btn-auto-pitch-params:hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+.btn-pitch-tool.disabled-mode {
   color: var(--fg-disabled);
   border-color: var(--button-secondary-border);
+}
+
+/* 手势说明：右侧只有 196px，必须允许换行 */
+.pitch-hint {
+  margin: 0;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--fg-muted);
+  user-select: none;
+}
+.pitch-smooth-value {
+  flex: 0 0 22px;
+  text-align: right;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
 }
 
 #toolbar .btn-shortcuts {
@@ -124,18 +185,6 @@
   align-items: center;
   justify-content: center;
 }
-
-.pitch-hint {
-  font-size: var(--font-xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  user-select: none;
-  padding: 2px 6px;
-  background: var(--accent-softer);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent-soft);
-}
-#toolbar .pitch-tools-group { gap: var(--space-4); }
 
 .brush-smoothing-slider {
   width: 60px;
@@ -1302,17 +1351,7 @@
   opacity: 0.9;
 }
 
-/* ---- 自动音高曲线控件 ---- */
-.auto-pitch-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--fg-secondary, #c8c8dc);
-  user-select: none;
-  cursor: pointer;
-}
-.auto-pitch-toggle input { cursor: pointer; }
+/* ---- 自动音高曲线控件（开关本身用 field-row + 原生 checkbox） ---- */
 .auto-pitch-preset {
   font-size: 12px;
   padding: 2px 4px;

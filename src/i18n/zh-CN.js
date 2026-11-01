@@ -324,6 +324,8 @@ export default {
     inspAuto: '自动',
     inspNoneSelected: '未选中',
     inspPhoneme: '音素',
+    inspPitchCurve: '音高曲线',
+    inspBatch: '批量',
     autoSaveIndicator: '自动同步',
     shortcutHelpTitle: '快捷键帮助 (F1)',
     statusReady: '就绪',

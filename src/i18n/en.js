@@ -327,6 +327,8 @@ export default {
     inspAuto: 'Auto',
     inspNoneSelected: 'None selected',
     inspPhoneme: 'Phoneme',
+    inspPitchCurve: 'Pitch curve',
+    inspBatch: 'Batch',
     autoSaveIndicator: 'Auto-sync',
     shortcutHelpTitle: 'Shortcut help (F1)',
     statusReady: 'Ready',
