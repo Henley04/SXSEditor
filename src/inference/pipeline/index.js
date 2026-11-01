@@ -1932,24 +1932,13 @@ class OnnxSVSPipeline {
 
         const loadOne = async (i) => {
             const modelFile = resolvedModelFiles[i];
-            // mel_transform 精度覆盖：官方 FP16 推理是
-            //   model.half(); model.mel.float()
-            // 即整个网络半精度、唯独参考音频的 mel 变换保持 FP32。本应用此前的 FP16
-            // 精度会连 mel_transform 一起换成 fp16 变体，prompt 条件因此多一层量化
-            // 噪声（官方没有）。mel_transform 只有 0.25 MB、每个分片只跑一次，
-            // 用根目录的 FP32 版本换回与官方一致的 prompt，代价可以忽略。
-            let modelPath = this._getModelPath(modelFile);
-            let modelIsFP16 = this.isFP16;
-            if (sessionKeys[i] === 'melTransform' && this.isFP16 &&
-                this.baseModelDir && this.modelDir !== this.baseModelDir) {
-                const fp32MelPath = path.join(this.baseModelDir, modelFile);
-                try {
-                    if (fs.existsSync(fp32MelPath)) {
-                        modelPath = fp32MelPath;
-                        modelIsFP16 = false;
-                    }
-                } catch (_) { /* 读不到就沿用 fp16 版本 */ }
-            }
+            // 注意：曾试过在 FP16 下把 mel_transform 换成根目录的 FP32 图（对应上游
+            // model.mel.float()）。实测 mel 变换的误差几乎全部集中在近静音帧的对数
+            // 下限附近（整体 SNR 38–50 dB，能量最高的四分位约 70 dB），对 prompt
+            // 条件的实际影响远小于 vocoder 自身的 ~32 dB；收益不足以支撑一条与其他
+            // 阶段不同的加载分支，故暂不启用，保持与其余阶段一致的精度选择。
+            const modelPath = this._getModelPath(modelFile);
+            const modelIsFP16 = this.isFP16;
             // SiFiGAN 双输入 dummy（sessionKey 仍为 'vocoder'，通过 overrideDummyInputs 传入 mel+f0）
             const isSifigan = this._isSifiganVocoder(modelFile);
             const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;

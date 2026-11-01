@@ -717,12 +717,11 @@ with _autocast_if(use_fp16):           # torch.amp.autocast('cuda')
     generated_audio = self.vocoder(...).float()</code></pre>
       <p data-lang="en"><code>torch.autocast</code> keeps softmax, LayerNorm, exponentiation and reductions in FP32 even though the weights are half. Two consequences: (1) upstream FP16 is only ever active on CUDA (<code>pt_wav.is_cuda</code>), and (2) its numerics are not reproducible by a fully-half ONNX graph.</p>
       <p data-lang="zh"><code>torch.autocast</code> 会在权重为 half 的情况下，把 softmax、LayerNorm、指数与归约类算子保持在 FP32。这带来两个后果：(1) 上游 FP16 只在 CUDA 上真正启用（<code>pt_wav.is_cuda</code>）；(2) 它的数值行为无法用一个"全 half"的 ONNX 图复现。</p>
-      <p data-lang="en">SXSEditor loads the <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> checkpoints, i.e. weights <em>and</em> activations in fp16, on DirectML / TensorRT-RTX. The pipeline compensates where the cost is negligible:</p>
-      <p data-lang="zh">SXSEditor 加载的是 <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> 权重，权重<em>与</em>激活都是 fp16，跑在 DirectML / TensorRT-RTX 上。管线在代价可以忽略的位置做了补偿：</p>
+      <p data-lang="en">SXSEditor loads the <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> checkpoints, i.e. weights <em>and</em> activations in fp16, on DirectML / TensorRT-RTX. Only one place compensates without touching the arithmetic:</p>
+      <p data-lang="zh">SXSEditor 加载的是 <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> 权重，权重<em>与</em>激活都是 fp16，跑在 DirectML / TensorRT-RTX 上。只有一处在不改动算术的前提下做了补偿：</p>
       <ul>
-        <li><span data-lang="en"><strong>mel_transform stays FP32.</strong> <code>_loadModelsPartitioned</code> overrides the path for <code>melTransform</code> to the root-directory FP32 graph when base accuracy is FP16, mirroring <code>model.mel.float()</code>. The model is 0.25 MB and runs once per fragment, so the cost is noise. <code>extractRefMelOnnx</code> then picks the input dtype from the session's own <code>inputMetadata</code> rather than the global <code>isFP16</code>, because the two now disagree by design.</span><span data-lang="zh"><strong>mel_transform 保持 FP32。</strong>基础精度为 FP16 时，<code>_loadModelsPartitioned</code> 会把 <code>melTransform</code> 的路径改到根目录的 FP32 图，对应上游的 <code>model.mel.float()</code>。该模型只有 0.25 MB、每个分片只跑一次，代价可忽略。<code>extractRefMelOnnx</code> 随后按会话自己的 <code>inputMetadata</code> 选择输入 dtype，而不是全局 <code>isFP16</code>——因为这两者此时按设计就不一致。</span></li>
         <li><span data-lang="en"><strong>Q-Drift is opt-out.</strong> A sampler-side per-channel correction (see <code>qdrift/</code>) that upstream does not have. It is on by default for FP16 and locks the sampler contract; for like-for-like comparison with upstream it must be switched off.</span><span data-lang="zh"><strong>Q-Drift 可关闭。</strong>采样器侧的逐通道校正（见 <code>qdrift/</code>），上游没有对应实现。FP16 下默认开启并锁定采样合约；要与上游做对等对比时必须关闭。</span></li>
-        <li><span data-lang="en"><strong>Everything else is identical arithmetic.</strong> CFG combine, variance rescale (<code>cfgRescale</code>), Euler update and the vocoder input are the same formulas as <code>reverse_diffusion</code>; only the dtype of the model evaluations differs.</span><span data-lang="zh"><strong>其余算术完全一致。</strong>CFG 合并、方差 rescale（<code>cfgRescale</code>）、Euler 更新与 vocoder 输入都使用与 <code>reverse_diffusion</code> 相同的公式，区别只在模型评估的 dtype。</span></li>
+        <li><span data-lang="en"><strong>Everything else is identical arithmetic.</strong> CFG combine, variance rescale (<code>cfgRescale</code>), Euler update and the vocoder input are the same formulas as <code>reverse_diffusion</code>; only the dtype of the model evaluations differs. In particular the mel transform is loaded at the same precision as every other stage — see below.</span><span data-lang="zh"><strong>其余算术完全一致。</strong>CFG 合并、方差 rescale（<code>cfgRescale</code>）、Euler 更新与 vocoder 输入都使用与 <code>reverse_diffusion</code> 相同的公式，区别只在模型评估的 dtype。mel 变换也与其他阶段同一精度加载——见下。</span></li>
       </ul>
       <p data-lang="en">Measured error against FP32 on the same machine (<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>):</p>
       <p data-lang="zh">同机实测相对 FP32 的误差（<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>）：</p>
@@ -762,9 +761,69 @@ with _autocast_if(use_fp16):           # torch.amp.autocast('cuda')
       </table>
       <p data-lang="en">The vocoder dominates the error budget: 32–33 dB SNR is a low-level noise floor, audible only in near-silent passages. Do not "fix" it by raising diffusion precision — the diffusion step is already 15 dB cleaner than the vocoder it feeds.</p>
       <p data-lang="zh">误差预算由 vocoder 主导：32–33 dB 的信噪比相当于一层很低的底噪，只在近乎无声的段落可闻。不要试图用"提高扩散精度"来修它——扩散步已经比它要喂的 vocoder 干净约 15 dB。</p>
+
+      <h3 id="mel-transform-error">
+        <span data-lang="en">mel_transform under TrueFP16</span>
+        <span data-lang="zh">TrueFP16 下的 mel_transform</span>
+      </h3>
+      <p data-lang="en">The mel transform is only used to turn the reference audio into the prompt condition (<code>extractRefMelOnnx</code>), once per fragment — it never sits in the audio path. Measured against the FP32 graph on three 4-second singing segments plus one non-vocal segment:</p>
+      <p data-lang="zh">mel 变换只用于把参考音频转成 prompt 条件（<code>extractRefMelOnnx</code>），每个分片跑一次，不在音频通路上。以下是对三段 4 秒真实唱段加一段非人声素材、相对 FP32 图的实测：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Measurement</span><span data-lang="zh">指标</span></th>
+            <th><span data-lang="en">Value</span><span data-lang="zh">数值</span></th>
+            <th><span data-lang="en">Note</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Overall SNR</span><span data-lang="zh">整体信噪比</span></td>
+            <td>38.3 – 49.6 dB</td>
+            <td><span data-lang="en">Content-dependent; the quieter the passage, the lower</span><span data-lang="zh">随内容变化，段落越安静越低</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Cosine</span><span data-lang="zh">余弦相似度</span></td>
+            <td>0.99993 – 0.99999</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Mean abs error</span><span data-lang="zh">平均绝对误差</span></td>
+            <td>0.007 – 0.018</td>
+            <td><span data-lang="en">log-mel units (range of the signal is ≈ 12)</span><span data-lang="zh">log-mel 单位（信号本身跨度约 12）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Loudest energy quartile</span><span data-lang="zh">能量最高的四分位</span></td>
+            <td>65 – 71 dB</td>
+            <td><span data-lang="en">MAE 0.0005–0.0006 — effectively FP32</span><span data-lang="zh">MAE 0.0005–0.0006，等同 FP32</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Quietest energy quartile</span><span data-lang="zh">能量最低的四分位</span></td>
+            <td>35 – 46 dB</td>
+            <td><span data-lang="en">MAE 0.02–0.06 — where all the error lives</span><span data-lang="zh">MAE 0.02–0.06，误差几乎全部集中于此</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Max abs error</span><span data-lang="zh">最大绝对误差</span></td>
+            <td>≈ 1.5</td>
+            <td><span data-lang="en">Isolated bins flipping across the <code>clamp(1e-5)</code> floor</span><span data-lang="zh">个别 bin 在 <code>clamp(1e-5)</code> 下限两侧翻转</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The aggregate SNR is misleading here: it is dominated by a handful of near-silent bins sitting on the log floor, which carry no energy and do not move the conditioning. Weighted by energy the transform matches FP32 to ~70 dB. Since the vocoder adds a 32 dB floor to the actual audio, the mel transform is not where the audible difference from upstream comes from.</p>
+      <p data-lang="zh">这里整体 SNR 有误导性：它被少数贴着对数下限的近静音 bin 主导，这些 bin 既没有能量、也不会推动条件。按能量加权后，该变换与 FP32 的差距约 70 dB。而 vocoder 会给真实音频加上 32 dB 的底噪下限，因此与上游的听感差异并不来自 mel 变换。</p>
+      <p data-lang="en">A build that loaded the FP32 graph for <code>melTransform</code> under FP16 (mirroring <code>model.mel.float()</code>) existed briefly and was reverted: the measured gain is smaller than the uncertainty of the whole TrueFP16 path, and it made one stage follow a different precision contract than every other stage in the <code>[Precision]</code> line. <code>extractRefMelOnnx</code> nevertheless keeps reading the input dtype from the session's own <code>inputMetadata</code> instead of the global <code>isFP16</code>, so re-enabling the override later is a one-line change.</p>
+      <p data-lang="zh">曾在 FP16 下把 <code>melTransform</code> 指向 FP32 图（对应 <code>model.mel.float()</code>）的构建存在过很短一段时间，已回退：实测收益小于整条 TrueFP16 路径本身的不确定度，而且会让一个阶段服从与其他所有阶段不同的精度约定，<code>[Precision]</code> 行也就失去可比性。<code>extractRefMelOnnx</code> 仍按会话自己的 <code>inputMetadata</code> 取输入 dtype 而非全局 <code>isFP16</code>，所以将来要重新启用只是一行改动。</p>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Method.</strong> The checkpoint is not in this repository, so the exported graph was re-implemented in torch (reflect-pad STFT n_fft 1920 / hop 480, magnitude, Slaney mel matmul with 128 bands, <code>log(clamp(x, 1e-5))</code>) and quantised at each op boundary. Accumulation is modelled as FP32, which makes the estimate optimistic: the historical W16A32 figure of 66.5 dB on white noise reproduces as 80 dB in this harness. Expect the real DirectML number to be roughly 5–14 dB worse, i.e. in the 30–45 dB band for quiet material. Re-measure on hardware before turning the override back on.</p>
+          <p data-lang="zh"><strong>方法。</strong>仓库里没有权重文件，因此用 torch 重建了导出的图（reflect 填充 STFT，n_fft 1920 / hop 480，取模，128 带 Slaney mel 矩阵，<code>log(clamp(x, 1e-5))</code>），并在每个算子边界做量化。累加按 FP32 建模，所以结果是乐观估计：历史上白噪声的 W16A32 实测值 66.5 dB，在本仿真里复现为 80 dB。真实 DirectML 数值预计要差 5–14 dB，安静素材大约落在 30–45 dB 区间。重新启用前应在真机上复测。</p>
+        </div>
+      </div>
+
       <p data-lang="en">After loading, <code>_logPrecisionSummary()</code> emits one line so a silent fallback is visible:</p>
       <p data-lang="zh">加载完成后，<code>_logPrecisionSummary()</code> 会打印一行，让静默回退无所遁形：</p>
-      <pre><code>[Precision] encoders=fp16(dml) diff=fp16(dml) vocoder=fp16(dml) mel=fp32(dml) qdrift=fp16 | official FP16 uses CUDA autocast + fp32 mel_transform</code></pre>
+      <pre><code>[Precision] encoders=fp16(dml) diff=fp16(dml) vocoder=fp16(dml) mel=fp16(dml) qdrift=fp16 | official FP16 uses CUDA autocast + fp32 mel_transform</code></pre>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
