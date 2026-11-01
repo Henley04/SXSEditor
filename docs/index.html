@@ -169,7 +169,14 @@ html[data-theme="dark"] .hud-b.playing .hud-meta b{color:var(--yellow)}
 .play-btn{display:inline-flex;align-items:center;gap:7px;background:var(--blue);color:#fff;font-weight:700;font-size:12.5px;padding:7px 13px;clip-path:polygon(7px 0,100% 0,calc(100% - 7px) 100%,0 100%);transition:background-color .2s,transform .15s}
 .play-btn:hover{background:var(--blue2);transform:translateY(-1px)}
 .play-btn svg{width:12px;height:12px}
+.play-btn.err{background:var(--red)}
+.play-btn.err:hover{background:var(--red)}
+.play-btn.busy{cursor:progress}
+/* 悬停时停掉漂浮动画，避免按钮在指针下移动导致点击落空 */
+@media (hover:hover){.hud-b:hover{animation-play-state:paused}}
 .bpm{font-family:var(--num);font-weight:700;font-size:12px;color:var(--ink2);letter-spacing:.08em}
+.play-toast{position:fixed;left:50%;bottom:26px;z-index:200;max-width:min(420px,88vw);background:var(--navy2);color:#fff;font-size:13px;font-weight:700;line-height:1.5;padding:10px 16px;border:2px solid var(--red);box-shadow:var(--hard) 5px 5px 0;opacity:0;transform:translate(-50%,14px);pointer-events:none;transition:opacity .25s ease,transform .25s ease}
+.play-toast.on{opacity:1;transform:translate(-50%,0)}
 /* 漂浮装饰 */
 .deco{position:absolute;pointer-events:none;z-index:1}
 .deco svg{display:block}
@@ -641,6 +648,10 @@ html[data-theme="dark"] footer{background:#070B14}
             <span class="bpm">♩ = 132</span>
           </div>
         </div>
+        <audio id="demoAudio" preload="auto" playsinline style="display:none">
+          <source src="res/example_lty_cn.mp3" type="audio/mpeg">
+          <source src="res/example_lty_cn.opus" type="audio/ogg">
+        </audio>
       </div>
     </div>
   </div>
@@ -1122,7 +1133,8 @@ var I18N={
     "stat.lang":"合成语言","stat.prec":"模型精度","stat.gpu":"GPU 加速比",
     "hero.tag1":"实时合成","hero.tag2":"音域 C2 – G5","hero.tag3":"中 · 英 · 日 跨语种",
     "hero.hud1":"ONNX Runtime 推理","hero.hud1meta":"DirectML · GPU","hero.hud1val":"6x 加速",
-    "hero.play":"试听 Demo","hero.pause":"暂停",
+    "hero.play":"试听 Demo","hero.pause":"暂停","hero.loading":"载入中","hero.retry":"重试",
+    "hero.errNet":"音频加载失败，请检查网络后重试","hero.errFmt":"当前浏览器无法播放该音频格式",
     "feat.title":"核心功能","feat.sub":"为歌声合成而生的创作工作台",
     "feat.f1.pipe1":"参考音频","feat.f1.pipe2":"mel","feat.f1.pipe3":"diffusion ×N","feat.f1.pipe4":"声码器","feat.f2.c1":"音符","feat.f2.c1s":"拖动 / 缩放 / 吸附小节","feat.f2.c2":"音高笔刷","feat.f2.c2s":"手绘滑音与颤音","feat.f2.c3":"包络","feat.f2.c3s":"音量 / 声像逐帧曲线","feat.f2.c4":"音素边界","feat.f2.c4s":"逐音素调时值与过渡","feat.f3.res":"12 个音符已写入 · 耗时 41 ms","feat.f4.c1":"引擎","feat.f4.c2":"有声区中位误差","feat.f4.c3":"静音假阳性","feat.f4.unit":"音分","feat.f4.t1":"动态长度","feat.f4.t2":"32 帧对齐","feat.f4.t3":"清音门限","feat.f5.zhbadge":"中文 · 自动声调","feat.f5.zhcap":"pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）","feat.f5.enbadge":"ENGLISH · G2P + DURATION","feat.f5.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first","feat.f5.t1":"中文自动声调","feat.f5.t2":"英文音素时长分配","feat.f6.p1":"质量优先（推荐）","feat.f6.p2":"显存减半，W16A32","feat.f6.p3":"体积最小","feat.f6.p4":"面向 Intel NPU","feat.f7.h":"多后端推理","feat.f7.p":"一个二进制覆盖 DirectML GPU、WebNN NPU/GPU 与 CPU，自动挑最优，失败自动回退。","feat.f8.h":"插件式推理后端","feat.f8.p":"内置管线不是唯一选择：插件可以接管推理后端，用自己的模型和参数，工程、播放、导出照常工作。","feat.f8.c1":"自定义模型","feat.f8.c2":"同协议","feat.f6.note":"切换精度无需重启；各精度分目录共存，互不覆盖。","feat.f1.h":"SoulX-Singer 神经合成","feat.f1.p":"深度学习歌声合成模型，跑在 ONNX Runtime 上。DirectML GPU 让声码器快 6 倍，mel 前端信噪比从 49.86 dB 提到 83.54 dB。中英日三语共用一套音色，换语言不用换歌手。分片级合成缓存、EBU R128 响度归一化与 48 kHz 导出都在同一条管线里，改一个音符只重算那一片。",
     "feat.f1.t1":"AI 声线","feat.f1.t2":"跨语种合成","feat.f1.t3":"ONNX opset 20",
@@ -1196,7 +1208,8 @@ var I18N={
     "stat.lang":"Synth Languages","stat.prec":"Model Precisions","stat.gpu":"GPU Speedup",
     "hero.tag1":"Real-time Synthesis","hero.tag2":"Range C2 – G5","hero.tag3":"CN · EN · JP Cross-lingual",
     "hero.hud1":"MCP · AI 直接驱动编辑器","hero.hud1meta":"Claude · Cursor · 脚本","hero.hud1val":"44 个方法",
-    "hero.play":"Play Demo","hero.pause":"Pause",
+    "hero.play":"Play Demo","hero.pause":"Pause","hero.loading":"Loading","hero.retry":"Retry",
+    "hero.errNet":"Couldn't load the demo audio. Check your connection and try again.","hero.errFmt":"This browser can't play the demo audio format.",
     "feat.title":"Features","feat.sub":"A workbench built for singing synthesis",
     "feat.f1.pipe1":"reference","feat.f1.pipe2":"mel","feat.f1.pipe3":"diffusion ×N","feat.f1.pipe4":"vocoder","feat.f2.c1":"Notes","feat.f2.c1s":"drag / resize / bar snap","feat.f2.c2":"Pitch brush","feat.f2.c2s":"draw portamento and vibrato","feat.f2.c3":"Envelopes","feat.f2.c3s":"per-frame volume and pan","feat.f2.c4":"Phoneme bounds","feat.f2.c4s":"tune each phoneme's timing","feat.f3.res":"12 notes written · 41 ms","feat.f4.c1":"Engine","feat.f4.c2":"median error (voiced)","feat.f4.c3":"silence false positives","feat.f4.unit":"cents","feat.f4.t1":"any length","feat.f4.t2":"32-frame aligned","feat.f4.t3":"voicing gate","feat.f5.zhbadge":"CHINESE · AUTO TONE","feat.f5.zhcap":"pinyin-pro tone marking · neutral tone = 5 · manual override (e.g. 星3)","feat.f5.enbadge":"ENGLISH · G2P + DURATION","feat.f5.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first","feat.f5.t1":"Chinese auto tone","feat.f5.t2":"English phoneme timing","feat.f6.p1":"quality first (recommended)","feat.f6.p2":"half the VRAM, W16A32","feat.f6.p3":"smallest footprint","feat.f6.p4":"for Intel NPU","feat.f7.h":"Multi-backend inference","feat.f7.p":"One binary covers DirectML GPU, WebNN NPU/GPU and CPU. Best backend is picked automatically, with fallback when it fails.","feat.f8.h":"Pluggable inference backends","feat.f8.p":"The built-in pipeline is not the only option: a plugin can take over inference with its own model and parameters, while editing, playback and export keep working.","feat.f8.c1":"custom model","feat.f8.c2":"same protocol","hero.hud1":"MCP · let an agent drive the editor","hero.hud1meta":"Claude · Cursor · scripts","hero.hud1val":"44 methods","feat.f6.note":"Switch without restarting — each precision lives in its own folder.","feat.f1.h":"SoulX-Singer Neural Synthesis","feat.f1.p":"A deep-learning singing synthesizer running on ONNX Runtime. DirectML makes the vocoder 6x faster and lifts the mel frontend SNR from 49.86 dB to 83.54 dB. One voice sings Chinese, English and Japanese — switch language, not singer. Segment-level synth cache, EBU R128 loudness normalisation and 48 kHz export live in the same pipeline: editing one note only re-runs that slice.",
     "feat.f1.t1":"AI Voice","feat.f1.t2":"Cross-lingual","feat.f1.t3":"ONNX opset 20",
@@ -1402,39 +1415,94 @@ function buildRoll(el,notes,withPlayhead){
 var heroRoll=buildRoll(document.getElementById('heroRoll'),MELODY,true);
 
 /* ---------- 音频试听（洛天依示例音频） ---------- */
-var AC=null,master=null,analyser=null,srcNode=null,freqData=null,timeData=null,playing=false;
+var playing=false;
 var BEAT=60/132,LOOP=16*BEAT;
-var demoAudio=new Audio('res/example_lty_cn.opus');
-demoAudio.preload='auto';demoAudio.loop=false;
+var demoAudio=document.getElementById('demoAudio');
 var playBtn=document.getElementById('playBtn'),hudB=document.getElementById('hudB');
 var ICON_PLAY='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l13 7.5-13 7.5z"/></svg>';
 var ICON_PAUSE='<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="5" height="16"/><rect x="14" y="4" width="5" height="16"/></svg>';
+var ICON_RETRY='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg>';
+var ICON_WAIT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="8" opacity=".35"/><path d="M12 4a8 8 0 0 1 8 8"/></svg>';
 function t(k){var dict=I18N[curLang]||I18N.zh;return dict[k]!==undefined?dict[k]:k;}
-function updatePlayBtnLabel(){
+
+/* 播放状态机：idle → loading → playing，出错进 error 可重试 */
+var playState='idle',playWatchdog=null;
+
+function renderPlayBtn(){
   if(!playBtn)return;
-  var ic=playing?ICON_PAUSE:ICON_PLAY;
-  var lbl=t(playing?'hero.pause':'hero.play');
-  playBtn.innerHTML=ic+'<span style="margin-left:4px">'+lbl+'</span>';
+  var ic=ICON_PLAY,lbl='hero.play',busy=false;
+  if(playState==='playing'){ic=ICON_PAUSE;lbl='hero.pause';}
+  else if(playState==='loading'){ic=ICON_WAIT;lbl='hero.loading';busy=true;}
+  else if(playState==='error'){ic=ICON_RETRY;lbl='hero.retry';}
+  playBtn.innerHTML=ic+'<span style="margin-left:4px">'+t(lbl)+'</span>';
+  playBtn.classList.toggle('err',playState==='error');
+  playBtn.classList.toggle('busy',busy);
+  playBtn.setAttribute('aria-pressed',playState==='playing'?'true':'false');
+  playBtn.setAttribute('aria-label',t(lbl));
 }
+function setPlayState(s){
+  playState=s;
+  playing=(s==='playing');
+  if(hudB)hudB.classList.toggle('playing',playing);
+  if(s==='playing'||s==='idle')clearWatchdog();
+  renderPlayBtn();
+}
+function clearWatchdog(){if(playWatchdog){clearTimeout(playWatchdog);playWatchdog=null;}}
+function updatePlayBtnLabel(){renderPlayBtn();}
 window.updatePlayBtnLabel=updatePlayBtnLabel;
-playBtn.innerHTML=ICON_PLAY+'<span style="margin-left:4px">'+t('hero.play')+'</span>';
-function ensureAC(){
-  if(!AC){
-    var Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return null;
-    AC=new Ctx();
-    master=AC.createGain();master.gain.value=0.8;master.connect(AC.destination);
-    analyser=AC.createAnalyser();analyser.fftSize=256;analyser.smoothingTimeConstant=0.78;
-    freqData=new Uint8Array(analyser.frequencyBinCount);
-    timeData=new Uint8Array(analyser.fftSize);
-    try{
-      srcNode=AC.createMediaElementSource(demoAudio);
-      srcNode.connect(analyser);analyser.connect(master);
-    }catch(e){console.warn('MediaElementSource 创建失败:',e);}
+
+/* 轻量提示条：只在失败时出现，2.8s 后自动消失 */
+var toastEl=null,toastTimer=null;
+function showToast(msg){
+  if(!toastEl){
+    toastEl=document.createElement('div');
+    toastEl.className='play-toast';
+    toastEl.setAttribute('role','status');
+    document.body.appendChild(toastEl);
   }
-  if(AC.state==='suspended')AC.resume();
-  return AC;
+  toastEl.textContent=msg;
+  toastEl.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){toastEl.classList.remove('on');},3000);
 }
-/* 音频事件 */
+
+function audioFail(kind){
+  clearWatchdog();
+  setPlayState('error');
+  showToast(t(kind==='fmt'?'hero.errFmt':'hero.errNet'));
+}
+
+function startPlayback(){
+  clearWatchdog();
+  setPlayState('loading');
+  /* 10s 还没出声就给出重试入口；仍在后台继续缓冲，能播了会自动切回播放态 */
+  playWatchdog=setTimeout(function(){
+    if(playState!=='playing'&&demoAudio.readyState<2){
+      playWatchdog=null;
+      setPlayState('error');
+      showToast(t('hero.errNet'));
+    }
+  },10000);
+  var p=demoAudio.play();
+  if(p&&typeof p.catch==='function'){
+    p.catch(function(err){
+      if(err&&err.name==='AbortError')return; /* 用户主动暂停打断，不算错误 */
+      var fmt=!!(err&&(err.name==='NotSupportedError'));
+      if(!fmt&&demoAudio.error&&demoAudio.error.code===4)fmt=true;
+      audioFail(fmt?'fmt':'net');
+    });
+  }
+}
+
+/* 音频事件驱动 UI，避免 promise 与真实播放状态不同步 */
+demoAudio.addEventListener('playing',function(){setPlayState('playing');});
+demoAudio.addEventListener('waiting',function(){if(playState==='playing')setPlayState('loading');});
+demoAudio.addEventListener('pause',function(){if(playState!=='error')setPlayState('idle');});
+demoAudio.addEventListener('error',function(){
+  var code=demoAudio.error?demoAudio.error.code:0;
+  console.warn('[demo] 音频加载失败，code=',code);
+  audioFail(code===4?'fmt':'net');
+});
 demoAudio.addEventListener('timeupdate',function(){
   if(!isFinite(demoAudio.duration)||demoAudio.duration<=0)return;
   var pos=demoAudio.currentTime/demoAudio.duration;
@@ -1448,37 +1516,57 @@ demoAudio.addEventListener('timeupdate',function(){
   });
 });
 demoAudio.addEventListener('ended',function(){
-  playing=false;hudB.classList.remove('playing');
-  updatePlayBtnLabel();playBtn.setAttribute('aria-pressed','false');
+  setPlayState('idle');
   if(heroRoll.ph)heroRoll.ph.style.left='0%';
   heroRoll.notes.forEach(function(el){el.classList.remove('hit');});
 });
+
 playBtn.addEventListener('click',function(){
-  if(!ensureAC())return;
-  if(demoAudio.paused){
-    demoAudio.play().then(function(){
-      playing=true;hudB.classList.add('playing');
-      updatePlayBtnLabel();playBtn.setAttribute('aria-pressed','true');
-    }).catch(function(err){console.warn('播放失败:',err);});
-  }else{
-    demoAudio.pause();
-    playing=false;hudB.classList.remove('playing');
-    updatePlayBtnLabel();playBtn.setAttribute('aria-pressed','false');
+  if(playState==='error'){
+    /* 重试：重新拉取音源，canplay 后再自动开始 */
+    clearWatchdog();
+    setPlayState('loading');
+    try{demoAudio.load();}catch(e){}
+    var startOnCanplay=function(){
+      demoAudio.removeEventListener('canplay',startOnCanplay);
+      startPlayback();
+    };
+    demoAudio.addEventListener('canplay',startOnCanplay);
+    playWatchdog=setTimeout(function(){
+      if(playState!=='playing'&&demoAudio.readyState<2){
+        playWatchdog=null;
+        setPlayState('error');
+        showToast(t('hero.errNet'));
+      }
+    },10000);
+    return;
   }
+  if(!demoAudio.paused){demoAudio.pause();return;}
+  if(playState==='loading'){
+    /* 载入中可以点一下取消，回到初始态 */
+    clearWatchdog();
+    try{demoAudio.pause();}catch(e){}
+    setPlayState('idle');
+    return;
+  }
+  /* 音源已确定不可用（格式不支持 / 被拦截）时立刻报错，别让用户对着按钮干等 */
+  if(demoAudio.readyState===0&&demoAudio.networkState===3){
+    var badCode=demoAudio.error?demoAudio.error.code:0;
+    audioFail(badCode===4?'fmt':'net');
+    return;
+  }
+  startPlayback();
 });
 document.addEventListener('visibilitychange',function(){
   if(document.hidden&&!demoAudio.paused)demoAudio.pause();
 });
+renderPlayBtn();
 
 /* 声库试听按钮（如页面有 [data-freq] 元素，也统一指向示例音频） */
 document.querySelectorAll('[data-freq]').forEach(function(btn){
   btn.addEventListener('click',function(){
-    if(!ensureAC())return;
     if(!demoAudio.paused)demoAudio.currentTime=0;
-    demoAudio.play().then(function(){
-      playing=true;hudB.classList.add('playing');
-      updatePlayBtnLabel();
-    }).catch(function(){});
+    startPlayback();
   });
 });
 
