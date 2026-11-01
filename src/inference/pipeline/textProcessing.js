@@ -379,12 +379,25 @@ const JP_MORA_WEIGHTS = {
  */
 const JP_MORA_DEFAULT_WEIGHT = 0.50;
 
+/**
+ * 词表里整个音节都不存在的少数普通话读音，用发音最接近的音节顶替。
+ *
+ * 只有"同音节换声调"也救不回来时才用（基础音节整个缺失）。目前只剩成音节的
+ * 鼻音 ng：除了"嗯"没有别的字读它，而"嗯"在歌词里出现得并不少。
+ */
+const ZH_SYLLABLE_ALIASES = {
+    'ng': 'en',   // 嗯 [ŋ] → 恩
+    'n': 'en',
+};
+
 class TextProcessing {
     constructor(options = {}) {
         this.phone2idx = {};
         this.enG2pDict = {};
         this._vocabSize = 0;
         this._dictSize = 0;
+        // 基础音节 → 词表里实际存在的声调列表，用于"缺声调"回退。
+        this._zhToneIndex = new Map();
         // Japanese vocalization mode:
         // - 'hybrid' (default): improved ARPAbet mapping (L for ら行, AO for お段) on the base model
         // - 'en-phonemes': uses English ARPAbet phonemes (original mapping) on the base multilingual model
@@ -427,6 +440,7 @@ class TextProcessing {
                         this.phone2idx[phoneList[i]] = i;
                     }
                     this._vocabSize = phoneList.length;
+                    this._buildZhToneIndex();
                     console.log(`[OnnxSVSPipeline] Phoneme vocabulary loaded: ${phoneList.length} phonemes (path: ${phoneSetPath})`);
                     return;
                 }
@@ -535,36 +549,147 @@ class TextProcessing {
         if (zhPhoneme && this.phone2idx[zhPhoneme] !== undefined) {
             return this.phone2idx[zhPhoneme];
         }
-        const vocabSize = this._vocabSize;
-        console.warn(`[OnnxSVSPipeline] Unknown phoneme: "${trimmed}"${zhPhoneme ? ` (converted: ${zhPhoneme})` : ''} [vocab=${vocabSize}], Using <UNK>`);
+        // 歌词直接写成 zh_ 音素时也可能缺声调（词表只收训练语料里出现过的组合）
+        const zhAlt = trimmed.startsWith('zh_') ? this._nearestToneVariant(trimmed) : null;
+        if (zhAlt && this.phone2idx[zhAlt] !== undefined) {
+            return this.phone2idx[zhAlt];
+        }
+        // 同一个字在整首歌里会出现几十次，同一条告警只报一次，免得刷满日志
+        this._unkWarned = this._unkWarned || new Set();
+        if (!this._unkWarned.has(trimmed)) {
+            this._unkWarned.add(trimmed);
+            const vocabSize = this._vocabSize;
+            console.warn(`[OnnxSVSPipeline] Unknown phoneme: "${trimmed}"${zhPhoneme ? ` (converted: ${zhPhoneme})` : ''} [vocab=${vocabSize}], Using <UNK>`);
+        }
         return this.phone2idx['<UNK>'] || 3;
     }
 
-    _charToZhPhoneme(input) {
-        const match = input.match(/^([\u4e00-\u9fff])([1-5])$/);
-        const char = match ? match[1] : input;
-        const overrideTone = match ? match[2] : null;
+    /**
+     * 建立"基础音节 → 词表中存在的声调"索引。
+     *
+     * phone_set.json 只收了 1201 个中文音节（402 个基础音节），是训练语料里
+     * 实际出现过的组合，并不覆盖普通话全部 400×5 个音节。例如 shui 只有
+     * 3/4 声，"谁"的 shui2 就没有。有这份索引才能在缺失时退到同一个音节的
+     * 其它声调，而不是直接 <UNK>。
+     */
+    _buildZhToneIndex() {
+        this._zhToneIndex = new Map();
+        for (const key of Object.keys(this.phone2idx)) {
+            const m = key.match(/^zh_(.+?)([1-5])$/);
+            if (!m) continue;
+            let tones = this._zhToneIndex.get(m[1]);
+            if (!tones) this._zhToneIndex.set(m[1], tones = []);
+            tones.push(Number(m[2]));
+        }
+    }
 
-        if (!/[\u4e00-\u9fff]/.test(char)) {
+    /**
+     * 拼音 → 词表键中音节部分的归一化。
+     *
+     * 词表把 ü 写成冒号形式（zh_lu:4 = 绿），pinyin-pro 给的是 lü4。
+     * 旧实现换成 v（lv4），词表里根本没有这种写法，于是"绿/吕/女/略"
+     * 整类字全部落到 <UNK>。
+     */
+    _normalizeZhSyllable(syllable, overrideTone = null) {
+        let s = String(syllable).toLowerCase().replace(/ü/g, 'u:').replace(/v/g, 'u:');
+        if (overrideTone) {
+            return s.replace(/\d?$/, overrideTone);
+        }
+        if (/0$/.test(s)) {
+            // pinyin-pro 用 0 表示轻声；词表沿用拼音方案的 5
+            return s.replace(/0$/, '5');
+        }
+        if (!/[1-5]$/.test(s)) {
+            return s + '5';
+        }
+        return s;
+    }
+
+    /**
+     * 同一个基础音节、换一个声调。返回词表里声调最接近的那个。
+     *
+     * 声调在 SVS 里主要影响音素的时长/滑音走势，实际音高由音符决定，所以
+     * 换声调的听感远好于 <UNK> 的随机 embedding。
+     */
+    _nearestToneVariant(key) {
+        const m = key.match(/^zh_(.+?)([1-5])$/);
+        if (!m) return null;
+        const tones = this._zhToneIndex.get(m[1]);
+        if (!tones || tones.length === 0) return null;
+        const want = Number(m[2]);
+        let best = tones[0];
+        let bestDistance = Math.abs(best - want);
+        for (const t of tones) {
+            const d = Math.abs(t - want);
+            if (d < bestDistance) {
+                best = t;
+                bestDistance = d;
+            }
+        }
+        return `zh_${m[1]}${best}`;
+    }
+
+    _charToZhPhoneme(input) {
+        const withTone = input.match(/^([\u4e00-\u9fff])([1-5])$/);
+        const overrideTone = withTone ? withTone[2] : null;
+
+        // 歌词里可能混着标点、替换字符或整段乱码（"璋?"）。只取第一个汉字，
+        // 否则 pinyin() 会把其余字符原样返回，拼出 "zh_乥5" 这种词表里永远
+        // 不存在的键。
+        const cjk = input.match(/[\u4e00-\u9fff]/);
+        if (!cjk) {
             return null;
         }
+        const char = cjk[0];
+
+        let readings;
         try {
-            const py = pinyin(char, { toneType: 'num', type: 'array' });
-            if (py && py.length > 0 && py[0]) {
-                let syllable = py[0].toLowerCase().replace(/ü/g, 'v');
-                if (overrideTone) {
-                    syllable = syllable.replace(/\d?$/, overrideTone);
-                } else if (/0$/.test(syllable)) {
-                    // pinyin-pro uses tone 0 for neutral tone; the model
-                    // vocabulary follows the standard pinyin convention 5.
-                    syllable = syllable.replace(/0$/, '5');
-                } else if (!/[1-5]$/.test(syllable)) {
-                    syllable += '5';
-                }
-                return 'zh_' + syllable;
-            }
+            // multiple: true 给出该字的所有读音（按常用度排序）。常用读音
+            // 缺失时用其它读音顶上，比 <UNK> 准得多：谁的 shui2 不在词表，
+            // 但第二个读音 shei2 在。
+            readings = pinyin(char, { toneType: 'num', type: 'array', multiple: true });
         } catch (e) {
             console.warn(`[OnnxSVSPipeline] Pinyin conversion failed ("${input}"):`, e.message);
+            return null;
+        }
+        if (!readings || readings.length === 0) {
+            return null;
+        }
+
+        const candidates = [];
+        for (const r of readings) {
+            // ü 必须放行：pinyin-pro 给的是 lü4，过滤掉就等于把"绿/女/略"
+            // 整个读音丢掉，只剩多音字里的 lu4(路)、ru3(汝) 这种错读。
+            if (!r || !/^[a-zü:]+[0-5]?$/.test(String(r).toLowerCase())) {
+                // 生僻字会被 pinyin-pro 原样返回（"乥"），不是读音
+                continue;
+            }
+            const key = 'zh_' + this._normalizeZhSyllable(r, overrideTone);
+            if (!candidates.includes(key)) candidates.push(key);
+        }
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        // 1) 精确命中
+        for (const key of candidates) {
+            if (this.phone2idx[key] !== undefined) return key;
+        }
+        // 2) 同音节换声调
+        for (const key of candidates) {
+            const alt = this._nearestToneVariant(key);
+            if (alt && this.phone2idx[alt] !== undefined) return alt;
+        }
+        // 3) 整个音节都不在词表里（ng 这种成音节鼻音），用最接近的音节顶替
+        for (const key of candidates) {
+            const m = key.match(/^zh_(.+?)([1-5])$/);
+            if (!m) continue;
+            const alias = ZH_SYLLABLE_ALIASES[m[1]];
+            if (!alias) continue;
+            const direct = `zh_${alias}${m[2]}`;
+            if (this.phone2idx[direct] !== undefined) return direct;
+            const alt = this._nearestToneVariant(`zh_${alias}5`);
+            if (alt && this.phone2idx[alt] !== undefined) return alt;
         }
         return null;
     }

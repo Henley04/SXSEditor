@@ -96,6 +96,45 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(out1[0].name.startsWith('zh_')).to.be.true;
       expect(out2[0].name.startsWith('zh_')).to.be.true;
     });
+
+    describe('phoneme vocabulary gaps', () => {
+      // 词表只有 1201 个中文音节，是训练语料里出现过的组合，覆盖不到全部
+      // 400x5 个拼音；ü 在词表里写的是 u: 而不是 v。
+      it('should spell ü as u: to match the vocabulary', () => {
+        expect(tpEn.resolveLyricToPhonemes('绿')[0].name).to.equal('zh_lu:4');
+        expect(tpEn.resolveLyricToPhonemes('吕')[0].name).to.equal('zh_lu:3');
+        expect(tpEn.resolveLyricToPhonemes('女')[0].name).to.equal('zh_nu:3');
+        expect(tpEn.resolveLyricToPhonemes('略')[0].name).to.equal('zh_lu:e4');
+      });
+
+      it('should use another reading when the common one is missing', () => {
+        // 谁 shuí 不在词表（只有 shui3/shui4），但第二个读音 shéi 在
+        expect(tpEn.resolveLyricToPhonemes('谁')[0].name).to.equal('zh_shei2');
+      });
+
+      it('should fall back to the same syllable with another tone', () => {
+        expect(tpEn._charToZhPhoneme('水2')).to.equal('zh_shui3');
+        expect(tpEn._lookupPhonemeId('zh_shui2')).to.equal(tpEn.phone2idx['zh_shui3']);
+      });
+
+      it('should ignore noise after the first Han character', () => {
+        expect(tpEn._charToZhPhoneme('璋?')).to.equal('zh_zhang1');
+        expect(tpEn._charToZhPhoneme('谁\uFFFD')).to.equal('zh_shei2');
+      });
+
+      it('should never emit a key that is absent from the vocabulary', () => {
+        for (const ch of ['谁', '绿', '吕', '女', '略', '嗯', '呣', '乥', '鿿']) {
+          const name = tpEn._charToZhPhoneme(ch);
+          if (name !== null) {
+            expect(tpEn.phone2idx[name], `${ch} -> ${name}`).to.not.equal(undefined);
+          }
+        }
+      });
+
+      it('should map the syllabic nasal ng to a real syllable', () => {
+        expect(tpEn._charToZhPhoneme('嗯')).to.equal('zh_en4');
+      });
+    });
   });
 
   describe('resolveLyricToPhonemes (jp-lora mode)', () => {
