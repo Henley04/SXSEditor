@@ -108,6 +108,13 @@
       var open = !container.classList.contains('open');
       setOpen(open);
       if (open) {
+        // keep the site menu from overlapping the doc list
+        var nav = document.querySelector('[data-header-nav].open');
+        if (nav) {
+          nav.classList.remove('open');
+          var menuBtn = document.querySelector('[data-menu-btn]');
+          if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+        }
         var act = container.querySelector('.side-link.active');
         if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
       }

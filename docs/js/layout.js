@@ -64,6 +64,14 @@
       nav.classList.toggle('open', open);
       btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       btn.setAttribute('aria-label', (window.SXS_i18n && window.SXS_i18n.t(open ? 'menu.close' : 'menu.open')) || (open ? 'Close menu' : 'Open menu'));
+      if (open) {
+        // never stack the doc switcher and the site menu on top of each other
+        document.querySelectorAll('.docs-sidebar.open').forEach(function (sb) {
+          sb.classList.remove('open');
+          const t = sb.previousElementSibling;
+          if (t && t.classList.contains('docnav-toggle')) t.setAttribute('aria-expanded', 'false');
+        });
+      }
     }
     btn.setAttribute('aria-expanded', 'false');
     btn.setAttribute('aria-controls', 'site-nav');
