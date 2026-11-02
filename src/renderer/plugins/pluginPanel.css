@@ -1,0 +1,100 @@
+/* 插件面板抽屉（主窗口）。
+ *
+ * 用 position: fixed 覆盖在主界面右侧，而不是插进 #app 的 flex 列 —— 主窗口的
+ * 布局（工具栏 / 音轨 / 时间线 / 状态栏）已经有一整套尺寸联动与 canvas 重排逻辑，
+ * 往里塞一个会改变宽度的兄弟节点会让 timelineRenderer 的每一条 hit-test 都要重算。
+ * 浮动抽屉对它是零影响：不动布局，只在上面盖一层。
+ */
+
+.plugin-panel-dock {
+  --plugin-panel-width: 420px;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--plugin-panel-width);
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border-default);
+  box-shadow: var(--shadow-xl);
+  z-index: 40;
+  animation: plugin-panel-enter var(--motion-base, 160ms) var(--ease-emphasized, ease-out);
+}
+
+.plugin-panel-dock[hidden] {
+  display: none;
+}
+
+@keyframes plugin-panel-enter {
+  from { transform: translateX(12px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* 用户在系统设置里关掉动效时不要动 */
+@media (prefers-reduced-motion: reduce) {
+  .plugin-panel-dock { animation: none; }
+}
+
+.plugin-panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: linear-gradient(180deg, var(--bg-header-start), var(--bg-header-end));
+}
+
+.plugin-panel-title {
+  margin: 0;
+  font-size: var(--font-md, 13px);
+  font-weight: 600;
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-panel-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.plugin-panel-close:hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+}
+
+.plugin-panel-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.plugin-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.plugin-panel-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  /* 面板自带主题，宿主不该给它加底色 —— 透出面板自己的背景 */
+  background: transparent;
+  color-scheme: normal;
+}

@@ -72,6 +72,15 @@ const HIGH_RISK_METHOD_WINDOWS = [
   { path: ['showItemInFolder'], windows: ['index', 'settings', 'singermarket'] },
   // 插件合成：只有主窗口与分片编辑器会真正驱动第三方歌声后端
   { path: ['pluginAPI', 'synthesize'], windows: ['index', 'fragmenteditor'] },
+  // 插件系统 v2：跑命令 / 面板 RPC 只允许在会渲染插件 UI 的窗口
+  { path: ['pluginHost', 'runCommand'], windows: ['index', 'fragmenteditor', 'pluginmanager'] },
+  { path: ['pluginHost', 'panelRpc'], windows: ['index', 'fragmenteditor'] },
+  { path: ['pluginHost', 'install'], windows: ['index', 'pluginmanager'] },
+  { path: ['pluginHost', 'installFromPath'], windows: ['index', 'pluginmanager'] },
+  { path: ['pluginHost', 'uninstall'], windows: ['index', 'pluginmanager'] },
+  { path: ['pluginHost', 'setEnabled'], windows: ['index', 'pluginmanager'] },
+  // 工程写入的应答只属于真正持有工程文档的两个窗口
+  { path: ['pluginHost', 'sendProjectApplyResult'], windows: ['index', 'fragmenteditor'] },
   // 系统投递的文件只属于主窗口：它会读盘、还会新建预处理窗口
   { path: ['takePendingOpenFile'], windows: ['index'] },
   { path: ['openSingerFileAt'], windows: ['index'] },
@@ -641,6 +650,46 @@ const _fullElectronAPI = {
       const handler = (event, data) => callback(data);
       ipcRenderer.on(IPC_CHANNELS.PLUGIN_DIAGNOSTICS, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGIN_DIAGNOSTICS, handler);
+    },
+  },
+
+  // ==================== Plugin Host v2（全应用插件） ====================
+  // 窄接口：只暴露"列出/安装/卸载/跑命令/面板 RPC/事件"，不暴露任何文件路径或
+  // 进程句柄。面板 iframe 的能力由 pluginHost.panelRpc 再收一道（apiScopes）。
+  pluginHost: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_LIST),
+    admin: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_ADMIN),
+    install: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL),
+    installFromPath: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL_PATH, filePath),
+    uninstall: (id, keepData) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_UNINSTALL, id, !!keepData),
+    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_ENABLED, id, !!enabled),
+    reload: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RELOAD),
+    runCommand: (commandId, args) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RUN_COMMAND, commandId, args || {}),
+    panelRpc: (request) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_PANEL_RPC, request || {}),
+    openPluginsFolder: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DIR),
+    getLog: (limit) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_GET_LOG, limit),
+    // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
+    onSync: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_SYNC, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_SYNC, handler);
+    },
+    onEvent: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_EVENT, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_EVENT, handler);
+    },
+    onProjectApply: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_PROJECT_APPLY, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_PROJECT_APPLY, handler);
+    },
+    sendProjectApplyResult: (payload) => ipcRenderer.send(IPC_CHANNELS.PLUGINHOST_PROJECT_APPLY_RESULT, payload),
+    // 菜单点了"打开面板" → 主进程下发已算好的 plugin:// URL，渲染层挂 iframe
+    onOpenPanel: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL, handler);
     },
   },
 

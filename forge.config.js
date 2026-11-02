@@ -319,6 +319,17 @@ module.exports = {
                 js: './src/preload.js',
               },
             },
+            {
+              // 插件管理器：安装 / 启停 / 卸载 / 活动日志。
+              // 独立窗口而不是主窗口内嵌面板，理由见 plan §6：管理器要能展示
+              // "插件把应用搞坏了"的现场，主窗口此时可能已经起不来了。
+              html: './src/pluginManager.html',
+              js: './src/pluginManager/index.js',
+              name: 'plugin_manager_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
           ],
         },
       },

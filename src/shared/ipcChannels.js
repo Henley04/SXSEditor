@@ -158,6 +158,30 @@ const IPC_CHANNELS = {
   PLUGIN_AUDIO: 'plugin:audio',
   PLUGIN_DIAGNOSTICS: 'plugin:diagnostics',
 
+  // ==================== Plugin Host v2（全应用插件） ====================
+  // 注意与上面的 v1（plugin:*，仅歌声后端）分开：v1 保持原样直到 3.0 移除。
+  // 这里没有"每插件一个通道"的动态通道 —— 插件 runtime 与主进程走
+  // utilityProcess 的 MessagePort，不占 ipcMain，天然免掉一类卸载残留。
+  PLUGINHOST_LIST: 'plugin-host:list',
+  PLUGINHOST_ADMIN: 'plugin-host:admin',
+  PLUGINHOST_INSTALL: 'plugin-host:install',
+  PLUGINHOST_INSTALL_PATH: 'plugin-host:install-path',
+  PLUGINHOST_UNINSTALL: 'plugin-host:uninstall',
+  PLUGINHOST_SET_ENABLED: 'plugin-host:set-enabled',
+  PLUGINHOST_RELOAD: 'plugin-host:reload',
+  PLUGINHOST_RUN_COMMAND: 'plugin-host:run-command',
+  PLUGINHOST_PANEL_RPC: 'plugin-host:panel-rpc',
+  PLUGINHOST_OPEN_DIR: 'plugin-host:open-dir',
+  PLUGINHOST_GET_LOG: 'plugin-host:get-log',
+  // 主进程 → 渲染进程
+  PLUGINHOST_SYNC: 'plugin-host:sync',
+  PLUGINHOST_EVENT: 'plugin-host:event',
+  // 主进程 → 主窗口：一次工程写入往返（插件 runtime 经宿主转发）
+  PLUGINHOST_PROJECT_APPLY: 'plugin-host:project-apply',
+  PLUGINHOST_PROJECT_APPLY_RESULT: 'plugin-host:project-apply-result',
+  // 主进程 → 主窗口：请渲染层挂载某个插件的 iframe 面板（菜单项触发）
+  PLUGINHOST_OPEN_PANEL: 'plugin-host:open-panel',
+
   // ==================== Resource Manager ====================
   RESMGR_OPEN: 'resmgr:open',
   RESMGR_GET_GPU_INFO: 'resmgr:getGPUInfo',

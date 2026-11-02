@@ -784,4 +784,12 @@ export function registerMcpAutomation() {
   }));
 }
 
+/**
+ * 插件宿主转发过来的工程读写（`plugin-host:project-apply`）。
+ *
+ * 与 MCP 自动化共用同一套 op 语义，是刻意的：插件作者与智能体作者面对的是
+ * 同一份 `project.apply` 契约，不存在"通过插件写工程和通过 MCP 写工程行为不同"
+ * 的第二语义。区别只在入口与审计，不在语义。
+ */
+export { execute as executeAutomationRequest };
 export { execute as _executeForTests };

@@ -18,6 +18,7 @@ let pendingFragmentData = {};
 let singerCreatorWindow = null;
 let singerMarketWindow = null;
 let audioPreprocessWindow = null;
+let pluginManagerWindow = null;
 let pendingPreprocessData = null;
 let preprocessWavBuffer = null;
 
@@ -272,8 +273,33 @@ function buildAppMenu() {
     },
   ];
 
+  // 插件菜单插在 Settings 之后、View 之前（与"文件/设置同级"的产品要求一致）。
+  // 延迟 require：PluginService 会反过来 require 本模块重建菜单，顶层导入会成环。
+  try {
+    const { getPluginService } = require('./plugins/PluginService');
+    const pluginService = getPluginService();
+    if (pluginService.initialized) {
+      const fragment = pluginService.getMenuFragment();
+      if (fragment) menuTemplate.splice(3, 0, fragment);
+    }
+  } catch (err) {
+    console.warn('[Menu] 构建插件菜单失败:', err && err.message);
+  }
+
   const menu = Menu.buildFromTemplate(menuTemplate);
   Menu.setApplicationMenu(menu);
+}
+
+/**
+ * 重建整个应用菜单。插件贡献变化时调用 —— 整体重建而非增量 patch，
+ * 避免"卸载后菜单里还剩一个幽灵项"这类只能靠肉眼发现的问题。
+ */
+function rebuildAppMenu() {
+  try {
+    buildAppMenu();
+  } catch (err) {
+    console.warn('[Menu] 重建失败:', err && err.message);
+  }
 }
 
 async function showAboutDialog() {
@@ -413,6 +439,65 @@ function openSettingsWindow() {
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
+  });
+}
+
+/**
+ * 插件管理器窗口（独立窗口，菜单 "Manage Plugins…" 打开）。
+ *
+ * 与 settings 不同，这个窗口不带 modal：用户在管理器里删插件时，主窗口该能继续用。
+ * 打开参数（{tab, focus}）通过 hash 传入，窗口已存在时用 executeJavaScript 复用同一个实例。
+ */
+function openPluginManagerWindow(options = {}) {
+  const param = new URLSearchParams();
+  if (options.tab) param.set('tab', options.tab);
+  if (options.focus) param.set('focus', options.focus);
+  const suffix = param.toString() ? `#${param.toString()}` : '';
+
+  if (pluginManagerWindow && !pluginManagerWindow.isDestroyed()) {
+    pluginManagerWindow.show();
+    pluginManagerWindow.focus();
+    try {
+      pluginManagerWindow.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('plugin-manager:params',{detail:${JSON.stringify(options || {})}}))`,
+        true,
+      );
+    } catch (_) { /* 窗口还没加载完，忽略 */ }
+    return;
+  }
+
+  pluginManagerWindow = new BrowserWindow({
+    width: 900,
+    height: 720,
+    minWidth: 760,
+    minHeight: 520,
+    title: t('menu.plugins'),
+    icon: resolveAppIcon(),
+    resizable: true,
+    minimizable: true,
+    maximizable: true,
+    parent: mainWindow || undefined,
+    backgroundColor: '#14141f',
+    show: false,
+    webPreferences: {
+      preload: PLUGIN_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+
+  pluginManagerWindow.loadURL(`${PLUGIN_MANAGER_WINDOW_WEBPACK_ENTRY}${suffix}`);
+  pluginManagerWindow.once('ready-to-show', () => {
+    pluginManagerWindow.show();
+  });
+  pluginManagerWindow.setMenu(null);
+  pluginManagerWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  pluginManagerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  pluginManagerWindow.on('closed', () => {
+    pluginManagerWindow = null;
   });
 }
 
@@ -1007,6 +1092,9 @@ module.exports = {
   notifyRelayout,
   attachRelayoutListeners,
   openResourceManagerWindow,
+  openPluginManagerWindow,
+  rebuildAppMenu,
+  getPluginManagerWindow: () => pluginManagerWindow,
   createModelDownloadWindow,
   setModelDownloadWindow,
   openUpdateNotificationWindow,

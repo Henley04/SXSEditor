@@ -1,0 +1,49 @@
+{
+  "apiVersion": 2,
+  "id": "example-hello",
+  "name": "Example: Hello Panel",
+  "version": "1.0.0",
+  "description": "最小可用的 v2 插件模板：一个命令 + 一个 iframe 面板，演示 project.read / project.apply / state 三类宿主能力。复制这个目录改名即可开工。",
+  "author": "SXSEditor Dev",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {
+    "project": ["read", "write"],
+    "ui": ["menu", "panel"],
+    "automation": ["expose"]
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "greet",
+        "title": {
+          "en": "Say hello",
+          "zh-CN": "打个招呼"
+        },
+        "description": "在通知区显示一条消息，并把调用次数写进插件自己的 state。"
+      },
+      {
+        "id": "bumpTempo",
+        "title": {
+          "en": "Set tempo to 132",
+          "zh-CN": "把 BPM 改成 132"
+        },
+        "description": "通过 project.apply 修改工程速度，演示插件如何写回工程。"
+      }
+    ],
+    "panels": [
+      {
+        "id": "main",
+        "title": {
+          "en": "Hello Panel",
+          "zh-CN": "Hello 面板"
+        },
+        "entry": "panel/index.html",
+        "width": 420,
+        "apiScopes": ["project.read", "project.apply", "state.get", "state.set", "ui.notify"]
+      }
+    ]
+  }
+}

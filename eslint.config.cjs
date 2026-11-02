@@ -85,6 +85,13 @@ module.exports = [
             'src/shared/mcpModel.js',
             'src/shared/jpPhonemeMap.js',
             'src/shared/pluginPermissions.js',
+            // 插件系统 v2 的共享层：CJS（插件 runtime 是裸拷贝，按路径 require，
+            // 因此这几个文件不能写成 ESM），主进程与 runtime 共用。
+            'src/shared/pluginApi.js',
+            'src/shared/pluginDisposable.js',
+            'src/shared/pluginProtocol.js',
+            'src/shared/pluginManifest.js',
+            'src/shared/pluginZip.js',
             // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
             'src/shared/safeCall.js',
             // .sxssinger 解析（主进程用，纯函数便于单测）
@@ -140,6 +147,8 @@ module.exports = [
                 UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 SINGER_MARKET_WINDOW_WEBPACK_ENTRY: 'readonly',
                 SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
             },
         },
     },
@@ -164,6 +173,7 @@ module.exports = [
             'src/singerCreator.js',
             'src/singerMarket.js',
             'src/settings.js',
+            'src/pluginManager/**/*.js',
             'src/modelDownload.js',
             'src/resourceManager.js',
             'src/alertDialog.js',
@@ -212,6 +222,8 @@ module.exports = [
                 RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 SPLASH_WINDOW_WEBPACK_ENTRY: 'readonly',
                 SPLASH_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
             },
         },
     },
@@ -225,6 +237,22 @@ module.exports = [
                 ...globals.node,
                 ...globals.mocha,
                 ...globals.browser,
+            },
+        },
+    },
+    // 仓库自带的示例插件（plugins/）。它们不是构建产物的一部分，但会被插件作者
+    // 直接照抄，所以必须与 src/ 保持同样的基本正确性。
+    // 两档 globals 合在一起给：main.js 是 utilityProcess 里的 CJS（node），
+    // panel/*.js 是 sandbox iframe 里的脚本（browser）。按子目录再拆一档不值得。
+    {
+        files: ['plugins/**/*.js'],
+        languageOptions: {
+            sourceType: 'script',
+            globals: {
+                ...globals.node,
+                ...globals.browser,
+                // sandbox iframe 里访问父窗口
+                parent: 'readonly',
             },
         },
     },

@@ -106,6 +106,9 @@ typings/
 # Electron-Forge
 out/
 
+# 插件安装包产物（scripts/package-plugin.js 生成）
+dist-plugins/
+
 # ONNX models
 *.onnx
 *.onnx.data

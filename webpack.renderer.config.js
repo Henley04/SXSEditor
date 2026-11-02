@@ -18,6 +18,8 @@ const WINDOW_NAMES = [
   // updateNotification.html 里同样有 <script src="./themes/themeBootstrap.js">，
   // 原先漏在列表外 → 打包后该窗口 404，首屏防闪烁脚本不生效（审查项 U2）。
   'update_notification_window',
+  // 插件管理器窗口同样在 <head> 里引了 themeBootstrap.js
+  'plugin_manager_window',
   // ⚠️ 这里**故意没有** 'splash_window'。splash 不是 webpack 渲染入口，
   // 不产生 .webpack/renderer/splash_window/ 目录：它的首帧必须零JS（无 preload
   // 编译、无 bundle 执行），而 @electron-forge/plugin-webpack 强制要求每个

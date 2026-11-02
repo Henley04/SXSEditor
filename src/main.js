@@ -254,6 +254,17 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
     },
   },
+  // plugin:// —— 插件面板的静态资源来源。standard + secure 才能给出稳定 origin，
+  // 让 iframe 的 sandbox 真正把它们隔离成一个独立源（没有 host 的 DOM 与存储）。
+  {
+    scheme: 'plugin',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
 ]);
 
 app.whenReady().then(() => {
@@ -382,7 +393,7 @@ app.whenReady().then(() => {
   const cspConnectSrc = isDev
     ? "'self' https://modelscope.cn ws://0.0.0.0:3000 ws://localhost:3000"
     : "'self' https://modelscope.cn";
-  const contentSecurityPolicy = `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ${cspConnectSrc}; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;`;
+  const contentSecurityPolicy = `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ${cspConnectSrc}; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' plugin:;`;
 
   // Content Security Policy: restrict resource loading to self-origin
   //
@@ -668,6 +679,38 @@ app.whenReady().then(() => {
     registerAudioIpc();
     registerModelDownloadIpc();
     registerUpdateIpc();
+
+    // 插件系统 v2：只扫描目录 + 注册贡献（不 spawn 任何进程），冷启动代价是几次
+    // readdir + JSON.parse。运行时按需启动，见 PluginService._ensureRuntime()。
+    try {
+      const { getPluginService } = require('./main/plugins/PluginService');
+      const { registerHandler } = require('./main/plugins/PluginProtocol');
+      const { getLocale } = require('./main/locale');
+      const pluginService = getPluginService();
+      pluginService.init({
+        getMainWindow: () => {
+          try {
+            return require('./main/windowManager').getMainWindow();
+          } catch (_) {
+            return null;
+          }
+        },
+        locale: getLocale(),
+      });
+      pluginService.setMenuDirtyHandler(() => {
+        try {
+          require('./main/windowManager').rebuildAppMenu();
+        } catch (err) {
+          console.warn('[plugins] 菜单重建失败:', err && err.message);
+        }
+      });
+      registerHandler({ resolvePluginDir: (id) => pluginService.resolvePluginDir(id) });
+      console.log(`[plugins] loaded: ${JSON.stringify(pluginService.registry.stats())}`);
+    } catch (err) {
+      // 插件系统坏了不能拖垮主程序
+      console.error('[plugins] 初始化失败:', err && err.stack ? err.stack : err);
+    }
+
     resolveHeavyIpcReady({ success: true });
 
     // 后台执行一次性硬件检测和设备校验（原位于 did-finish-load 回调，
@@ -833,6 +876,15 @@ app.on('before-quit', (event) => {
       resetRosvot();
       resetAudioManagers();
       require('./main/mcpBridge').stopMcpBridge();
+      // 插件：先停 runtime（dispose → kill），再让 IPC handler 一起下线。
+      // 这一步不能省：utilityProcess 里的插件会持有 ORT session 与文件句柄，
+      // 直接 app.exit() 只会让内核回收，日志里看不到"是谁没退干净"。
+      try {
+        const { getPluginService } = require('./main/plugins/PluginService');
+        await getPluginService().disposeAll();
+      } catch (err) {
+        console.warn('[Main] 插件清理失败:', err && err.message);
+      }
       const { getFragmentWindows } = require('./main/windowManager');
       const fragmentWindows = getFragmentWindows();
       for (const id in fragmentWindows) {

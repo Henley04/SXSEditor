@@ -41,6 +41,10 @@ const EXTRA_RAW_ENTRIES = [
   // pluginWorker.js 落在 `src/main` 目录拷贝范围内，但它是 worker 入口
   // （见 pluginHost.js 的 WORKER_ENTRY_CANDIDATES），必须按路径裸加载。
   path.join(MAIN_OUT, 'main', 'pluginWorker.js'),
+  // 插件 runtime 入口：由 utilityProcess.fork 按路径拉起（见
+  // PluginRuntimeManager.resolveRuntimeEntry），同样落在 `src/main` 树拷贝里。
+  // 它 require 的同目录 ortRunner.js / sandbox.js 必须一起被拷到。
+  path.join(MAIN_OUT, 'main', 'plugins', 'runtime', 'pluginRuntimeEntry.js'),
 ];
 
 function toPosix(p) {

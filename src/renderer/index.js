@@ -1,5 +1,6 @@
 import '../common.css';
 import '../index.css';
+import './plugins/pluginPanel.css';
 
 // Import state and DOM references (initializes trackManager, history, and DOM elements)
 import './state.js';
@@ -22,6 +23,8 @@ import { hydrateIcons } from '../icons/iconHelper.js';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
 import { installPluginPlaybackBridge } from './pluginBlockingOverlay.js';
 import { installOpenFromOs, consumePendingOpenFile } from './openFromOs.js';
+import { installPluginPanelHost } from './plugins/pluginPanelHost.js';
+import { installProjectApplyBridge } from './plugins/projectApplyBridge.js';
 
 // 首屏关键路径之外的工作（图标水合）延后到空闲帧执行，让主窗口更早呈现。
 // 首屏的 i18n 文本替换必须先跑，否则用户会先看到英文再闪成中文。
@@ -83,6 +86,14 @@ if (state._ipcCleanups) {
   state._ipcCleanups.push(installPluginPlaybackBridge({
     getTimeDisplay: () => dom.timeDisplay,
   }));
+}
+
+// 插件系统 v2：工程读写落地端 + iframe 面板宿主。
+// 两者都只挂监听、不主动拉数据 —— 没装插件时零开销（没有 IPC 往返、没有 DOM）。
+// 句柄同样交给 state._ipcCleanups，beforeunload 时统一摘除。
+if (state._ipcCleanups) {
+  state._ipcCleanups.push(installProjectApplyBridge());
+  state._ipcCleanups.push(installPluginPanelHost());
 }
 
 // Display app version.

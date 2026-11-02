@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="plugins.windowTitle">插件</title>
+  <!-- 与其它窗口一致：首帧前把主题变量写好，避免亮/暗色闪一下 -->
+  <script src="./themes/themeBootstrap.js"></script>
+</head>
+<body>
+  <header class="pm-header">
+    <div class="pm-titlebar">
+      <h1 data-i18n="plugins.heading">插件</h1>
+      <span class="pm-count" id="pmCount"></span>
+    </div>
+    <div class="pm-actions">
+      <button type="button" class="pm-btn pm-btn-primary" id="pmInstall" data-i18n="plugins.install">安装插件…</button>
+      <button type="button" class="pm-btn" id="pmReload" data-i18n="plugins.reloadAll">重新加载全部</button>
+      <button type="button" class="pm-btn" id="pmOpenFolder" data-i18n="plugins.openFolder">打开插件目录</button>
+    </div>
+  </header>
+
+  <nav class="pm-tabs" role="tablist">
+    <button type="button" class="pm-tab is-active" role="tab" aria-selected="true" data-tab="installed" data-i18n="plugins.tabInstalled">已安装</button>
+    <button type="button" class="pm-tab" role="tab" aria-selected="false" data-tab="log" data-i18n="plugins.tabLog">活动日志</button>
+  </nav>
+
+  <main class="pm-body">
+    <section class="pm-pane" id="pmPaneInstalled" role="tabpanel">
+      <div class="pm-empty" id="pmEmpty">
+        <p class="pm-empty-title" data-i18n="plugins.empty">还没有安装任何插件</p>
+        <p class="pm-empty-hint" data-i18n="plugins.emptyHint">插件包以 .sxsp 结尾。安装后会在菜单栏「插件」下出现入口。</p>
+      </div>
+      <ul class="pm-list" id="pmList"></ul>
+    </section>
+
+    <section class="pm-pane pm-pane-hidden" id="pmPaneLog" role="tabpanel">
+      <div class="pm-log-toolbar">
+        <span class="pm-log-hint" id="pmLogCount"></span>
+        <button type="button" class="pm-btn pm-btn-small" id="pmLogRefresh" data-i18n="plugins.logRefresh">刷新</button>
+      </div>
+      <div class="pm-empty" id="pmLogEmpty" data-i18n="plugins.logEmpty">暂无活动记录</div>
+      <div class="pm-log-wrap">
+        <table class="pm-log" id="pmLogTable">
+          <thead>
+            <tr>
+              <th data-i18n="plugins.logTime">时间</th>
+              <th data-i18n="plugins.logEvent">事件</th>
+              <th data-i18n="plugins.logPlugin">插件</th>
+              <th data-i18n="plugins.logDetail">详情</th>
+            </tr>
+          </thead>
+          <tbody id="pmLogBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="pm-toast" id="pmToast" hidden></div>
+</body>
+</html>
