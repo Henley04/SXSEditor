@@ -208,6 +208,31 @@ describe('plugin lifecycle (M1 slice)', function () {
     expect(fs.existsSync(dataDir)).to.equal(false);
   });
 
+  it('停用只撤贡献、保留条目；再启用恢复贡献', async function () {
+    expect((await service.installFromPackage(pkgPath)).ok).to.equal(true);
+
+    const disabled = await service.setEnabled(TEST_ID, false);
+    expect(disabled.ok).to.equal(true);
+
+    // 关键：停用后插件仍出现在列表里，否则管理器里没有"启用"按钮可按
+    const snap = service.snapshot();
+    expect(snap.plugins).to.have.length(1);
+    expect(snap.plugins[0].status).to.equal('disabled');
+    expect(snap.plugins[0].commands).to.have.length(0);
+    expect(registry.stats().command).to.equal(0);
+    // 菜单里不该再出现它的子菜单
+    const fragment = service.getMenuFragment();
+    expect(fragment.submenu.some((i) => i.label === 'Demo Plugin')).to.equal(false);
+
+    const enabled = await service.setEnabled(TEST_ID, true);
+    expect(enabled.ok).to.equal(true);
+    const after = service.snapshot();
+    expect(after.plugins[0].status).to.equal('loaded');
+    expect(after.plugins[0].commands).to.have.length(1);
+
+    await service.uninstall(TEST_ID, { keepData: false });
+  });
+
   it('拒绝非法包：缺 manifest / 目录穿越 / 非法 id', async function () {
     const bad = path.join(root, 'bad.sxsp');
 

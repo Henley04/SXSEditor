@@ -325,8 +325,9 @@ class PluginService {
 
     if (!enabled) {
       await this.runtimes.stop(id);
-      this.registry.removePlugin(id);
-      this._pluginDirs.delete(id);
+      // 停用只撤贡献、保留记录 —— 记录一删，管理器里就没这条了，用户无法再启用。
+      this.registry.removeContributions(id);
+      this.registry.updatePlugin(id, { status: 'disabled', runtimeAlive: false, error: '' });
     } else {
       await this.reloadAll({ reason: 'enable' });
     }

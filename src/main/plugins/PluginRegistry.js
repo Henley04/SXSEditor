@@ -60,19 +60,32 @@ class PluginRegistry {
     return record;
   }
 
-  /** 删除插件及其全部贡献。返回被删除的贡献数量，供审计与断言使用。 */
-  removePlugin(id) {
+  /**
+   * 只摘掉贡献，保留插件记录（停用用这条）。
+   *
+   * 停用不能走 removePlugin：记录一删，管理器里连条目都没有了，用户再也点不到
+   * "启用"，只能重启应用。两者的差别正是"这个插件还安不安全地待在列表里"。
+   * @returns {number} 被删除的贡献数量
+   */
+  removeContributions(pluginId) {
     let removed = 0;
     // 遍历所有贡献类型：插件的每一项贡献都带着 pluginId，按它过滤，
     // 不需要插件自己报"我注册了什么"—— 这也是卸载能兜底的原因。
     for (const map of this._contrib.values()) {
       for (const [key, entry] of [...map]) {
-        if (entry.pluginId === id) {
+        if (entry.pluginId === pluginId) {
           map.delete(key);
           removed++;
         }
       }
     }
+    if (removed > 0) this._bump();
+    return removed;
+  }
+
+  /** 删除插件及其全部贡献。返回被删除的贡献数量，供审计与断言使用。 */
+  removePlugin(id) {
+    const removed = this.removeContributions(id);
     this._plugins.delete(id);
     this._bump();
     return removed;
