@@ -108,6 +108,13 @@ class ModelAcl {
   decide(subject, endpoint, opts = {}) {
     if (!endpoint || !endpoint.id) return { decision: 'deny', scope: '', reason: 'no-endpoint' };
 
+    // 宿主自身没有 pluginId，不该被插件级 ACL 卡住：命令面板调模型时弹一个
+    // "是否允许宿主访问"的确认框没有意义，用户就是操作者本身。
+    // 但端点可用性（用户禁用、缺凭据）仍然有效 —— 那条在 store.resolve 里已经判了。
+    if (subject === 'host') {
+      return { decision: 'allow', scope: 'host', reason: 'host' };
+    }
+
     if (this._subjectPolicy.get(subject) === 'deny') {
       return { decision: 'deny', scope: '', reason: 'subject-deny' };
     }

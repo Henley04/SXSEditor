@@ -146,6 +146,13 @@ describe('ModelAcl', function () {
     expect(acl.decide('plugin:a', ep).decision).to.equal('ask');
   });
 
+  it('host 主体跳过插件 ACL，不需要弹窗', function () {
+    const acl = new ModelAcl();
+    expect(acl.decide('host', ep)).to.include({ decision: 'allow', reason: 'host' });
+    // 但端点被禁用 / 缺凭据仍会挡住 —— 那是 resolve 的职责，不是 ACL 放行的结果
+    expect(acl.decide('host', { ...ep, locality: 'cloud' }).decision).to.equal('allow');
+  });
+
   it('bypass-all 只作用于显式传入的调用', function () {
     const acl = new ModelAcl();
     const cloud = { ...ep, locality: 'cloud' };

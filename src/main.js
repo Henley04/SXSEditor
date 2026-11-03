@@ -717,6 +717,8 @@ app.whenReady().then(() => {
         app.on('will-quit', () => {
           try { modelService.dispose(); } catch (_) { /* 退出路径不抛 */ }
         });
+        // MCP 的 model.* 工具要用它；bridge 可能已经启动，setter 随时可调。
+        try { require('./main/mcpBridge').setModelService(modelService); } catch (_) { /* 可选依赖 */ }
       } catch (err) {
         console.error('[models] 初始化失败:', err && err.message);
       }

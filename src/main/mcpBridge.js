@@ -37,7 +37,42 @@ const RATE_LIMIT = { windowMs: 10 * 1000, max: 120 };
 const pending = new Map();
 const sseClients = new Set();
 const rateBuckets = new Map();
-const tokens = new Map(); // token -> name
+// token -> { id, name, models }
+// models 是 token 的**上限**：'*' | 'provider:<name>' | 'endpoint:<id>'。
+// 未配置（[]）= 不能用模型，而不是"不限"——漏配的默认值必须是拒绝。
+const tokens = new Map();
+let modelService = null;
+let modelStreamSeq = 0;
+
+/** 注入模型服务（main.js 装配后调用）。 */
+function setModelService(svc) {
+  modelService = svc || null;
+}
+
+function tokenIdentity(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 12);
+}
+
+function normalizeModelScopes(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((v) => String(v || '').trim())
+    .filter((v) => v === '*' || /^(provider|endpoint):[A-Za-z0-9._:-]{1,160}$/.test(v));
+}
+
+/**
+ * token scope 只认三种形态，不做前缀通配。
+ * `provider:` 只匹配 owner ∈ {builtin,user}：插件注册的端点即使自称 provider=openai，
+ * 也不能蹭用户对 OpenAI 的批量授权。
+ */
+function modelScopeAllows(tokenInfo, endpoint) {
+  if (!tokenInfo || !Array.isArray(tokenInfo.models) || !tokenInfo.models.length) return false;
+  const scopes = tokenInfo.models;
+  if (scopes.includes('*')) return true;
+  if (scopes.includes(`endpoint:${endpoint.id}`)) return true;
+  if (endpoint.owner !== 'plugin' && scopes.includes(`provider:${endpoint.provider}`)) return true;
+  return false;
+}
 
 let server = null;
 let endpointFile = null;
@@ -181,7 +216,7 @@ function checkPreconditions(def) {
 
 // ---------------------------------------------------------------- dispatch
 
-async function dispatchMain(method, params) {
+async function dispatchMain(method, params, ctx = {}) {
   switch (method) {
     case 'schema.get':
       return schema();
@@ -229,6 +264,31 @@ async function dispatchMain(method, params) {
     }
     case 'midi.importFile':
       return importMidiFile(params);
+
+    case 'model.list': {
+      if (!modelService) throw new McpError('UNAVAILABLE', 'Model service is not enabled');
+      const listed = modelService.list(ctx.subject, { task: params && params.task });
+      const visible = listed.endpoints.filter((ep) => modelScopeAllows(ctx.tokenInfo, ep));
+      return { endpoints: visible };
+    }
+
+    case 'model.invoke': {
+      if (!modelService) throw new McpError('UNAVAILABLE', 'Model service is not enabled');
+      const resolved = modelService.resolveEndpoint(params.task, params.endpointId);
+      if (!resolved.ok) {
+        throw new McpError(resolved.error, resolved.message || 'No endpoint', {
+          hint: resolved.candidates && resolved.candidates.length
+            ? `bind one of: ${resolved.candidates.join(', ')}`
+            : 'configure an endpoint for this task in Settings → Models',
+        });
+      }
+      if (!modelScopeAllows(ctx.tokenInfo, resolved.endpoint)) {
+        throw new McpError('FORBIDDEN', 'This token is not scoped to that endpoint', {
+          hint: `endpoint ${resolved.endpoint.id} is outside the token's model scope`,
+        });
+      }
+      return invokeModelAggregated(modelService, ctx, params);
+    }
     default:
       throw new McpError('UNKNOWN_METHOD', `Unknown method ${method}`, { hint: 'see GET /schema' });
   }
@@ -263,7 +323,55 @@ function withTimeout(promise, ms, method) {
   ]);
 }
 
-async function dispatch(method, params) {
+/**
+ * MCP 是请求-响应：把流聚合成一个结果再返回。
+ * 真正长的生成建议客户端用 async:true 提交成 job（def.long = true 时可用）。
+ */
+function invokeModelAggregated(service, ctx, params) {
+  const streamKey = `mcp${++modelStreamSeq}`;
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let settled = false;
+    const done = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+    const r = service.invoke(ctx.subject, params, {
+      via: 'mcp',
+      streamKey,
+      onEvent: (evt) => {
+        if (evt.type === 'chunk') {
+          chunks.push(evt.data == null ? '' : String(evt.data));
+          // 聚合模式也必须回执：不回执的话网关会认为消费方卡住，32 个分片后
+          // 就把生产方暂停，最后变成一个莫名其妙的总时长超时。
+          if (evt.handleId) service.ack(ctx.subject, evt.handleId, evt.bytes || 0);
+          return;
+        }
+        if (evt.type === 'done') {
+          done(resolve, { text: chunks.join(''), endpointId: evt.endpointId || '' });
+          return;
+        }
+        if (evt.type === 'error') {
+          const info = evt.error || {};
+          done(reject, new McpError(info.code || 'INTERNAL', info.message || 'Model call failed', {
+            hint: info.hint,
+            details: { retryable: info.retryable === true },
+          }));
+          return;
+        }
+        if (evt.type === 'cancelled') {
+          done(reject, new McpError('CANCELLED', 'Model call cancelled'));
+        }
+      },
+    });
+    if (r && r.error) {
+      done(reject, new McpError(r.error.code || 'INTERNAL', r.error.message || 'Model call failed'));
+    }
+  });
+}
+
+async function dispatch(method, params, ctx = {}) {
   const def = getMethod(method);
   if (!def || def.internal) {
     throw new McpError('UNKNOWN_METHOD', `Unknown method ${method}`, { hint: 'see GET /schema' });
@@ -282,17 +390,17 @@ async function dispatch(method, params) {
 
   const timeoutMs = def.long ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
   const result = def.target === 'main'
-    ? await withTimeout(dispatchMain(method, checked.value), timeoutMs, method)
+    ? await withTimeout(dispatchMain(method, checked.value, ctx), timeoutMs, method)
     : await callRenderer(def.target, method, checked.value, timeoutMs);
 
   return { result, warnings: checked.warnings };
 }
 
-function runJob(job, method, params) {
+function runJob(job, method, params, ctx = {}) {
   if (job.cancelRequested) return;
   jobs.start(job.id);
   emit('job.started', { jobId: job.id, method });
-  dispatch(method, params)
+  dispatch(method, params, ctx)
     .then(({ result, warnings }) => {
       const done = jobs.finish(job.id, { result: warnings && warnings.length ? { result, warnings } : result });
       if (done) emit('job.completed', { jobId: job.id, method, status: done.status });
@@ -360,7 +468,8 @@ async function handle(req, res) {
   if (!tokens.has(token)) {
     return sendJson(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'Invalid or missing token' } });
   }
-  const tokenName = tokens.get(token);
+  const tokenInfo = tokens.get(token);
+  const tokenName = tokenInfo.name;
 
   if (url.pathname !== '/health') {
     const retryAfter = rateLimited(token);
@@ -450,12 +559,14 @@ async function handle(req, res) {
         checkPreconditions(def);
         const job = jobs.create(methodName);
         sendJson(res, 202, { ok: true, result: { jobId: job.id, status: job.status, poll: `/jobs/${job.id}` }, requestId });
-        runJob(job, methodName, checked.value);
+        runJob(job, methodName, checked.value, { tokenInfo, subject: `mcp:${tokenInfo.id}` });
         audit({ token: tokenName, method: methodName, ok: true, async: true, jobId: job.id, ms: Date.now() - started });
         return undefined;
       }
 
-      const { result, warnings } = await dispatch(methodName, body.params || {});
+      const { result, warnings } = await dispatch(methodName, body.params || {}, {
+        tokenInfo, subject: `mcp:${tokenInfo.id}`,
+      });
       audit({ token: tokenName, method: methodName, ok: true, ms: Date.now() - started });
       return sendJson(res, 200, { ok: true, result, warnings: warnings.length ? warnings : undefined, requestId });
     } catch (err) {
@@ -471,13 +582,20 @@ async function handle(req, res) {
 // ------------------------------------------------------------------ startup
 
 function loadTokens(primary) {
-  tokens.set(primary, 'default');
+  // 主 token 是用户自己从设置里复制的那个，给全量模型范围；真正的花钱动作仍要过
+  // ACL 的首次确认，所以"给 * "不会静默扣费。
+  tokens.set(primary, { id: tokenIdentity(primary), name: 'default', models: ['*'] });
   try {
     const file = path.join(app.getPath('userData'), 'mcp-tokens.json');
     const extra = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const t of extra.tokens || []) {
       if (t && typeof t.token === 'string' && t.token.length >= 16) {
-        tokens.set(t.token, t.name || 'extra');
+        tokens.set(t.token, {
+          id: tokenIdentity(t.token),
+          name: t.name || 'extra',
+          // 没写 models 的 token = 不能调模型（默认拒绝，不是默认全开）
+          models: normalizeModelScopes(t.models),
+        });
       }
     }
   } catch (_) {
@@ -544,10 +662,11 @@ function stopMcpBridge() {
 }
 
 module.exports = {
+  setModelService,
   registerMcpReplyIpc,
   startMcpBridge,
   stopMcpBridge,
   emit,
   // exported for tests / diagnostics
-  _internal: { dispatch, handle, tokens, modelsAvailable },
+  _internal: { dispatch, handle, tokens, modelsAvailable, modelScopeAllows, normalizeModelScopes },
 };

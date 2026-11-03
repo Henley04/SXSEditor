@@ -192,6 +192,11 @@ class ModelService {
     return { ok: true };
   }
 
+  /** 解析某次调用的目标端点（MCP 需要在调之前做 scope 判定）。 */
+  resolveEndpoint(task, endpointId) {
+    return this.store.resolve(task, endpointId);
+  }
+
   /** 能力发现。调用方只看见被允许（或可能被允许）的端点。 */
   list(subject, { task, bypassAll = false } = {}) {
     const opts = { localFree: this.gateway.settings.localFree, bypassAll };

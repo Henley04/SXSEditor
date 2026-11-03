@@ -713,9 +713,26 @@ src/main/models/adapters/            openai-compatible / anthropic / local-proce
 locality 四档判定、ACL 指纹失效与 once 消费、终止事件唯一、cancel 与 error 的区分、
 端点 idle 覆写、去重命中与失败不缓存、可暂停/不可暂停两条背压路径、审计不含输入内容。
 
-未接线的部分（第 2 段）：`tts` / `asr` / `midi` / `accompaniment` 的二进制结果
-（需要把 `ModelHandleStore` 接进 adapter 的 chunk 路径）、`local-process` 的真实后端
-（等 `synthesis.backend` 迁移）、以及四类调用方的 IPC。
+**第 2 段已落地（2026-11-04）**：
+
+| 调用方 | 入口 | 状态 |
+|---|---|---|
+| 插件 runtime | `ctx.models.list / invoke / invokeOnce` | ✅ 事件按 `streamKey` 认领，每分片回 `models.ack` |
+| 面板 iframe | `apiScopes: ['models.invoke']` → 现有 `panel.rpc` 桥 | ✅ 闸门是 panel scope + `permissions.models`；最终由插件 runtime 代发，审计主体为插件 |
+| MCP 客户端 | `model.list` / `model.invoke` + token `models` scope | ✅ 三形态、来源隔离、`*` 需单独配置 |
+| 宿主自身 | `subject = 'host'` | ✅ 跳过插件级 ACL（用户就是操作者），端点可用性仍有效 |
+
+- 面板不直连网关：所有 `panel.rpc` 都经插件 runtime，双闸门天然成立（面板 scope +
+  插件权限）。代价是审计里看不出"这次是面板发起的"，需要时再看是否加 `via` 标记。
+- MCP 是请求-响应，`model.invoke` 在网关侧聚合后返回；长生成用 `async:true` 提交成
+  job（`def.long`）。聚合模式每个分片都会回 ack —— 不回的话 32 个分片后生产方会被
+  背压暂停，最终表现成一个莫名其妙的总时长超时。
+- 主 token 默认 `models: ['*']`（否则用户第一次用会莫名 FORBIDDEN），真正的花钱动作
+  仍要过 ACL 首次确认；配置文件里没写 `models` 的额外 token 默认**不能用**模型。
+
+仍未接线：`tts` / `asr` / `midi` / `accompaniment` 的二进制结果（要把
+`ModelHandleStore` 接进 adapter 的 chunk 路径）、`local-process` 的真实后端
+（等 `synthesis.backend` 迁移）、以及第 3 段的设置页与确认弹窗。
 
 ## 13. 参考
 

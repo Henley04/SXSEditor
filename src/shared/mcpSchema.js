@@ -16,6 +16,8 @@
  *   aliases    legacy top-level param names -> canonical name
  */
 
+const { TASKS } = require('./modelContract');
+
 const obj = (properties, required = []) => ({
   type: 'object',
   properties,
@@ -345,6 +347,29 @@ const METHODS = {
     target: 'renderer', mutates: true,
     params: obj({ settings: { type: 'object', additionalProperties: true, description: 'Settings patch' } }, ['settings']),
     aliases: { patch: 'settings' },
+  },
+  // ------------------------------------------------------------- models
+  'model.list': {
+    summary: 'List model endpoints this token may use.',
+    description: 'Endpoints the token is scoped to (models: * / provider:x / endpoint:id). '
+      + 'Base URLs and credentials are never included.',
+    target: 'main',
+    params: obj({ task: str('Filter by task (chat / midi / accompaniment / singing / tts / asr / embed / completion)') }),
+  },
+  'model.invoke': {
+    summary: 'Invoke a model endpoint and return the aggregated result.',
+    description: 'Server-side stream is collapsed into one result. Long generations '
+      + '(midi / accompaniment) should be submitted with async:true and polled via /jobs.',
+    target: 'main', long: true,
+    params: obj({
+      task: { type: 'string', enum: [...TASKS], description: 'What kind of generation' },
+      // 故意不写 type：输入可以是 string / object / array，校验器按"任意值"放行，
+      // 具体形状由 task 的契约决定（见 modelContract.TASK_SPECS）。
+      input: { description: 'string | object | array, shaped by the task' },
+      endpointId: str('Explicit endpoint id; omit to use the task default'),
+      model: str('Model name override for this call'),
+      clientRequestId: str('Idempotency key; the same id within 5 minutes returns the same result'),
+    }, ['task', 'input']),
   },
   'ui.open': {
     summary: 'Open a secondary window (singer creator, market, model download…).',
