@@ -704,6 +704,14 @@ app.whenReady().then(() => {
           console.warn('[plugins] 菜单重建失败:', err && err.message);
         }
       });
+      // 菜单在 buildAppMenuDeferred()（见本文件上方）就建好了，那时插件服务还是
+      // 未初始化状态，buildAppMenu 里的 `if (pluginService.initialized)` 直接跳过了
+      // 插件片段。init 只读写注册表、不触发 onDidChange，于是"已安装的插件冷启动后
+      // 不在菜单里"——要等用户装/停用一次才冒出来。这里补一次重建。
+      //
+      // 无条件重建：即使一个插件都没有，Plugins 菜单本身也是"安装插件"的唯一入口，
+      // 省掉它等于新用户没有任何办法装第一个插件。
+      require('./main/windowManager').rebuildAppMenu();
       registerHandler({ resolvePluginDir: (id) => pluginService.resolvePluginDir(id) });
       console.log(`[plugins] loaded: ${JSON.stringify(pluginService.registry.stats())}`);
     } catch (err) {

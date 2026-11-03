@@ -2,8 +2,8 @@
   "apiVersion": 2,
   "id": "example-hello",
   "name": "Example: Hello Panel",
-  "version": "1.0.0",
-  "description": "最小可用的 v2 插件模板：一个命令 + 一个 iframe 面板，演示 project.read / project.apply / state 三类宿主能力。复制这个目录改名即可开工。",
+  "version": "1.1.0",
+  "description": "v2 插件模板：命令 + 面板 + 工具栏按钮 + 状态栏 + 右键菜单 + 时间轴浮层 + 设置分区 + 快捷键，演示 project.read / project.apply / state / ui.status 五类宿主能力。复制这个目录改名即可开工。",
   "author": "SXSEditor Dev",
   "main": "main.js",
   "engines": {
@@ -11,7 +11,7 @@
   },
   "permissions": {
     "project": ["read", "write"],
-    "ui": ["menu", "panel"],
+    "ui": ["menu", "panel", "toolbar", "statusBar", "contextMenu", "overlay", "settings"],
     "automation": ["expose"]
   },
   "contributes": {
@@ -33,6 +33,12 @@
         "description": "通过 project.apply 修改工程速度，演示插件如何写回工程。"
       }
     ],
+    "menus": [
+      {
+        "path": "plugins/example",
+        "command": "greet"
+      }
+    ],
     "panels": [
       {
         "id": "main",
@@ -44,6 +50,155 @@
         "width": 420,
         "apiScopes": ["project.read", "project.apply", "state.get", "state.set", "ui.notify"]
       }
-    ]
+    ],
+    "toolbar": [
+      {
+        "id": "greet",
+        "command": "greet",
+        "title": {
+          "en": "Hello",
+          "zh-CN": "打招呼"
+        },
+        "icon": "music-note",
+        "group": "example"
+      }
+    ],
+    "statusBar": [
+      {
+        "id": "count",
+        "command": "greet",
+        "text": {
+          "en": "@greetIdle",
+          "zh-CN": "@greetIdle"
+        },
+        "tooltip": {
+          "en": "Click to say hello again",
+          "zh-CN": "点击再打一次招呼"
+        },
+        "alignment": "right"
+      }
+    ],
+    "contextMenus": [
+      {
+        "id": "bumpHere",
+        "context": "fragment",
+        "command": "bumpTempo",
+        "title": {
+          "en": "Set tempo to 132",
+          "zh-CN": "把 BPM 改成 132"
+        },
+        "when": "hasSelection"
+      }
+    ],
+    "timelineOverlays": [
+      {
+        "id": "blank",
+        "title": {
+          "en": "Example overlay",
+          "zh-CN": "示例浮层"
+        },
+        "entry": "overlay/index.html",
+        "height": 96,
+        "pointerEvents": "none",
+        "when": "hasFragments"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "greet",
+        "key": "CmdOrCtrl+Shift+H"
+      }
+    ],
+    "settings": [
+      {
+        "id": "general",
+        "title": {
+          "en": "Greeting",
+          "zh-CN": "招呼设置"
+        },
+        "fields": [
+          {
+            "key": "greeting",
+            "type": "string",
+            "default": "Hello",
+            "label": {
+              "en": "Greeting text",
+              "zh-CN": "招呼语"
+            },
+            "description": {
+              "en": "Shown in the notification when the command runs.",
+              "zh-CN": "命令执行时显示在通知里的文字。"
+            }
+          },
+          {
+            "key": "step",
+            "type": "number",
+            "default": 1,
+            "min": 1,
+            "max": 100,
+            "label": {
+              "en": "Count step",
+              "zh-CN": "计数步长"
+            },
+            "description": {
+              "en": "How much to add to the internal counter per call.",
+              "zh-CN": "每次调用给内部计数加多少。"
+            }
+          },
+          {
+            "key": "showBpm",
+            "type": "boolean",
+            "default": true,
+            "label": {
+              "en": "Include current BPM",
+              "zh-CN": "附带当前 BPM"
+            }
+          },
+          {
+            "key": "tone",
+            "type": "select",
+            "default": "friendly",
+            "label": {
+              "en": "Tone",
+              "zh-CN": "语气"
+            },
+            "options": [
+              {
+                "value": "friendly",
+                "label": {
+                  "en": "Friendly",
+                  "zh-CN": "友好"
+                }
+              },
+              {
+                "value": "formal",
+                "label": {
+                  "en": "Formal",
+                  "zh-CN": "正式"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "advanced",
+        "title": {
+          "en": "Advanced",
+          "zh-CN": "高级"
+        },
+        "panel": "main"
+      }
+    ],
+    "i18n": {
+      "en": {
+        "greetIdle": "Hello ×0",
+        "greetCount": "Hello ×{n}"
+      },
+      "zh-CN": {
+        "greetIdle": "打招呼 ×0",
+        "greetCount": "打招呼 ×{n}"
+      }
+    }
   }
 }

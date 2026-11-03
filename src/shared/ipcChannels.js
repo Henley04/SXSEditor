@@ -173,6 +173,15 @@ const IPC_CHANNELS = {
   PLUGINHOST_PANEL_RPC: 'plugin-host:panel-rpc',
   PLUGINHOST_OPEN_DIR: 'plugin-host:open-dir',
   PLUGINHOST_GET_LOG: 'plugin-host:get-log',
+  // M2：界面贡献点。设置页读写插件设置、管理器开关快捷键、渲染层取 iframe 地址。
+  // 地址必须由主进程 mint（entry 只在主进程可见），渲染层不能自己拼 plugin://。
+  PLUGINHOST_SETTINGS_GET: 'plugin-host:settings-get',
+  PLUGINHOST_SETTINGS_SET: 'plugin-host:settings-set',
+  PLUGINHOST_SET_KEYBINDINGS: 'plugin-host:set-keybindings',
+  PLUGINHOST_OVERLAY_URL: 'plugin-host:overlay-url',
+  // 设置页/管理器 → 主窗口：把某个面板挂到主窗口的右侧抽屉（设置分区用它对
+  // 自定义界面；管理器用它做"打开面板"）。面板的 apiScopes 校验仍在主进程做。
+  PLUGINHOST_OPEN_PANEL_REQUEST: 'plugin-host:open-panel-request',
   // 主进程 → 渲染进程
   PLUGINHOST_SYNC: 'plugin-host:sync',
   PLUGINHOST_EVENT: 'plugin-host:event',

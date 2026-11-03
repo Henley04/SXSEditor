@@ -55,59 +55,19 @@ let _webnnReadModelFileReqId = 0;
 //   · 被裁剪的方法替换成抛明确错误的函数，而不是 undefined —— 万一白名单漏了，
 //     会立刻在控制台看到"哪个窗口缺哪个能力"，而不是一个莫名的 undefined 报错。
 // ---------------------------------------------------------------------------
+const { windowIdFromPath, applyWindowCapabilityRedaction } = require('./shared/windowCapabilities');
+
 const WINDOW_ID = (() => {
   try {
-    const m = String(location.pathname || '').match(/\/([A-Za-z0-9_-]+)\.html$/);
-    return m ? m[1].toLowerCase() : null;
+    return windowIdFromPath(location.pathname);
   } catch (_) {
     return null;
   }
 })();
 
-// 能力路径（支持一层嵌套，如 pluginAPI.synthesize）→ 允许使用它的窗口
-const HIGH_RISK_METHOD_WINDOWS = [
-  { path: ['saveFile'], windows: ['index', 'fragmenteditor', 'singercreator', 'audiopreprocess', 'settings', 'singermarket'] },
-  { path: ['saveSettings'], windows: ['index', 'settings'] },
-  { path: ['openExternal'], windows: ['index', 'settings', 'updatenotification', 'singermarket'] },
-  { path: ['showItemInFolder'], windows: ['index', 'settings', 'singermarket'] },
-  // 插件合成：只有主窗口与分片编辑器会真正驱动第三方歌声后端
-  { path: ['pluginAPI', 'synthesize'], windows: ['index', 'fragmenteditor'] },
-  // 插件系统 v2：跑命令 / 面板 RPC 只允许在会渲染插件 UI 的窗口
-  { path: ['pluginHost', 'runCommand'], windows: ['index', 'fragmenteditor', 'pluginmanager'] },
-  { path: ['pluginHost', 'panelRpc'], windows: ['index', 'fragmenteditor'] },
-  { path: ['pluginHost', 'install'], windows: ['index', 'pluginmanager'] },
-  { path: ['pluginHost', 'installFromPath'], windows: ['index', 'pluginmanager'] },
-  { path: ['pluginHost', 'uninstall'], windows: ['index', 'pluginmanager'] },
-  { path: ['pluginHost', 'setEnabled'], windows: ['index', 'pluginmanager'] },
-  // 工程写入的应答只属于真正持有工程文档的两个窗口
-  { path: ['pluginHost', 'sendProjectApplyResult'], windows: ['index', 'fragmenteditor'] },
-  // 系统投递的文件只属于主窗口：它会读盘、还会新建预处理窗口
-  { path: ['takePendingOpenFile'], windows: ['index'] },
-  { path: ['openSingerFileAt'], windows: ['index'] },
-];
-
-function denyCapability(name) {
-  return function () {
-    throw new Error(`[preload] 当前窗口（${WINDOW_ID || 'unknown'}）未授权调用 ${name}()`);
-  };
-}
-
-function applyWindowCapabilityRedaction(api) {
-  if (!WINDOW_ID) return api; // 无法识别窗口：保守起见保持全量
-  for (const entry of HIGH_RISK_METHOD_WINDOWS) {
-    if (entry.windows.includes(WINDOW_ID)) continue;
-    let holder = api;
-    for (let i = 0; i < entry.path.length - 1; i++) {
-      holder = holder && holder[entry.path[i]];
-      if (!holder) break;
-    }
-    if (!holder) continue;
-    const name = entry.path.join('.');
-    if (typeof holder[entry.path[entry.path.length - 1]] === 'function') {
-      holder[entry.path[entry.path.length - 1]] = denyCapability(name);
-    }
-  }
-  return api;
+function redactApi(api) {
+  // 无法识别窗口（例如未来新增的入口）→ 不裁剪，保持全量，不冒险
+  return applyWindowCapabilityRedaction(api, WINDOW_ID);
 }
 
 const _fullElectronAPI = {
@@ -668,6 +628,16 @@ const _fullElectronAPI = {
     panelRpc: (request) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_PANEL_RPC, request || {}),
     openPluginsFolder: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DIR),
     getLog: (limit) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_GET_LOG, limit),
+    // ---- M2：界面贡献点 ----
+    // 设置页读写的只是 manifest 里声明过的表单值；值域收敛在主进程做，
+    // 这里不做任何判断（渲染层判权限等于把锁挂在门框上）。
+    settingsGet: (pluginId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET, pluginId),
+    settingsSet: (pluginId, patch) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET, pluginId, patch || {}),
+    setKeybindings: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS, pluginId, !!enabled),
+    // iframe 地址由主进程 mint：manifest.entry 只在主进程可见
+    overlayUrl: (pluginId, overlayId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, pluginId, overlayId),
+    // 请主窗口把某个面板挂到右侧抽屉（设置分区/管理器用）
+    openPanel: (pluginId, panelId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST, pluginId, panelId),
     // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
     onSync: (callback) => {
       const handler = (event, data) => callback(data);
@@ -706,4 +676,4 @@ const _fullElectronAPI = {
   },
 };
 
-contextBridge.exposeInMainWorld('electronAPI', applyWindowCapabilityRedaction(_fullElectronAPI));
+contextBridge.exposeInMainWorld('electronAPI', redactApi(_fullElectronAPI));

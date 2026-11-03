@@ -17,6 +17,8 @@ export default {
     load: '加载',
     unsavedChangesConfirm: '当前工程有未保存的修改。继续加载将丢失这些修改，是否继续？',
     export: '导出',
+    exportDisabledHint: '先添加一个分片（Fragment）才能导出',
+    emptySingerHint: '选择已有音色、安装新音色，或导入本地歌手文件',
     exportMidi: '导出MIDI',
     noNotesToExportMidi: '当前分片没有可导出的 MIDI 音符',
     exportMidiFailedDetail: 'MIDI 导出失败: {detail}',
@@ -37,6 +39,9 @@ export default {
     embedAccompanimentAudioDesc: '将伴奏音频编码为 base64 嵌入项目文件（文件体积会增大）',
     fragmentTimeline: '分片时间轴',
     timeSignature: '拍号',
+    autoShift: '自动移调',
+    autoShiftHint: '根据参考音频自动调整音高偏移。只影响合成出的音频，不改 MIDI 音符。',
+    moreActions: '更多操作',
     selectSinger: '选择歌手',
     openSingerCreator: '打开歌手创建页面',
     openExistingSinger: '打开已有歌手文件',
@@ -115,7 +120,7 @@ export default {
       cfgRescale: 'CFG Rescale 系数',
       cfgRescaleRangeWarn: '⚠ 当前值超出 SVS 推荐甜区 [0.5, 0.7]，可能产生伪影。仍可继续使用此值合成。',
       sampler: '求解器',
-      samplerHint: '扩散采样求解器。STORK-2 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理，精度更高但更慢）；Extrapolated Euler 为受 STORK 启发的速度外推启发式（每步 1 次推理）；STORK-2 为论文原版 Stabilized Taylor Orthogonal Runge-Kutta 方法（每步 1 次推理 + 8 个 RKC sub-stage，通过 virtual NFE 复用速度场）。注意：分块预览推理时 Extrapolated Euler 与 STORK-2 均在块边界丢失跨步状态，优势减弱。',
+      samplerHint: '按"每步推理几次"取舍：Heun 每步 2 次（更稳，但慢一倍）；Euler、Extrapolated Euler、STORK-2 每步 1 次。默认 STORK-2。分块预览时外推类方法会在块边界丢失跨步状态，优势减弱，可退回 Euler。',
       samplerEuler: 'Euler（一阶）',
       samplerHeun: 'Heun（二阶，2 倍推理）',
       samplerExtrap: 'Extrapolated Euler（1 倍推理）',
@@ -303,16 +308,31 @@ export default {
   },
   fragmentEditor: {
     // fragmentEditor.html 的文档标题（窗口标题由主进程 locale 的 fragment.title 提供）
-    title: '分片编辑器'
+    title: '分片编辑器',
+    // 模型缺失时不再把 IPC 错误直接抛到控制台/开发覆盖层：转成一个可操作的对话框。
+    // 注意 IPC 边界会脱敏路径（`src/main/ipcSafe.js`），所以文案里不要引用具体路径。
+    modelMissingPrompt: '缺少推理所需的模型文件，暂时无法合成。要打开模型下载页补齐吗？',
+    openModelDownload: '打开模型下载',
   },
   fragment: {
     title: '分片编辑',
     loadingModel: '正在加载推理模型，请稍候...',
+    loadingElapsed: '已等待 {seconds} 秒',
+    loadingElapsedLong: '已等待 {seconds} 秒 · 首次加载需要把模型读入显存，通常 10–60 秒',
+    loadStageHardware: '检测硬件',
+    loadStageResolve: '定位模型文件',
+    loadStageModel: '加载模型文件 {current}/{total}',
+    loadStageModelBare: '加载模型文件',
+    loadingBackground: '先在后台加载',
+    loadingBackgroundHint: '模型继续在后台加载，进度显示在底部状态栏，可先编辑音符',
+    loadBackgroundRunning: '模型后台加载中…',
+    loadFailed: '模型加载失败',
     save: '保存',
     close: '关闭',
     fragment: '分片',
     play: '播放',
     export: '导出',
+    exportAudio: '导出音频',
     exportMidi: '导出MIDI',
     importMidi: '导入MIDI',
     inspSinger: '歌手',
@@ -698,7 +718,14 @@ export default {
     deviceLabel: '设备',
     levelStatus: '电平',
     levelWarnTitle: '电平警告',
-    fcpeParamsDisabled: '当前 MIDI 提取工具为 {tool}，FCPE 参数不生效。如需使用 FCPE 参数，请在设置中切换 MIDI 提取工具为 FCPE。'
+    fcpeParamsDisabled: '当前 MIDI 提取工具为 {tool}，FCPE 参数不生效。如需使用 FCPE 参数，请在设置中切换 MIDI 提取工具为 FCPE。',
+    // 参数分区（原先 11 个字段平铺，靠阅读顺序猜分组）
+    groupPreset: '预设与算法',
+    groupF0Range: 'F0 范围',
+    groupTempoLoudness: '节拍与响度',
+    // 空面板提示
+    waveformEmptyHint: '载入音频后在这里显示波形',
+    midiEmptyHint: '点「RMVPE提取F0」或「提取MIDI」开始，也可以直接在空白处画音符'
   },
   settings: {
     title: '设置',
@@ -739,7 +766,7 @@ export default {
     diffSteps: '扩散步数',
     previewDiffStepsHint: '扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。',
     sampler: '求解器',
-    samplerHint: '扩散采样求解器。STORK-2 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理，精度更高但更慢）；Extrapolated Euler 为受 STORK 启发的速度外推启发式（每步 1 次推理）；STORK-2 为论文原版 Stabilized Taylor Orthogonal Runge-Kutta 方法（每步 1 次推理 + 8 个 RKC sub-stage，通过 virtual NFE 复用速度场）。注意：分块预览推理时 Extrapolated Euler 与 STORK-2 均在块边界丢失跨步状态，优势减弱。',
+    samplerHint: '按"每步推理几次"取舍：Heun 每步 2 次（更稳，但慢一倍）；Euler、Extrapolated Euler、STORK-2 每步 1 次。默认 STORK-2。分块预览时外推类方法会在块边界丢失跨步状态，优势减弱，可退回 Euler。',
     samplerEuler: 'Euler（一阶）',
     samplerHeun: 'Heun（二阶，2 倍推理）',
     samplerExtrap: 'Extrapolated Euler（1 倍推理）',
@@ -764,8 +791,8 @@ export default {
     exportInferenceParams: '导出推理参数',
     exportInferenceParamsDesc: '导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。',
     exportDiffStepsHint: '导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步，如追求极致质量可尝试 48~64 步。',
-    exportCfgStrengthHint: '导出时的 CFG 强度。与预览参数说明相同，导出时建议保持较高值以确保音质。',
-    exportCfgRescaleHint: '导出时的 CFG Rescale 系数。与预览参数说明相同。',
+    exportCfgStrengthHint: '导出时的分类器引导强度：越高越贴合音高与歌词，过高会产生伪影。导出建议略高于预览（约 4–5）。',
+    exportCfgRescaleHint: '导出时的 CFG 重缩放系数，用来压住过度引导的伪影：0 = 完全使用 CFG 结果，1 = 完全使用原始预测，推荐 0.5–0.9。',
     audioOutput: '音频输出',
     outputMode: '输出模式',
     sharedMode: '共享模式 (WASAPI Shared)',
@@ -983,7 +1010,7 @@ export default {
     dynamicThresholdPercentile: '截断分位数',
     dynamicThresholdPercentileHint: '每帧保留的分位点（0.900–0.999）。0.995 只压掉最极端的 0.5%；数值越低越激进，0.99 已能明显收动态，0.90 会明显发闷。推荐 0.995，CFG > 4 时可试 0.99。',
     postProcessingTitle: '后处理选项',
-    postProcessingDesc: '导出时对合成音频的后处理。预览不应用这些设置。',
+    postProcessingDesc: '导出时对合成音频的后处理。下面每一项都只影响导出的 WAV，预览听不到变化。',
     vocoderOverlapFrames: 'Vocoder 重叠帧数',
     vocoderOverlapFramesHint: '相邻 vocoder 分片的重叠帧数，用 Hann 窗交叉淡化消除拼接痕迹（每帧 20 ms）。默认 32 帧 ≈ 0.64 s。调大边界更平滑但更慢；调到 0 且分片较多时，接缝处可能出现"咔"声或相位断层。',
     enableLoudnormFinal: 'EBU R128 响度归一化',
@@ -1042,6 +1069,12 @@ export default {
         resetToken: '重置此令牌',
         undo: '撤销',
         redo: '重做',
+        undoTitle: '{action}：{tokens}',
+        redoTitle: '{action}：{tokens}',
+        undoEmpty: '没有可撤销的操作',
+        redoEmpty: '没有可重做的操作',
+        moreTokens: ' 等 {count} 项',
+        tokenJoin: '、',
         resetAll: '重置全部',
         apply: '应用',
         close: '关闭',
@@ -1057,6 +1090,27 @@ export default {
         colorPicker: '颜色拾取器',
       },
     },
+    // 设置页通用文案（搜索框、滑杆占位符）
+    searchPlaceholder: '搜索设置',
+    searchEmpty: '没有匹配的设置',
+    autoPlaceholder: '自动',
+    // 显卡/显存都没探到时的另一种说法：不要拼成"（未知 VRAM, Unknown GPU）"
+    // 这种中英混排，直接把两个值合并成一句。
+    vocoderChunkSmartResultUnknown: '智能分配结果：{frames} 帧 · 未识别到显卡型号与显存',
+    unknownVram: '显存未知',
+    modelProgress: '已就绪 {done}/{total} 个文件',
+    downloadMissing: '补齐',
+    // ---- 折叠 / 可编辑数值 / 分区标签 ----
+    detailsLabel: '详情',
+    exportOnly: '仅导出',
+    sliderValueHint: '点击输入精确值',
+    sliderResetHint: '双击恢复默认值',
+    // ---- 精度说明（首屏只留两句结论，细节折在"详情"里）----
+    precisionInfoSummaryFp32: 'FP32：音质最好、显存占用最高。8GB 以上独显优先选它。',
+    precisionInfoSummaryFast: 'FP16 约省一半显存、快一倍；INT8 再省 40–50%，但音质损失更明显。',
+    // ---- 硬件检测失败（不能一直停在"检测中..."）----
+    hardwareDetectFailed: '检测失败',
+    hardwareRetry: '重新检测',
   },
   modelDownload: {
     title: 'SXSEditor 模型文件下载',
@@ -1100,6 +1154,7 @@ export default {
     optionalModelsDivider: '可选模型（按需下载）',
     overviewReady: '已安装',
     overviewMissing: '未安装',
+    overviewMissingCount: '未安装 · 缺 {count} 个文件',
     overviewChecking: '检测中',
     overviewDownloading: '下载中',
     overviewUpdateAvailable: '有更新',
@@ -1299,6 +1354,7 @@ export default {
     noGpuDetected: '未检测到 GPU 设备',
     noModels: '无模型数据',
     loadFailed: '加载失败',
+    retry: '重试',
     loadAll: '全部加载',
     unloadAll: '全部卸载',
     load: '加载',
@@ -1369,6 +1425,10 @@ export default {
     retry: '重试',
     saveFailed: '保存文件失败',
     refreshed: '已刷新',
+    tagsPlaceholder: '人声, 女声, 流行...',
+    // 列表加载态：先出骨架卡，超过 timeout 再切错误态（见 singerMarket.js）
+    listLoading: '正在加载歌手列表…',
+    listTimeout: '加载超时，请检查网络后重试',
   },
   // 插件管理器窗口（src/pluginManager/）。菜单侧的文案在 src/main/locale.js，
   // 两套字典必须同时有对应键 —— 见 src/i18n/index.js 顶部的 B7 说明。
@@ -1437,5 +1497,27 @@ export default {
     reloadDone: '已重新加载 {n} 个插件',
     actionFailed: '操作失败：{error}',
     unsupportedPackage: '只能安装 .sxsp 插件包',
+
+    // M2：界面贡献点
+    settingsCategory: '插件',
+    settingsSectionHint: '这些设置由插件「{name}」提供，保存在本机插件配置中。',
+    openSettingsPanel: '打开插件面板',
+    settingsSaving: '保存中…',
+    settingsSaved: '已保存',
+    commandFailed: '插件命令执行失败',
+
+    contribToolbar: '工具栏 {n}',
+    contribStatusBar: '状态栏 {n}',
+    contribContextMenus: '右键菜单 {n}',
+    contribOverlays: '浮层 {n}',
+
+    keybindingsSection: '快捷键',
+    keybindingsEnable: '启用该插件的快捷键',
+    keybindingsHint: '默认关闭。插件快捷键会影响整个应用，只在确实需要时打开；与已有快捷键冲突时不会绑定。',
+    keybindingStatusActive: '生效中',
+    keybindingStatusDisabled: '未启用',
+    keybindingConflictHost: '与宿主快捷键冲突，未绑定',
+    keybindingConflictPlugin: '与 {plugins} 冲突，双方都未绑定',
+    keybindingToggleFailed: '切换快捷键失败：{error}',
   }
 }

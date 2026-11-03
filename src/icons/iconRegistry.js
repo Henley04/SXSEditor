@@ -57,6 +57,8 @@ export const ICON_REGISTRY = {
     'chevron-up': () => '<path d="M6 15l6-6 6 6"/>',
     'chevron-down': () => '<path d="M6 9l6 6 6-6"/>',
     'chevron-right': () => '<path d="M9 6l6 6-6 6"/>',
+    // 顶栏"更多操作"。三个圆点，不用省略号字符（各平台字形宽度不一致）。
+    'more-horizontal': () => '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
 
     // ===== Status / utility =====
     info: () => '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.5" r="0.8" fill="currentColor" stroke="none"/>',

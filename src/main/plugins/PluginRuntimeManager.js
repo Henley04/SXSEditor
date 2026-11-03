@@ -51,6 +51,8 @@ class RuntimeSession {
     this.lastError = '';
     this.onEvent = null;
     this.onExit = null;
+    /** 主动 stop() 置位：此时 exit 是预期内的，不能算崩溃。 */
+    this.stopping = false;
     this.hostHandler = null;
   }
 }
@@ -92,12 +94,20 @@ class PluginRuntimeManager {
     const child = utilityProcess.fork(this._entry(), [], {
       serviceName: `sxseditor-plugin-${plugin.id}`,
       stdio: 'pipe',
-      env: {
-        ...process.env,
-        SXS_PLUGIN_ID: plugin.id,
-        // 插件进程不该继承 Electron 的调试开关
-        ELECTRON_RUN_AS_NODE: '1',
-      },
+      // 不能设 ELECTRON_RUN_AS_NODE=1：utilityProcess.fork 拉起的就是 Electron
+      // 的 utility 进程（`--type=utility`、`--utility-sub-type=node.mojom.NodeService`
+      // 由框架自己拼），一旦置了 RUN_AS_NODE，二进制会以纯 Node 模式启动，
+      // 把这些 Chromium 开关当成 node 的非法选项直接退出：
+      //   /proc/self/exe: bad option: --type=utility
+      // 结果就是 init 握手永远等不到，命令调用统一报 PLUGIN_TIMEOUT。
+      // "隔离调试开关"的正确做法是删掉继承来的 ELECTRON_* 变量，而不是打开它。
+      env: (() => {
+        const env = { ...process.env, SXS_PLUGIN_ID: plugin.id };
+        for (const key of ['ELECTRON_RUN_AS_NODE', 'ELECTRON_ENABLE_LOGGING', 'ELECTRON_ENABLE_STACK_DUMPING']) {
+          delete env[key];
+        }
+        return env;
+      })(),
       // 插件是第三方代码，给一个明确的堆上限，避免它把整机内存吃光
       execArgv: [`--max-old-space-size=${RUNTIME_LIMITS.maxOldSpaceMb}`],
     });
@@ -117,6 +127,16 @@ class PluginRuntimeManager {
 
     // init 握手
     session.hostHandler = this.hostHandler;
+    // 会话级回调必须显式接线：_onMessage/_onExit 读的是 session.onEvent/onExit，
+    // 而 manager 上的 onEvent/onExit 是构造之后由 PluginService 赋值的。
+    // 少了这一步，插件的 ctx.log / ui.progress 事件全部静默丢弃，崩溃也不进审计。
+    // 用转发闭包而不是直接赋值，是为了让"后设置 manager 回调"也能生效。
+    session.onEvent = (id, event, payload) => {
+      if (typeof this.onEvent === 'function') this.onEvent(id, event, payload);
+    };
+    session.onExit = (id, code, detail) => {
+      if (typeof this.onExit === 'function') this.onExit(id, code, detail);
+    };
     const ready = new Promise((resolve, reject) => {
       session._readyResolve = resolve;
       session._readyReject = reject;
@@ -136,6 +156,9 @@ class PluginRuntimeManager {
       entry: plugin.entry,
       permissions: plugin.permissions || {},
       capabilities: plugin.capabilities || {},
+      // 设置页里用户填过的值（manifest.settings[].fields）。启动时给一份快照，
+      // 之后的变化通过 `settings.changed` 事件推给插件（见 PluginService.setSettings）。
+      settings: plugin.settings || {},
     });
 
     await ready;
@@ -204,7 +227,9 @@ class PluginRuntimeManager {
       session.pending.delete(id);
     }
     this.sessions.delete(session.id);
-    if (session.onExit) {
+    // 主动 stop() 之后的 exit 是预期行为，交给 stop() 自己收尾；
+    // 若也走 onExit，卸载/停用会被记成崩溃，三次正常停用就触发隔离。
+    if (!session.stopping && session.onExit) {
       try {
         session.onExit(session.id, code, session.lastError);
       } catch (_) { /* ignore */ }
@@ -232,10 +257,23 @@ class PluginRuntimeManager {
     });
   }
 
+  /** 向插件推一条事件（不等回复）。插件没监听就自然丢弃。 */
+  sendEvent(id, event, payload) {
+    const session = this.sessions.get(id);
+    if (!session || session.exited || !session.ready) return false;
+    try {
+      session.child.postMessage({ kind: 'event', event, payload });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /** 优雅停止：先 dispose，再等进程退出，超时强杀。 */
   async stop(id) {
     const session = this.sessions.get(id);
     if (!session) return;
+    session.stopping = true;
     try {
       await Promise.race([
         this.call(id, 'dispose', {}, { timeoutMs: TIMEOUTS.killGrace }),

@@ -120,6 +120,12 @@ function getPluginState(registry, id) {
     updatedAt: (entry && entry.updatedAt) || 0,
     permissionsHash: (entry && entry.permissionsHash) || '',
     automationExpose: entry ? entry.automationExpose !== false : true,
+    // 设置页里由宿主渲染的表单值（键来自 manifest 的 settings[].fields）。
+    // 与插件 runtime 的 ctx.state 分开存：前者是"用户配置"，后者是"插件私有数据"，
+    // 混在一起会让"重置设置"连带清掉插件记住的运行期计数。
+    settings: (entry && entry.settings && typeof entry.settings === 'object') ? { ...entry.settings } : {},
+    // 快捷键默认关闭：安装插件就改变全局按键行为不可接受（见 PluginKeybindings）。
+    keybindingsEnabled: !!(entry && entry.keybindingsEnabled),
   };
 }
 

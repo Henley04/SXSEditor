@@ -2129,8 +2129,13 @@ function renderPianoKeys(c) {
     pianoKeysCtx.strokeRect(0, y, w, keyH);
 
     if (keyH >= 10) {
-      pianoKeysCtx.fillStyle = isBlack ? '#cccccc' : '#2a2a3d';
-      pianoKeysCtx.font = '10px sans-serif';
+      // 走查里"顶部 F#9 出现两次"其实是读错了 10px 下的 "#"：
+      // 黑键标签用 #cccccc 画在黑键上、白键标签用 #2a2a3d 画在白键上，
+      // 缩放后 "#" 先糊掉，F#9 就退化成 F9，与下一行的 F9 看着一模一样。
+      // 这里抬高对比度并把字号提到 11px（键高 16px 仍装得下），
+      // 数据本身没有重复——midiToNoteName 是按 midi % 12 取名的。
+      pianoKeysCtx.fillStyle = isBlack ? '#f2f3f7' : '#1d1f2b';
+      pianoKeysCtx.font = '600 11px -apple-system, "Segoe UI", sans-serif';
       pianoKeysCtx.textAlign = 'right';
       pianoKeysCtx.textBaseline = 'middle';
       pianoKeysCtx.fillText(midiToNoteName(p), w - 4, y + keyH / 2);

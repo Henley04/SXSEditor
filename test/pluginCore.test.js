@@ -17,7 +17,7 @@ function goodManifest(overrides = {}) {
     description: 'fixture',
     main: 'main.js',
     engines: { app: '>=1.0.0' },
-    permissions: { ui: ['menu'] },
+    permissions: { ui: ['menu', 'panel'] },
     contributes: {
       commands: [{ id: 'hello', title: 'Hello' }],
       panels: [{ id: 'main', title: 'Demo', entry: 'panel/index.html', apiScopes: ['state.get', 'command.run'] }],
@@ -229,11 +229,13 @@ describe('pluginManifest', function () {
     const r = validateManifest(goodManifest({
       contributes: {
         commands: [{ id: 'hello', title: 'Hello' }],
-        statusBar: [{ id: 'sb', text: 'x' }],
+        // M2 起 statusBar/toolbar/keybindings 都已落地；intents 仍是 M5 的事，
+        // 用它来守住"未知但已登记的能力不静默丢弃"这条契约。
+        intents: [{ id: 'compose', title: 'Compose' }],
       },
     }), ctx);
     expect(r.ok, r.error).to.equal(true);
-    expect(r.value.pendingContributions).to.include('statusBar');
+    expect(r.value.pendingContributions).to.include('intents');
   });
 
   it('isLegacyManifest 只认 apiVersion===1', function () {

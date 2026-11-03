@@ -404,16 +404,84 @@
   color: var(--accent);
 }
 
+/* 列表加载态：骨架卡占位。
+   原先是一个居中的转圈 + 一条背景色遮罩 —— 慢网下用户看到的是"空白 + 转圈"，
+   分不清是没数据还是程序卡死；数据到达时整页还会跳一下。骨架卡先把版式占住，
+   到位后布局不动。 */
 .loading-state {
   position: absolute;
   inset: 0;
+  background: var(--bg-app);
+  z-index: 5;
+  overflow: hidden;
+}
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.skeleton-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-app);
-  opacity: 0.7;
-  z-index: 5;
+  gap: var(--space-3);
+}
+
+.skeleton-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--bg-button);
+}
+
+.skeleton-line {
+  height: 9px;
+  border-radius: var(--radius-full);
+  background: var(--bg-button);
+}
+
+.skeleton-line--title {
+  height: 12px;
+  width: 62%;
+}
+
+.skeleton-line--short {
+  width: 38%;
+}
+
+/* 呼吸而不是流光：不做渐变扫光，避免在深色主题下变成一条"泛光"亮带。
+   只改不透明度，和 prefers-reduced-motion 一起降级。 */
+.skeleton-card .skeleton-avatar,
+.skeleton-card .skeleton-line {
+  animation: sxs-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.skeleton-card:nth-child(2n) .skeleton-avatar,
+.skeleton-card:nth-child(2n) .skeleton-line {
+  animation-delay: 0.2s;
+}
+
+.skeleton-card:nth-child(3n) .skeleton-avatar,
+.skeleton-card:nth-child(3n) .skeleton-line {
+  animation-delay: 0.4s;
+}
+
+@keyframes sxs-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-card .skeleton-avatar,
+  .skeleton-card .skeleton-line {
+    animation: none;
+  }
 }
 
 .spinner {
@@ -906,4 +974,32 @@
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* ==================== Header actions ==================== */
+/* 登录是这一屏唯一能推进流程的动作；刷新只是维护性操作。
+   两者原先样式完全一致（同样的描边按钮），看不出该点哪个。 */
+#btn-login {
+  background: var(--bg-button-primary);
+  color: var(--fg-on-accent);
+  border-color: var(--accent-pressed);
+}
+
+#btn-login:hover {
+  background: var(--bg-button-primary-hover);
+  border-color: var(--accent-pressed);
+}
+
+/* 刷新降级为图标按钮：文字仍通过 aria-label/title 暴露 */
+#toolbar #btn-refresh {
+  width: 30px;
+  min-width: 30px;
+  padding-inline: 0;
+  font-size: 0;
+}
+
+#toolbar #btn-refresh > .icon {
+  width: 15px;
+  height: 15px;
+  margin: 0;
 }

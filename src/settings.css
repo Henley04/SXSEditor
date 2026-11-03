@@ -32,12 +32,41 @@ body {
 }
 
 .sidebar-category {
-    padding: 16px 18px 5px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--fg-muted);
+    /* 原先 11px 大写 + 0.8px 字距，与下方 sentence case 的条目只差 1px，
+       层级全靠"全大写"这个排版 trick 撑。改成 Title Case + 12.5px/650：
+       分组看起来是标题，条目不抢戏，也不再跟其它窗口的写法不一致。 */
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 16px 18px 6px;
+    font-size: 12.5px;
+    font-weight: 650;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+/* 可折叠指示：一个小三角，折叠时转 -90°。 */
+.sidebar-category::after {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    opacity: 0.55;
+    transform: rotate(90deg);
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.sidebar-group.is-collapsed .sidebar-category::after {
+    transform: rotate(0deg);
+}
+
+.sidebar-group.is-collapsed .sidebar-item {
+    display: none;
 }
 
 .sidebar-item {
@@ -215,9 +244,12 @@ body {
 
 .hint {
     font-size: var(--font-sm);
-    color: var(--fg-disabled);
+    /* 原来是 --fg-disabled：12px 正文用"禁用色"，在浅色主题下对比度不足 4.5:1。
+       hint 是要读的内容，不是不可用的控件。 */
+    color: var(--fg-muted);
     margin-top: var(--space-2);
-    line-height: 1.5;
+    /* 12px 配 1.6：折行后的中文不再像一坨，长 hint 折成 3 行也可读 */
+    line-height: 1.6;
     padding-left: var(--space-2);
     border-left: 2px solid var(--ink-soft);
 }
@@ -285,6 +317,116 @@ body {
     color: var(--accent);
 }
 
+/* 数值徽章可点击改成精确值：不必为了 0.68 去拖一根 1px 精度的滑杆。 */
+.volume-display--editable {
+    cursor: text;
+}
+
+.volume-display--editable:hover {
+    outline: 1px solid var(--accent);
+}
+
+.volume-display-input {
+    width: 4.2em;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+    outline: none;
+    /* 去掉 number 的上下箭头：徽章只有 20px 高，箭头会盖住数字 */
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.volume-display-input::-webkit-inner-spin-button,
+.volume-display-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* 滑杆端点值：紧贴轨道下方，只在需要精确值时提供参考 */
+.range-scale {
+    display: flex;
+    justify-content: space-between;
+    margin-top: -2px;
+    padding: 0 2px;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+}
+
+/* 长说明折叠：用 <details>，收起时只留两行。 */
+.hint-fold {
+    margin-top: var(--space-2);
+}
+
+.hint-fold > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    list-style: none;
+    font-size: var(--font-sm);
+    color: var(--accent);
+    user-select: none;
+    padding: 2px 0;
+}
+
+.hint-fold > summary::-webkit-details-marker,
+.hint-fold > summary::marker {
+    display: none;
+}
+
+.hint-fold > summary::before {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3.5px solid transparent;
+    border-bottom: 3.5px solid transparent;
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.hint-fold[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.hint-fold > .hint {
+    margin-top: var(--space-1);
+}
+
+/* 收起时压到两行；文本仍在 DOM 里，Ctrl+F 与读屏软件都还能读到。 */
+.hint-fold:not([open]) > .hint {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* "仅导出"标签：贴在分区说明末尾，替代一句容易被忽略的小字。 */
+.section-desc--callout {
+    padding: var(--space-3) var(--space-4);
+    background: var(--accent-softer);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-md);
+    color: var(--fg-secondary);
+}
+
+.export-only-tag {
+    display: inline-block;
+    margin-left: var(--space-3);
+    padding: 1px 7px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    color: var(--fg-secondary);
+    vertical-align: 1px;
+}
+
 /* ==================== Info Boxes ==================== */
 /* 信息框统一样式由 components.css §5 提供（扁平 callout + SVG 线性图标）。
    此处不再覆盖配色与左侧粗条——之前强制琥珀色左边条会把所有说明信息
@@ -317,6 +459,54 @@ body {
 .precision-info-box strong {
     color: var(--accent-fg);
     font-weight: 600;
+}
+
+/* 首屏结论：两条，加粗数字而不是加粗整句 */
+.precision-info-summary {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-7);
+}
+
+/* 分区内的 disclosure（精度说明 / VRAM 对照表）。
+   统一外观：一行标题 + 三角，展开后显示正文；不引入卡片阴影/发光。 */
+.settings-disclosure {
+    margin-top: var(--space-2);
+}
+
+.settings-disclosure > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    list-style: none;
+    font-size: var(--font-sm);
+    color: var(--accent);
+    user-select: none;
+    padding: 3px 0;
+}
+
+.settings-disclosure > summary::-webkit-details-marker,
+.settings-disclosure > summary::marker {
+    display: none;
+}
+
+.settings-disclosure > summary::before {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3.5px solid transparent;
+    border-bottom: 3.5px solid transparent;
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.settings-disclosure[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+/* 展开后的表格不要再顶出一大段空白 */
+.settings-disclosure > .vram-table-wrapper {
+    margin-top: var(--space-2);
 }
 
 .precision-info-box ul {
@@ -467,24 +657,24 @@ body {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--fg-disabled);
+    background: var(--status-idle, var(--fg-muted));
 }
 
+/* 与 modelDownload.css 的 .overview-dot 同一套状态语义，不加光晕 */
 .model-overview-dot.installed {
-    background: var(--success);
-    box-shadow: 0 0 6px var(--success);
+    background: var(--status-ready);
 }
 
 .model-overview-dot.missing {
-    background: var(--fg-muted);
+    background: var(--status-idle);
 }
 
 .model-overview-dot.warning {
-    background: var(--warning, #f0ad4e);
+    background: var(--status-attention);
 }
 
 .model-overview-dot.checking {
-    background: var(--accent);
+    background: var(--status-busy);
     animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
@@ -521,20 +711,21 @@ body {
     color: var(--fg-secondary);
 }
 
+/* 圆点旁边的状态文字与圆点同一套映射，避免"点是绿的、字是灰的" */
 .model-overview-status.installed {
-    color: var(--success);
+    color: var(--status-ready);
 }
 
 .model-overview-status.missing {
-    color: var(--fg-muted);
+    color: var(--status-idle);
 }
 
 .model-overview-status.warning {
-    color: var(--warning, #f0ad4e);
+    color: var(--status-attention);
 }
 
 .model-overview-status.checking {
-    color: var(--accent);
+    color: var(--status-busy);
 }
 
 .model-overview-version {
@@ -586,7 +777,28 @@ body {
 }
 
 .model-status-info {
+    flex: 1;
+    min-width: 0;
     color: var(--fg-muted);
+}
+
+/* 行内下载入口：缺口 + 体积之后紧跟一个次要按钮。不做发光/渐变，
+   与页面其余次要按钮同级。 */
+.model-status-download {
+    flex-shrink: 0;
+    appearance: none;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    border-radius: var(--radius-sm);
+    padding: 2px 10px;
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.model-status-download:hover {
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 /* ==================== Hardware Info ==================== */
@@ -604,9 +816,14 @@ body {
 }
 
 .device-mode-radio {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
+    /* 原来是 flex：input / label / desc 三个并排项，desc 会跑到 label 右边、
+       贴着卡片边缘，看起来像"标题居中、说明靠右"。改成两列网格后 label 与
+       desc 同起点、上下排列，读起来才像一条选项。 */
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+    align-items: start;
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
@@ -640,12 +857,23 @@ body {
 }
 
 .device-mode-radio input[type="radio"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
     margin-top: 3px;
     cursor: pointer;
     flex-shrink: 0;
 }
 
+.device-mode-radio input[type="checkbox"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
 .device-mode-radio .radio-label {
+    grid-column: 2;
+    grid-row: 1;
     font-size: var(--font-md);
     font-weight: 600;
     color: var(--fg-primary);
@@ -653,10 +881,13 @@ body {
 }
 
 .device-mode-radio .radio-desc {
+    grid-column: 2;
+    grid-row: 2;
     font-size: var(--font-sm);
     color: var(--fg-muted);
     display: block;
-    margin-top: var(--space-1);
+    margin-top: 0;
+    line-height: 1.55;
 }
 
 /* ==================== WebNN/NPU Status Bar ==================== */
@@ -687,17 +918,41 @@ body {
     transition: color var(--motion-base);
 }
 
+/* 检测失败后的就地重试 */
+.hardware-retry-btn {
+    margin-left: auto;
+    appearance: none;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    border-radius: var(--radius-sm);
+    padding: 2px 10px;
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.hardware-retry-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* 状态文字同样走 --status-* 语义：检测中=蓝、可用=绿、不可用=灰，
+ * 与模型卡片的圆点保持同一套映射，不再出现"这里黄那里蓝" */
 .webnn-status-value.status-available {
-    color: var(--success);
+    color: var(--status-ready);
 }
 
 .webnn-status-value.status-unavailable {
-    color: var(--fg-muted);
+    color: var(--status-idle);
 }
 
 .webnn-status-value.status-checking {
-    color: var(--warning);
+    color: var(--status-busy);
     animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+.webnn-status-value.status-failed {
+    color: var(--status-error);
 }
 
 @keyframes pulse-text {
@@ -962,6 +1217,25 @@ body {
     transform: translateY(0) scale(0.97);
     transition-duration: 0.06s;
     transition-timing-function: var(--ease-standard);
+}
+
+/* 禁用态不能只是"浅一档灰"：撤销/重做栈空时此前与可点状态几乎无差别。
+   这里同时降不透明度、去描边、锁光标，并且不响应 hover 位移。 */
+.btn-theme-editor:disabled {
+    opacity: 0.42;
+    background: transparent;
+    border-color: var(--border-subtle);
+    color: var(--fg-muted);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-theme-editor:disabled:hover {
+    background: transparent;
+    border-color: var(--border-subtle);
+    color: var(--fg-muted);
+    transform: none;
 }
 
 .btn-theme-editor.btn-theme-editor-primary {

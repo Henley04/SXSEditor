@@ -157,6 +157,37 @@ function applyLocale() {
     });
 }
 
+/**
+ * 注册插件自带文案。
+ *
+ * 键空间隔离：所有词条落在 `plugin.<pluginId>.<key>` 下。不隔离的话，一个叫
+ * `common` 的插件用 `ok` 做键就会把宿主的 `common.ok` 覆盖掉 —— 界面文案被第三方
+ * 插件改写，而且极难定位。
+ *
+ * 合并是幂等的：每次投影同步都会重放一遍，重复注册只是覆盖同一批键；
+ * 插件被卸载/停用时调用 unregister，避免卸载后仍能翻译它的词条。
+ *
+ * @param {string} pluginId
+ * @param {Record<string, Record<string, string>>} dicts 语言 → 扁平词条
+ */
+function registerPluginMessages(pluginId, dicts) {
+    if (!pluginId || !dicts || typeof dicts !== 'object') return;
+    for (const [locale, dict] of Object.entries(dicts)) {
+        const target = locales[locale] || locales[String(locale).split('-')[0]];
+        if (!target || !dict || typeof dict !== 'object') continue;
+        if (!target.plugin) target.plugin = {};
+        target.plugin[pluginId] = { ...(target.plugin[pluginId] || {}), ...dict };
+    }
+    _tCache.clear();
+}
+
+function unregisterPluginMessages(pluginId) {
+    for (const dict of Object.values(locales)) {
+        if (dict && dict.plugin && dict.plugin[pluginId]) delete dict.plugin[pluginId];
+    }
+    _tCache.clear();
+}
+
 async function initI18n() {
     // 1. Check localStorage (fast, renderer-local)
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -184,4 +215,7 @@ async function initI18n() {
     }
 }
 
-export { t, tOr, setLocale, getLocale, applyLocale, initI18n };
+export {
+    t, tOr, setLocale, getLocale, applyLocale, initI18n,
+    registerPluginMessages, unregisterPluginMessages,
+};

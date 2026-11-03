@@ -92,6 +92,10 @@ module.exports = [
             'src/shared/pluginProtocol.js',
             'src/shared/pluginManifest.js',
             'src/shared/pluginZip.js',
+            // 快捷键字符串的规范化（主进程仲裁与渲染层匹配共用，CJS）
+            'src/shared/pluginKeys.js',
+            // 窗口标识与 preload 高危能力裁剪表（CJS，单测要拿它校验入口名）
+            'src/shared/windowCapabilities.js',
             // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
             'src/shared/safeCall.js',
             // .sxssinger 解析（主进程用，纯函数便于单测）
@@ -173,6 +177,10 @@ module.exports = [
             'src/singerCreator.js',
             'src/singerMarket.js',
             'src/settings.js',
+            'src/settingsUi.js',
+            // 工具栏弹出层的通用装配器：渲染层 ESM（utils 目录整体登记在 CJS 档，
+            // 新文件必须单独列进 ESM 档，否则 import/export 直接解析失败）
+            'src/utils/popoverMenu.js',
             'src/pluginManager/**/*.js',
             'src/modelDownload.js',
             'src/resourceManager.js',

@@ -15,7 +15,7 @@ registerMcpAutomation();
 // Import and run initialization
 import { updateProjectSettings } from './projectManager.js';
 import { refreshAll, renderFragmentTimeline } from './timelineRenderer.js';
-import { state, dom } from './state.js';
+import { state, dom, trackManager } from './state.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
 import { TRANSPORT, setTransport } from './transport.js';
 import { initWindowTheme } from '../themes/themeInit.js';
@@ -24,7 +24,9 @@ import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
 import { installPluginPlaybackBridge } from './pluginBlockingOverlay.js';
 import { installOpenFromOs, consumePendingOpenFile } from './openFromOs.js';
 import { installPluginPanelHost } from './plugins/pluginPanelHost.js';
+import { installPluginHost } from './plugins/pluginHost.js';
 import { installProjectApplyBridge } from './plugins/projectApplyBridge.js';
+import { installToolbarPopovers } from './toolbarPopovers.js';
 
 // 首屏关键路径之外的工作（图标水合）延后到空闲帧执行，让主窗口更早呈现。
 // 首屏的 i18n 文本替换必须先跑，否则用户会先看到英文再闪成中文。
@@ -94,6 +96,24 @@ if (state._ipcCleanups) {
 if (state._ipcCleanups) {
   state._ipcCleanups.push(installProjectApplyBridge());
   state._ipcCleanups.push(installPluginPanelHost());
+  // M2 界面贡献点（工具栏 / 状态栏 / 浮层 / 右键菜单 / 快捷键）。
+  // 上下文按需计算：只有当某条贡献声明了 when 时才会被读到，没插件时零成本。
+  state._ipcCleanups.push(installPluginHost({
+    getContext: () => ({
+      projectOpen: !!state.currentProjectFilePath,
+      hasFragments: trackManager.getFragments().length > 0,
+      hasSelection: !!state.selectedFragmentId,
+      playing: !!state.isPlaying,
+      idle: !state.isPlaying,
+    }),
+  }));
+}
+
+// 顶栏弹出层（拍号 4/4、⋯ 更多操作）。必须在 eventHandlers.js 之后安装：
+// 触发按钮的 click 只是开关弹层，真正的动作仍由各自的 id 监听器处理。
+{
+  const disposePopovers = installToolbarPopovers();
+  if (state._ipcCleanups) state._ipcCleanups.push(disposePopovers);
 }
 
 // Display app version.

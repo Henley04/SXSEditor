@@ -20,7 +20,12 @@ class PluginRegistry {
     this._contrib = new Map();
     this._listeners = new Set();
     this.revision = 0;
-    for (const type of ['command', 'menu', 'panel', 'fileType', 'setting', 'hook']) {
+    for (const type of [
+      'command', 'menu', 'panel', 'fileType', 'setting', 'hook',
+      // M2：界面贡献点。与命令分开存，卸载时按 pluginId 一律清掉，
+      // 不依赖插件自己报"我往工具栏塞了什么"。
+      'toolbar', 'statusBar', 'contextMenu', 'overlay', 'keybinding',
+    ]) {
       this._contrib.set(type, new Map());
     }
   }
@@ -150,8 +155,42 @@ class PluginRegistry {
   /**
    * 渲染进程需要的投影。只含可用（enabled 且非 quarantine）的插件贡献。
    * 注意：不含文件路径与权限细节 —— 渲染层不需要，也不该拿到。
+   *
+   * @param {{keybindings?: Map<string, object[]>, statusText?: Map<string, string>}} [extras]
+   *   keybindings：主进程仲裁后的"该插件当前真正生效/被挡住的组合"；
+   *   statusText：插件运行期通过 ui.status 覆盖过的状态栏文案（不落盘）。
    */
-  snapshot() {
+  snapshot(extras = {}) {
+    const keybindingsByPlugin = extras.keybindings || new Map();
+    const statusText = extras.statusText || new Map();
+    /**
+     * 投影从**贡献表**读，而不是从 manifest 读。
+     *
+     * 两处读法在"正常加载"时结果一样，但差异恰恰出现在出问题的时候：
+     * 停用/重载过程中若只撤掉了注册表而 record 还在，按 manifest 投影就会把
+     * 已经不存在的按钮继续画出来 —— 点下去就是 NOT_FOUND。注册表是唯一权威，
+     * 投影就必须跟着它。
+     */
+    const byPlugin = (type) => {
+      const map = new Map();
+      for (const entry of this.list(type)) {
+        if (!map.has(entry.pluginId)) map.set(entry.pluginId, []);
+        map.get(entry.pluginId).push(entry);
+      }
+      return map;
+    };
+    const tables = {
+      command: byPlugin('command'),
+      panel: byPlugin('panel'),
+      setting: byPlugin('setting'),
+      fileType: byPlugin('fileType'),
+      toolbar: byPlugin('toolbar'),
+      statusBar: byPlugin('statusBar'),
+      contextMenu: byPlugin('contextMenu'),
+      overlay: byPlugin('overlay'),
+    };
+    const rows = (type, pluginId) => (tables[type].get(pluginId) || []);
+
     const plugins = [];
     for (const record of this._plugins.values()) {
       const usable = record.status === 'loaded';
@@ -164,16 +203,35 @@ class PluginRegistry {
         error: record.error,
         legacy: record.legacy,
         runtimeAlive: record.runtimeAlive,
-        commands: usable ? record.manifest.contributes.commands.map((c) => ({
+        commands: rows('command', record.id).map((c) => ({
           id: c.id, title: c.title, description: c.description, headless: c.headless,
-        })) : [],
-        panels: usable ? record.manifest.contributes.panels.map((p) => ({
+        })),
+        panels: rows('panel', record.id).map((p) => ({
           id: p.id, title: p.title, width: p.width,
-        })) : [],
-        settings: usable ? record.manifest.contributes.settings.map((s) => ({
-          id: s.id, title: s.title, hasPanel: !!s.entry, fields: s.fields,
-        })) : [],
-        fileTypes: usable ? record.manifest.contributes.fileTypes : [],
+        })),
+        settings: rows('setting', record.id).map((s) => ({
+          id: s.id, localId: s.localId, title: s.title, panel: s.panelId, fields: s.fields,
+        })),
+        fileTypes: rows('fileType', record.id),
+        toolbar: rows('toolbar', record.id).map((t) => ({
+          id: t.id, localId: t.localId, command: t.command, title: t.title,
+          icon: t.icon, group: t.group, when: t.when,
+        })),
+        statusBar: rows('statusBar', record.id).map((s) => ({
+          id: s.id, localId: s.localId, command: s.command, text: s.text, tooltip: s.tooltip,
+          alignment: s.alignment, when: s.when,
+          runtimeText: statusText.has(s.id) ? statusText.get(s.id) : null,
+        })),
+        contextMenus: rows('contextMenu', record.id).map((c) => ({
+          id: c.id, localId: c.localId, context: c.context, command: c.command,
+          title: c.title, when: c.when,
+        })),
+        overlays: rows('overlay', record.id).map((o) => ({
+          id: o.id, localId: o.localId, title: o.title, anchor: o.anchor,
+          height: o.height, width: o.width, pointerEvents: o.pointerEvents, when: o.when,
+        })),
+        keybindings: keybindingsByPlugin.get(record.id) || [],
+        i18n: usable ? record.manifest.contributes.i18n : {},
         permissions: usable ? record.manifest.permissions : {},
         pendingContributions: record.manifest.pendingContributions || [],
       });
@@ -182,7 +240,8 @@ class PluginRegistry {
   }
 
   /** 管理器窗口用：含状态、来源、错误、审计摘要。 */
-  adminSnapshot() {
+  adminSnapshot(extras = {}) {
+    const keybindingsByPlugin = extras.keybindings || new Map();
     return {
       revision: this.revision,
       plugins: [...this._plugins.values()].map((r) => ({
@@ -204,6 +263,17 @@ class PluginRegistry {
         commands: r.manifest.contributes.commands.map((c) => c.localId),
         panels: r.manifest.contributes.panels.map((p) => p.localId),
         fileTypes: r.manifest.contributes.fileTypes,
+        // M2：界面贡献点的条目数与管理器要展示的快捷键状态。
+        // 只给数量而不是内容 —— 管理器不渲染工具栏按钮，给内容只会多一份要维护的形状。
+        uiContributions: {
+          toolbar: r.manifest.contributes.toolbar.length,
+          statusBar: r.manifest.contributes.statusBar.length,
+          contextMenus: r.manifest.contributes.contextMenus.length,
+          overlays: r.manifest.contributes.timelineOverlays.length,
+          settings: r.manifest.contributes.settings.length,
+        },
+        keybindings: keybindingsByPlugin.get(r.id) || [],
+        keybindingsEnabled: !!r.state?.keybindingsEnabled,
         pendingContributions: r.manifest.pendingContributions || [],
       })),
     };

@@ -32,6 +32,23 @@ function isPluginUrl(url) {
   }
 }
 
+/**
+ * 面板标题兜底解析。
+ *
+ * 主进程下发前已经按当前语言解析过（见 PluginService.openPanel），正常拿到的是
+ * 字符串；这里再兜一层是为了让"以后有别的路径直接把 manifest 里的 title 透传
+ * 过来"时不会在抽屉标题上显示 [object Object]。
+ */
+function panelTitle(payload) {
+  const raw = payload && payload.title;
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  if (raw && typeof raw === 'object') {
+    const lang = document.documentElement.lang || 'en';
+    return raw[lang] || raw[lang.split('-')[0]] || raw.en || Object.values(raw)[0] || payload.panelId;
+  }
+  return (payload && payload.panelId) || '';
+}
+
 function createEl(tag, className) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -48,7 +65,7 @@ function createEl(tag, className) {
  * 只发面板真正需要的几个（背景 / 前景 / 强调色 / 边框 / 明暗），不发全部 200+
  * 个 token：发多了等于把宿主的设计系统固化成一个对外的 ABI。
  */
-function hostTheme() {
+export function hostTheme() {
   try {
     const cs = getComputedStyle(document.documentElement);
     const scheme = String(cs.getPropertyValue('--color-scheme') || '').trim();
@@ -109,6 +126,10 @@ export function installPluginPanelHost() {
       frame = null;
     }
     if (bodyEl) bodyEl.textContent = '';
+    // 抽屉是复用的（关闭时只 hidden），属性必须随面板一起失效。
+    // 泄漏探针按 [data-plugin-id] 数残留节点，若这里不清，正常关面板也会被
+    // 记成"还留着一个节点"；反过来，若打开时不打标记，残留的 iframe 又数不到。
+    if (dock) delete dock.dataset.pluginId;
   }
 
   // ------------------------------------------------------------ 通信
@@ -191,11 +212,20 @@ export function installPluginPanelHost() {
 
   // ------------------------------------------------------------ 打开 / 关闭
 
-  function closePanel() {
+  function closePanel(options = {}) {
     teardownFrame();
     current = null;
     if (dock) dock.hidden = true;
     if (titleEl) titleEl.textContent = '';
+    // 用户主动关面板 → 保留空容器，下次打开省一次 DOM 构建；
+    // 插件被卸载/停用/重载 → 连容器一起移除，否则"卸载干净"之后
+    // body 里还挂着一个空 <aside>（探针数不到，但肉眼与 DOM 快照看得到）。
+    if (options.destroy && dock) {
+      try { dock.remove(); } catch (_) { /* ignore */ }
+      dock = null;
+      titleEl = null;
+      bodyEl = null;
+    }
   }
 
   function openPanel(payload) {
@@ -214,23 +244,27 @@ export function installPluginPanelHost() {
     teardownFrame();
     if (dock) dock.hidden = true;
 
-    titleEl.textContent = payload.title || payload.panelId;
+    const title = panelTitle(payload);
+    titleEl.textContent = title;
 
     const iframe = createEl('iframe', 'plugin-panel-frame');
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
     iframe.setAttribute('allow', '');
-    iframe.title = payload.title || payload.panelId;
+    iframe.title = title;
     const width = Math.max(280, Math.min(900, Number(payload.width) || 420));
     if (dock) dock.style.setProperty('--plugin-panel-width', `${width}px`);
     iframe.src = payload.url;
 
     bodyEl.appendChild(iframe);
     frame = iframe;
+    // 面板节点带插件归属，卸载时主进程的泄漏探针才数得到（见 PluginLeakProbe）。
+    iframe.dataset.pluginId = payload.pluginId;
+    if (dock) dock.dataset.pluginId = payload.pluginId;
     current = {
       pluginId: payload.pluginId,
       panelId: payload.panelId,
-      title: payload.title || payload.panelId,
+      title,
     };
     dock.hidden = false;
   }
@@ -248,7 +282,7 @@ export function installPluginPanelHost() {
       const alive = (snapshot?.plugins || []).some((p) => (
         p.id === current.pluginId && p.status === 'loaded'
       ));
-      if (!alive) closePanel();
+      if (!alive) closePanel({ destroy: true });
     })
     : null;
 

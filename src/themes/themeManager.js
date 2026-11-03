@@ -327,6 +327,40 @@ function redo() {
     return true;
 }
 
+/**
+ * 历史栈是"整份 overrides 快照"式存储，本身不记动作名。为了让工具栏的
+ * 撤销/重做能说清"这一步改了什么"，用相邻两份快照做差集反推动作对象，
+ * 最多取 3 个令牌名（再多 tooltip 也读不完，只说"等 N 项"就够了）。
+ */
+function diffTokens(fromIdx, toIdx) {
+    const a = history[fromIdx] ? history[fromIdx].tokens : {};
+    const b = history[toIdx] ? history[toIdx].tokens : {};
+    const changed = [];
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (a[key] !== b[key]) changed.push(key);
+    }
+    return changed;
+}
+
+function canUndo() {
+    return historyActive && historyIndex > 0;
+}
+
+function canRedo() {
+    return historyActive && historyIndex < history.length - 1;
+}
+
+/** 返回 { available, tokens } —— tokens 是这一步将会被撤销/重做的令牌名 */
+function peekUndo() {
+    if (!canUndo()) return { available: false, tokens: [] };
+    return { available: true, tokens: diffTokens(historyIndex, historyIndex - 1) };
+}
+
+function peekRedo() {
+    if (!canRedo()) return { available: false, tokens: [] };
+    return { available: true, tokens: diffTokens(historyIndex, historyIndex + 1) };
+}
+
 const themeManager = {
     register,
     registerBuiltins,
@@ -344,6 +378,10 @@ const themeManager = {
     pushHistory,
     undo,
     redo,
+    canUndo,
+    canRedo,
+    peekUndo,
+    peekRedo,
     snapshot,
     restoreSnapshot,
     on,

@@ -1,5 +1,26 @@
 /* Shared component styles — imported via common.css */
 
+/* ==================== 0. Status semantics ====================
+ * 五种状态的唯一语义来源。此前各处直接拿 --warning / --accent / --success
+ * 拼状态，同为"检测中"在不同页面一个蓝一个黄，同为"未安装"有深灰浅灰两档。
+ * 以后状态点/状态文字只认这五个名字：
+ *   idle      未开始 / 不适用 / 未安装   灰
+ *   busy      进行中（检测、下载、计算）  蓝
+ *   attention 需要用户操作（可更新、缺文件） 橙
+ *   error     失败                      红
+ *   ready     就绪 / 已安装              绿
+ * 刻意定义在这里而不是 themeFallback.css：后者被 test/themeFallback.test.js
+ * 与 themeBootstrap.js 逐项比对，加新变量会牵动启动兜底链路；而这里只是
+ * 对既有主题变量的别名，取值随换肤自动变化，无需测试同步。
+ */
+:root {
+  --status-idle: var(--fg-muted);
+  --status-busy: var(--accent);
+  --status-attention: var(--warning);
+  --status-error: var(--danger);
+  --status-ready: var(--success);
+}
+
 /* ==================== 0. Motion Keyframes ==================== */
 
 @keyframes button-hover-glow {

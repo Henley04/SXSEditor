@@ -121,6 +121,11 @@ function registerHandler(options) {
       'cache-control': 'no-store',
       // 插件面板不允许被任意站点嵌入；只有宿主窗口（file:// 或 localhost）可以
       'x-content-type-options': 'nosniff',
+      // 宿主窗口开了 Cross-Origin-Embedder-Policy: require-corp（为了 SharedArrayBuffer），
+      // 于是每个跨源子资源都必须显式声明 CORP，否则被 COEP 拦成
+      // ERR_BLOCKED_BY_RESPONSE —— iframe 里只剩一张空白错误页。
+      // plugin:// 与宿主（http://localhost 或 file://）永远是跨源的，所以这里必须给。
+      'cross-origin-resource-policy': 'cross-origin',
     };
     if (isDoc) headers['content-security-policy'] = PANEL_CSP;
     return new Response(data, { status: 200, headers });

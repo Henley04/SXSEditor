@@ -58,8 +58,11 @@ function buildPluginsMenu(options) {
       if (panels.length) {
         if (items.length) items.push({ type: 'separator' });
         for (const panel of panels) {
+          // panel.title 与 cmd.title 同构（{ en, 'zh-CN' } 或 string），
+          // 这里必须走 pickTitle —— 直接模板插值会得到 "[object Object]"。
+          const panelLabel = pickTitle(panel.title, locale);
           items.push({
-            label: `${t('menu.pluginsOpenPanel')}${panel.title ? ` · ${panel.title}` : ''}`,
+            label: `${t('menu.pluginsOpenPanel')}${panelLabel ? ` · ${panelLabel}` : ''}`,
             click: () => openPanel(plugin.id, panel.localId),
           });
         }

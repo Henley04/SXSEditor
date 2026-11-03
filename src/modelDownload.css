@@ -58,24 +58,24 @@ body {
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--fg-disabled);
+  background: var(--status-idle, var(--fg-muted));
 }
 
+/* 状态色统一走 --status-* 语义变量；就绪点不加光晕，只靠颜色区分 */
 .overview-dot.installed {
-  background: var(--success);
-  box-shadow: 0 0 6px var(--success);
+  background: var(--status-ready);
 }
 
 .overview-dot.missing {
-  background: var(--fg-muted);
+  background: var(--status-idle);
 }
 
 .overview-dot.warning {
-  background: var(--warning, #f0ad4e);
+  background: var(--status-attention);
 }
 
 .overview-dot.checking {
-  background: var(--accent);
+  background: var(--status-busy);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -309,6 +309,13 @@ body {
   justify-content: space-between;
   padding: var(--space-1) 0;
   font-size: var(--font-sm);
+  /* 两行版本信息之间留出呼吸：之前行高 0 间距，下一行"选择版本"的下拉
+     上沿几乎压住上一行文字，看起来像叠在一起。 */
+  line-height: 1.6;
+}
+
+.version-info-row + .version-info-row {
+  margin-top: var(--space-1);
 }
 
 .version-label {
@@ -328,10 +335,10 @@ body {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: var(--bg-elevated, rgba(255, 193, 7, 0.1));
-  border: 1px solid var(--warning, #f0ad4e);
+  border: 1px solid var(--status-attention);
   border-radius: var(--radius-md);
   font-size: var(--font-sm);
-  color: var(--warning, #f0ad4e);
+  color: var(--status-attention);
 }
 
 .version-update-banner .update-icon {
@@ -348,16 +355,16 @@ body {
   flex-shrink: 0;
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-sm);
-  border: 1px solid var(--warning, #f0ad4e);
+  border: 1px solid var(--status-attention);
   background: transparent;
-  color: var(--warning, #f0ad4e);
+  color: var(--status-attention);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
 .version-update-banner .btn-update:hover {
-  background: var(--warning, #f0ad4e);
+  background: var(--status-attention);
   color: var(--bg-panel, #fff);
 }
 
@@ -367,6 +374,7 @@ body {
   justify-content: space-between;
   padding: var(--space-1) 0;
   font-size: var(--font-sm);
+  margin-top: var(--space-2);
 }
 
 .version-select {
@@ -776,28 +784,28 @@ body {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--fg-disabled);
+  background: var(--status-idle, var(--fg-muted));
 }
 
 .status-indicator.installed {
-  background: var(--success);
+  background: var(--status-ready);
 }
 
 .status-indicator.not_downloaded {
-  background: var(--fg-disabled);
+  background: var(--status-idle);
 }
 
 .status-indicator.warning {
-  background: var(--warning, #f0ad4e);
+  background: var(--status-attention);
 }
 
 .status-indicator.checking {
-  background: var(--accent);
+  background: var(--status-busy);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
 .status-indicator.downloading {
-  background: var(--accent);
+  background: var(--status-busy);
   animation: pulse 0.8s ease-in-out infinite;
 }
 
@@ -822,9 +830,9 @@ body {
   margin-left: auto;
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-xs);
-  border: 1px solid var(--warning, #f0ad4e);
+  border: 1px solid var(--status-attention);
   background: transparent;
-  color: var(--warning, #f0ad4e);
+  color: var(--status-attention);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -833,7 +841,7 @@ body {
 .model-card-status .btn-update-sifigan:hover,
 .model-card-status .btn-update-fcpe:hover,
 .model-card-status .btn-update-optional:hover {
-  background: var(--warning, #f0ad4e);
+  background: var(--status-attention);
   color: var(--bg-panel, #fff);
 }
 
@@ -841,9 +849,9 @@ body {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: var(--bg-elevated);
-  border: 1px solid var(--warning, #f0ad4e);
+  border: 1px solid var(--status-attention);
   border-radius: var(--radius-md);
-  color: var(--warning, #f0ad4e);
+  color: var(--status-attention);
   font-size: var(--font-sm);
   line-height: 1.4;
 }

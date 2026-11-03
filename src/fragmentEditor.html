@@ -12,6 +12,21 @@
         <div class="loading-content">
           <div class="loading-spinner"></div>
           <div class="loading-text" data-i18n="fragment.loadingModel">正在加载推理模型，请稍候...</div>
+          <!-- 主进程其实一直在推 svs:loadProgress（stage/percent/current/total），
+               之前没人订阅，遮罩只能干等。这里接上：进度条 + 阶段 + 文件计数。
+               没有进度事件时（旧后端 / CLI）这行保持隐藏，退回"已等待 N 秒"。 -->
+          <div class="loading-progress" id="model-loading-progress" hidden>
+            <div class="loading-progress-track">
+              <div class="loading-progress-fill" id="model-loading-progress-fill"></div>
+            </div>
+            <div class="loading-progress-meta" id="model-loading-progress-meta"></div>
+          </div>
+          <div class="loading-elapsed" id="model-loading-elapsed"></div>
+          <!-- 真取消做不到（主进程的 init 没有中止通道），但"继续在前台干等"不该是
+               唯一选项：音符编辑不依赖模型，用户可以先把音符改完。 -->
+          <button type="button" id="btn-loading-background" class="loading-background"
+                  data-i18n="fragment.loadingBackground"
+                  data-i18n-title="fragment.loadingBackgroundHint">先在后台加载</button>
         </div>
       </div>
 
@@ -19,8 +34,25 @@
       <div id="toolbar">
       <div class="toolbar-group">
         <button id="btn-play-fragment" title="Space" data-i18n="fragment.play" data-icon="play">播放</button>
-        <button id="btn-export-fragment" data-i18n="fragment.export" data-icon="download">导出</button>
-        <button id="btn-export-fragment-midi" data-i18n="fragment.exportMidi" data-icon="music">导出MIDI</button>
+      </div>
+      <div class="toolbar-divider"></div>
+      <!-- 导出与传输分开：原先 Play/Export/ExportMIDI 挤在同一组里，
+           和右侧的 tab（Manual/Score/MIDI/Pitch）形成"三个维度并排"的观感。
+           两个导出再收进一个 ▾：它们共享同一个对象（当前分片），只是格式不同，
+           并排两个按钮会让人先读两个名字才能决定点哪个。
+           注意：两个按钮的 id / 事件监听一律不动，只是搬进弹出层。 -->
+      <div class="toolbar-group export-group">
+        <div class="toolbar-popover-anchor">
+          <button id="btn-export-menu" type="button" class="btn-export-menu"
+                  aria-haspopup="menu"
+                  data-i18n="fragment.export" data-icon="download">导出</button>
+          <div class="toolbar-popover" id="export-menu-panel" hidden role="menu">
+            <button id="btn-export-fragment" role="menuitem"
+                    data-i18n="fragment.exportAudio" data-icon="download">导出音频</button>
+            <button id="btn-export-fragment-midi" role="menuitem"
+                    data-i18n="fragment.exportMidi" data-icon="music">导出MIDI</button>
+          </div>
+        </div>
       </div>
       <div class="toolbar-divider"></div>
       <div class="toolbar-group">
@@ -179,7 +211,7 @@
 
       <!-- Status bar -->
       <div id="statusbar" class="statusbar">
-        <div class="s-item"><span class="led"></span><span data-i18n="fragment.statusReady">Ready</span></div>
+        <div class="s-item" id="status-model"><span class="led" id="status-model-led"></span><span id="status-model-text" data-i18n="fragment.statusReady">Ready</span></div>
         <div class="s-div"></div>
         <div class="s-item"><span class="led led-accent"></span>SVS Pipeline</div>
         <div class="s-div"></div>

@@ -584,6 +584,12 @@ export function syncProjectControls() {
   dom.bpmInput.value = state.project.bpm;
   if (dom.timeSigNum) dom.timeSigNum.value = state.project.timeSignature[0];
   if (dom.timeSigDen) dom.timeSigDen.value = state.project.timeSignature[1];
+  // 拍号徽标只在用户 input 时由 toolbarPopovers.js 同步；载入工程 / MCP 改工程
+  // 是直接赋 value，不会触发 input，这里补一次。
+  const timesigDisplay = document.getElementById('timesig-display');
+  if (timesigDisplay) {
+    timesigDisplay.textContent = `${state.project.timeSignature[0]}/${state.project.timeSignature[1]}`;
+  }
   if (dom.bpmDisplayBadge) {
     const bpmText = dom.bpmDisplayBadge.querySelector('#bpm-display-text')
       || document.getElementById('bpm-display-text');

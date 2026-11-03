@@ -1,0 +1,34 @@
+/* 浮层背景必须透明：它盖在时间轴画布上，不透明等于把工程内容挡住 */
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: system-ui, sans-serif;
+}
+
+.grid {
+  position: absolute;
+  inset: 0;
+  /* 用 currentColor + 极低透明度，深浅主题下都不刺眼；不用发光/阴影 */
+  color: currentColor;
+  opacity: 0.18;
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 1px,
+    transparent 1px 64px
+  );
+  border-bottom: 1px dashed currentColor;
+}
+
+.badge {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 10px;
+  opacity: 0.65;
+  color: currentColor;
+}

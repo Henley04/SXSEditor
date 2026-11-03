@@ -9,10 +9,11 @@ import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSin
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
+import { appendPluginContextItems, pluginContextItems } from './plugins/contributionContextMenu.js';
 
 // Click-vs-drag tracking for fragment selection
 let _clickStartPos = null;
@@ -309,11 +310,16 @@ dom.btnLoad.addEventListener('click', async () => {
 });
 
 dom.btnExport.addEventListener('click', async () => {
+  // 空工程时按钮已置灰（title 说明原因），这里只是兜底，避免快捷键/脚本绕过
+  if (!isExportAvailable()) return;
   await exportAll();
 });
 
 if (dom.btnExportLrc) {
-  dom.btnExportLrc.addEventListener('click', exportProjectLrc);
+  dom.btnExportLrc.addEventListener('click', () => {
+    if (!isExportAvailable()) return;
+    exportProjectLrc();
+  });
 }
 
 // Add singer
@@ -628,7 +634,22 @@ dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
       }
     }
   }
+
+  // 空白处右击：宿主没有内置菜单，但插件可能声明了 canvas 区域的项。
+  // 没有插件项时什么都不做（不弹一个空菜单）。
+  showPluginContextMenu(e.clientX, e.clientY, 'canvas', { hasSelection: false });
 });
+
+// 歌手列表右键：插件可以在某个歌手行上提供"用它做点什么"的入口。
+// 用事件委托而不是给每一行挂监听 —— 列表每次 refreshAll 都会重建。
+dom.singerListEl.addEventListener('contextmenu', (e) => {
+  const row = e.target && e.target.closest ? e.target.closest('.singer-item[data-singer-id]') : null;
+  if (!row) return;
+  if (!pluginContextItems('singer', { hasSelection: true }).length) return;
+  e.preventDefault();
+  showPluginContextMenu(e.clientX, e.clientY, 'singer', { hasSelection: true });
+});
+
 
 // Wheel events: rAF-coalesced to avoid layout thrash on high-frequency trackpad scroll.
 // 关键：同一帧内的多个 wheel 事件必须「累加」delta —— 若只保留最后一个，
@@ -787,6 +808,36 @@ function hideFragmentContextMenu() {
   }
 }
 
+/** 挂上菜单并装好"点外面关闭"。两个入口（分片 / 插件）共用，避免行为漂移。 */
+function mountContextMenu(menu) {
+  document.body.appendChild(menu);
+  _fragmentCtxMenu = menu;
+  const closeHandler = (e) => {
+    if (!menu.contains(e.target)) {
+      hideFragmentContextMenu();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  // 延迟到下一轮事件循环：否则本次 contextmenu 之后紧跟的 click 会立刻关掉它
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+/**
+ * 只含插件项的菜单（画布空白处 / 歌手行）。返回是否真的弹出了菜单 ——
+ * 没有插件项时调用方不应该 preventDefault，让系统默认菜单照常出现。
+ */
+function showPluginContextMenu(clientX, clientY, area, extraContext) {
+  if (!pluginContextItems(area, extraContext).length) return false;
+  hideFragmentContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'fragment-ctx-menu';
+  menu.style.left = clientX + 'px';
+  menu.style.top = clientY + 'px';
+  if (!appendPluginContextItems(menu, area, { extraContext })) return false;
+  mountContextMenu(menu);
+  return true;
+}
+
 function showFragmentContextMenu(clientX, clientY, fragment) {
   hideFragmentContextMenu();
 
@@ -806,17 +857,9 @@ function showFragmentContextMenu(clientX, clientY, fragment) {
   });
 
   menu.appendChild(deleteItem);
-  document.body.appendChild(menu);
-  _fragmentCtxMenu = menu;
-
-  // Close on click outside
-  const closeHandler = (e) => {
-    if (!menu.contains(e.target)) {
-      hideFragmentContextMenu();
-      document.removeEventListener('click', closeHandler);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+  // 插件项接在宿主项之后：宿主自己的动作位置固定，插件多装几个也不会把"删除"挤走
+  appendPluginContextItems(menu, 'fragment', { extraContext: { hasSelection: true } });
+  mountContextMenu(menu);
 }
 
 // ---- Fragment deletion ----

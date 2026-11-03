@@ -915,6 +915,11 @@ export function renderSingerList() {
   renderSingerList._cacheKey = cacheKey;
 
   dom.singerListEl.innerHTML = '';
+  // 空工程时左栏只有一个入口：把虚线 CTA 放大，同时收起标题栏的 +。
+  // 两个按钮做同一件事却并排放着，用户要先判断"点哪个"，而这时根本没有内容
+  // 需要管理，多出来的入口只增加决策成本。有歌手后 + 自动回来。
+  dom.singerListEl.classList.toggle('singer-list--empty', singers.length === 0);
+  if (dom.btnAddSinger) dom.btnAddSinger.hidden = singers.length === 0;
 
   const spacer = document.createElement('div');
   spacer.className = 'singer-row-spacer';
@@ -923,7 +928,6 @@ export function renderSingerList() {
   if (singers.length === 0) {
     const emptyItem = document.createElement('div');
     emptyItem.className = 'singer-item-empty';
-    emptyItem.setAttribute('role', 'listitem');
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'singer-avatar-empty';
     const placeholder = document.createElement('span');
@@ -936,10 +940,27 @@ export function renderSingerList() {
     textDiv.className = 'singer-empty-text';
     textDiv.textContent = t('main.clickToAddSinger');
     infoDiv.appendChild(textDiv);
+    // 第二行说明"点了会发生什么"：选已有音色 / 装新品 / 导入本地文件都在这个
+    // 对话框里。原来只有一句 Click to Add Singer，用户得点开才知道有这些路。
+    const hintDiv = document.createElement('div');
+    hintDiv.className = 'singer-empty-hint';
+    hintDiv.textContent = t('main.emptySingerHint');
+    infoDiv.appendChild(hintDiv);
     emptyItem.appendChild(avatarDiv);
     emptyItem.appendChild(infoDiv);
-    emptyItem.addEventListener('click', () => {
-      showSingerSelectDialog(null);
+
+    // 空工程时这是**主 CTA**，必须能 Tab 到、能回车触发。
+    // 原先只有 click 监听：键盘用户在这个页面上没有任何入口（时间轴 canvas
+    // 的 aria 说明里写着方向键，但添加歌手只能靠鼠标或顶栏的 +）。
+    emptyItem.tabIndex = 0;
+    emptyItem.setAttribute('role', 'button');
+    emptyItem.setAttribute('aria-label', t('main.addSinger'));
+    const openPicker = () => showSingerSelectDialog(null);
+    emptyItem.addEventListener('click', openPicker);
+    emptyItem.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      openPicker();
     });
     dom.singerListEl.appendChild(emptyItem);
     return;
@@ -1267,6 +1288,44 @@ export function invalidateSingerListCache() {
 export function refreshAll() {
   renderSingerList();
   renderFragmentTimeline();
+  syncExportAvailability();
+  // 插件贡献点的 when 条件（有分片/有选中/是否播放）都跟着这条路径变化。
+  // 在这里统一广播一次，避免每个贡献点模块自己挂一堆状态监听（也避免漏挂）。
+  window.dispatchEvent(new CustomEvent('app:state-changed'));
+}
+
+/**
+ * 没有分片时"导出"其实没有可导的内容，但两个导出按钮此前一直可用，
+ * 用户要等对话框开出来才发现是空的；而直接改成原生 disabled 后，
+ * Chromium 不会为禁用控件弹 title，"为什么不能点"反而更说不清。
+ * 所以用 aria-disabled + 样式类置灰，保留指针事件，让 tooltip 能解释原因。
+ */
+const _exportBtnTitleKeys = new Map();
+
+function syncExportAvailability() {
+  if (!_exportBtnTitleKeys.size) {
+    if (dom.btnExport) _exportBtnTitleKeys.set(dom.btnExport, 'main.export');
+    if (dom.btnExportLrc) _exportBtnTitleKeys.set(dom.btnExportLrc, 'main.exportLrc');
+  }
+  const exportable = trackManager.getFragments().length > 0;
+  for (const [btn, key] of _exportBtnTitleKeys) {
+    btn.classList.toggle('is-unavailable', !exportable);
+    btn.setAttribute('aria-disabled', exportable ? 'false' : 'true');
+    if (exportable) {
+      // 交还给 i18n：localeChanged 时 applyLocale 会按这个属性重新写 title
+      btn.setAttribute('data-i18n-title', key);
+      btn.title = t(key);
+    } else {
+      // 移除属性，否则 applyLocale 会把"为什么不能点"的说明覆盖回按钮名
+      btn.removeAttribute('data-i18n-title');
+      btn.title = t('main.exportDisabledHint');
+    }
+  }
+}
+
+/** 导出按钮当前是否可点（供点击处理器复用同一判定） */
+export function isExportAvailable() {
+  return trackManager.getFragments().length > 0;
 }
 
 // Re-render when theme changes
@@ -1277,6 +1336,8 @@ if (typeof window !== 'undefined') {
     invalidateFragmentNoteSprites();
     refreshAll();
   });
+  // 切语言时导出按钮的 title 需要按新语言重算（禁用态下没有 data-i18n-title 可依赖）
+  document.addEventListener('localeChanged', () => syncExportAvailability());
 }
 
 /**

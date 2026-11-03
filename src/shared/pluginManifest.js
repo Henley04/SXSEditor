@@ -13,8 +13,10 @@
  */
 const {
   API_VERSION, CONTRIBUTION_KEYS, LIMITS, PERMISSION_GROUPS, PANEL_SCOPES,
-  HOOK_STAGES, HOOK_KINDS,
+  HOOK_STAGES, HOOK_KINDS, TIMEOUTS,
+  CONTEXT_AREAS, STATUS_ALIGNMENTS, OVERLAY_ANCHORS, WHEN_CLAUSES,
 } = require('./pluginApi.js');
+const { normalizeChord } = require('./pluginKeys.js');
 
 const ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
@@ -112,6 +114,27 @@ function localizedTitle(value, field) {
     if (Object.keys(out).length) return { ok: true, value: out };
   }
   return { ok: false, error: `${field} 必须是字符串或 { en, 'zh-CN' } 对象` };
+}
+
+/**
+ * 显示条件：封闭的布尔子句，`!` 取反，`&&` 连接。
+ * 空串/缺省 = 永远显示。
+ */
+function validateWhen(value, field) {
+  if (value === undefined || value === null || value === '') return { ok: true, value: null };
+  if (typeof value !== 'string') return { ok: false, error: `${field} 必须是字符串` };
+  const text = value.trim();
+  if (!text) return { ok: true, value: null };
+  if (text.length > 200) return { ok: false, error: `${field} 过长` };
+  for (const rawClause of text.split('&&')) {
+    const clause = rawClause.trim();
+    if (!clause) return { ok: false, error: `${field} 含空的 && 片段` };
+    const name = clause.startsWith('!') ? clause.slice(1).trim() : clause;
+    if (!WHEN_CLAUSES.includes(name)) {
+      return { ok: false, error: `${field} 含未知条件 '${name}'（允许：${WHEN_CLAUSES.join(', ')}）` };
+    }
+  }
+  return { ok: true, value: text };
 }
 
 // ------------------------------------------------------------ 权限
@@ -221,14 +244,22 @@ function validatePanels(list, pluginId) {
         return fail(`panel('${panel.id}') 申请了未知能力 '${scope}'（允许：${PANEL_SCOPES.join(', ')}）`);
       }
     }
+    // 标题与命令用同一条规范化路径。此前这里是 `String(panel.title || panel.id)`，
+    // 而 v2 的 title 允许 { en, 'zh-CN' } 对象 —— 结果菜单里显示
+    // "Open Panel · [object Object]"。标题缺省时才回退到 panel.id。
+    const panelTitle = localizedTitle(panel.title || panel.id, `panel('${panel.id}').title`);
+    if (!panelTitle.ok) return fail(panelTitle.error);
     out.push({
       id: `${pluginId}.${panel.id}`,
       localId: panel.id,
       pluginId,
-      title: String(panel.title || panel.id).slice(0, 120),
+      title: panelTitle.value,
       entry: entry.value,
       apiScopes: [...new Set(scopes)],
       width: Math.max(280, Math.min(1600, Number(panel.width) || 420)),
+      // pluginApi 的注释承诺了"panel.timeoutMs 可覆盖默认 RPC 超时"，
+      // 但校验层此前把它丢了，于是作者写了也不生效。这里保留并夹紧。
+      timeoutMs: Math.max(1000, Math.min(120000, Number(panel.timeoutMs) || TIMEOUTS.panelRpc)),
     });
   }
   return { ok: true, value: out };
@@ -252,30 +283,321 @@ function validateFileTypes(list) {
   return { ok: true, value: out };
 }
 
+const FIELD_TYPES = Object.freeze(['boolean', 'number', 'string', 'select', 'multiline']);
+
+/**
+ * 设置字段的规范化。
+ *
+ * M1 只校验了 key，值直接透传。管理器/设置页要按 schema 渲染出真正的控件，
+ * 就必须在加载时把类型、默认值、范围一次性定下来 —— 否则渲染层要为每种
+ * "作者可能写错的形状"做兜底，最后变成一堆 if。
+ */
+function normalizeSettingField(raw, sectionId) {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: `settings('${sectionId}') 的字段必须是对象` };
+  if (typeof raw.key !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(raw.key)) {
+    return { ok: false, error: `settings('${sectionId}') 的字段 key 非法` };
+  }
+  const type = FIELD_TYPES.includes(raw.type) ? raw.type : 'string';
+  const label = localizedTitle(raw.label || raw.key, `settings('${sectionId}').${raw.key}.label`);
+  if (!label.ok) return fail(label.error);
+  let description = { ok: true, value: null };
+  if (raw.description !== undefined) {
+    description = localizedTitle(raw.description, `settings('${sectionId}').${raw.key}.description`);
+    if (!description.ok) return fail(description.error);
+  }
+
+  const out = {
+    key: raw.key,
+    type,
+    label: label.value,
+    description: description.value,
+    min: Number.isFinite(raw.min) ? Number(raw.min) : null,
+    max: Number.isFinite(raw.max) ? Number(raw.max) : null,
+    step: Number.isFinite(raw.step) && Number(raw.step) > 0 ? Number(raw.step) : null,
+    options: [],
+    default: null,
+  };
+
+  if (type === 'select') {
+    const list = Array.isArray(raw.options) ? raw.options : [];
+    if (!list.length) return fail(`settings('${sectionId}').${raw.key}.options 不能为空`);
+    for (const opt of list.slice(0, 32)) {
+      if (!opt || typeof opt !== 'object') return fail(`settings('${sectionId}').${raw.key}.options 含非对象项`);
+      const value = typeof opt.value === 'number' ? opt.value : String(opt.value ?? '');
+      if (!value && value !== 0) return fail(`settings('${sectionId}').${raw.key}.options 含空 value`);
+      const optLabel = localizedTitle(opt.label || String(value), `settings('${sectionId}').${raw.key}.option`);
+      if (!optLabel.ok) return fail(optLabel.error);
+      out.options.push({ value, label: optLabel.value });
+    }
+    out.default = raw.default === undefined
+      ? out.options[0].value
+      : (out.options.some((o) => o.value === raw.default) ? raw.default : out.options[0].value);
+    return { ok: true, value: out };
+  }
+
+  if (type === 'boolean') {
+    out.default = raw.default === true;
+    return { ok: true, value: out };
+  }
+
+  if (type === 'number') {
+    let value = Number(raw.default);
+    if (!Number.isFinite(value)) value = out.min !== null ? out.min : 0;
+    if (out.min !== null) value = Math.max(out.min, value);
+    if (out.max !== null) value = Math.min(out.max, value);
+    out.default = value;
+    return { ok: true, value: out };
+  }
+
+  // string / multiline
+  out.default = typeof raw.default === 'string' ? raw.default.slice(0, 2000) : '';
+  return { ok: true, value: out };
+}
+
 function validateSettings(list, pluginId) {
   const out = [];
   for (const section of list) {
     if (!section || typeof section !== 'object') return fail('settings 的每一项必须是对象');
     if (!COMMAND_ID_RE.test(section.id || '')) return fail(`settings.id 非法：${JSON.stringify(section.id)}`);
-    const entry = section.entry ? relPath(section.entry, `settings('${section.id}').entry`) : null;
-    if (entry && !entry.ok) return fail(entry.error);
-    const fields = Array.isArray(section.fields) ? section.fields : [];
-    for (const f of fields) {
-      if (!f || typeof f !== 'object' || typeof f.key !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(f.key)) {
-        return fail(`settings('${section.id}') 的字段 key 非法`);
-      }
+    // M2 的决定：设置分区只有两种形态 —— 宿主渲染的 schema 表单，或"跳到一个面板"。
+    // 曾经的 entry（在设置页里内嵌任意 HTML）被放弃：设置窗口没有面板那套 postMessage
+    // 桥与 apiScopes 校验，内嵌 iframe 等于开一个**没有权限闸门**的插件页面。
+    // 需要自定义界面就把逻辑写进 panel，再从设置页跳过去。
+    if (section.entry !== undefined) {
+      return fail(`settings('${section.id}').entry 不受支持：请改用 fields 内联表单，或用 panel 指向一个已注册面板`);
     }
+    let panelId = null;
+    if (section.panel !== undefined) {
+      if (typeof section.panel !== 'string' || !COMMAND_ID_RE.test(section.panel)) {
+        return fail(`settings('${section.id}').panel 非法`);
+      }
+      panelId = `${pluginId}.${section.panel}`;
+    }
+    const fields = [];
+    for (const raw of Array.isArray(section.fields) ? section.fields.slice(0, 64) : []) {
+      const field = normalizeSettingField(raw, section.id);
+      if (!field.ok) return fail(field.error);
+      fields.push(field.value);
+    }
+    if (!panelId && !fields.length) {
+      return fail(`settings('${section.id}') 必须提供 panel 或至少一个 fields`);
+    }
+    const sectionTitle = localizedTitle(section.title || section.id, `settings('${section.id}').title`);
+    if (!sectionTitle.ok) return fail(sectionTitle.error);
     out.push({
       id: `${pluginId}.${section.id}`,
       localId: section.id,
       pluginId,
-      title: String(section.title || section.id).slice(0, 120),
-      entry: entry && entry.ok ? entry.value : null,
-      fields: fields.slice(0, 64),
+      title: sectionTitle.value,
+      panelId,
+      fields,
     });
   }
   return { ok: true, value: out };
 }
+
+// ------------------------------------------------------------ 界面贡献点
+function requireCommand(commandIds, command, field) {
+  if (typeof command !== 'string' || !COMMAND_ID_RE.test(command)) {
+    return { ok: false, error: `${field} 非法：${JSON.stringify(command)}` };
+  }
+  return { ok: true, value: command };
+}
+
+function validateToolbar(list, pluginId, commandIds) {
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return fail('toolbar 的每一项必须是对象');
+    if (!COMMAND_ID_RE.test(item.id || '')) return fail(`toolbar.id 非法：${JSON.stringify(item.id)}`);
+    const command = requireCommand(commandIds, item.command, `toolbar('${item.id}').command`);
+    if (!command.ok) return fail(command.error);
+    const fullCommand = `${pluginId}.${item.command}`;
+    if (commandIds && !commandIds.has(fullCommand)) {
+      return fail(`toolbar('${item.id}') 引用了未声明的命令 '${item.command}'`);
+    }
+    const title = localizedTitle(item.title, `toolbar('${item.id}').title`);
+    if (!title.ok) return fail(title.error);
+    if (item.icon !== undefined && (typeof item.icon !== 'string' || !/^[a-z0-9-]{1,32}$/.test(item.icon))) {
+      return fail(`toolbar('${item.id}').icon 非法（小写字母/数字/连字符）`);
+    }
+    if (item.group !== undefined && (typeof item.group !== 'string' || !/^[a-z0-9-]{1,32}$/.test(item.group))) {
+      return fail(`toolbar('${item.id}').group 非法`);
+    }
+    const when = validateWhen(item.when, `toolbar('${item.id}').when`);
+    if (!when.ok) return fail(when.error);
+    out.push({
+      id: `${pluginId}.${item.id}`,
+      localId: item.id,
+      pluginId,
+      command: fullCommand,
+      title: title.value,
+      icon: item.icon || null,
+      group: item.group || 'plugins',
+      when: when.value,
+    });
+  }
+  return { ok: true, value: out };
+}
+
+function validateStatusBar(list, pluginId, commandIds) {
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return fail('statusBar 的每一项必须是对象');
+    if (!COMMAND_ID_RE.test(item.id || '')) return fail(`statusBar.id 非法：${JSON.stringify(item.id)}`);
+    const text = localizedTitle(item.text, `statusBar('${item.id}').text`);
+    if (!text.ok) return fail(text.error);
+    let command = null;
+    if (item.command !== undefined) {
+      const checked = requireCommand(commandIds, item.command, `statusBar('${item.id}').command`);
+      if (!checked.ok) return fail(checked.error);
+      command = `${pluginId}.${item.command}`;
+      if (commandIds && !commandIds.has(command)) {
+        return fail(`statusBar('${item.id}') 引用了未声明的命令 '${item.command}'`);
+      }
+    }
+    let tooltip = { ok: true, value: null };
+    if (item.tooltip !== undefined) {
+      tooltip = localizedTitle(item.tooltip, `statusBar('${item.id}').tooltip`);
+      if (!tooltip.ok) return fail(tooltip.error);
+    }
+    const when = validateWhen(item.when, `statusBar('${item.id}').when`);
+    if (!when.ok) return fail(when.error);
+    out.push({
+      id: `${pluginId}.${item.id}`,
+      localId: item.id,
+      pluginId,
+      text: text.value,
+      tooltip: tooltip.value,
+      command,
+      alignment: STATUS_ALIGNMENTS.includes(item.alignment) ? item.alignment : 'right',
+      when: when.value,
+    });
+  }
+  return { ok: true, value: out };
+}
+
+function validateContextMenus(list, pluginId, commandIds) {
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return fail('contextMenus 的每一项必须是对象');
+    if (!COMMAND_ID_RE.test(item.id || '')) return fail(`contextMenus.id 非法：${JSON.stringify(item.id)}`);
+    if (!CONTEXT_AREAS.includes(item.context)) {
+      return fail(`contextMenus('${item.id}') 的 context 非法（允许：${CONTEXT_AREAS.join(', ')}）`);
+    }
+    const checked = requireCommand(commandIds, item.command, `contextMenus('${item.id}').command`);
+    if (!checked.ok) return fail(checked.error);
+    const fullCommand = `${pluginId}.${item.command}`;
+    if (commandIds && !commandIds.has(fullCommand)) {
+      return fail(`contextMenus('${item.id}') 引用了未声明的命令 '${item.command}'`);
+    }
+    const title = localizedTitle(item.title, `contextMenus('${item.id}').title`);
+    if (!title.ok) return fail(title.error);
+    const when = validateWhen(item.when, `contextMenus('${item.id}').when`);
+    if (!when.ok) return fail(when.error);
+    out.push({
+      id: `${pluginId}.${item.id}`,
+      localId: item.id,
+      pluginId,
+      context: item.context,
+      command: fullCommand,
+      title: title.value,
+      when: when.value,
+    });
+  }
+  return { ok: true, value: out };
+}
+
+function validateOverlays(list, pluginId) {
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return fail('timelineOverlays 的每一项必须是对象');
+    if (!COMMAND_ID_RE.test(item.id || '')) return fail(`timelineOverlays.id 非法：${JSON.stringify(item.id)}`);
+    const entry = relPath(item.entry, `timelineOverlays('${item.id}').entry`);
+    if (!entry.ok) return fail(entry.error);
+    const title = localizedTitle(item.title || item.id, `timelineOverlays('${item.id}').title`);
+    if (!title.ok) return fail(title.error);
+    const when = validateWhen(item.when, `timelineOverlays('${item.id}').when`);
+    if (!when.ok) return fail(when.error);
+    out.push({
+      id: `${pluginId}.${item.id}`,
+      localId: item.id,
+      pluginId,
+      entry: entry.value,
+      title: title.value,
+      anchor: OVERLAY_ANCHORS.includes(item.anchor) ? item.anchor : 'canvas',
+      height: Math.max(40, Math.min(800, Number(item.height) || 160)),
+      // null = 横向铺满锚点；数字 = 固定宽度（从左侧起）
+      width: Number.isFinite(item.width) ? Math.max(80, Math.min(4000, Number(item.width))) : null,
+      pointerEvents: item.pointerEvents === 'auto' ? 'auto' : 'none',
+      when: when.value,
+    });
+  }
+  return { ok: true, value: out };
+}
+
+function validateKeybindings(list, pluginId, commandIds) {
+  const out = [];
+  const seen = new Map();
+  for (const [index, item] of list.entries()) {
+    if (!item || typeof item !== 'object') return fail('keybindings 的每一项必须是对象');
+    const checked = requireCommand(commandIds, item.command, `keybindings[${index}].command`);
+    if (!checked.ok) return fail(checked.error);
+    const fullCommand = `${pluginId}.${item.command}`;
+    if (commandIds && !commandIds.has(fullCommand)) {
+      return fail(`keybindings[${index}] 引用了未声明的命令 '${item.command}'`);
+    }
+    const chord = normalizeChord(item.key);
+    if (!chord) return fail(`keybindings[${index}].key 无法识别：${JSON.stringify(item.key)}`);
+    let mac = null;
+    if (item.mac !== undefined) {
+      mac = normalizeChord(item.mac);
+      if (!mac) return fail(`keybindings[${index}].mac 无法识别：${JSON.stringify(item.mac)}`);
+    }
+    const when = validateWhen(item.when, `keybindings[${index}].when`);
+    if (!when.ok) return fail(when.error);
+    // 同一插件内同一组合声明两次 = 作者写错了，直接拒绝；跨插件冲突交给运行时仲裁
+    const dedupeKey = `${chord}|${mac || ''}|${when.value || ''}`;
+    if (seen.has(dedupeKey)) {
+      return fail(`keybindings 重复绑定 ${chord}（与第 ${seen.get(dedupeKey) + 1} 项相同）`);
+    }
+    seen.set(dedupeKey, index);
+    out.push({
+      id: `${pluginId}.kb${index}`,
+      index,
+      pluginId,
+      command: fullCommand,
+      chord,
+      mac,
+      when: when.value,
+    });
+  }
+  return { ok: true, value: out };
+}
+
+const LOCALE_RE = /^[a-z]{2}(?:-[A-Za-z0-9]{2,8})?$/;
+
+/** 插件自带文案：{ 'zh-CN': { greeting: '你好' }, en: {...} }，最多 400 条。 */
+function validateI18n(raw) {
+  if (raw === undefined) return { ok: true, value: {} };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fail('i18n 必须是对象');
+  const out = {};
+  let total = 0;
+  for (const [locale, dict] of Object.entries(raw)) {
+    if (!LOCALE_RE.test(locale)) return fail(`i18n 的语言标签非法：${JSON.stringify(locale)}`);
+    if (!dict || typeof dict !== 'object' || Array.isArray(dict)) return fail(`i18n.${locale} 必须是对象`);
+    const flat = {};
+    for (const [key, text] of Object.entries(dict)) {
+      if (!/^[A-Za-z0-9_.-]{1,64}$/.test(key)) return fail(`i18n.${locale} 的键非法：${JSON.stringify(key)}`);
+      if (typeof text !== 'string') return fail(`i18n.${locale}.${key} 必须是字符串`);
+      flat[key] = text.slice(0, 500);
+      total++;
+    }
+    if (total > 400) return fail('i18n 条目总数超过上限 400');
+    out[locale] = flat;
+  }
+  return { ok: true, value: out };
+}
+
 
 function validatePipeline(raw) {
   if (raw === undefined) return { ok: true, value: [] };
@@ -417,6 +739,21 @@ function validateManifest(manifest, ctx = {}) {
   const settings = validateSettings(arr('settings', LIMITS.settings), id);
   if (!settings.ok) return settings;
 
+  const toolbar = validateToolbar(arr('toolbar', LIMITS.toolbar), id, commandIds);
+  if (!toolbar.ok) return toolbar;
+
+  const statusBar = validateStatusBar(arr('statusBar', LIMITS.statusBar), id, commandIds);
+  if (!statusBar.ok) return statusBar;
+
+  const contextMenus = validateContextMenus(arr('contextMenus', LIMITS.contextMenus), id, commandIds);
+  if (!contextMenus.ok) return contextMenus;
+
+  const timelineOverlays = validateOverlays(arr('timelineOverlays', LIMITS.timelineOverlays), id);
+  if (!timelineOverlays.ok) return timelineOverlays;
+
+  const keybindings = validateKeybindings(arr('keybindings', LIMITS.keybindings), id, commandIds);
+  if (!keybindings.ok) return keybindings;
+
   if (arrayError) return fail(arrayError);
 
   const pipeline = validatePipeline(contributes.pipeline);
@@ -428,9 +765,33 @@ function validateManifest(manifest, ctx = {}) {
   const services = validateServices(contributes.services);
   if (!services.ok) return services;
 
-  // 尚未在 M1 落地的贡献点：接受但不生效，管理器里会标注"未实现"
+  const i18n = validateI18n(contributes.i18n);
+  if (!i18n.ok) return i18n;
+
+  // 界面贡献必须与声明的权限对得上。
+  //
+  // 不校验的话 permissions 就只是安装弹窗上的一行装饰：插件可以声明"我不要
+  // 任何界面权限"，然后往工具栏塞按钮。用户的知情同意必须与实际行为一致。
+  const uiPerms = perms.value.ui || [];
+  const requiredUi = [
+    // [贡献点（manifest 键名，用于报错）, permissions.ui 里的权限名（单数）, 条目数]
+    ['menus', 'menu', menus.value.length],
+    ['panels', 'panel', panels.value.length],
+    ['toolbar', 'toolbar', toolbar.value.length],
+    ['statusBar', 'statusBar', statusBar.value.length],
+    ['contextMenus', 'contextMenu', contextMenus.value.length],
+    ['timelineOverlays', 'overlay', timelineOverlays.value.length],
+    ['settings', 'settings', settings.value.length],
+  ];
+  for (const [contribution, permission, count] of requiredUi) {
+    if (count > 0 && !uiPerms.includes(permission)) {
+      return fail(`声明了 contributes.${contribution}，但 permissions.ui 里没有 '${permission}'`);
+    }
+  }
+
+  // 尚未落地的贡献点：接受但不生效，管理器里会标注"未实现"
   const pending = [];
-  for (const key of ['keybindings', 'toolbar', 'statusBar', 'contextMenus', 'timelineOverlays', 'intents', 'llm', 'synthesis']) {
+  for (const key of ['services', 'intents', 'llm', 'synthesis']) {
     if (contributes[key] !== undefined) pending.push(key);
   }
 
@@ -454,6 +815,12 @@ function validateManifest(manifest, ctx = {}) {
         panels: panels.value,
         fileTypes: fileTypes.value,
         settings: settings.value,
+        toolbar: toolbar.value,
+        statusBar: statusBar.value,
+        contextMenus: contextMenus.value,
+        timelineOverlays: timelineOverlays.value,
+        keybindings: keybindings.value,
+        i18n: i18n.value,
         pipeline: pipeline.value,
         services: services.value,
         automation: automation.value,

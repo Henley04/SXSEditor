@@ -501,7 +501,15 @@ function registerSettingsIpc() {
     const result = {};
     for (const p of precisions) {
       const { missing, existing } = checkMissingFiles(modelDir, p);
-      result[p] = { ready: missing.length === 0, missing: missing.length, total: missing.length + existing.length };
+      // 界面要在行内显示"还差多少体积"，否则只有一句 "18 files missing"，
+      // 用户既不知道要下多久，也没有就地开始的入口。manifest 条目自带 size。
+      const missingBytes = missing.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
+      result[p] = {
+        ready: missing.length === 0,
+        missing: missing.length,
+        total: missing.length + existing.length,
+        missingBytes,
+      };
     }
     // 全量就绪时缓存 30s；存在缺失时只缓存 3s —— 用户刚下载完模型返回设置页
     // 必须立刻看到“已就绪”，30s 的陈旧负结果会被误读成下载失败。

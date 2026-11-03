@@ -28,7 +28,7 @@ function manifest(overrides = {}) {
     description: 'lifecycle fixture',
     main: 'main.js',
     engines: { app: '>=1.0.0' },
-    permissions: { ui: ['menu'], automation: ['expose'] },
+    permissions: { ui: ['menu', 'panel'], automation: ['expose'] },
     contributes: {
       commands: [{ id: 'hello', title: 'Hello' }],
       panels: [{ id: 'main', title: 'Demo Panel', entry: 'panel/index.html', apiScopes: ['state.get'] }],
@@ -220,6 +220,10 @@ describe('plugin lifecycle (M1 slice)', function () {
     expect(snap.plugins[0].status).to.equal('disabled');
     expect(snap.plugins[0].commands).to.have.length(0);
     expect(registry.stats().command).to.equal(0);
+    // 管理器的启停按钮读的是 admin 投影里的 state.enabled。如果这里仍是扫描时的
+    // true，卡片会一直显示"停用"，用户再也点不回"启用"（M2 实机踩过）。
+    const admin = service.adminSnapshot();
+    expect(admin.plugins[0].state.enabled).to.equal(false);
     // 菜单里不该再出现它的子菜单
     const fragment = service.getMenuFragment();
     expect(fragment.submenu.some((i) => i.label === 'Demo Plugin')).to.equal(false);

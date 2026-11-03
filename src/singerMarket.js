@@ -1,6 +1,6 @@
 import './common.css';
 import './singerMarket.css';
-import { t, tOr, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { tOr, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 import { hydrateIcons } from './icons/iconHelper.js';
 
@@ -441,10 +441,28 @@ async function loadPopularTags() {
 }
 
 // ==================== Singer list ====================
+// 列表请求的超时。IPC 本身没有超时语义（主进程可能卡在 DNS/重试链上），
+// 没有这一层的话"网络很差"和"程序假死"在界面上完全一样：永远转圈。
+const LIST_TIMEOUT_MS = 12000;
+
+function withListTimeout(promise, ms) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error('LIST_TIMEOUT');
+      err.code = 'LIST_TIMEOUT';
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function loadSingers() {
   state.loading = true;
   state.loadError = null;
-  dom.loadingState.style.display = 'flex';
+  dom.loadingState.style.display = 'block';
   dom.emptyState.style.display = 'none';
   try {
     const params = {
@@ -456,7 +474,7 @@ async function loadSingers() {
       params.tags = state.activeTags;
       params.tag_mode = 'and';
     }
-    const result = await apiListSingers(params);
+    const result = await withListTimeout(apiListSingers(params), LIST_TIMEOUT_MS);
     if (result.success && result.data) {
       const data = result.data;
       state.singers = Array.isArray(data.items) ? data.items : [];
@@ -475,7 +493,10 @@ async function loadSingers() {
   } catch (err) {
     state.singers = [];
     state.totalPages = 1;
-    state.loadError = errorText(err, tOr('singerMarket.loadFailed', 'Unable to reach the singer market'));
+    const timedOut = err && err.code === 'LIST_TIMEOUT';
+    state.loadError = timedOut
+      ? tOr('singerMarket.listTimeout', 'Loading timed out. Check your connection and retry.')
+      : errorText(err, tOr('singerMarket.loadFailed', 'Unable to reach the singer market'));
     state.loadErrorRegion = null;
     showToast(state.loadError, 'error');
   } finally {

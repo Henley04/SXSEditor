@@ -12,6 +12,7 @@ import { setupUiControls, refreshPostprocessLabels } from './uiControls.js';
 import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
 import { applyPluginEditorLayout } from './pluginEditorMode.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
+import { installPopoverMenus } from '../utils/popoverMenu.js';
 import {
   getAutoSaveTimer, setAutoSaveTimer,
   getIpcCleanups,
@@ -29,7 +30,10 @@ import {
 const i18nReady = initI18n();
 
 // Initialize pipeline
-initPipeline();
+// 失败已经在 initPipeline() 里记日志并按需弹"打开模型下载"对话框了；这里只
+// 负责不让它变成 unhandled rejection —— 那会触发 webpack dev server 的全屏
+// "Uncaught runtime errors" 覆盖层，把整个编辑器遮住，看起来像程序崩了。
+initPipeline().catch(() => {});
 
 // Apply saved theme
 initWindowTheme(getIpcCleanups());
@@ -58,6 +62,22 @@ setupIpcHandlers();
 
 // Setup UI controls
 setupUiControls();
+
+// 导出 ▾ 弹出层：两个导出按钮原来并排在工具栏上，用户要先读两个名字才能
+// 决定点哪个。收进菜单后工具栏只留"导出"，格式在面板里选。
+// 两个按钮的 id 与监听器都没动，菜单只是包了一层容器。
+{
+  const trigger = document.getElementById('btn-export-menu');
+  const panel = document.getElementById('export-menu-panel');
+  const cleanup = installPopoverMenus([[trigger, panel]]);
+  if (cleanup) getIpcCleanups().push(cleanup);
+  // 选完格式就收起菜单；这里不 preventDefault，原监听器照常执行
+  if (panel) {
+    panel.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => { panel.hidden = true; });
+    });
+  }
+}
 
 // 批量操作（音高曲线移调/贴合/抽稀/平滑）与 Alt+↑↓ 快捷键
 setupPitchBatchTools();
@@ -113,8 +133,8 @@ setupPitchBatchTools();
       if (!dragging) return;
       const dx = startX - e.clientX;
       const cols = startCols.split(/\s+/);
-      const currentW = parseFloat(cols[3]) || 220;
-      const newW = Math.max(160, Math.min(400, currentW + dx));
+      const currentW = parseFloat(cols[3]) || 300;
+      const newW = Math.max(240, Math.min(400, currentW + dx));
       mainContent.style.gridTemplateColumns = `80px 1fr 4px ${newW}px`;
       scheduleRelayout();
     });

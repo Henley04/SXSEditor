@@ -32,32 +32,72 @@
           </div>
         </div>
         <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
-          <span id="time-display">00:00:000</span>
+        <div class="toolbar-group tempo-group">
+          <label class="toolbar-field">BPM <input id="bpm-input" type="number" value="120" min="1" max="999" /></label>
+          <!-- 拍号：两个输入框收进一个 4/4 控件。原先 "Time Sig [4] / [4]" 占四个
+               元素宽度，且和 BPM 并排时看不出是一组；现在外显一个 "4/4" 徽标，
+               点开才编辑分子/分母（id 不变，原有 change 监听不受影响）。 -->
+          <div class="toolbar-popover-anchor">
+            <button id="btn-timesig" type="button" class="toolbar-timesig"
+                    aria-haspopup="dialog" aria-expanded="false"
+                    data-i18n-aria-label="main.timeSignature" data-i18n-title="main.timeSignature"
+                    aria-label="Time Sig" title="Time Sig">
+              <span id="timesig-display">4/4</span>
+              <span class="icon icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+            </button>
+            <div class="toolbar-popover" id="timesig-popover" hidden role="dialog"
+                 data-i18n-aria-label="main.timeSignature" aria-label="Time Sig">
+              <label class="toolbar-popover-row" for="time-sig-num">
+                <span data-i18n="main.timeSignature">Time Sig</span>
+                <span class="toolbar-popover-fields">
+                  <input id="time-sig-num" type="number" value="4" min="1" max="32"
+                         aria-label="Time signature numerator" />
+                  <span aria-hidden="true">/</span>
+                  <input id="time-sig-den" type="number" value="4" min="1" max="32"
+                         aria-label="Time signature denominator" />
+                </span>
+              </label>
+            </div>
+          </div>
+          <!-- Auto Shift：名字本身不自解释。加长文案放 title，标签用 i18n（此前硬编码英文）。 -->
+          <label class="toolbar-field toolbar-toggle"
+                 data-i18n-title="main.autoShiftHint" title="Automatically adjust pitch shift based on reference audio">
+            <input type="checkbox" id="auto-shift-check" />
+            <span data-i18n="main.autoShift">Auto Shift</span>
+          </label>
         </div>
         <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
-          <label>BPM <input id="bpm-input" type="number" value="120" min="1" max="999" /></label>
-          <label data-i18n="main.timeSignature">拍号 <input id="time-sig-num" type="number" value="4" min="1" max="32" /> / <input id="time-sig-den" type="number" value="4" min="1" max="32" /></label>
-          <label><input type="checkbox" id="auto-shift-check" />Auto Shift</label>
-        </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
+        <div class="toolbar-group project-group">
           <button id="btn-load" data-i18n="main.load" data-i18n-title="main.load" data-icon="folder-open">加载</button>
           <button id="btn-export" data-i18n="main.export" data-i18n-title="main.export" data-icon="upload">导出</button>
           <button id="btn-export-lrc" data-i18n="main.exportLrc" data-i18n-title="main.exportLrc" data-icon="file-text">导出LRC</button>
         </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
-          <button id="btn-audio-to-midi" data-i18n="main.audioToMidi" data-i18n-title="main.audioToMidi" data-icon="music">音频转MIDI</button>
-          <button id="btn-import-midi" data-i18n="main.importMidi" data-i18n-title="main.importMidi" data-icon="file-music">导入MIDI</button>
-        </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
+        <div class="toolbar-divider" id="plugin-toolbar-divider" hidden></div>
+        <!-- 插件工具栏：位置固定在内置组之后、弹性空隙之前。
+             有插件按钮时才显示（同时显示左侧分隔线），没装插件时整块 hidden，
+             不占宽度也不改变现有按钮的位置。 -->
+        <div class="toolbar-group plugin-toolbar-slot" id="plugin-toolbar-slot" hidden></div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group market-group">
           <button id="btn-open-singer-market" data-i18n="main.openSingerMarket" data-i18n-title="main.openSingerMarket" data-icon="market">歌手市场</button>
         </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
+        <!-- 低频动作收进 ⋯：音频转 MIDI / 导入 MIDI 平时用不到，却一直占着
+             顶栏最宝贵的位置。按钮仍在 DOM 里（id 不变），只是搬进了弹出层。 -->
+        <div class="toolbar-group more-group">
+          <div class="toolbar-popover-anchor">
+            <button id="btn-toolbar-more" type="button" class="toolbar-more"
+                    aria-haspopup="menu" aria-expanded="false"
+                    data-i18n-title="main.moreActions" data-i18n-aria-label="main.moreActions"
+                    data-icon="more-horizontal" title="More actions" aria-label="More actions"></button>
+            <div class="toolbar-popover toolbar-popover--menu" id="toolbar-more-panel" hidden role="menu">
+              <button id="btn-audio-to-midi" role="menuitem"
+                      data-i18n="main.audioToMidi" data-i18n-title="main.audioToMidi" data-icon="music">音频转MIDI</button>
+              <button id="btn-import-midi" role="menuitem"
+                      data-i18n="main.importMidi" data-i18n-title="main.importMidi" data-icon="file-music">导入MIDI</button>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar-group version-group">
           <span id="version-display" class="version-badge">v-</span>
         </div>
       </div>
@@ -86,9 +126,18 @@
             <canvas id="fragment-canvas" role="application" tabindex="0"
                     aria-label="分片时间轴：方向键移动选择，Delete 删除，Enter 打开分片编辑器"></canvas>
             <canvas id="fragment-playhead-canvas" role="presentation" aria-hidden="true" aria-label="播放指针"></canvas>
+            <!-- 插件浮层：位于画布之上、播放指针之下。默认不接收指针事件，
+                 否则插件一装，时间轴就点不动了（原因还很难看出来）。 -->
+            <div id="plugin-overlay-layer" class="plugin-overlay-layer" hidden aria-live="off"></div>
             <p id="fragment-canvas-a11y-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
           </div>
         </div>
+      </div>
+      <!-- 状态栏：只在有插件条目时出现（24px）。左侧放"当前在做什么"，
+           右侧放"插件自己的状态"。没有插件时整条 hidden，主窗口布局与以前一致。 -->
+      <div id="status-bar" class="status-bar" hidden>
+        <div id="status-bar-left" class="status-bar-slot status-bar-slot--left"></div>
+        <div id="status-bar-right" class="status-bar-slot status-bar-slot--right"></div>
       </div>
     </div>
     <!-- ort.all.min.js (onnxruntime-web UMD bundle, ~5-10MB) was previously

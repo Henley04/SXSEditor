@@ -15,17 +15,19 @@
  *   4. 删文件
  *   5. 泄漏断言（失败只记审计，因为前面的步骤已经保证了正确性）
  */
-const { app, dialog, BrowserWindow } = require('electron');
+const { app, dialog, BrowserWindow, Menu } = require('electron');
+const { getLocale } = require('../locale');
 
 const { TIMEOUTS, ERR, RUNTIME_LIMITS } = require('../../shared/pluginApi.js');
 const { validateManifest, isLegacyManifest } = require('../../shared/pluginManifest.js');
 const { PluginRegistry } = require('./PluginRegistry.js');
 const { PluginRuntimeManager } = require('./PluginRuntimeManager.js');
 const { PluginLeakProbe } = require('./PluginLeakProbe.js');
+const { evaluateKeybindings, collectMenuChords } = require('./PluginKeybindings.js');
 const installer = require('./PluginInstaller.js');
 const store = require('./PluginStateStore.js');
 const ipcFacade = require('./PluginIpcV2.js');
-const { buildPluginsMenu } = require('./PluginMenu.js');
+const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
 const { panelUrl } = require('./PluginProtocol.js');
 
 class PluginService {
@@ -47,6 +49,11 @@ class PluginService {
     this._changeDisposable = null;
     this._pluginDirs = new Map();
     this._locale = 'zh-CN';
+    /**
+     * 插件通过 `ui.status` 覆盖的状态栏文案（itemId → text）。
+     * 不落盘：状态栏表达的是"这次运行时的进展"，重启后应回到 manifest 里声明的静态文案。
+     */
+    this._statusText = new Map();
 
     this.runtimes.onEvent = (pluginId, event, payload) => {
       ipcFacade.broadcastEvent(pluginId, event, payload);
@@ -57,9 +64,15 @@ class PluginService {
     this.runtimes.onExit = (pluginId, code) => {
       const record = this.registry.getPlugin(pluginId);
       if (!record) return;
-      const crashes = (record.state.crashes || 0) + 1;
-      this.registry.updatePlugin(pluginId, { runtimeAlive: false });
+      // 崩溃次数必须从落盘状态读：record.state 是 addPlugin 时的快照，整个生命周期
+      // 不会变。之前用它累加，每次崩溃都算出 1，maxCrashes 的隔离阈值永远够不到。
       const registry = store.readRegistry();
+      const persisted = store.getPluginState(registry, pluginId);
+      const crashes = (persisted.crashes || 0) + 1;
+      this.registry.updatePlugin(pluginId, {
+        runtimeAlive: false,
+        state: { ...(record.state || {}), crashes },
+      });
       store.setPluginState(registry, pluginId, { crashes });
       if (crashes >= RUNTIME_LIMITS.maxCrashes) {
         store.setPluginState(registry, pluginId, {
@@ -88,6 +101,8 @@ class PluginService {
     this.loadAll();
 
     this.ipc = ipcFacade.registerPluginHostIpc(this, { probe: this.probe });
+    // 窗口就绪 → 补发一次投影（冷启动竞态，见 pushSnapshotOnWindowLoad 注释）
+    this._pushDisposable = ipcFacade.pushSnapshotOnWindowLoad(this);
     this._changeDisposable = this.registry.onDidChange(() => {
       ipcFacade.broadcastSnapshot(this);
       if (this._menuDirtyHandler) {
@@ -136,7 +151,9 @@ class PluginService {
     const sent = ipcFacade.requestOpenPanel(this.mainWindowGetter(), {
       pluginId,
       panelId,
-      title: panel.title,
+      // manifest 里的 title 是 { en, 'zh-CN' } 对象；渲染层只会把它塞进
+      // textContent，拿不到也不该拿语言表，所以在边界处就解析成字符串。
+      title: pickTitle(panel.title, getLocale()),
       width: panel.width,
       url,
     });
@@ -145,8 +162,14 @@ class PluginService {
     return { ok: true, url };
   }
 
-  _reportCommandError(result) {
-    const win = this.mainWindowGetter();
+  /** 撤掉某插件在状态栏上的运行时文案（停用/卸载/重载都要调）。 */
+  _clearStatusText(pluginId) {
+    for (const key of [...this._statusText.keys()]) {
+      if (key.startsWith(`${pluginId}.`)) this._statusText.delete(key);
+    }
+  }
+
+  _reportCommandError(result) {    const win = this.mainWindowGetter();
     const message = (result && result.error && result.error.message) || '插件命令执行失败';
     try {
       if (win && !win.isDestroyed()) {
@@ -227,6 +250,25 @@ class PluginService {
     for (const hook of c.pipeline) {
       this.registry.register('hook', `${record.id}:${hook.stage}:${hook.order}`, { ...hook, pluginId: record.id });
     }
+
+    // ---- M2 界面贡献点 ----
+    // 每类单独一张表，键都用全局 id；卸载时 removeContributions 按 pluginId 一扫而空，
+    // 插件即使不配合也留不下东西。
+    for (const item of c.toolbar) {
+      this.registry.register('toolbar', item.id, { ...item, pluginId: record.id });
+    }
+    for (const item of c.statusBar) {
+      this.registry.register('statusBar', item.id, { ...item, pluginId: record.id });
+    }
+    for (const item of c.contextMenus) {
+      this.registry.register('contextMenu', item.id, { ...item, pluginId: record.id });
+    }
+    for (const item of c.timelineOverlays) {
+      this.registry.register('overlay', item.id, { ...item, pluginId: record.id });
+    }
+    for (const item of c.keybindings) {
+      this.registry.register('keybinding', item.id, { ...item, pluginId: record.id });
+    }
   }
 
   // ------------------------------------------------------------ 查询
@@ -239,12 +281,19 @@ class PluginService {
   }
 
   snapshot() {
-    return this.registry.snapshot();
+    return this.registry.snapshot(this._contributionExtras());
   }
 
   adminSnapshot() {
+    const extras = this._contributionExtras();
+    // 管理器需要"为什么这条组合不生效"，所以 admin 里给完整仲裁结果而不是只给生效项
+    const byPlugin = new Map();
+    for (const binding of extras.bindings) {
+      if (!byPlugin.has(binding.pluginId)) byPlugin.set(binding.pluginId, []);
+      byPlugin.get(binding.pluginId).push(binding);
+    }
     return {
-      ...this.registry.adminSnapshot(),
+      ...this.registry.adminSnapshot({ keybindings: byPlugin }),
       pluginsDir: this.getPluginsDir(),
       appVersion: app.getVersion(),
       runtimes: this.runtimes.list(),
@@ -252,8 +301,143 @@ class PluginService {
     };
   }
 
+  /**
+   * 投影用的派生数据：快捷键仲裁结果 + 状态栏运行时文案。
+   *
+   * 宿主快捷键每次重新收集：菜单会随插件安装/卸载重建，缓存下来就会漏掉
+   * "插件装完之前不存在的 accelerator"。
+   */
+  _contributionExtras() {
+    let hostChords = null;
+    try {
+      hostChords = collectMenuChords(Menu.getApplicationMenu());
+    } catch (_) {
+      hostChords = new Set();
+    }
+    const registryState = store.readRegistry();
+    const enabled = (pluginId) => !!store.getPluginState(registryState, pluginId).keybindingsEnabled;
+    const result = evaluateKeybindings({
+      registry: this.registry,
+      isEnabled: enabled,
+      hostChords,
+    });
+    const byPlugin = new Map();
+    for (const binding of result.bindings) {
+      if (!byPlugin.has(binding.pluginId)) byPlugin.set(binding.pluginId, []);
+      // 投影只给渲染层要用的字段；reason/conflictWith 只对管理器有意义
+      byPlugin.get(binding.pluginId).push({
+        chord: binding.chord,
+        command: binding.command,
+        when: binding.when,
+        status: binding.status === 'candidate' ? 'active' : binding.status,
+      });
+    }
+    return { keybindings: byPlugin, bindings: result.bindings, statusText: this._statusText };
+  }
+
   getLog(limit) {
     return store.readAudit(Math.max(1, Math.min(1000, Number(limit) || 200)));
+  }
+
+  // ------------------------------------------------------------ M2：界面贡献点
+  /**
+   * 设置页需要的"当前值"：manifest 里的 default 叠加用户改过的值。
+   * 只返回 schema 里声明过的键 —— 用户不该看到一个插件自己都没定义过的设置项。
+   */
+  getSettings(pluginId) {
+    const record = this.registry.getPlugin(pluginId);
+    if (!record) return { ok: false, error: `未安装：${pluginId}` };
+    const registry = store.readRegistry();
+    const state = store.getPluginState(registry, pluginId);
+    const values = {};
+    for (const section of record.manifest.contributes.settings) {
+      for (const field of section.fields) {
+        values[field.key] = Object.prototype.hasOwnProperty.call(state.settings, field.key)
+          ? state.settings[field.key]
+          : field.default;
+      }
+    }
+    return { ok: true, values };
+  }
+
+  /**
+   * 写入设置。按 schema 做类型收敛（而不是信渲染层传来的任何东西），
+   * 落盘后再通知 runtime —— 插件可以在自己进程里监听 `settings.changed`。
+   */
+  setSettings(pluginId, patch) {
+    const record = this.registry.getPlugin(pluginId);
+    if (!record) return { ok: false, error: `未安装：${pluginId}` };
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return { ok: false, error: 'patch 必须是对象' };
+    }
+    const fields = new Map();
+    for (const section of record.manifest.contributes.settings) {
+      for (const field of section.fields) fields.set(field.key, field);
+    }
+    const next = {};
+    for (const [key, raw] of Object.entries(patch)) {
+      const field = fields.get(key);
+      if (!field) return { ok: false, error: `未声明的设置项：${key}` };
+      next[key] = this._coerceField(field, raw);
+    }
+
+    const registry = store.readRegistry();
+    const state = store.getPluginState(registry, pluginId);
+    store.setPluginState(registry, pluginId, { settings: { ...state.settings, ...next } });
+    store.writeRegistry(registry);
+
+    // 运行中的插件需要知道配置变了；没在跑就等它下次启动读设置快照。
+    // 用事件而不是请求：插件没监听设置变化是合法的，不该因此报超时。
+    this.runtimes.sendEvent(pluginId, 'settings.changed', { values: { ...state.settings, ...next } });
+    return { ok: true, values: next };
+  }
+
+  _coerceField(field, raw) {
+    switch (field.type) {
+      case 'boolean':
+        return raw === true;
+      case 'number': {
+        let value = Number(raw);
+        if (!Number.isFinite(value)) value = field.default;
+        if (field.min !== null) value = Math.max(field.min, value);
+        if (field.max !== null) value = Math.min(field.max, value);
+        return value;
+      }
+      case 'select':
+        return field.options.some((opt) => opt.value === raw) ? raw : field.default;
+      default:
+        return typeof raw === 'string' ? raw.slice(0, 2000) : String(raw ?? '').slice(0, 2000);
+    }
+  }
+
+  /** 用户是否为该插件启用快捷键（默认关闭）。 */
+  setKeybindingsEnabled(pluginId, enabled) {
+    const record = this.registry.getPlugin(pluginId);
+    if (!record) return { ok: false, error: `未安装：${pluginId}` };
+    const registry = store.readRegistry();
+    store.setPluginState(registry, pluginId, { keybindingsEnabled: !!enabled });
+    store.writeRegistry(registry);
+    this.registry.updatePlugin(pluginId, { state: { ...(record.state || {}), keybindingsEnabled: !!enabled } });
+    store.audit('keybindings', pluginId, { enabled: !!enabled });
+    // 注册表内容没变，但投影里的 keybindings[].status 变了 → 必须主动推一次
+    ipcFacade.broadcastSnapshot(this);
+    return { ok: true, enabled: !!enabled };
+  }
+
+  /**
+   * 时间轴浮层的 iframe 地址。与面板同一条 mint 逻辑：entry 只在主进程可见，
+   * 渲染层拿到的永远是成型 URL；每次挂载换 nonce，旧 URL 不会长期有效。
+   */
+  overlayUrl(pluginId, overlayId) {
+    const record = this.registry.getPlugin(pluginId);
+    const overlay = this.registry.get('overlay', `${pluginId}.${overlayId}`);
+    if (!record || record.status !== 'loaded' || !overlay) {
+      return { ok: false, error: `浮层未注册：${pluginId}.${overlayId}` };
+    }
+    return {
+      ok: true,
+      url: panelUrl(pluginId, overlay.entry, `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`),
+    };
   }
 
   // ------------------------------------------------------------ 安装 / 卸载
@@ -290,6 +474,7 @@ class PluginService {
     // 1. 撤 UI 与菜单：registry.removePlugin 会触发 _notify → renderer 重新投影 + 菜单重建
     const removedContribs = this.registry.removePlugin(id);
     this._pluginDirs.delete(id);
+    this._clearStatusText(id);
 
     // 2. 停运行时
     await this.runtimes.stop(id);
@@ -312,7 +497,13 @@ class PluginService {
     }
 
     this._notify();
-    return { ok: true, removedContributions: removedContribs, removedDir: removed.removedDir };
+    return {
+      ok: true,
+      removedContributions: removedContribs,
+      removedDir: removed.removedDir,
+      // 文件被占用时目录可能还在；界面据此提示"重启后自动清理"，而不是假装干净
+      fileError: removed.fileError,
+    };
   }
 
   async setEnabled(id, enabled) {
@@ -327,7 +518,15 @@ class PluginService {
       await this.runtimes.stop(id);
       // 停用只撤贡献、保留记录 —— 记录一删，管理器里就没这条了，用户无法再启用。
       this.registry.removeContributions(id);
-      this.registry.updatePlugin(id, { status: 'disabled', runtimeAlive: false, error: '' });
+      this._clearStatusText(id);
+      this.registry.updatePlugin(id, {
+        status: 'disabled',
+        runtimeAlive: false,
+        error: '',
+        // 记录里的 state 是扫描时读的副本，不跟着改的话管理器仍以 enabled:true
+        // 判断，按钮会一直显示"停用"，用户再也点不回"启用"。
+        state: { ...(record.state || {}), enabled: false },
+      });
     } else {
       await this.reloadAll({ reason: 'enable' });
     }
@@ -345,6 +544,7 @@ class PluginService {
       this.registry.removePlugin(record.id);
     }
     this._pluginDirs.clear();
+    this._statusText.clear();
     this.loadAll();
     store.audit('reload', null, { reason: (options && options.reason) || 'manual' });
     this._notify();
@@ -378,7 +578,10 @@ class PluginService {
       return { ok: false, error: { code: ERR.PERMISSION_DENIED, message: `面板未申请能力：${method}` } };
     }
     try {
-      const result = await this._call(pluginId, 'panel.rpc', { panelId, method, params: params || {} }, TIMEOUTS.panelRpc);
+      const result = await this._call(
+        pluginId, 'panel.rpc', { panelId, method, params: params || {} },
+        panel.timeoutMs || TIMEOUTS.panelRpc,
+      );
       return { ok: true, result };
     } catch (err) {
       return { ok: false, error: { code: err.code || ERR.INTERNAL, message: err.message } };
@@ -408,6 +611,7 @@ class PluginService {
     }
 
     const dataDir = installer.ensureDataDir(pluginId);
+    const persisted = store.getPluginState(store.readRegistry(), pluginId);
     await this.runtimes.start({
       id: pluginId,
       name: record.manifest.name,
@@ -417,6 +621,8 @@ class PluginService {
       entry: record.manifest.main,
       locale: this._locale,
       permissions: record.manifest.permissions,
+      // 启动快照：插件在 initialize() 里就能读到用户配置，不必先等一次事件
+      settings: persisted.settings || {},
       capabilities: {
         deviceId: undefined,
         hardware: this._hardwareSnapshot(),
@@ -463,7 +669,9 @@ class PluginService {
         // 同一条往返通道，`operations === null` 表示"只要快照，不写"。
         // 复用一条通道的理由：渲染层只需要实现一个处理器，就不会出现
         // "读走了 apply 通道、写走了 read 通道"这类接线错误。
-        const result = await ipcFacade.requestProjectApply(this.mainWindowGetter(), `plugin:${pluginId}:read:${Date.now()}`, null);
+        const result = await ipcFacade.requestProjectApply(
+          this.mainWindowGetter(), ipcFacade.nextProjectApplyId(pluginId, 'read'), null,
+        );
         return result;
       }
       case 'project.apply': {
@@ -473,7 +681,9 @@ class PluginService {
         const ops = Array.isArray(params && params.operations) ? params.operations : [];
         if (!ops.length) throw new Error('operations 为空');
         if (ops.length > 500) throw new Error('单次最多 500 个操作');
-        return ipcFacade.requestProjectApply(this.mainWindowGetter(), `plugin:${pluginId}:apply:${Date.now()}`, ops, 60000);
+        return ipcFacade.requestProjectApply(
+          this.mainWindowGetter(), ipcFacade.nextProjectApplyId(pluginId, 'apply'), ops, 60000,
+        );
       }
       case 'ui.notify': {
         const payload = params || {};
@@ -481,6 +691,20 @@ class PluginService {
           message: String(payload.message || '').slice(0, 500),
           level: payload.level === 'error' || payload.level === 'warn' ? payload.level : 'info',
         });
+        return { ok: true };
+      }
+      case 'ui.status': {
+        // 状态栏文案由插件自己更新（"已处理 3/10"）。只允许改自己声明的条目：
+        // 否则一个插件能把另一个插件的状态栏改成任意文字。
+        const payload = params || {};
+        const itemId = `${pluginId}.${String(payload.itemId || '')}`;
+        if (!this.registry.get('statusBar', itemId)) {
+          throw Object.assign(new Error(`未声明的状态栏条目：${payload.itemId}`), { code: ERR.NOT_FOUND });
+        }
+        const text = String(payload.text ?? '').slice(0, 160);
+        if (text) this._statusText.set(itemId, text);
+        else this._statusText.delete(itemId);
+        ipcFacade.broadcastSnapshot(this);
         return { ok: true };
       }
       default:
@@ -534,6 +758,10 @@ class PluginService {
     if (this._changeDisposable) {
       this._changeDisposable.dispose();
       this._changeDisposable = null;
+    }
+    if (this._pushDisposable) {
+      this._pushDisposable();
+      this._pushDisposable = null;
     }
     for (const record of this.registry.listPlugins()) {
       this.registry.removePlugin(record.id);

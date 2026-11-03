@@ -12,6 +12,7 @@ import {
     normalize,
 } from './themes/index.js';
 import { resolveQDriftDefault } from './inference/pipeline/qdrift/defaults.js';
+import { installSettingsUiPolish } from './settingsUi.js';
 
 const inferenceProviderSelect = document.getElementById('inferenceProvider');
 const inferenceProviderHint = document.getElementById('inferenceProviderHint');
@@ -703,12 +704,16 @@ async function loadVocoderChunkFramesInfo() {
         const gb = info.bestVramBytes / (1024 * 1024 * 1024);
         _currentVramGb = gb;
         const gpuName = info.bestGpuName || '';
-        const vramStr = gb > 0 ? `${gb.toFixed(1)}GB` : '未知';
-        const text = t('settings.vocoderChunkSmartResult', {
-            frames: info.smartFrames,
-            vram: vramStr,
-            gpu: gpuName || t('settings.unknownGpu'),
-        });
+        const hasVram = Number.isFinite(gb) && gb > 0;
+        // 两个值都没探到时不要再拼 "（未知 VRAM, Unknown GPU）" —— 中英混排
+        // 且括号里两个占位词并排，读起来像没渲染完。整句换成另一种说法。
+        const text = (!hasVram && !gpuName)
+            ? t('settings.vocoderChunkSmartResultUnknown', { frames: info.smartFrames })
+            : t('settings.vocoderChunkSmartResult', {
+                frames: info.smartFrames,
+                vram: hasVram ? `${gb.toFixed(1)}GB` : t('settings.unknownVram'),
+                gpu: gpuName || t('settings.unknownGpu'),
+            });
         if (vocoderChunkSmartText) {
             vocoderChunkSmartText.textContent = text;
         }
@@ -739,17 +744,40 @@ async function loadVocoderChunkFramesTable() {
                 if (r.tierGb <= _currentVramGb) currentTierGb = r.tierGb;
             }
         }
-        const rowsHtml = rows.map((r) => {
-            const isCurrent = r.tierGb === currentTierGb && currentTierGb > 0;
-            const budgetStr = r.budgetGb > 0 ? `${r.budgetGb.toFixed(2)}GB` : '—';
-            const durStr = `${r.approxSeconds.toFixed(1)}s`;
+
+        // 低档位会被预算公式压到同一个最小值（512 帧），于是 2/3/4GB 三行
+        // 内容完全相同、还要占三行。这里把"连续且推荐值相同"的档位合并成
+        // 一行区间（2–4GB），既保留信息又不再重复。
+        const groups = [];
+        for (const row of rows) {
+            const last = groups[groups.length - 1];
+            if (last && last.frames === row.frames && last.approxSeconds === row.approxSeconds) {
+                last.tierMax = row.tierGb;
+                last.budgetGb = Math.max(last.budgetGb, row.budgetGb);
+                continue;
+            }
+            groups.push({
+                tierMin: row.tierGb,
+                tierMax: row.tierGb,
+                frames: row.frames,
+                approxSeconds: row.approxSeconds,
+                budgetGb: row.budgetGb,
+            });
+        }
+
+        const rowsHtml = groups.map((g) => {
+            const isCurrent = currentTierGb > 0
+                && currentTierGb >= g.tierMin && currentTierGb <= g.tierMax;
+            const budgetStr = g.budgetGb > 0 ? `${g.budgetGb.toFixed(2)}GB` : '—';
+            const durStr = `${g.approxSeconds.toFixed(1)}s`;
+            const tierLabel = g.tierMin === g.tierMax ? `${g.tierMin}GB` : `${g.tierMin}–${g.tierMax}GB`;
             const currentBadge = isCurrent
                 ? `<span class="vram-current-badge">${t('settings.vocoderChunkTableCurrent')}</span>`
                 : '';
             return `<tr class="${isCurrent ? 'vram-row-current' : ''}">
-                <td>${r.tierGb}GB${currentBadge}</td>
+                <td>${tierLabel}${currentBadge}</td>
                 <td>${budgetStr}</td>
-                <td>${r.frames}</td>
+                <td>${g.frames}</td>
                 <td>${durStr}</td>
             </tr>`;
         }).join('');
@@ -843,6 +871,18 @@ const PRECISION_LABELS = {
     'int8-npu': 'INT8-NPU',
 };
 
+/**
+ * 把字节数写成一行人能读的字符串。设置页只需要 GB / MB 两级：
+ * 模型包都是百 MB 量级，再细分没有意义。
+ */
+function _formatBytesShort(bytes) {
+    const n = Number(bytes) || 0;
+    if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+    if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+    if (n > 0) return `${Math.round(n / 1024)} KB`;
+    return '';
+}
+
 function updateModelStatusDisplay(modelStatus) {
     const el = document.getElementById('modelStatusList');
     if (!el || !modelStatus) return;
@@ -857,10 +897,35 @@ function updateModelStatusDisplay(modelStatus) {
         label.textContent = PRECISION_LABELS[prec] || prec;
         const info = document.createElement('span');
         info.className = 'model-status-info';
-        info.textContent = status.ready ? t('settings.modelReady') : t('settings.modelMissing', { count: status.missing });
+        if (status.ready) {
+            info.textContent = t('settings.modelReady');
+        } else {
+            // "还差 6/18 个文件 · 1.2 GB" —— 三个信息缺一不可：进度、缺口、体积。
+            const parts = [];
+            if (status.total) {
+                parts.push(t('settings.modelProgress', {
+                    done: Math.max(0, status.total - status.missing),
+                    total: status.total,
+                }));
+            }
+            const size = _formatBytesShort(status.missingBytes);
+            if (size) parts.push(size);
+            info.textContent = parts.join(' · ');
+        }
         item.appendChild(dot);
         item.appendChild(label);
         item.appendChild(info);
+        if (!status.ready) {
+            // 就地开下载页，不再让用户自己找入口。
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'model-status-download';
+            btn.textContent = t('settings.downloadMissing');
+            btn.addEventListener('click', () => {
+                window.electronAPI?.modelDownloadOpen?.(prec);
+            });
+            item.appendChild(btn);
+        }
         el.appendChild(item);
     }
 }
@@ -1005,13 +1070,44 @@ async function refreshModelOverview() {
     }
 }
 
+/**
+ * 硬件检测失败时的收尾。
+ *
+ * 原实现只在 catch 里重置了下拉框，三个状态灯会永远停在「检测中...」——
+ * 用户看到的是"程序卡死"，而实际只是一次 IPC 失败。这里统一改成失败态并
+ * 给一个就地重试入口。
+ */
+function markHardwareDetectionFailed() {
+    for (const el of [webnnStatusValue, npuStatusValue, gpuStatusValue]) {
+        if (!el) continue;
+        el.textContent = t('settings.hardwareDetectFailed');
+        el.classList.remove('status-checking', 'status-available', 'status-unavailable');
+        el.classList.add('status-failed');
+    }
+    const textEl = document.getElementById('currentHardwareText');
+    if (textEl) textEl.textContent = t('settings.hardwareDetectFailed');
+
+    const bar = document.querySelector('.webnn-status-bar');
+    if (bar && !bar.querySelector('.hardware-retry-btn')) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hardware-retry-btn';
+        btn.textContent = t('settings.hardwareRetry');
+        btn.addEventListener('click', () => {
+            btn.remove();
+            loadDevices();
+        });
+        bar.appendChild(btn);
+    }
+}
+
 async function loadDevices() {
     try {
         // 立即显示加载状态
         for (const el of [webnnStatusValue, npuStatusValue, gpuStatusValue]) {
             if (!el) continue;
             el.textContent = t('settings.webnnChecking');
-            el.classList.remove('status-available', 'status-unavailable');
+            el.classList.remove('status-available', 'status-unavailable', 'status-failed');
             el.classList.add('status-checking');
         }
 
@@ -1147,6 +1243,7 @@ async function loadDevices() {
         loadAudioDevices().catch(() => {});
     } catch (err) {
         console.error('Failed to load device list:', err);
+        markHardwareDetectionFailed();
         inferenceDeviceSelect.textContent = '';
         const opt = document.createElement('option');
         opt.value = 'auto';
@@ -2056,6 +2153,9 @@ initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
   hydrateIcons(document);
+  // 滑杆数值可编辑 / 长说明折叠。必须放在 applyLocale 之后：折叠与否取决于
+  // 当前语言下的实际文本长度（中文通常比英文短一行）。
+  installSettingsUiPolish();
 });
 
 // Apply saved theme
@@ -2475,6 +2575,39 @@ function renderEditorBody() {
         }
         themeEditorBody.appendChild(section);
     }
+    syncThemeHistoryButtons();
+}
+
+/**
+ * 撤销/重做此前是"永远可点、点了没反应"：栈空时按钮依然是正常态，用户
+ * 只能靠点击无响应来推断到底有没有历史；能点时也说不清这一步撤销的是什么。
+ * 这里统一把可用性写成 disabled，并把"这一步会改动哪些令牌"放进 tooltip。
+ */
+function syncThemeHistoryButtons() {
+    const pairs = [
+        [themeEditorUndoBtn, 'peekUndo', 'undo', 'undoEmpty', 'undoTitle'],
+        [themeEditorRedoBtn, 'peekRedo', 'redo', 'redoEmpty', 'redoTitle'],
+    ];
+    for (const [btn, peekFn, verbKey, emptyKey, titleKey] of pairs) {
+        if (!btn) continue;
+        const peek = typeof themeManager[peekFn] === 'function'
+            ? themeManager[peekFn]()
+            : { available: false, tokens: [] };
+        btn.disabled = !peek.available;
+        if (!peek.available) {
+            btn.removeAttribute('data-i18n-title');
+            btn.title = t(`settings.theme.editor.${emptyKey}`);
+            continue;
+        }
+        const shown = peek.tokens.slice(0, 3).join(t('settings.theme.editor.tokenJoin'));
+        const suffix = peek.tokens.length > 3
+            ? t('settings.theme.editor.moreTokens', { count: peek.tokens.length - 3 })
+            : '';
+        btn.title = t(`settings.theme.editor.${titleKey}`, {
+            tokens: shown + suffix,
+            action: t(`settings.theme.editor.${verbKey}`),
+        });
+    }
 }
 
 if (themeEditBtn) {
@@ -2632,20 +2765,69 @@ if (window.electronAPI?.themeAPI?.onListChanged) {
 
 // ==================== Sidebar Navigation ====================
 
-document.querySelectorAll('.sidebar-item').forEach(item => {
-    item.addEventListener('click', () => {
-        const target = item.dataset.target;
-        if (!target) return;
-
-        // Update active sidebar item
-        document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-
-        // Show target section, hide others
-        document.querySelectorAll('.settings-section').forEach(s => s.classList.add('hidden'));
-        const section = document.getElementById(target);
-        if (section) section.classList.remove('hidden');
+// 把每个分类标题与其后的条目包进 .sidebar-group，使分类可折叠。
+//
+// 为什么在 JS 里包一层而不是直接改 HTML：侧栏条目被搜索逻辑按
+// `.sidebar-item[data-target]` 平铺查询，如果手写包裹层，每个分类都要重复一遍
+// 结构；这里按 DOM 顺序一次分组，搜索逻辑完全不用改。
+(function groupSidebarCategories() {
+    const nav = document.querySelector('.sidebar-nav');
+    if (!nav) return;
+    let group = null;
+    for (const child of Array.from(nav.children)) {
+        if (child.classList.contains('sidebar-category')) {
+            group = document.createElement('div');
+            group.className = 'sidebar-group';
+            nav.insertBefore(group, child);
+            group.appendChild(child);
+        } else if (group && child.classList.contains('sidebar-item')) {
+            group.appendChild(child);
+        }
+    }
+    nav.querySelectorAll('.sidebar-category').forEach((category) => {
+        const container = category.parentElement;
+        if (!container || !container.classList.contains('sidebar-group')) return;
+        const toggle = () => {
+            const collapsed = container.classList.toggle('is-collapsed');
+            category.setAttribute('aria-expanded', String(!collapsed));
+        };
+        category.setAttribute('role', 'button');
+        category.tabIndex = 0;
+        category.setAttribute('aria-expanded', 'true');
+        category.addEventListener('click', toggle);
+        category.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            toggle();
+        });
     });
+})();
+
+// 侧栏跳转用事件委托，而不是给每个条目挂监听：
+// 插件设置分区是异步注入的（见文件末尾 installPluginSettings），
+// 加载时逐个 addEventListener 的写法会让后注入的条目点了没反应。
+document.addEventListener('click', (event) => {
+    const item = event.target && event.target.closest ? event.target.closest('.sidebar-item') : null;
+    if (!item) return;
+    const target = item.dataset.target;
+    if (!target) return;
+
+    // 搜索命中或程序化点击时，条目可能在折叠的分类里：先展开再跳。
+    const group = item.closest('.sidebar-group');
+    if (group && group.classList.contains('is-collapsed')) {
+        group.classList.remove('is-collapsed');
+        const category = group.querySelector('.sidebar-category');
+        if (category) category.setAttribute('aria-expanded', 'true');
+    }
+
+    // Update active sidebar item
+    document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+
+    // Show target section, hide others
+    document.querySelectorAll('.settings-section').forEach(s => s.classList.add('hidden'));
+    const section = document.getElementById(target);
+    if (section) section.classList.remove('hidden');
 });
 
 // ==================== About page: open source usage / papers / links ====================
@@ -2842,10 +3024,13 @@ initQDriftListeners();
     const input = document.getElementById('settingsSearch');
     const empty = document.getElementById('settingsSearchEmpty');
     if (!input) return;
-    const sections = Array.from(document.querySelectorAll('.settings-section'));
-    const navItems = Array.from(document.querySelectorAll('.sidebar-item[data-target]'));
+    // 每次查询时重新取：插件设置分区是异步注入的，加载时快照会让它们搜不到
+    const getSections = () => Array.from(document.querySelectorAll('.settings-section'));
+    const getNavItems = () => Array.from(document.querySelectorAll('.sidebar-item[data-target]'));
     const normalize = value => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
     const apply = () => {
+      const sections = getSections();
+      const navItems = getNavItems();
       const query = normalize(input.value);
       if (!query) {
         document.querySelectorAll('.setting-group.search-hidden').forEach(el => el.classList.remove('search-hidden'));
@@ -2877,3 +3062,234 @@ initQDriftListeners();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
 })();
+
+// ==================== 插件设置分区（M2） ====================
+/**
+ * 把插件声明的 settings 注入设置页。
+ *
+ * 为什么由宿主渲染表单，而不是让插件塞一个 iframe 进来：
+ *   · 设置窗口没有面板那套 postMessage 桥，内嵌 iframe 就是一个**没有 apiScopes
+ *     闸门**的插件页面；
+ *   · 主题、字号、键盘可达性都由宿主统一处理，插件只需给出 schema。
+ *
+ * 需要自定义界面的分区用 `panel` 指向自己的面板 —— 点"打开面板"后复用主窗口
+ * 的抽屉（那里有完整的权限校验），而不是在设置页里再开一套。
+ */
+function _pluginSafeId(id) {
+    return String(id || '').replace(/[^A-Za-z0-9_-]/g, '-');
+}
+
+function _pluginPickText(value) {
+    if (typeof value === 'string') return value;
+    if (!value || typeof value !== 'object') return '';
+    const lang = typeof getLocale === 'function' ? getLocale() : 'en';
+    return value[lang] || value[String(lang).split('-')[0]] || value.en || Object.values(value)[0] || '';
+}
+
+function _pluginFieldControl(pluginId, field, value, onCommit) {
+    const wrap = document.createElement('div');
+    wrap.className = 'setting-group';
+    const controlId = `plugin-field-${_pluginSafeId(pluginId)}-${_pluginSafeId(field.key)}`;
+    const label = _pluginPickText(field.label) || field.key;
+    const description = field.description ? _pluginPickText(field.description) : '';
+
+    if (field.type === 'boolean') {
+        const labelEl = document.createElement('label');
+        labelEl.className = 'device-mode-radio';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = controlId;
+        input.checked = !!value;
+        input.addEventListener('change', () => onCommit(input.checked));
+        const text = document.createElement('span');
+        text.className = 'radio-label';
+        text.textContent = label;
+        labelEl.appendChild(input);
+        labelEl.appendChild(text);
+        wrap.appendChild(labelEl);
+        if (description) {
+            const desc = document.createElement('span');
+            desc.className = 'radio-desc';
+            desc.textContent = description;
+            labelEl.appendChild(desc);
+        }
+        return wrap;
+    }
+
+    const labelEl = document.createElement('label');
+    labelEl.setAttribute('for', controlId);
+    labelEl.textContent = label;
+    wrap.appendChild(labelEl);
+
+    let input;
+    if (field.type === 'select') {
+        input = document.createElement('select');
+        for (const option of field.options || []) {
+            const opt = document.createElement('option');
+            opt.value = String(option.value);
+            opt.textContent = _pluginPickText(option.label) || String(option.value);
+            if (option.value === value) opt.selected = true;
+            input.appendChild(opt);
+        }
+        input.addEventListener('change', () => onCommit(input.value));
+    } else if (field.type === 'multiline') {
+        input = document.createElement('textarea');
+        input.rows = 4;
+        input.value = value == null ? '' : String(value);
+        input.addEventListener('change', () => onCommit(input.value));
+    } else if (field.type === 'number') {
+        input = document.createElement('input');
+        input.type = 'number';
+        if (field.min !== null) input.min = String(field.min);
+        if (field.max !== null) input.max = String(field.max);
+        if (field.step !== null) input.step = String(field.step);
+        input.value = value == null ? '' : String(value);
+        input.addEventListener('change', () => onCommit(Number(input.value)));
+    } else {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.value = value == null ? '' : String(value);
+        input.addEventListener('change', () => onCommit(input.value));
+    }
+    input.id = controlId;
+    wrap.appendChild(input);
+
+    if (description) {
+        const hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = description;
+        wrap.appendChild(hint);
+    }
+    return wrap;
+}
+
+async function installPluginSettings() {
+    const api = window.electronAPI?.pluginHost;
+    if (!api || typeof api.list !== 'function' || typeof api.settingsGet !== 'function') return;
+
+    let snapshot;
+    try {
+        snapshot = await api.list();
+    } catch (err) {
+        console.warn('[settings] 读取插件列表失败:', err && err.message);
+        return;
+    }
+
+    const entries = [];
+    for (const plugin of (snapshot && snapshot.plugins) || []) {
+        if (plugin.status !== 'loaded') continue;
+        for (const section of plugin.settings || []) entries.push({ plugin, section });
+    }
+    if (!entries.length) return;
+
+    const nav = document.querySelector('.sidebar-nav');
+    const content = document.querySelector('.settings-content');
+    if (!nav || !content) return;
+
+    const group = document.createElement('div');
+    group.className = 'sidebar-group';
+    const category = document.createElement('div');
+    category.className = 'sidebar-category';
+    category.textContent = t('plugins.settingsCategory');
+    category.setAttribute('role', 'button');
+    category.tabIndex = 0;
+    category.setAttribute('aria-expanded', 'true');
+    const toggle = () => {
+        const collapsed = group.classList.toggle('is-collapsed');
+        category.setAttribute('aria-expanded', String(!collapsed));
+    };
+    category.addEventListener('click', toggle);
+    category.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        toggle();
+    });
+    group.appendChild(category);
+
+    for (const { plugin, section } of entries) {
+        const sectionId = `plugin-section-${_pluginSafeId(plugin.id)}-${_pluginSafeId(section.localId)}`;
+        const navItem = document.createElement('div');
+        navItem.className = 'sidebar-item';
+        navItem.dataset.target = sectionId;
+        const navText = document.createElement('span');
+        navText.textContent = `${plugin.name} · ${_pluginPickText(section.title)}`;
+        navItem.appendChild(navText);
+        group.appendChild(navItem);
+
+        const sectionEl = document.createElement('div');
+        sectionEl.className = 'settings-section hidden';
+        sectionEl.id = sectionId;
+
+        const head = document.createElement('div');
+        head.className = 'setting-group';
+        const headLabel = document.createElement('label');
+        headLabel.textContent = `${plugin.name} · ${_pluginPickText(section.title)}`;
+        head.appendChild(headLabel);
+        const headHint = document.createElement('p');
+        headHint.className = 'hint';
+        headHint.textContent = t('plugins.settingsSectionHint', { name: plugin.name });
+        head.appendChild(headHint);
+        sectionEl.appendChild(head);
+
+        if (section.panel) {
+            // panel 的值是全局 id（`<pluginId>.<localId>`）；去掉前缀才是本地 id。
+            // 不能用 split('.').pop()：插件 id 自己就允许带点（com.example.demo）。
+            const panelLocalId = String(section.panel).startsWith(`${plugin.id}.`)
+                ? String(section.panel).slice(plugin.id.length + 1)
+                : String(section.panel);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn-theme-action';
+            button.dataset.i18n = 'plugins.openSettingsPanel';
+            button.textContent = t('plugins.openSettingsPanel');
+            button.addEventListener('click', async () => {
+                button.disabled = true;
+                try {
+                    const result = await api.openPanel(plugin.id, panelLocalId);
+                    if (result && result.ok === false) {
+                        headHint.textContent = result.error || t('plugins.actionFailed', { error: '' });
+                    }
+                } finally {
+                    button.disabled = false;
+                }
+            });
+            sectionEl.appendChild(button);
+        }
+
+        if (section.fields && section.fields.length) {
+            let values = {};
+            try {
+                const current = await api.settingsGet(plugin.id);
+                if (current && current.ok) values = current.values || {};
+            } catch (err) {
+                console.warn('[settings] 读取插件设置失败:', err && err.message);
+            }
+            const status = document.createElement('p');
+            status.className = 'hint';
+            for (const field of section.fields) {
+                sectionEl.appendChild(_pluginFieldControl(plugin.id, field, values[field.key], async (next) => {
+                    status.textContent = t('plugins.settingsSaving');
+                    try {
+                        const result = await api.settingsSet(plugin.id, { [field.key]: next });
+                        status.textContent = result && result.ok ? t('plugins.settingsSaved') : (result && result.error) || '';
+                    } catch (err) {
+                        status.textContent = (err && err.message) || String(err);
+                    }
+                }));
+            }
+            sectionEl.appendChild(status);
+        }
+
+        content.appendChild(sectionEl);
+    }
+
+    nav.appendChild(group);
+
+    // 搜索索引是惰性查询的，但空查询下的"清空隐藏"状态需要重跑一次
+    const search = document.getElementById('settingsSearch');
+    if (search) search.dispatchEvent(new Event('input'));
+}
+
+installPluginSettings().catch((err) => {
+    console.warn('[settings] 插件设置分区初始化失败:', err && err.message);
+});

@@ -39,6 +39,9 @@ export function updateMidiInfo() {
   if (state.pianoRoll) {
     const noteCount = state.pianoRoll.notes.length;
     dom.midiInfoEl.textContent = noteCount > 0 ? t('preprocess.noteCount', { count: noteCount }) : t('preprocess.waitingForExtraction');
+    // MIDI 空态与音符数联动：有音符就撤掉提示，清空（如重新灌数据）再显示。
+    const midiEmpty = document.getElementById('midi-empty');
+    if (midiEmpty) midiEmpty.hidden = noteCount > 0;
   }
 }
 

@@ -2,6 +2,8 @@ import '../common.css';
 import './pluginManager.css';
 import { t, initI18n, applyLocale } from '../i18n/index.js';
 import { initWindowTheme } from '../themes/themeInit.js';
+import { formatChordForDisplay } from '../shared/pluginKeys.js';
+import { isMac } from '../renderer/platformInfo.js';
 
 /**
  * 插件管理器窗口的渲染层。
@@ -125,12 +127,80 @@ function renderContributions(plugin) {
   if (plugin.panels?.length) chips.push(t('plugins.contribPanels', { n: plugin.panels.length }));
   if (plugin.fileTypes?.length) chips.push(t('plugins.contribFileTypes', { n: plugin.fileTypes.length }));
   if (plugin.settings?.length) chips.push(t('plugins.contribSettings', { n: plugin.settings.length }));
+  // M2：界面贡献点只显示数量。管理器不预览按钮/状态栏，给数量是为了让用户
+  // 在安装前就能判断"这个插件会往我的顶栏塞多少东西"。
+  const ui = plugin.uiContributions || {};
+  if (ui.toolbar) chips.push(t('plugins.contribToolbar', { n: ui.toolbar }));
+  if (ui.statusBar) chips.push(t('plugins.contribStatusBar', { n: ui.statusBar }));
+  if (ui.contextMenus) chips.push(t('plugins.contribContextMenus', { n: ui.contextMenus }));
+  if (ui.overlays) chips.push(t('plugins.contribOverlays', { n: ui.overlays }));
   if (!chips.length) {
     wrap.appendChild(el('span', 'pm-chip', t('plugins.noContributions')));
     return wrap;
   }
   for (const chip of chips) wrap.appendChild(el('span', 'pm-chip', chip));
   return wrap;
+}
+
+/**
+ * 快捷键块：总开关 + 每条组合的状态。
+ *
+ * 状态文案必须解释"为什么没生效"：只显示一个灰色 chord，用户会以为插件坏了；
+ * 写清"与宿主冲突/与某插件冲突"才知道下一步该做什么（关掉另一个插件）。
+ */
+function renderKeybindings(plugin) {
+  const bindings = plugin.keybindings || [];
+  if (!bindings.length) return null;
+
+  const box = el('div', 'pm-kb');
+  const head = el('div', 'pm-kb-head');
+  head.appendChild(el('span', 'pm-row-label', t('plugins.keybindingsSection')));
+
+  const toggleLabel = el('label', 'pm-kb-toggle');
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = !!plugin.keybindingsEnabled;
+  checkbox.addEventListener('change', async () => {
+    checkbox.disabled = true;
+    const result = await safeCall(() => api.setKeybindings(plugin.id, checkbox.checked));
+    checkbox.disabled = false;
+    if (result && result.ok === false) {
+      toast(t('plugins.keybindingToggleFailed', { error: (result && result.error) || '' }), true);
+      checkbox.checked = !checkbox.checked;
+    }
+    await refresh();
+  });
+  toggleLabel.appendChild(checkbox);
+  toggleLabel.appendChild(document.createTextNode(t('plugins.keybindingsEnable')));
+  head.appendChild(toggleLabel);
+  box.appendChild(head);
+  box.appendChild(el('p', 'pm-note', t('plugins.keybindingsHint')));
+
+  const list = el('div', 'pm-kb-list');
+  for (const binding of bindings) {
+    const row = el('div', 'pm-kb-row');
+    // 规范形里的 Mod 是抽象修饰键，直接印出来用户不知道该按什么
+    const key = el('kbd', 'pm-kbd', formatChordForDisplay(binding.chord, isMac));
+    row.appendChild(key);
+
+    let statusText = t('plugins.keybindingStatusActive');
+    let statusClass = 'is-active';
+    if (binding.status === 'disabled') {
+      statusText = t('plugins.keybindingStatusDisabled');
+      statusClass = 'is-off';
+    } else if (binding.status === 'conflict') {
+      statusText = binding.reason === 'host'
+        ? t('plugins.keybindingConflictHost')
+        : t('plugins.keybindingConflictPlugin', { plugins: (binding.conflictWith || []).join(', ') });
+      statusClass = 'is-conflict';
+    }
+    const status = el('span', `pm-kb-status ${statusClass}`, statusText);
+    row.appendChild(status);
+    row.appendChild(el('span', 'pm-kb-command', binding.command || ''));
+    list.appendChild(row);
+  }
+  box.appendChild(list);
+  return box;
 }
 
 function renderCard(plugin) {
@@ -159,7 +229,11 @@ function renderCard(plugin) {
 
   // ---- 操作
   const actions = el('div', 'pm-card-actions');
-  const enabled = plugin.state?.enabled !== false && plugin.status !== 'quarantined';
+  // 以状态为准：state.enabled 是磁盘上的开关，status 是这次运行的真实结果，
+  // 两者不一致时（例如上一次停用只改了磁盘）按 status 走，否则按钮会永远停在
+  // "停用"上，用户没法把插件重新打开。
+  const enabled = plugin.status !== 'disabled' && plugin.status !== 'quarantined'
+    && plugin.state?.enabled !== false;
 
   const toggle = el('button', 'pm-btn', enabled ? t('plugins.disable') : t('plugins.enable'));
   toggle.type = 'button';
@@ -250,6 +324,9 @@ function renderCard(plugin) {
   runtimeValue.appendChild(el('span', 'pm-chip', plugin.dir || ''));
   runtimeRow.appendChild(runtimeValue);
   body.appendChild(runtimeRow);
+
+  const keybindingBox = renderKeybindings(plugin);
+  if (keybindingBox) body.appendChild(keybindingBox);
 
   if (plugin.pendingContributions?.length) {
     body.appendChild(el('p', 'pm-note', t('plugins.pendingContributions', { list: plugin.pendingContributions.join(', ') })));

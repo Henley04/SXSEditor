@@ -10,8 +10,10 @@
         <!-- ==================== Sidebar ==================== -->
         <nav class="settings-sidebar">
             <div class="settings-search-wrap">
-                    <input id="settingsSearch" type="search" placeholder="搜索设置" aria-label="搜索设置">
-                    <div id="settingsSearchEmpty" class="settings-search-empty hidden">没有匹配的设置</div>
+                    <input id="settingsSearch" type="search" placeholder="搜索设置" aria-label="搜索设置"
+                           data-i18n-placeholder="settings.searchPlaceholder"
+                           data-i18n-aria-label="settings.searchPlaceholder">
+                    <div id="settingsSearchEmpty" class="settings-search-empty hidden" data-i18n="settings.searchEmpty">没有匹配的设置</div>
                 </div>
                 <div class="sidebar-nav">
                 <div class="sidebar-category" data-i18n="settings.catGeneral">通用</div>
@@ -229,7 +231,8 @@
                     </div>
                     <div class="setting-group" id="previewCfgStrengthStartGroup">
                         <label for="previewCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
-                        <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
+                        <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动"
+                               data-i18n-placeholder="settings.autoPlaceholder">
                         <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。</p>
                     </div>
                     <div class="setting-group hidden" id="previewCfgScheduleKeyframesGroup">
@@ -297,7 +300,9 @@
 
             <!-- Export Inference Params -->
             <div class="settings-section hidden" id="section-export-params">
-                <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
+                <p class="section-desc section-desc--callout" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。
+                    <span class="export-only-tag" data-i18n="settings.exportOnly">仅导出</span>
+                </p>
                 <div class="settings-subgroup">
                     <p class="subgroup-label" data-i18n="settings.subgroupBasic">基础参数</p>
                     <div class="setting-group">
@@ -340,7 +345,8 @@
                     </div>
                     <div class="setting-group" id="exportCfgStrengthStartGroup">
                         <label for="exportCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
-                        <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
+                        <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动"
+                               data-i18n-placeholder="settings.autoPlaceholder">
                         <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。</p>
                     </div>
                     <div class="setting-group hidden" id="exportCfgScheduleKeyframesGroup">
@@ -379,7 +385,9 @@
 
             <!-- Post-Processing -->
             <div class="settings-section hidden" id="section-post-processing">
-                <p class="section-desc" data-i18n="settings.postProcessingDesc">导出时对合成音频的后处理。预览不应用这些设置。</p>
+                <p class="section-desc section-desc--callout" data-i18n="settings.postProcessingDesc">导出时对合成音频的后处理，预览不应用这些设置。
+                    <span class="export-only-tag" data-i18n="settings.exportOnly">仅导出</span>
+                </p>
                 <div class="settings-subgroup">
                     <p class="subgroup-label" data-i18n="settings.subgroupVocoder">Vocoder 拼接</p>
                     <div class="setting-group">
@@ -453,23 +461,28 @@
                     </div>
                 </div>
                 <div class="setting-group" id="vocoderChunkTableGroup">
-                    <label data-i18n="settings.vocoderChunkTableTitle">不同显存对照表</label>
-                    <p class="hint" data-i18n="settings.vocoderChunkTableHint">以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。</p>
-                    <div class="vram-table-wrapper">
-                        <table class="vram-table" id="vocoderChunkTable">
-                            <thead>
-                                <tr>
-                                    <th data-i18n="settings.vocoderChunkTableVram">显存</th>
-                                    <th data-i18n="settings.vocoderChunkTableBudget">可用预算</th>
-                                    <th data-i18n="settings.vocoderChunkTableFrames">推荐分片</th>
-                                    <th data-i18n="settings.vocoderChunkTableDuration">约时长</th>
-                                </tr>
-                            </thead>
-                            <tbody id="vocoderChunkTableBody">
-                                <tr><td colspan="4" data-i18n="settings.vocoderChunkTableLoading">加载中...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
+                    <!-- 表格与上方的"智能分配结果"信息重复，默认占掉约 340px，
+                         把下面的设置项挤出首屏。改成默认收起的 disclosure：
+                         结果条给结论，想看"为什么是这个值"再展开。 -->
+                    <details class="settings-disclosure" id="vocoderChunkTableDetails">
+                        <summary data-i18n="settings.vocoderChunkTableTitle">不同显存对照表</summary>
+                        <p class="hint" data-i18n="settings.vocoderChunkTableHint">以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。</p>
+                        <div class="vram-table-wrapper">
+                            <table class="vram-table" id="vocoderChunkTable">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="settings.vocoderChunkTableVram">显存</th>
+                                        <th data-i18n="settings.vocoderChunkTableBudget">可用预算</th>
+                                        <th data-i18n="settings.vocoderChunkTableFrames">推荐分片</th>
+                                        <th data-i18n="settings.vocoderChunkTableDuration">约时长</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="vocoderChunkTableBody">
+                                    <tr><td colspan="4" data-i18n="settings.vocoderChunkTableLoading">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
                 </div>
             </div>
 
@@ -770,13 +783,22 @@
                     <div class="model-status-list" id="modelStatusList"></div>
                     <div class="precision-info-box" id="precisionInfoBox">
                         <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
-                        <ul>
-                            <li data-i18n="settings.precisionInfoFp32"></li>
-                            <li data-i18n="settings.precisionInfoFp16"></li>
-                            <li data-i18n="settings.precisionInfoInt8"></li>
-                            <li data-i18n="settings.precisionInfoInt8Npu"></li>
-                            <li data-i18n="settings.precisionInfoRecommend"></li>
+                        <!-- 首屏只回答"我该选哪个"，5 条机制细节折进 Details。
+                             之前 900 字连排，用户要读完才能做决定。 -->
+                        <ul class="precision-info-summary">
+                            <li data-i18n="settings.precisionInfoSummaryFp32">FP32：音质最好、显存占用最高。8GB 以上独显优先选它。</li>
+                            <li data-i18n="settings.precisionInfoSummaryFast">FP16 约省一半显存、快一倍；INT8 再省 40–50%，但音质损失更明显。</li>
                         </ul>
+                        <details class="settings-disclosure">
+                            <summary data-i18n="settings.detailsLabel">详情</summary>
+                            <ul>
+                                <li data-i18n="settings.precisionInfoFp32"></li>
+                                <li data-i18n="settings.precisionInfoFp16"></li>
+                                <li data-i18n="settings.precisionInfoInt8"></li>
+                                <li data-i18n="settings.precisionInfoInt8Npu"></li>
+                                <li data-i18n="settings.precisionInfoRecommend"></li>
+                            </ul>
+                        </details>
                     </div>
                 </div>
                 <div class="setting-group">

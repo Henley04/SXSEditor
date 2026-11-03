@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Example Overlay</title>
+  <!-- 和面板一样：CSP 由 plugin:// 协议层下发，页面不要自己再写一份 -->
+  <link rel="stylesheet" href="./overlay.css">
+</head>
+<body>
+  <!--
+    时间轴浮层的最小示例：画几条等距辅助线。
+
+    现在它还不知道节拍宽度（宿主不把画布坐标系借给插件），所以这里只演示
+    "能挂上去、能收到视口变化、能跟着主题走"。真要做节拍网格，需要宿主在
+    welcome 消息里补 bpm / beatWidth —— 那是后续里程碑的事。
+  -->
+  <div id="grid" class="grid" aria-hidden="true"></div>
+  <div class="badge" id="badge">overlay</div>
+  <script src="./overlay.js"></script>
+</body>
+</html>

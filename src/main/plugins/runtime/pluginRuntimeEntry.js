@@ -62,6 +62,9 @@ function hostCall(method, params, timeoutMs = 30000) {
 function createContext(init) {
   const { plugin, permissions, capabilities } = init;
   const cleanups = [];
+  // 用户设置的可变快照：`settings.changed` 到达时就地替换（插件不必自己缓存）。
+  let settings = { ...(init.settings || {}) };
+  const settingsListeners = [];
 
   const log = (level) => (message, detail) => {
     post({
@@ -141,6 +144,20 @@ function createContext(init) {
     ui: {
       notify: (message, level) => hostCall('ui.notify', { message: String(message || '').slice(0, 500), level: level || 'info' }),
       progress: (value, text) => post({ kind: 'evt', event: 'progress', payload: { value, text } }),
+      /**
+       * 更新自己声明的状态栏条目（manifest.contributes.statusBar[].id）。
+       * 宿主按 pluginId 前缀校验归属，插件改不了别人的条目。
+       */
+      status: (itemId, text) => hostCall('ui.status', { itemId: String(itemId || ''), text: String(text == null ? '' : text) }),
+    },
+    /** 用户设置（settings 分区里填的值）。只读快照 + 变更事件。 */
+    settings: {
+      get: (key) => settings[key],
+      all: () => ({ ...settings }),
+    },
+    onSettingsChanged: (fn) => {
+      if (typeof fn !== 'function') return;
+      settingsListeners.push(fn);
     },
     hardware: () => (capabilities && capabilities.hardware) || null,
     onDispose: (fn) => {
@@ -148,8 +165,15 @@ function createContext(init) {
     },
   };
 
-  ctx.__cleanup = async () => {
-    for (const fn of cleanups.splice(0).reverse()) {
+  /** 宿主推来新设置时调用（见 onMessage 的 event 分支）。 */
+  ctx.__setSettings = (values) => {
+    settings = { ...(values || {}) };
+    for (const fn of settingsListeners) {
+      try { fn(ctx, { ...settings }); } catch (err) { ctx.log.warn(`settings listener failed: ${err && err.message}`); }
+    }
+  };
+
+  ctx.__cleanup = async () => {    for (const fn of cleanups.splice(0).reverse()) {
       try {
         await fn();
       } catch (err) {
@@ -226,10 +250,18 @@ async function handleRequest(msg) {
         break;
       }
       case 'panel.rpc': {
+        // 面板 RPC 的入口有三种写法，按"越具体越优先"的顺序解析：
+        //   1. panels.<panelId>.rpc(ctx, method, params)  —— 一个面板一个 dispatcher
+        //   2. panels.rpc(ctx, method, params)            —— 所有面板共用一个 dispatcher
+        //   3. onPanelRpc(ctx, panelId, method, params)   —— 平铺的函数式写法
+        // 示例插件用的是第 2 种（它的注释也那么写），而此前只实现了第 1、3 种，
+        // 于是示例面板每一条 RPC 都报“插件没有实现面板 'main' (NOT_FOUND)”。
         const panels = (moduleExports && moduleExports.panels) || {};
         const panel = panels[params.panelId];
         if (panel && typeof panel.rpc === 'function') {
           result = await panel.rpc(ctx, params.method, params.params || {});
+        } else if (typeof panels.rpc === 'function') {
+          result = await panels.rpc(ctx, params.method, params.params || {});
         } else if (moduleExports && typeof moduleExports.onPanelRpc === 'function') {
           result = await moduleExports.onPanelRpc(ctx, params.panelId, params.method, params.params || {});
         } else {
@@ -296,6 +328,10 @@ function onMessage(raw) {
     }
     case 'event':
       try {
+        if (msg.event === 'settings.changed' && ctx) {
+          ctx.__setSettings((msg.payload && msg.payload.values) || {});
+          return;
+        }
         if (moduleExports && typeof moduleExports.onHostEvent === 'function') {
           moduleExports.onHostEvent(ctx, msg.event, msg.payload);
         }

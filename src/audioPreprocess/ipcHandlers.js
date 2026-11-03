@@ -154,6 +154,9 @@ export function setupIpcHandlers() {
 
         dom.wavFileNameEl.textContent = state.wavFileName;
         dom.midiInfoEl.textContent = t('preprocess.waitingForExtraction');
+        // 波形空态：有音频了就不再提示"载入音频后显示波形"
+        const waveformEmpty = document.getElementById('waveform-empty');
+        if (waveformEmpty) waveformEmpty.hidden = true;
 
         processWavBuffer(state.wavFileBuffer).then((buffer) => {
           state.wavAudioBuffer = buffer;

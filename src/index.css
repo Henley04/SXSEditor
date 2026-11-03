@@ -118,6 +118,12 @@
   background: var(--bg-button-active);
 }
 
+/* [hidden] 的 UA 规则是 display:none，但上面用 display:flex 覆盖掉了它。
+   空工程时要把 + 收起（主 CTA 是左栏的虚线框），这里显式补回。 */
+#btn-add-singer[hidden] {
+  display: none;
+}
+
 .singer-panel-actions {
   display: flex;
   align-items: center;
@@ -153,6 +159,13 @@
 .singer-item-empty:hover {
   background: var(--bg-header-end);
   color: var(--fg-muted);
+}
+
+/* 键盘焦点：空态是主 CTA，必须看得见焦点环（不发光，只用 1px 实线）。 */
+.singer-item-empty:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  color: var(--fg-primary);
 }
 
 .singer-avatar-empty {
@@ -195,6 +208,35 @@
 .singer-empty-text {
   font-size: var(--font-base);
   color: inherit;
+}
+
+/* 空态第二行：说明点击后会打开什么（选音色 / 装新品 / 导入本地） */
+.singer-empty-hint {
+  margin-top: 2px;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+}
+
+/* 空工程：整个左栏只有这一个入口，把它放大并抬到正文色阶
+   （原来用 --fg-disabled，看起来像"不可用"，而它恰恰是唯一能点的东西） */
+.singer-list--empty .singer-item-empty {
+  padding: var(--space-9) 12px;
+  color: var(--fg-secondary);
+}
+
+.singer-list--empty .singer-avatar-empty {
+  width: 56px;
+  height: 56px;
+  border-color: var(--accent);
+}
+
+.singer-list--empty .singer-empty-text {
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+
+.singer-list--empty .singer-item-empty:hover {
+  color: var(--fg-primary);
 }
 
 .singer-item {
@@ -496,6 +538,115 @@
   overflow: hidden;
 }
 
+/* 顶栏的分组。这里不放任何阴影/发光：弹出层只靠边框与背景色分层，
+   与工程内其余浮层（右键菜单）保持同一套语言。 */
+.toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+
+.toolbar-toggle {
+  cursor: pointer;
+}
+
+.toolbar-popover-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* 4/4 控件：一个按钮，点开才编辑分子/分母 */
+#toolbar .toolbar-timesig {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+#toolbar .toolbar-timesig > .icon {
+  width: 12px;
+  height: 12px;
+  opacity: 0.6;
+}
+
+/* 弹出层：fixed 而不是 absolute —— #toolbar 是 overflow:hidden（窄窗口防溢出），
+   absolute 会被裁掉。坐标由 toolbarPopovers.js 在打开时算。 */
+.toolbar-popover {
+  position: fixed;
+  z-index: 70;
+  min-width: 168px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolbar-popover[hidden] {
+  display: none;
+}
+
+.toolbar-popover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+}
+
+.toolbar-popover-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#toolbar .toolbar-popover input[type="number"] {
+  width: 48px;
+  padding-inline: 4px;
+  text-align: center;
+}
+
+/* 弹出层里的按钮恢复成"完整按钮"：窄屏规则会把 #btn-audio-to-midi 之类的
+   顶栏按钮压成 28px 纯图标，收进菜单后那样就没有意义了。 */
+#toolbar .toolbar-popover--menu button {
+  width: auto;
+  min-width: 0;
+  justify-content: flex-start;
+  padding: 6px 10px;
+  font-size: var(--font-base);
+}
+
+#toolbar .toolbar-popover--menu button > .icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+}
+
+/* ⋯ 触发器：与传输按钮同尺寸，避免图标按钮宽度随语言变化 */
+#toolbar .toolbar-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+#toolbar .toolbar-more > .icon {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 #toolbar button > .icon {
   flex: 0 0 auto;
 }
@@ -584,6 +735,23 @@
   #toolbar label { font-size: 0; }
   #toolbar label > input { font-size: var(--font-sm); }
   #time-display { min-width: 70px; font-size: var(--font-sm); }
+
+  /* 内置按钮收成纯图标可以被认出来（图标本身就是约定俗成的），插件按钮不行：
+     用户装了什么只有文字能说明，只剩一个音符等于没有信息。这里把字号还回去，
+     用更小的 max-width 让它优先被截断。选择器带 .toolbar-plugin-btn，比
+     `#toolbar button` 更具体，不会被上面的 font-size: 0 盖掉。 */
+  #toolbar .toolbar-plugin-btn {
+    width: auto;
+    min-width: 0;
+    padding-inline: 6px;
+    font-size: var(--font-sm);
+  }
+  #toolbar .toolbar-plugin-btn > .icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 2px;
+  }
+  #toolbar .toolbar-plugin-label { max-width: 72px; }
 }
 
 /* ==========================================================================
@@ -609,6 +777,20 @@
   cursor: default;
   /* 注意不要用 pointer-events: none —— 那会让禁用态连原生 title 都不弹，
      而"为什么这个按钮不能点"恰恰是最需要提示的时候。 */
+}
+
+/* 导出按钮的"空工程"态：用 aria-disabled 而非 disabled，
+   否则 Chromium 不弹 title，用户只知道点不动、不知道为什么。
+   视觉上降到与 transport 禁用态一致（0.35），并禁用 hover 反馈。 */
+#toolbar button.is-unavailable {
+  opacity: 0.35;
+  cursor: default;
+}
+
+#toolbar button.is-unavailable:hover {
+  color: inherit;
+  background: transparent;
+  border-color: transparent;
 }
 
 /* 进度区：空闲时不占位；有内容时展开并右对齐 */
@@ -671,4 +853,151 @@
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-softer);
+}
+
+/* ==================== 插件界面贡献点（M2） ==================== */
+/* 视觉约束：只用边框/背景分层，不加阴影与发光，与工具栏弹出层保持一致。 */
+
+.plugin-toolbar-slot {
+  /* 插件按钮多起来时先压缩间距，而不是把 BPM / 导出挤出可视区 */
+  gap: var(--space-1);
+}
+
+.toolbar-plugin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-plugin-label {
+  /* 窄窗口下插件名比内置按钮长得多：截断并靠 title 补全，避免顶栏整体换行 */
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-overlay-layer {
+  position: absolute;
+  inset: 0;
+  /* 在分片画布之上、播放指针之下：z-index 只影响同层定位元素 */
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.plugin-overlay-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border: 0;
+  background: transparent;
+  display: block;
+}
+
+.plugin-toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.plugin-toast {
+  pointer-events: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+  line-height: 1.4;
+  animation: plugin-toast-in 140ms var(--ease-standard);
+}
+
+.plugin-toast.is-warn { border-color: var(--warning); }
+.plugin-toast.is-error { border-color: var(--danger); }
+
+.plugin-toast.is-leaving { opacity: 0; transition: opacity 160ms linear; }
+
+@keyframes plugin-toast-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: 24px;
+  min-height: 24px;
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.status-bar-slot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-bar-slot--right { justify-content: flex-end; }
+
+.status-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.status-bar-item { cursor: pointer; }
+button.status-bar-item:hover { color: var(--fg-primary); text-decoration: underline; }
+button.status-bar-item:disabled { cursor: default; opacity: 0.6; }
+
+.status-bar-text { overflow: hidden; text-overflow: ellipsis; }
+
+/* 小圆点表示"这一条来自插件"，与宿主自有的状态区分开；不额外占宽度 */
+.status-bar-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+/* 插件右键项：复用宿主的菜单外观，但语义是 <button>，需要抹掉浏览器默认按钮样式 */
+.fragment-ctx-divider {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-subtle);
+}
+
+button.fragment-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
 }

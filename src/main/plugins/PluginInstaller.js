@@ -247,9 +247,19 @@ function uninstall(id, options = {}) {
   const p = store.paths();
   const dir = path.join(p.plugins, id);
   let removedDir = false;
+  let fileError = '';
   if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    removedDir = true;
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      removedDir = true;
+    } catch (err) {
+      // 走到这里说明贡献已撤、运行时已停，只是文件被占用（Windows 上插件
+      // 加载过的 .dll/.node 常被映射住）。此时再把异常抛出去，等于让一次
+      // "已经卸载成功"的操作报失败，还跳过了后面的泄漏断言。
+      // 正确做法是如实报告"目录残留"，下次启动扫描时它会被当成未启用插件。
+      fileError = String((err && err.message) || err);
+      console.warn(`[plugins] 删除 ${id} 的安装目录失败:`, fileError);
+    }
   }
 
   if (!options.keepData) {
@@ -270,8 +280,8 @@ function uninstall(id, options = {}) {
     store.writeGrants(grants);
   }
 
-  store.audit('uninstall', id, { removedDir, keepData: !!options.keepData });
-  return { ok: true, removedDir };
+  store.audit('uninstall', id, { removedDir, keepData: !!options.keepData, fileError: fileError || undefined });
+  return { ok: true, removedDir, fileError: fileError || undefined };
 }
 
 /** 插件自己的可写目录（不存在则创建）。 */

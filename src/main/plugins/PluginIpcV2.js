@@ -10,7 +10,7 @@
  * 动态通道在这里不需要：插件 runtime 与主进程走 utilityProcess 的 MessagePort，
  * 不占 ipcMain。这一点直接消掉了"每个插件注册一堆 IPC 通道、卸载时忘了删"的整类问题。
  */
-const { ipcMain, dialog, shell, BrowserWindow } = require('electron');
+const { app, ipcMain, dialog, shell, BrowserWindow } = require('electron');
 const path = require('node:path');
 
 const { IPC_CHANNELS } = require('../../shared/ipcChannels');
@@ -53,6 +53,32 @@ function registerPluginHostIpc(service, options = {}) {
   track(IPC_CHANNELS.PLUGINHOST_SET_ENABLED);
   safeHandle(IPC_CHANNELS.PLUGINHOST_GET_LOG, async (_event, limit) => service.getLog(limit));
   track(IPC_CHANNELS.PLUGINHOST_GET_LOG);
+
+  // ---- M2：界面贡献点 ----
+  safeHandle(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET, async (_event, pluginId) => (
+    service.getSettings(pluginId)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET, async (_event, pluginId, patch) => (
+    service.setSettings(pluginId, patch)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS, async (_event, pluginId, enabled) => (
+    service.setKeybindingsEnabled(pluginId, !!enabled)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, async (_event, pluginId, overlayId) => (
+    service.overlayUrl(pluginId, overlayId)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST, async (_event, pluginId, panelId) => (
+    service.openPanel(pluginId, panelId)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST);
 
   safeHandle(IPC_CHANNELS.PLUGINHOST_INSTALL, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) || service.getMainWindow();
@@ -121,6 +147,33 @@ function broadcastSnapshot(service) {
   }
 }
 
+/**
+ * 每个窗口"加载完成"时补发一次投影。
+ *
+ * 冷启动的竞态：插件在窗口还空着的时候就加载完了，那次 broadcastSnapshot 没有
+ * 任何监听者；渲染层随后自己 invoke 一次 list()，但那时主进程可能还在加载
+ * （拿到的是一份空投影），而加载结束不会再广播 —— 结果就是"插件明明在跑，
+ * 工具栏却空着，直到手动重载窗口"。
+ *
+ * 这里把"窗口就绪"当成一次明确的订阅握手：此时 registry 一定已经有最终结果，
+ * 推一次即可，比渲染层定时轮询干净。
+ */
+function pushSnapshotOnWindowLoad(service) {
+  // 单测里 electron 是桩（没有 app.on），退化成空实现即可
+  if (!app || typeof app.on !== 'function') return () => {};
+  const onCreated = (_event, win) => {
+    if (!win.webContents || typeof win.webContents.on !== 'function') return;
+    if (!win || !win.webContents) return;
+    win.webContents.on('did-finish-load', () => {
+      let snapshot;
+      try { snapshot = service.snapshot(); } catch (_) { return; }
+      try { win.webContents.send(IPC_CHANNELS.PLUGINHOST_SYNC, snapshot); } catch (_) { /* 窗口正在销毁 */ }
+    });
+  };
+  app.on('browser-window-created', onCreated);
+  return () => { try { app.removeListener('browser-window-created', onCreated); } catch (_) { /* ignore */ } };
+}
+
 /** 插件事件（日志 / 进度 / 通知）转发给所有窗口，由渲染层决定要不要显示。 */
 function broadcastEvent(pluginId, event, payload) {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -155,6 +208,19 @@ function requestProjectApply(mainWindow, id, operations, timeoutMs = 30000) {
   });
 }
 requestProjectApply._pending = new Map();
+
+/**
+ * 生成一次工程往返的请求 id。
+ *
+ * 不能只用 Date.now()：同一个插件在同一毫秒内发两次 apply（面板连点、批量脚本）
+ * 会得到相同 id，后者覆盖前者在 _pending 里的条目，先发的那个 Promise 永远等不到
+ * 响应，只能挂到 60s 超时。加一个进程内自增序号即可保证唯一。
+ */
+let _applySeq = 0;
+function nextProjectApplyId(pluginId, kind) {
+  _applySeq += 1;
+  return `plugin:${pluginId}:${kind}:${Date.now().toString(36)}:${_applySeq}`;
+}
 
 function settleProjectApply(payload) {
   const entry = payload && payload.id ? requestProjectApply._pending.get(payload.id) : null;
@@ -192,10 +258,12 @@ function requestOpenPanel(mainWindow, payload) {
 module.exports = {
   registerPluginHostIpc,
   broadcastSnapshot,
+  pushSnapshotOnWindowLoad,
   broadcastEvent,
   requestProjectApply,
   settleProjectApply,
   pendingProjectApplyCount,
+  nextProjectApplyId,
   requestOpenPanel,
   _paths: { path, TIMEOUTS },
 };

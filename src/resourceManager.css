@@ -157,6 +157,30 @@ body {
     padding: var(--space-4) 0;
 }
 
+/* 加载失败态：一句原因 + 一个重试。超时（10s）与真失败走同一个出口。 */
+.rm-load-failed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.rm-retry-btn {
+    appearance: none;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-1) var(--space-5);
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.rm-retry-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 /* ===== Model Groups ===== */
 
 .model-groups-content {
@@ -479,6 +503,33 @@ body {
 }
 
 /* ===== Responsive ===== */
+
+/* 宽窗下不再把内容硬塞进一列：1400 宽窗口里正文只有 624 px，
+   两侧各空近 400 px，而 GPU 信息和汇总本来就是两块短内容。
+   ≥1000 px 时这两块并排，模型列表独占整行。 */
+@media (min-width: 1000px) {
+    .rm-container {
+        max-width: 1040px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas:
+            "head    head"
+            "gpu     summary"
+            "models  models"
+            "actions actions";
+        gap: var(--space-5);
+        align-content: start;
+    }
+
+    .rm-container > h2 { grid-area: head; }
+    .rm-container .gpu-section { grid-area: gpu; }
+    .rm-container .summary-section { grid-area: summary; }
+    .rm-container .models-section { grid-area: models; }
+    .rm-container .rm-actions { grid-area: actions; }
+
+    /* 间距交给容器的 gap，卡片不再各自留底边距，否则行距会变成两倍 */
+    .rm-container .rm-section { margin-bottom: 0; }
+}
 
 @media (max-width: 640px) {
     .rm-container {

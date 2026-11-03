@@ -154,6 +154,8 @@ function updateMissingFiles(newMissingFiles) {
   }
   document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: newMissingFiles.length });
   renderFileList(true);
+  // 总览卡片的"缺 N 个文件"读的就是 missingFiles，列表变了就要同步刷新
+  updateOverviewStatus();
 }
 
 // ===== Version management =====
@@ -655,6 +657,7 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
 
 const jpState = {
   status: 'checking', // 'installed' | 'not_downloaded' | 'checking' | 'downloading'
+  missingCount: 0,
   isDownloading: false,
   versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
 };
@@ -755,6 +758,7 @@ async function refreshJpCard() {
   renderJpCard();
   try {
     const result = await window.electronAPI.modelDownloadCheckJp(currentPrecision);
+    jpState.missingCount = result && result.missing ? result.missing.length : 0;
     if (result && result.missing && result.missing.length === 0) {
       jpState.status = 'installed';
       try {
@@ -873,7 +877,11 @@ function updateOverviewStatus() {
         : t('modelDownload.overviewReady');
     } else {
       mainState = 'missing';
-      mainText = t('modelDownload.overviewMissing');
+      // "Missing" 只说缺，不说缺多少：把主模型当前精度下的缺失文件数带上，
+      // 用户才知道是差 1 个还是差 18 个（首次安装与"缺一个 data 文件"是两种情境）
+      mainText = missingFiles.length > 0
+        ? t('modelDownload.overviewMissingCount', { count: missingFiles.length })
+        : t('modelDownload.overviewMissing');
     }
   }
   // When main model is downloading, override to 'checking' (animated)
@@ -893,7 +901,9 @@ function updateOverviewStatus() {
       : t('modelDownload.overviewReady');
   } else if (jpState.status === 'not_downloaded') {
     jpDotState = 'missing';
-    jpText = t('modelDownload.overviewMissing');
+    jpText = jpState.missingCount > 0
+      ? t('modelDownload.overviewMissingCount', { count: jpState.missingCount })
+      : t('modelDownload.overviewMissing');
   } else if (jpState.status === 'downloading') {
     jpDotState = 'checking';
     jpText = t('modelDownload.overviewDownloading');
@@ -910,7 +920,9 @@ function updateOverviewStatus() {
       : t('modelDownload.overviewReady');
   } else if (sifiganState.status === 'not_downloaded' || sifiganState.status === 'download_url_not_configured') {
     sifiganDotState = 'missing';
-    sifiganText = t('modelDownload.overviewMissing');
+    sifiganText = sifiganState.missingCount > 0
+      ? t('modelDownload.overviewMissingCount', { count: sifiganState.missingCount })
+      : t('modelDownload.overviewMissing');
   } else if (sifiganState.status === 'downloading') {
     sifiganDotState = 'checking';
     sifiganText = t('modelDownload.overviewDownloading');
@@ -925,7 +937,9 @@ function updateOverviewStatus() {
     fcpeText = t('modelDownload.overviewReady');
   } else if (fcpeState.status === 'not_downloaded' || fcpeState.status === 'download_url_not_configured') {
     fcpeDotState = 'missing';
-    fcpeText = t('modelDownload.overviewMissing');
+    fcpeText = fcpeState.missingCount > 0
+      ? t('modelDownload.overviewMissingCount', { count: fcpeState.missingCount })
+      : t('modelDownload.overviewMissing');
   } else if (fcpeState.status === 'downloading') {
     fcpeDotState = 'checking';
     fcpeText = t('modelDownload.overviewDownloading');
@@ -944,6 +958,7 @@ function updateOverviewStatus() {
 const sifiganState = {
   status: 'checking', // 'installed' | 'not_downloaded' | 'download_url_not_configured' | 'checking' | 'downloading'
   files: null,
+  missingCount: 0,
   isDownloading: false,
   versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
 };
@@ -1056,6 +1071,8 @@ async function refreshSifiganCard() {
     const result = await window.electronAPI.modelDownloadCheckSifigan();
     sifiganState.status = result.status;
     sifiganState.files = result.files;
+    // files 是以文件名为键的映射，缺几个要自己数（allExist 只给布尔值）
+    sifiganState.missingCount = Object.values(result.files || {}).filter(f => !f.exists).length;
     // 检查 SiFiGAN 版本
     if (result.allExist) {
       try {
@@ -1176,6 +1193,7 @@ document.getElementById('sifiganUpdateBtn').addEventListener('click', async () =
 const fcpeState = {
   status: 'checking', // 'installed' | 'not_downloaded' | 'download_url_not_configured' | 'checking' | 'downloading'
   files: null,
+  missingCount: 0,
   isDownloading: false,
   versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
 };
@@ -1283,6 +1301,7 @@ async function refreshFcpeCard() {
     const result = await window.electronAPI.modelDownloadCheckFcpe();
     fcpeState.status = result.status;
     fcpeState.files = result.files;
+    fcpeState.missingCount = Object.values(result.files || {}).filter(f => !f.exists).length;
     if (result.allExist) {
       try {
         fcpeState.versionInfo = await window.electronAPI.modelDownloadCheckFcpeVersion();

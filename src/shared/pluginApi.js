@@ -17,6 +17,29 @@ const CONTRIBUTION_KEYS = Object.freeze([
   'commands', 'menus', 'panels', 'fileTypes', 'settings', 'keybindings',
   'toolbar', 'statusBar', 'contextMenus', 'timelineOverlays',
   'pipeline', 'synthesis', 'services', 'automation', 'llm', 'intents',
+  // 宿主渲染的文案（工具栏 tooltip、状态栏、右键菜单）由插件自带字典，
+  // 统一挂在 `plugin.<id>.` 前缀下；manifest 里只放扁平键值，不接受嵌套对象。
+  'i18n',
+]);
+
+/** 右键菜单可插入的区域。区域由宿主定义，插件只能声明"插到哪个区域"。 */
+const CONTEXT_AREAS = Object.freeze(['fragment', 'singer', 'canvas']);
+
+/** 状态栏两个槽位。 */
+const STATUS_ALIGNMENTS = Object.freeze(['left', 'right']);
+
+/** 时间轴浮层的锚点。当前只支持时间轴画布：位置、裁剪都由宿主决定。 */
+const OVERLAY_ANCHORS = Object.freeze(['canvas']);
+
+/**
+ * 贡献项的显示条件。
+ *
+ * 故意只做一个**封闭集合**而不是通用表达式：`when` 一旦可编程，插件就能把自己的
+ * 求值逻辑塞进宿主每一帧的渲染路径，既难测也难保证不抛异常。这里宿主认识的条件
+ * 都是布尔值，`!` 前缀取反，多个条件用 `&&` 连接。
+ */
+const WHEN_CLAUSES = Object.freeze([
+  'projectOpen', 'hasFragments', 'hasSelection', 'playing', 'idle',
 ]);
 
 /** 贡献点上限：防止一个坏 manifest 把界面撑爆。 */
@@ -58,7 +81,7 @@ const PANEL_SCOPES = Object.freeze([
   'project.read', 'project.apply', 'project.document',
   'files.pick', 'files.readPicked',
   'command.run', 'command.list',
-  'ui.notify', 'ui.progress', 'ui.setTitle', 'ui.resize',
+  'ui.notify', 'ui.progress', 'ui.setTitle', 'ui.resize', 'ui.status',
   'state.get', 'state.set', 'state.delete',
   'ort.run', 'ort.manifest',
   'llm.chat',
@@ -117,7 +140,13 @@ const RUNTIME_LIMITS = Object.freeze({
   maxLiveRuntimes: 8,
   /** 连续崩溃多少次后隔离。 */
   maxCrashes: 3,
-  /** 连续泄漏多少次后隔离。 */
+  /**
+   * 连续泄漏多少次后隔离。
+   *
+   * 注意：M1 只在卸载时采样一次泄漏，而此时插件记录已删除，没有可累计的对象，
+   * 所以这个阈值目前**没有消费方**（泄漏只写审计）。等 M2 把泄漏检测接到
+   * "停用 / 重载" 路径上再生效。留在这里是为了让契约先固定下来。
+   */
   maxLeaks: 2,
 });
 
@@ -147,6 +176,10 @@ module.exports = {
   API_VERSION,
   SUPPORTED_API_VERSIONS,
   CONTRIBUTION_KEYS,
+  CONTEXT_AREAS,
+  STATUS_ALIGNMENTS,
+  OVERLAY_ANCHORS,
+  WHEN_CLAUSES,
   LIMITS,
   PERMISSION_GROUPS,
   PANEL_SCOPES,
