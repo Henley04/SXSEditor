@@ -2,8 +2,8 @@
 
 > **状态**：M1（纵向切片）已实现并提交（`a7109d8`、`36be137`），并通过真实 Electron
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
-> （§9.2，2026-11-03）**；**M3（模型调用面）第 1–3 段已落地并通过实机走查（§12，
-> 2026-11-04），第 4 段（作者文档 + 示例插件）待做**；M4–M6 未开始。
+> （§9.2，2026-11-03）**；**M3（模型调用面）四段全部落地，并通过实机走查（§12，
+> 2026-11-04）**；M4–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -761,6 +761,28 @@ src/settings.html|js|css             模型端点、访问控制两块 + .model-
 （`PERMISSION_DENIED`、`BACKPRESSURE_OVERFLOW` 全看不出区别）。现按语义映射到
 `FORBIDDEN` / `RATE_LIMITED` / `PRECONDITION_FAILED` 等，原始码保留在
 `details.modelCode`。动态文案一并接入 i18n（`models.*` 95 条，中英对齐）。
+
+**第 4 段已落地（2026-11-04）**：
+
+```
+docs/dev/plugins-models.md            作者文档：task 契约 / ctx.models / 声明 / 错误码 / 禁自建 HTTP
+plugins/example-models/               示例插件：ask（流式）+ probeNet（故意违规看封锁）
+src/main/plugins/runtime/netGuard.js  插件进程出站封锁
+```
+
+- `contributes.models` 从"接受但不生效"变成真校验：`consumes`（≤8，必须是已知 task）、
+  `preferred`（≤16，`endpoint` 与 `provider` 至少给一个）。声明了却漏
+  `permissions.models: ['consume']` 直接拒绝 —— 权限清单是给用户看的，不能与实际行为脱节。
+- `preferredBy` 此前是个空功能（`setPreferences` 全仓没人调用，★ 永远不出现）。
+  改为 `setPreferenceSource` 惰性供数：插件随时可能被停用/卸载，缓存一份必然过期。
+- 出站封锁是**防误用**：`Module._load` 拦 `http/https/http2/net/tls/dgram/dns/undici`，
+  全局 `fetch` / `WebSocket` / `EventSource` 单独覆盖（Node 18+ 的 fetch 走内置 undici，
+  只拦 require 拦不住）。错误码 `PLUGIN_NET_BLOCKED`，消息里直接给出改法。
+  真正的边界仍是架构：插件拿不到 `baseUrl` 与密钥。
+
+实机验证：插件安装后 `pendingContributions` 为空、`contributes.models` 齐全；
+`ask` 返回结果并写进状态栏；`probeNet` 的 `require('node:https')` 与 `fetch` 都被拦；
+把端点 `provider` 改成 `openai` 后，Chat 绑定行出现 ★ 且 tooltip 写明推荐原因。
 
 ## 13. 参考
 
