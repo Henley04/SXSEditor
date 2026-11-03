@@ -44,6 +44,13 @@ const tokens = new Map();
 let modelService = null;
 let modelStreamSeq = 0;
 
+/** 供设置页展示：只给 id/名称/范围，永远不回传 token 本身。 */
+function listTokens() {
+  return [...tokens.values()].map((info) => ({
+    id: info.id, name: info.name, models: Array.isArray(info.models) ? [...info.models] : [],
+  }));
+}
+
 /** 注入模型服务（main.js 装配后调用）。 */
 function setModelService(svc) {
   modelService = svc || null;
@@ -73,6 +80,41 @@ function modelScopeAllows(tokenInfo, endpoint) {
   if (endpoint.owner !== 'plugin' && scopes.includes(`provider:${endpoint.provider}`)) return true;
   return false;
 }
+
+/**
+ * 模型域错误码 → MCP 错误码。
+ *
+ * 两套词表是分开演进的：`PERMISSION_DENIED` / `BACKPRESSURE_OVERFLOW` 这些在
+ * 模型契约里各有精确含义，但 McpError 只认自己那张表，不认识的一律塌成
+ * INTERNAL/500 —— 客户端就没法区分"被拒了"和"上游炸了"，重试策略全错。
+ * 原始码保留在 details.modelCode 里，需要细粒度判断的调用方仍然拿得到。
+ */
+const MODEL_ERROR_TO_MCP = {
+  NEED_ENDPOINT: 'PRECONDITION_FAILED',
+  ENDPOINT_UNAVAILABLE: 'PRECONDITION_FAILED',
+  ADAPTER_UNSUPPORTED: 'PRECONDITION_FAILED',
+  INVALID_REQUEST: 'VALIDATION_ERROR',
+  INVALID_RESPONSE: 'INTERNAL',
+  PERMISSION_DENIED: 'FORBIDDEN',
+  CONSENT_REQUIRED: 'FORBIDDEN',
+  CONSENT_TIMEOUT: 'FORBIDDEN',
+  BACKPRESSURE_OVERFLOW: 'RATE_LIMITED',
+  TIMEOUT: 'TIMEOUT',
+  HANDLE_EXPIRED: 'NOT_FOUND',
+  PROTOCOL_VIOLATION: 'INTERNAL',
+  UPSTREAM_ERROR: 'INTERNAL',
+  CANCELLED: 'CANCELLED',
+};
+
+function modelErrorToMcp(info) {
+  const src = (info && info.code) || 'UPSTREAM_ERROR';
+  const code = MODEL_ERROR_TO_MCP[src] || 'INTERNAL';
+  return new McpError(code, (info && info.message) || 'Model call failed', {
+    hint: info && info.hint,
+    details: { modelCode: src, retryable: info ? info.retryable === true : false },
+  });
+}
+
 
 let server = null;
 let endpointFile = null;
@@ -353,11 +395,7 @@ function invokeModelAggregated(service, ctx, params) {
           return;
         }
         if (evt.type === 'error') {
-          const info = evt.error || {};
-          done(reject, new McpError(info.code || 'INTERNAL', info.message || 'Model call failed', {
-            hint: info.hint,
-            details: { retryable: info.retryable === true },
-          }));
+          done(reject, modelErrorToMcp(evt.error));
           return;
         }
         if (evt.type === 'cancelled') {
@@ -366,7 +404,7 @@ function invokeModelAggregated(service, ctx, params) {
       },
     });
     if (r && r.error) {
-      done(reject, new McpError(r.error.code || 'INTERNAL', r.error.message || 'Model call failed'));
+      done(reject, modelErrorToMcp(r.error));
     }
   });
 }
@@ -663,6 +701,7 @@ function stopMcpBridge() {
 
 module.exports = {
   setModelService,
+  listTokens,
   registerMcpReplyIpc,
   startMcpBridge,
   stopMcpBridge,

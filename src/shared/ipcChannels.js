@@ -191,6 +191,22 @@ const IPC_CHANNELS = {
   // 主进程 → 主窗口：请渲染层挂载某个插件的 iframe 面板（菜单项触发）
   PLUGINHOST_OPEN_PANEL: 'plugin-host:open-panel',
 
+  // 模型调用面（设计方案 §12）：设置页读写端点/绑定/授权/审计，以及首次调用的确认窗。
+  MODELS_SNAPSHOT: 'models:snapshot',
+  MODELS_ENDPOINT_UPSERT: 'models:endpoint-upsert',
+  MODELS_ENDPOINT_REMOVE: 'models:endpoint-remove',
+  MODELS_BIND: 'models:bind',
+  MODELS_UNBIND: 'models:unbind',
+  MODELS_SET_DEFAULT: 'models:set-default',
+  MODELS_GRANT: 'models:grant',
+  MODELS_REVOKE: 'models:revoke',
+  MODELS_SET_SETTINGS: 'models:set-settings',
+  MODELS_AUDIT: 'models:audit',
+  // 主进程 → 渲染层：请求用户确认（首次调用某端点）
+  MODELS_CONSENT_REQUEST: 'models:consent-request',
+  // 渲染层 → 主进程：确认结果
+  MODELS_CONSENT_REPLY: 'models:consent-reply',
+
   // ==================== Resource Manager ====================
   RESMGR_OPEN: 'resmgr:open',
   RESMGR_GET_GPU_INFO: 'resmgr:getGPUInfo',

@@ -48,6 +48,26 @@ function publicView(ep) {
   };
 }
 
+/**
+ * 设置页视图：在脱敏视图上补回"只有配置者才需要"的字段。
+ *
+ * baseUrl 不是秘密（它就写在用户的配置文件里），但对调用方没意义，所以
+ * publicView 不带它。设置页必须带 —— 否则编辑端点时表单里 Base URL 是空的，
+ * 用户只改个名字都会被校验打回"必须是 http(s) 地址"，或者在保存时把地址抹掉。
+ */
+function settingsView(ep) {
+  return {
+    ...publicView(ep),
+    baseUrl: ep.baseUrl || '',
+    localityOverride: ep.localityOverride || null,
+    idleTimeoutMs: ep.idleTimeoutMs || 0,
+    maxDurationMs: ep.maxDurationMs || 0,
+    authKind: ep.authKind || 'none',
+    authLabel: ep.authLabel || '',
+    helpUrl: ep.helpUrl || '',
+  };
+}
+
 class ModelEndpointStore {
   /**
    * @param {{
@@ -353,7 +373,9 @@ class ModelEndpointStore {
   snapshot() {
     return {
       encrypted: this.secrets.isEncrypted ? this.secrets.isEncrypted() : true,
-      endpoints: this.list().map((ep) => publicView(ep)),
+      // 设置页是唯一的写入口，它需要 baseUrl 才能编辑；plugins/MCP 走 list()，
+      // 拿到的仍是脱敏视图。
+      endpoints: this.list().map((ep) => settingsView(ep)),
       bindings: this.listBindings().map((b) => ({
         task: b.task, endpointId: b.endpointId, model: b.model, isDefault: b.isDefault,
       })),
@@ -361,4 +383,4 @@ class ModelEndpointStore {
   }
 }
 
-module.exports = { ModelEndpointStore, publicView };
+module.exports = { ModelEndpointStore, publicView, settingsView };

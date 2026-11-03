@@ -1001,3 +1001,73 @@ button.fragment-ctx-item {
   font-size: var(--font-sm);
   color: var(--fg-primary);
 }
+
+/* ==================== 模型调用确认窗 ==================== */
+/* 不用阴影/泛光分层：遮罩 + 边框 + 背景色，三种手段够了。 */
+.model-consent-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.model-consent-card {
+  width: min(540px, calc(100vw - 48px));
+  padding: 20px 22px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+}
+
+.model-consent-title {
+  font-size: var(--font-md);
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.model-consent-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0 0 12px;
+  font-size: var(--font-sm);
+}
+
+.model-consent-rows dt {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.model-consent-rows dd {
+  margin: 0;
+  color: var(--fg-primary);
+  word-break: break-all;
+}
+
+.model-consent-hint {
+  padding: 8px 10px;
+  margin-bottom: 16px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  line-height: 1.45;
+}
+
+.model-consent-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.model-consent-countdown {
+  margin-right: auto;
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}

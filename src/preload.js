@@ -663,6 +663,33 @@ const _fullElectronAPI = {
     },
   },
 
+  // ==================== 模型调用面（设计方案 §12） ====================
+  // 设置页读写端点/绑定/授权/审计；主窗口只参与首次调用的确认。
+  // 密钥永远不经过渲染层：这里没有任何"读密钥"的方法，写进去就不再回来。
+  models: {
+    snapshot: () => ipcRenderer.invoke(IPC_CHANNELS.MODELS_SNAPSHOT),
+    upsertEndpoint: (endpoint) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_ENDPOINT_UPSERT, { endpoint: endpoint || {} }),
+    removeEndpoint: (id) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_ENDPOINT_REMOVE, { id }),
+    bind: (payload) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_BIND, payload || {}),
+    unbind: (task, endpointId) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_UNBIND, { task, endpointId }),
+    setDefault: (task, endpointId) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_SET_DEFAULT, { task, endpointId }),
+    grant: (subject, endpointId, decision, scope) => ipcRenderer.invoke(
+      IPC_CHANNELS.MODELS_GRANT, { subject, endpointId, decision, scope },
+    ),
+    revoke: (subject, endpointId) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_REVOKE, { subject, endpointId }),
+    setSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_SET_SETTINGS, patch || {}),
+    audit: (query) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_AUDIT, query || {}),
+    // 主进程 → 渲染层：请求确认（渲染层画模态，30s 无响应由主进程判拒）
+    onConsentRequest: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.MODELS_CONSENT_REQUEST, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.MODELS_CONSENT_REQUEST, handler);
+    },
+    consentReply: (requestId, answer) => ipcRenderer.invoke(
+      IPC_CHANNELS.MODELS_CONSENT_REPLY, { requestId, answer },
+    ),
+  },
+
   // ==================== Crash Reporting API ====================
   // Used by settings/help UI to surface log/dump file locations so users can
   // attach them when filing issues. Log forwarding (window.onerror /

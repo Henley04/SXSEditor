@@ -719,6 +719,19 @@ app.whenReady().then(() => {
         });
         // MCP 的 model.* 工具要用它；bridge 可能已经启动，setter 随时可调。
         try { require('./main/mcpBridge').setModelService(modelService); } catch (_) { /* 可选依赖 */ }
+        // 设置页与确认窗的通道
+        try {
+          const { registerModelIpc } = require('./main/models/ModelIpc');
+          registerModelIpc(modelService, {
+            // 确认框固定投递主窗口：设置页/下载页都没有监听器，投过去等于没弹。
+            getWindow: () => mainWindow,
+            // "人在不在"另判：任一窗口可见且聚焦就算在，否则按拒绝处理。
+            isAttended: () => require('electron').BrowserWindow.getAllWindows()
+              .some((w) => !w.isDestroyed() && w.isVisible() && w.isFocused()),
+          });
+        } catch (err) {
+          console.error('[models] IPC 注册失败:', err && err.message);
+        }
       } catch (err) {
         console.error('[models] 初始化失败:', err && err.message);
       }

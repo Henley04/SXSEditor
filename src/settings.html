@@ -56,6 +56,12 @@
                 <div class="sidebar-item" data-target="section-model">
                     <span data-i18n="settings.modelManagement">模型管理</span>
                 </div>
+                <div class="sidebar-item" data-target="section-model-endpoints">
+                    <span data-i18n="models.navEndpoints">模型端点</span>
+                </div>
+                <div class="sidebar-item" data-target="section-model-access">
+                    <span data-i18n="models.navAccess">访问控制</span>
+                </div>
 
                 <div class="sidebar-category" data-i18n="update.section">更新</div>
                 <div class="sidebar-item" data-target="section-update">
@@ -74,6 +80,93 @@
 
         <!-- ==================== Content ==================== -->
         <main class="settings-content">
+            <!-- 模型端点：网络位置 + 任务绑定。密钥只写不读。 -->
+            <div class="settings-section hidden" id="section-model-endpoints">
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.endpointsTitle">模型端点</div>
+                    <p class="setting-hint" data-i18n="models.endpointsHint">端点是一个网络位置加一把钥匙。密钥只进不出，写入后不会回显。</p>
+                    <div id="modelEndpointList" class="model-list"></div>
+                    <div class="model-toolbar">
+                        <button type="button" id="modelEndpointAdd" class="btn-secondary" data-i18n="models.addEndpoint">添加端点</button>
+                        <span id="modelEndpointStatus" class="model-status" role="status"></span>
+                    </div>
+                </div>
+
+                <form id="modelEndpointForm" class="setting-group model-form hidden" autocomplete="off">
+                    <div class="setting-group-title" data-i18n="models.formTitle">端点详情</div>
+                    <div class="model-form-grid">
+                        <label class="model-field">
+                            <span data-i18n="models.fTitle">名称</span>
+                            <input id="mf-title" type="text" maxlength="64" required>
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fAdapter">协议</span>
+                            <select id="mf-adapter">
+                                <option value="openai-compatible">OpenAI 兼容</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="local-process">本地进程</option>
+                            </select>
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fProvider">服务商</span>
+                            <input id="mf-provider" type="text" maxlength="32" placeholder="openai / ollama / custom">
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fBaseUrl">Base URL</span>
+                            <input id="mf-baseurl" type="url" placeholder="https://api.example.com/v1">
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fSecret">密钥</span>
+                            <input id="mf-secret" type="password" autocomplete="new-password" data-i18n-placeholder="models.fSecretPlaceholder" placeholder="留空则保持不变">
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fLocality">网络位置</span>
+                            <select id="mf-locality">
+                                <option value="" data-i18n="models.localityAuto">自动判断</option>
+                                <option value="device" data-i18n="models.localityDevice">本机（免确认）</option>
+                                <option value="lan" data-i18n="models.localityLan">局域网（视为云端）</option>
+                                <option value="cloud" data-i18n="models.localityCloud">云端</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="model-form-actions">
+                        <button type="submit" class="btn-primary" data-i18n="models.save">保存</button>
+                        <button type="button" id="modelEndpointCancel" class="btn-secondary" data-i18n="models.cancel">取消</button>
+                    </div>
+                </form>
+
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.bindingsTitle">任务绑定</div>
+                    <p class="setting-hint" data-i18n="models.bindingsHint">每个任务选一个默认端点。调用方只说要什么，不指定用哪个。</p>
+                    <div id="modelBindingList" class="model-list"></div>
+                </div>
+            </div>
+
+            <!-- 访问控制：谁能用哪个端点 -->
+            <div class="settings-section hidden" id="section-model-access">
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.accessTitle">访问控制</div>
+                    <label class="model-check">
+                        <input type="checkbox" id="modelLocalFree">
+                        <span data-i18n="models.localFreeLabel">本地端点免确认</span>
+                    </label>
+                    <p class="setting-hint" data-i18n="models.localFreeHint">只对判定为「本机」的端点生效。局域网服务器默认仍要确认——那台机器可能计费。</p>
+                </div>
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.aclTitle">已授权的调用方</div>
+                    <div id="modelAclList" class="model-list"></div>
+                </div>
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.tokensTitle">MCP 客户端</div>
+                    <p class="setting-hint" data-i18n="models.tokensHint">「跳过所有确认」只对该 token 生效，不影响插件。打开后该 token 可调用任意端点，不再询问。</p>
+                    <div id="modelTokenList" class="model-list"></div>
+                </div>
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.auditTitle">最近调用</div>
+                    <div id="modelAuditList" class="model-list model-audit"></div>
+                </div>
+            </div>
+
 
             <!-- Language -->
             <div class="settings-section" id="section-language">

@@ -1818,3 +1818,233 @@ details > summary { cursor: pointer; color: var(--accent); font-size: var(--font
     margin-top: 0;
     line-height: 1.6;
 }
+
+/* ==================== 模型端点 / 访问控制 ==================== */
+/* 通用按钮：设置页此前只有零散的自定义按钮类，这里是第一处需要成组出现的按钮。 */
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.btn-primary {
+    background: var(--bg-button-primary);
+    border-color: var(--bg-button-primary);
+    color: var(--fg-on-accent);
+}
+
+.btn-danger {
+    background: var(--bg-button-danger);
+    border-color: var(--bg-button-danger);
+    color: var(--fg-on-accent);
+}
+
+.btn-secondary:hover { background: var(--bg-button-hover); }
+.btn-primary:hover { background: var(--bg-button-active); }
+.btn-danger:hover { background: var(--bg-button-danger-hover); }
+
+.btn-sm {
+    padding: 3px 10px;
+    font-size: var(--font-xs);
+}
+
+.model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+.model-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-input);
+}
+
+.model-row-main { min-width: 0; flex: 1; }
+
+.model-row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-sm);
+    color: var(--fg-primary);
+}
+
+.model-row-sub {
+    margin-top: 2px;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    word-break: break-all;
+}
+
+/* 地址比描述弱一档：它是核对用的，不是读的主线。 */
+.model-row-url {
+    margin-top: 1px;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    opacity: 0.75;
+    word-break: break-all;
+}
+
+.model-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.model-tag {
+    padding: 0 6px;
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    font-size: var(--font-xs);
+    color: var(--fg-secondary);
+    line-height: 18px;
+}
+
+.model-tag-warn {
+    border-color: var(--bg-button-danger);
+    color: var(--bg-button-danger);
+}
+
+.model-empty {
+    padding: 10px 2px;
+    font-size: var(--font-sm);
+    color: var(--fg-muted);
+}
+
+/* 警示与上面那行端点卡片拉开一点，否则读起来像这张卡片自己的错误。 */
+.model-warn-text {
+    color: var(--bg-button-danger);
+    margin-top: var(--space-3);
+}
+
+.model-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.model-status {
+    font-size: var(--font-xs);
+    color: var(--fg-secondary);
+}
+
+.model-form { margin-top: 14px; }
+
+.model-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+}
+
+.model-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: var(--font-sm);
+    color: var(--fg-secondary);
+}
+
+.model-field input,
+.model-field select {
+    padding: 5px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--bg-input);
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+}
+
+.model-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.model-bind-group {
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-input);
+}
+
+.model-bind-title {
+    font-size: var(--font-sm);
+    color: var(--fg-primary);
+    margin-bottom: 4px;
+}
+
+.model-bind-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: var(--font-sm);
+}
+
+.model-bind-name { flex: 1; min-width: 0; }
+
+.model-bind-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.model-bind-add select {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--bg-input);
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+}
+
+.model-star {
+    color: var(--fg-bpm);
+    font-size: var(--font-xs);
+    cursor: help;
+}
+
+.model-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--font-sm);
+    color: var(--fg-primary);
+}
+
+/* 勾选框和它自己的文字必须挨着。`.setting-group label` 是 space-between，
+   特异性 (0,1,1) 高过 `.model-check` (0,1,0)，只能把选择器写实。 */
+.setting-group label.model-check,
+label.model-check {
+    justify-content: flex-start;
+}
+
+.model-audit { gap: 2px; }
+
+.model-audit-row {
+    display: grid;
+    grid-template-columns: 84px 120px minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    padding: 4px 2px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--font-xs);
+    color: var(--fg-secondary);
+}
+
+.model-audit-time { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.model-audit-subject,
+.model-audit-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

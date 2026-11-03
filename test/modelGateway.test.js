@@ -129,6 +129,18 @@ describe('ModelEndpointStore', function () {
     expect(r.candidates).to.include('user:x.y');
   });
 
+  it('设置页快照带 baseUrl，调用方视图不带', function () {
+    const { store } = makeEnv();
+    // 设置页要拿它回填表单：不给的话编辑端点时地址是空的，保存要么被校验打回、
+    // 要么把地址抹掉。插件 / MCP 走 list()，那里不该出现网络地址。
+    const snap = store.snapshot().endpoints.find((e) => e.id === 'user:local.7f3a');
+    expect(snap.baseUrl).to.equal('https://api.example.com/v1');
+    const listed = store.listForCaller('plugin:x', null, { localFree: true })
+      .find((e) => e.id === 'user:local.7f3a');
+    expect(listed).to.be.an('object');
+    expect(listed).to.not.have.property('baseUrl');
+  });
+
   it('删除端点级联删绑定', function () {
     const { store } = makeEnv();
     const r = store.remove('user:local.7f3a');

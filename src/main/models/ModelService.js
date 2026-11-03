@@ -101,6 +101,9 @@ class ModelService {
 
     /** @type {Map<string, {handle:object, subject:string}>} */
     this._handles = new Map();
+    this._settingsFile = path.join(this.dir, 'model-settings.json');
+    // 必须在 gateway 建好之后：这里读的是 gateway.settings
+    this._loadSettings();
   }
 
   _aclStore() {
@@ -127,6 +130,32 @@ class ModelService {
     };
   }
 
+  _loadSettings() {
+    try {
+      const raw = fs.readFileSync(this._settingsFile, 'utf8');
+      const data = JSON.parse(raw);
+      if (data && typeof data.localFree === 'boolean') this.gateway.settings.localFree = data.localFree;
+      if (data && Array.isArray(data.tokenBypass)) {
+        this.gateway.settings.tokenBypass = new Map(data.tokenBypass.map((id) => [String(id), true]));
+      }
+    } catch (_) {
+      // 没有配置文件就是默认值：本地免确认开、无 bypass
+    }
+  }
+
+  _saveSettings() {
+    try {
+      const tmp = `${this._settingsFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({
+        localFree: this.gateway.settings.localFree,
+        tokenBypass: [...this.gateway.settings.tokenBypass.keys()],
+      }), 'utf8');
+      fs.renameSync(tmp, this._settingsFile);
+    } catch (err) {
+      this.log.warn('[models] 设置落盘失败：', err && err.message);
+    }
+  }
+
   /** 换掉确认回调（主进程在窗口就绪后接上真正的弹窗）。 */
   setConsentHandler(fn) {
     this.gateway.consent = fn;
@@ -139,10 +168,11 @@ class ModelService {
   /** 设置页的两个全局开关。 */
   setSettings({ localFree, tokenBypass }) {
     if (typeof localFree === 'boolean') this.gateway.settings.localFree = localFree;
-    if (tokenBypass instanceof Map) this.gateway.settings.tokenBypass = tokenBypass;
+    if (tokenBypass instanceof Map) this.gateway.settings.tokenBypass = new Map(tokenBypass);
     else if (Array.isArray(tokenBypass)) {
       this.gateway.settings.tokenBypass = new Map(tokenBypass.map((id) => [id, true]));
     }
+    this._saveSettings();
   }
 
   // ------------------------------------------------------------ 调用

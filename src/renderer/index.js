@@ -26,6 +26,7 @@ import { installOpenFromOs, consumePendingOpenFile } from './openFromOs.js';
 import { installPluginPanelHost } from './plugins/pluginPanelHost.js';
 import { installPluginHost } from './plugins/pluginHost.js';
 import { installProjectApplyBridge } from './plugins/projectApplyBridge.js';
+import { installModelConsent } from './plugins/modelConsent.js';
 import { installToolbarPopovers } from './toolbarPopovers.js';
 
 // 首屏关键路径之外的工作（图标水合）延后到空闲帧执行，让主窗口更早呈现。
@@ -98,6 +99,11 @@ if (state._ipcCleanups) {
   state._ipcCleanups.push(installPluginPanelHost());
   // M2 界面贡献点（工具栏 / 状态栏 / 浮层 / 右键菜单 / 快捷键）。
   // 上下文按需计算：只有当某条贡献声明了 when 时才会被读到，没插件时零成本。
+  // 首次调用某模型端点时的确认窗。装在主窗口，因为插件与 MCP 的调用都发生在
+  // 这个窗口有焦点的时候；没有焦点时主进程直接按拒绝处理，不抢焦点弹框。
+  if (window.electronAPI?.models) {
+    state._ipcCleanups.push(installModelConsent(window.electronAPI.models));
+  }
   state._ipcCleanups.push(installPluginHost({
     getContext: () => ({
       projectOpen: !!state.currentProjectFilePath,

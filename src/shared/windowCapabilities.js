@@ -101,6 +101,19 @@ const HIGH_RISK_METHOD_WINDOWS = Object.freeze([
   { path: ['pluginHost', 'openPanel'], windows: ['index', 'settings', 'pluginmanager'] },
   // 工程写入的应答只属于真正持有工程文档的两个窗口
   { path: ['pluginHost', 'sendProjectApplyResult'], windows: ['index', 'fragmenteditor'] },
+  // 模型端点/绑定/授权只在设置页改：插件与面板没有理由写这张表
+  { path: ['models', 'snapshot'], windows: ['settings'] },
+  { path: ['models', 'upsertEndpoint'], windows: ['settings'] },
+  { path: ['models', 'removeEndpoint'], windows: ['settings'] },
+  { path: ['models', 'bind'], windows: ['settings'] },
+  { path: ['models', 'unbind'], windows: ['settings'] },
+  { path: ['models', 'setDefault'], windows: ['settings'] },
+  { path: ['models', 'grant'], windows: ['settings'] },
+  { path: ['models', 'revoke'], windows: ['settings'] },
+  { path: ['models', 'setSettings'], windows: ['settings'] },
+  { path: ['models', 'audit'], windows: ['settings'] },
+  // 确认窗在主窗口：它才是插件调用真正发生的地方
+  { path: ['models', 'consentReply'], windows: ['index'] },
   // 系统投递的文件只属于主窗口：它会读盘、还会新建预处理窗口
   { path: ['takePendingOpenFile'], windows: ['index'] },
   { path: ['openSingerFileAt'], windows: ['index'] },

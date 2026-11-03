@@ -198,6 +198,13 @@ class ModelGateway {
       if (answer === 'deny') {
         throw new ModelError(ERR.PERMISSION_DENIED, '用户拒绝了本次调用', { details: { reason: 'consent-denied' } });
       }
+      if (answer === 'unattended') {
+        // 没有可应答的窗口：不抢焦点弹框，直接按拒绝处理。消息要与"用户按了拒绝"
+        // 区分开，否则日志里两种完全不同的情况长得一模一样。
+        throw new ModelError(ERR.PERMISSION_DENIED, '没有可应答的窗口，已按拒绝处理', {
+          details: { reason: 'unattended' },
+        });
+      }
       effective = { decision: 'allow', scope: 'consent', reason: 'consent' };
     }
 
@@ -386,9 +393,15 @@ class ModelGateway {
         Promise.resolve(this.consent(info)),
         timeout,
       ]);
-      if (answer === 'deny') {
-        this.audit.record({ kind: 'consent', subject: info.subject, endpointId: info.endpoint.id, outcome: 'denied' });
-        return 'deny';
+      if (answer === 'deny' || answer === 'unattended') {
+        // 两种都不是"允许"，但原因不同：一种是用户按了拒绝，一种是压根没人
+        // 在电脑前（窗口没有焦点）。分开记，否则事后无法解释这次失败。
+        this.audit.record({
+          kind: 'consent', subject: info.subject, endpointId: info.endpoint.id,
+          outcome: answer === 'unattended' ? 'unattended' : 'denied',
+          ...(answer === 'unattended' ? { code: 'CONSENT_UNATTENDED' } : {}),
+        });
+        return answer;
       }
       if (answer === 'timeout') {
         this.audit.record({

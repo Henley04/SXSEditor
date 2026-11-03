@@ -3293,3 +3293,339 @@ async function installPluginSettings() {
 installPluginSettings().catch((err) => {
     console.warn('[settings] 插件设置分区初始化失败:', err && err.message);
 });
+
+// ==================== 模型端点 / 任务绑定 / 访问控制 ====================
+/**
+ * 模型调用面的设置界面（设计方案 §12.4–§12.5）。
+ *
+ * 三条界面原则：
+ *   · 密钥只写不读：表单里永远是空密码框，保存后主进程只回 hasSecret
+ *   · 任务绑定按「任务」组织，不按「端点勾任务」——后者会出现"勾了却绑不上"的两套真相
+ *   · 授权是按端点逐条列的，撤销就是删一条；没有"全部允许"这种按钮
+ */
+async function installModelSettings() {
+    const api = window.electronAPI?.models;
+    if (!api || typeof api.snapshot !== 'function') return;
+
+    // 任务名与位置名走 i18n：这里是动态生成的节点，靠不上 data-i18n。
+    let snapshot = null;
+    let editingId = null;
+
+    const el = (tag, cls, text) => {
+        const node = document.createElement(tag);
+        if (cls) node.className = cls;
+        if (text != null) node.textContent = text;
+        return node;
+    };
+
+    const status = (msg) => {
+        const node = document.getElementById('modelEndpointStatus');
+        if (!node) return;
+        node.textContent = msg || '';
+        if (msg) setTimeout(() => { if (node.textContent === msg) node.textContent = ''; }, 2600);
+    };
+
+    async function reload() {
+        try {
+            snapshot = await api.snapshot();
+        } catch (err) {
+            console.warn('[settings] 读取模型配置失败:', err && err.message);
+            return;
+        }
+        renderEndpoints();
+        renderBindings();
+        renderAccess();
+        renderTokens();
+        renderAudit();
+    }
+
+    const endpointName = (id) => {
+        const ep = (snapshot?.endpoints || []).find((e) => e.id === id);
+        return ep ? ep.title : id;
+    };
+
+    // ---------------------------------------------------------------- 端点
+    function renderEndpoints() {
+        const host = document.getElementById('modelEndpointList');
+        if (!host) return;
+        host.replaceChildren();
+        const rows = snapshot?.endpoints || [];
+        if (!rows.length) {
+            host.appendChild(el('div', 'model-empty', t('models.noEndpoints')));
+            return;
+        }
+        const encrypted = snapshot?.encrypted !== false;
+        for (const ep of rows) {
+            const row = el('div', 'model-row');
+
+            const main = el('div', 'model-row-main');
+            const title = el('div', 'model-row-title', ep.title);
+            if (!ep.hasSecret && ep.adapter !== 'local-process') {
+                title.appendChild(el('span', 'model-tag model-tag-warn', t('models.missingSecret')));
+            }
+            if (ep.locality === 'device') title.appendChild(el('span', 'model-tag', t('models.localityTag.device')));
+            main.appendChild(title);
+            main.appendChild(el('div', 'model-row-sub',
+                `${ep.adapter} · ${ep.provider} · ${t(`models.localityTag.${ep.locality}`)}`));
+            // 没有地址就分不清两个同名端点。设置页是唯一能看到它的地方。
+            if (ep.baseUrl) main.appendChild(el('div', 'model-row-url', ep.baseUrl));
+            row.appendChild(main);
+
+            const actions = el('div', 'model-row-actions');
+            const edit = el('button', 'btn-secondary btn-sm', t('models.edit'));
+            edit.type = 'button';
+            edit.addEventListener('click', () => openForm(ep));
+            const del = el('button', 'btn-danger btn-sm', t('models.remove'));
+            del.type = 'button';
+            del.addEventListener('click', async () => {
+                if (!window.confirm(t('models.removeConfirm', { title: ep.title }))) return;
+                const r = await api.removeEndpoint(ep.id);
+                if (!r || r.ok === false) status(r?.error || t('models.removeFailed'));
+                await reload();
+            });
+            actions.append(edit, del);
+            row.appendChild(actions);
+
+            host.appendChild(row);
+        }
+        if (!encrypted) {
+            host.appendChild(el('div', 'model-empty model-warn-text', t('models.plaintextWarn')));
+        }
+    }
+
+    function openForm(ep) {
+        const form = document.getElementById('modelEndpointForm');
+        if (!form) return;
+        editingId = ep ? ep.id : null;
+        form.classList.remove('hidden');
+        document.getElementById('mf-title').value = ep ? ep.title : '';
+        document.getElementById('mf-adapter').value = ep ? ep.adapter : 'openai-compatible';
+        document.getElementById('mf-provider').value = ep ? ep.provider : 'custom';
+        document.getElementById('mf-baseurl').value = ep ? (ep.baseUrl || '') : '';
+        document.getElementById('mf-secret').value = '';
+        document.getElementById('mf-locality').value = ep && ep.localityOverride ? ep.localityOverride : '';
+        document.getElementById('mf-title').focus();
+    }
+
+    function closeForm() {
+        const form = document.getElementById('modelEndpointForm');
+        if (form) form.classList.add('hidden');
+        editingId = null;
+    }
+
+    document.getElementById('modelEndpointAdd')?.addEventListener('click', () => openForm(null));
+    document.getElementById('modelEndpointCancel')?.addEventListener('click', closeForm);
+
+    document.getElementById('modelEndpointForm')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const title = document.getElementById('mf-title').value.trim();
+        const adapter = document.getElementById('mf-adapter').value;
+        const provider = document.getElementById('mf-provider').value.trim() || 'custom';
+        const baseUrl = document.getElementById('mf-baseurl').value.trim();
+        const secret = document.getElementById('mf-secret').value;
+        const localityOverride = document.getElementById('mf-locality').value || null;
+
+        // id 一旦定下就不再变：ACL 与绑定都按它索引。新建时用随机段，改名不影响授权。
+        const id = editingId || `user:local.${Math.random().toString(16).slice(2, 10)}`;
+        const payload = { id, title, adapter, provider, baseUrl, localityOverride };
+        if (secret) payload.secret = secret;
+
+        const r = await api.upsertEndpoint(payload);
+        if (!r || r.ok === false) {
+            status(r?.error || t('models.saveFailed'));
+            return;
+        }
+        status(t('models.saved'));
+        closeForm();
+        await reload();
+    });
+
+    // ---------------------------------------------------------------- 绑定
+    function renderBindings() {
+        const host = document.getElementById('modelBindingList');
+        if (!host) return;
+        host.replaceChildren();
+        const endpoints = snapshot?.endpoints || [];
+        const bindings = snapshot?.bindings || [];
+        const tasks = snapshot?.tasks || [];
+
+        if (!endpoints.length) {
+            host.appendChild(el('div', 'model-empty', t('models.needEndpointFirst')));
+            return;
+        }
+
+        for (const task of tasks) {
+            const group = el('div', 'model-bind-group');
+            group.appendChild(el('div', 'model-bind-title', t(`models.taskName.${task}`)));
+
+            const rows = bindings.filter((b) => b.task === task);
+            if (!rows.length) {
+                group.appendChild(el('div', 'model-empty', t('models.unbound')));
+            }
+            for (const b of rows) {
+                const line = el('div', 'model-bind-row');
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = `model-default-${task}`;
+                radio.checked = !!b.isDefault;
+                radio.addEventListener('change', async () => {
+                    await api.setDefault(task, b.endpointId);
+                    await reload();
+                });
+                line.appendChild(radio);
+                line.appendChild(el('span', 'model-bind-name', endpointName(b.endpointId)));
+
+                // 插件推荐（preferredBy）只做标注，不影响路由、不排序
+                const prefs = (b.endpoint && b.endpoint.preferredBy) || [];
+                for (const p of prefs) {
+                    const star = el('span', 'model-star', '★');
+                    star.title = t('models.preferredBy', { plugin: p.pluginId }) + (p.note ? `: ${p.note}` : '');
+                    line.appendChild(star);
+                }
+
+                const un = el('button', 'btn-secondary btn-sm', t('models.unbind'));
+                un.type = 'button';
+                un.addEventListener('click', async () => {
+                    await api.unbind(task, b.endpointId);
+                    await reload();
+                });
+                line.appendChild(un);
+                group.appendChild(line);
+            }
+
+            const addRow = el('div', 'model-bind-add');
+            const select = document.createElement('select');
+            select.appendChild(new Option(t('models.chooseEndpoint'), ''));
+            for (const ep of endpoints) select.appendChild(new Option(ep.title, ep.id));
+            const add = el('button', 'btn-secondary btn-sm', t('models.addBinding'));
+            add.type = 'button';
+            add.addEventListener('click', async () => {
+                if (!select.value) return;
+                const r = await api.bind({ task, endpointId: select.value, isDefault: rows.length === 0 });
+                if (!r || r.ok === false) status(r?.error || t('models.bindFailed'));
+                await reload();
+            });
+            addRow.append(select, add);
+            group.appendChild(addRow);
+            host.appendChild(group);
+        }
+    }
+
+    // ---------------------------------------------------------------- 访问控制
+    function renderAccess() {
+        const box = document.getElementById('modelLocalFree');
+        if (box && snapshot) {
+            box.checked = snapshot.settings?.localFree !== false;
+            if (!box.dataset.bound) {
+                box.dataset.bound = '1';
+                box.addEventListener('change', async () => {
+                    await api.setSettings({ localFree: box.checked });
+                });
+            }
+        }
+
+        const host = document.getElementById('modelAclList');
+        if (!host) return;
+        host.replaceChildren();
+        const subjects = snapshot?.acl?.subjects || [];
+        if (!subjects.length) {
+            host.appendChild(el('div', 'model-empty', t('models.noGrants')));
+            return;
+        }
+        for (const s of subjects) {
+            const group = el('div', 'model-bind-group');
+            group.appendChild(el('div', 'model-bind-title', s.subject));
+            if (s.policy === 'deny') {
+                group.appendChild(el('div', 'model-empty', t('models.subjectDenied')));
+            }
+            for (const g of s.grants) {
+                const line = el('div', 'model-bind-row');
+                line.appendChild(el('span', 'model-bind-name', endpointName(g.endpointId)));
+                const scopeKey = g.scope === 'always' ? 'always' : g.scope === 'session' ? 'session' : 'once';
+                line.appendChild(el('span', 'model-tag', t(`models.scope${scopeKey[0].toUpperCase()}${scopeKey.slice(1)}`)));
+                const revoke = el('button', 'btn-secondary btn-sm', t('models.revoke'));
+                revoke.type = 'button';
+                revoke.addEventListener('click', async () => {
+                    await api.revoke(s.subject, g.endpointId);
+                    await reload();
+                });
+                line.appendChild(revoke);
+                group.appendChild(line);
+            }
+            host.appendChild(group);
+        }
+    }
+
+    // ---------------------------------------------------------------- MCP token
+    function renderTokens() {
+        const host = document.getElementById('modelTokenList');
+        if (!host) return;
+        host.replaceChildren();
+        const tokens = snapshot?.tokens || [];
+        if (!tokens.length) {
+            host.appendChild(el('div', 'model-empty', t('models.noTokens')));
+            return;
+        }
+        for (const token of tokens) {
+            const row = el('div', 'model-row');
+            const main = el('div', 'model-row-main');
+            main.appendChild(el('div', 'model-row-title', token.name));
+            // 裸 '*' 对用户没有意义，写成"所有端点"；其余原样显示，因为那是
+            // MCP 侧配置里真实写下的字符串。
+            const scope = token.models && token.models.length
+                ? token.models.map((m) => (m === '*' ? t('models.scopeAll') : m)).join(', ')
+                : t('models.noScope');
+            main.appendChild(el('div', 'model-row-sub', scope));
+            row.appendChild(main);
+
+            const label = el('label', 'model-check');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = !!token.bypassAll;
+            box.addEventListener('change', async () => {
+                const ids = (snapshot.tokens || [])
+                    .map((x) => (x.id === token.id ? { ...x, bypassAll: box.checked } : x))
+                    .filter((x) => x.bypassAll)
+                    .map((x) => x.id);
+                await api.setSettings({ tokenBypass: ids });
+                if (box.checked) status(t('models.bypassEnabled'));
+                await reload();
+            });
+            label.append(box, el('span', '', t('models.bypassAll')));
+            row.appendChild(label);
+            host.appendChild(row);
+        }
+    }
+
+    // ---------------------------------------------------------------- 审计
+    function renderAudit() {
+        const host = document.getElementById('modelAuditList');
+        if (!host) return;
+        host.replaceChildren();
+        api.audit({ limit: 40 }).then((data) => {
+            const rows = (data && data.entries) || [];
+            if (!rows.length) {
+                host.appendChild(el('div', 'model-empty', t('models.noAudit')));
+                return;
+            }
+            for (const r of rows) {
+                const line = el('div', 'model-audit-row');
+                const when = new Date(r.ts).toLocaleTimeString();
+                const outcome = r.kind === 'consent'
+                    ? t('models.auditConsent', { outcome: t(`models.consentOutcome.${r.outcome}`) })
+                    : `${t(`models.taskName.${r.task}`) || r.task || ''} ${r.outcome || ''}${r.code ? ` (${r.code})` : ''}`;
+                line.appendChild(el('span', 'model-audit-time', when));
+                line.appendChild(el('span', 'model-audit-subject', r.subject || ''));
+                line.appendChild(el('span', 'model-audit-endpoint', r.endpointId || ''));
+                line.appendChild(el('span', 'model-audit-outcome', outcome));
+                host.appendChild(line);
+            }
+        }).catch(() => {});
+    }
+
+    await reload();
+}
+
+installModelSettings().catch((err) => {
+    console.warn('[settings] 模型设置分区初始化失败:', err && err.message);
+});
