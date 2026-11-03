@@ -38,13 +38,18 @@ const { text } = await ctx.models.invokeOnce({
 | `tts` | 语音合成 | 文本 | 256 KiB | 二进制 | ✓ |
 | `asr` | 语音识别 | 二进制 | 64 MiB | 文本 | ✓ |
 
-"JSON" 的具体字段由对应 adapter 决定（`chat` / `embed` 目前已实现，其余见 §9）。
+"JSON" 的具体字段由对应 adapter 决定。已实现的组合：
+`openai-compatible` 支持 `chat` / `completion` / `embed` / `tts`（`/audio/speech`）/
+`asr`（`/audio/transcriptions`）；`local-process` 支持 `singing` / `midi` /
+`accompaniment` / `tts` / `asr`（由本机后端提供）；`anthropic` 支持 `chat` / `completion`。
+`midi` / `accompaniment` 没有标准云端协议，走本地后端。
+
 `task` 不能自定义：需要一种新的模型能力时，先来改宿主 —— 加 task 意味着同时要定
 输入输出契约、字节上限、弹窗文案与 adapter 支持，那是契约变更，不是配置。
 
 输入超过上限直接拒，不弹窗：用户没法对 50MB 的未知数据做判断。
 
-## 2. `ctx.models` 的四个方法
+## 2. `ctx.models` 的五个方法
 
 ```js
 // 1) 能力发现：看得见哪些端点、要不要确认、是否可用
@@ -57,15 +62,18 @@ const h = ctx.models.invoke(
   {
     onStart: (evt) => {},        // { handleId, endpoint: { id, title, provider, locality } }
     onChunk: (text, evt) => {},  // 每个分片；evt.bytes 用于背压计费
-    onProgress: (evt) => {},     // 生成式任务的进度（0..1）
+    onProgress: (evt) => {},     // 生成式任务的进度 { received, mime } 或 { usage }
   },
 );
 h.id;          // handleId（start 之前为 null）
 h.cancel();    // 主动取消 → done 以 { cancelled: true } 结算
-await h.done;  // { text, endpointId } | { cancelled: true }
+await h.done;  // { text, endpointId, binary?, handle? } | { cancelled: true }
 
 // 3) 只要结果（内部仍走同一条流，中间分片由 runtime 聚合）
 const result = await ctx.models.invokeOnce({ task: 'chat', input: '你好' });
+
+// 4) 大结果读回（音频 / MIDI）。只能读自己那次调用的输出
+const { base64, size, mime } = await ctx.models.read(result.handle);
 ```
 
 **不需要自己处理背压。** runtime 每收到一个分片就回一次 `models.ack`，网关据此判断
@@ -74,6 +82,42 @@ const result = await ctx.models.invokeOnce({ task: 'chat', input: '你好' });
 
 **取消是协作式的。** `h.cancel()` 之后 `done` 以 `{ cancelled: true }` 结算，不是抛错 ——
 取消是正常结束，不是失败。
+
+### 2.1 二进制结果（midi / tts / singing / accompaniment）
+
+这四类任务的 `output` 是二进制，`done` 里**不会**有 `text`。按大小分两种形态：
+
+```js
+const r = await ctx.models.invokeOnce({ task: 'tts', input: '你好' });
+
+if (r.binary) {
+  // ≤256KB：直接内联，不用再往返一次
+  const buf = Buffer.from(r.binary.base64, 'base64');
+  // r.binary = { base64, size, mime, sha256, inline: true }
+} else if (r.handle) {
+  // >256KB：落盘，句柄带 mac，不能伪造
+  const { base64, size, mime } = await ctx.models.read(r.handle);
+  // r.handle  = { id, subject, jobId, sha256, size, mime, expiresAt, mac }
+}
+```
+
+`ctx.models.read` 的读取权**按调用方判**，不看文件系统权限：读自己的句柄永远允许
+（哪怕插件没有 `fs` 权限），读别人的返回 `PERMISSION_DENIED`，过期或被 GC 返回
+`HANDLE_EXPIRED`。
+
+二进制分片**不会**逐块推给 `onChunk`（Buffer 经过文本合并会损坏），进度走
+`onProgress({ received, mime })`。所以不要等 `onChunk` 拿音频。
+
+### 2.2 二进制输入（asr）
+
+`asr` 要 64MB 音频，跨进程传 Buffer 不现实。传句柄：
+
+```js
+const up = await ctx.models.invokeOnce({ task: 'tts', input: '你好' });  // 可能拿到 handle
+const text = await ctx.models.invokeOnce({ task: 'asr', input: { handle: up.handle } });
+```
+
+宿主在**授权通过之后**才读盘，未授权的调用不会先把音频读进内存。
 
 ## 3. manifest 要声明什么
 
@@ -191,24 +235,69 @@ const { text } = await ctx.models.invokeOnce({ task: 'chat', input: prompt });
 | `BACKPRESSURE_OVERFLOW` | 消费方太慢（`retryable: false`） | 修消费逻辑，别重试 |
 | `UPSTREAM_ERROR` | 上游返回非 2xx | `details.status === 429` 或 5xx 可退避重试 |
 | `PROTOCOL_VIOLATION` | 你发出了终止事件之后的事件 | 是插件的 bug，结果已作废 |
+| `INVALID_RESPONSE` | 二进制任务收到了文本（上游违约或 adapter bug） | 提示用户换端点，别重试 |
+| `RESULT_TOO_LARGE` | 结果超过 128MB 上限（`retryable: false`） | 拆小输入，别重试 |
+| `HANDLE_EXPIRED` | 句柄过期或已被 LRU 回收 | 重新发起那次调用 |
 | `CANCELLED` | 已取消 | 正常结束 |
 
 `.retryable` 是宿主的判断，照它决定要不要重试，别自己猜。
 
-## 9. 还没接线的部分
+## 9. 合成后处理 hook（postWaveform）
 
-- `midi` / `accompaniment` / `singing` / `tts` / `asr` 的**二进制结果**：`ModelHandleStore`
-  的句柄机制（`{ id, subject, sha256, size, mime, expiresAt, mac }`）已经就绪，但 adapter
-  的 chunk 路径还没接上。在那之前这些 task 会返回文本分片或直接报未实现。
-- `local-process` 的真实后端（等 `synthesis.backend` 迁移）。
-- 插件提供端点（`contributes.models.provides`，§6）。
+如果插件要做的是"对合成结果动手"（增益、EQ、去咔哒），不要绕一圈调 TTS 再自己拼，
+声明一个 hook：
 
-写插件时按最终形态调用即可，接线完成后不需要改插件代码。
+```json
+{
+  "contributes": {
+    "pipeline": {
+      "hooks": [
+        { "stage": "postWaveform", "kind": "js", "hook": "soften", "order": 100, "timeoutMs": 2000 }
+      ]
+    }
+  }
+}
+```
 
-## 10. 完整示例
+```js
+module.exports = {
+  pipelineHooks: {
+    soften(ctx, { audio, sampleRate }) {
+      const out = new Float32Array(audio.length);
+      for (let i = 0; i < audio.length; i++) out[i] = audio[i] * 0.7079;
+      return out;   // 必须同长度
+    },
+  },
+};
+```
+
+三条规则：
+
+1. **必须返回同样长度的 `Float32Array`。** 改变样本数会让音频与视频/伴奏错位，
+   宿主会拒绝你的结果并记一次失败。
+2. **失败不拖垮合成。** 抛错或超时 → 跳过你继续出音频；连续 3 次熔断，直到插件重载。
+3. **只对整段合成生效。** 多分片流式播放走的是边合成边推流，末端不再过 hook ——
+   否则"听到的"和"导出的"会是两个东西。
+
+`kind: 'model'`（声明 ONNX 让宿主在推理进程里跑）与另外两个 stage
+（`preEncoder` / `postMel`）**尚未接线**：manifest 会接受，但不会执行。
+
+参考实现：[`plugins/example-hook/`](../../plugins/example-hook)。
+
+## 10. 还没接线的部分
+
+- 插件提供端点（`contributes.models.provides`，§6）：manifest 直接拒绝，不会静默失效。
+- `contributes.pipeline` 的 `kind: 'model'` 与 `preEncoder` / `postMel` 两个 stage。
+- OpenAI 兼容协议的 `midi` / `accompaniment`：这两个没有标准端点，需要走
+  `local-process` 或由插件注册端点。
+
+## 11. 完整示例
 
 [`plugins/example-models/`](../../plugins/example-models)：一个 `ask` 命令（流式写状态栏、
 三种失败各给一条可照做的提示），一个 `probeNet` 命令（故意违规，用来看封锁生效）。
+
+[`plugins/example-hook/`](../../plugins/example-hook)：一个 `postWaveform` hook
+（50ms 淡入 + -3dB），没有命令也没有界面 —— 装上就应该听得出差别。
 
 ```bash
 npm run plugin:pack plugins/example-models

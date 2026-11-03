@@ -49,6 +49,25 @@ function errPayload(err) {
   };
 }
 
+/** 输入里的句柄引用。只有 output/input=binary 的 task 才启用识别。 */
+function handleRefOf(input) {
+  if (!input || typeof input !== 'object') return null;
+  const cand = (input.handle && typeof input.handle === 'object') ? input.handle : input;
+  if (typeof cand.id === 'string' && typeof cand.mac === 'string' && typeof cand.sha256 === 'string') {
+    return cand;
+  }
+  return null;
+}
+
+/** 把 adapter 给的二进制块归一成 Buffer。adapter 可能给 Buffer / Uint8Array / ArrayBuffer。 */
+function toBuffer(v) {
+  if (Buffer.isBuffer(v)) return v;
+  if (v instanceof ArrayBuffer) return Buffer.from(v);
+  if (ArrayBuffer.isView(v)) return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+  if (typeof v === 'string') return Buffer.from(v, 'base64');
+  return null;
+}
+
 /**
  * 一次调用的句柄。调用方通过它取消，通过事件回调拿结果。
  */
@@ -92,6 +111,7 @@ class ModelGateway {
    * @param {{
    *   store: object, acl: object, adapters: Map<string, object>,
    *   audit?: {record:Function}, consent?: Function, settings?: object,
+   *   handles?: {put:Function, read:Function},
    *   logger?: object, now?: Function
    * }} opts
    */
@@ -101,6 +121,11 @@ class ModelGateway {
     this.adapters = opts.adapters || new Map();
     this.audit = opts.audit || { record: () => {} };
     this.consent = opts.consent || (async () => 'deny');
+    /**
+     * 二进制结果仓库。没有它也能跑，只是 output=binary 的 task 会明确报
+     * ADAPTER_UNSUPPORTED —— 比"把 Buffer 拼成字符串"诚实。
+     */
+    this.handles = opts.handles || null;
     /**
      * 全局开关（来自设置页）：
      *   localFree   本地端点免确认（插件与 MCP 共用），默认 true
@@ -174,7 +199,26 @@ class ModelGateway {
   async _run(handle, subject, req, opts, dedupeKey) {
     handle.startedAt = this._now();
     const spec = TASK_SPECS[req.task];
-    const bytesIn = inputBytes(req.input);
+    let bytesIn = inputBytes(req.input);
+
+    /**
+     * 二进制输入走句柄（asr 收 64MB 音频，跨进程传 Buffer 不现实）。
+     * 这里只取元数据：真实字节数要用于确认弹窗与上限判断，而内容等到授权
+     * 之后再读 —— 先读 64MB 再告诉用户"你没被授权"是白花的 I/O。
+     */
+    const inputRef = spec.input === 'binary' ? handleRefOf(req.input) : null;
+    let inputStat = null;
+    if (inputRef) {
+      if (!this.handles) {
+        throw new ModelError(ERR.ADAPTER_UNSUPPORTED, '宿主未启用二进制输入');
+      }
+      inputStat = this.handles.stat(inputRef, subject);
+      bytesIn = inputStat.size;
+      if (bytesIn > spec.maxInputBytes) {
+        throw new ModelError(ERR.INVALID_REQUEST,
+          `输入过大：${bytesIn} > ${spec.maxInputBytes}`);
+      }
+    }
 
     // 1. 解析端点
     const resolved = this.store.resolve(req.task, req.endpointId);
@@ -269,6 +313,17 @@ class ModelGateway {
     let flushTimer = null;
     let paused = false;
     let chunkCount = 0;
+
+    /**
+     * 二进制结果不进文本合并窗口 —— Buffer 被 join('') 会变成字符串，那是不可逆的
+     * 损坏。先全收，结束时按 256KB 一次决定"内联"还是"落盘"。
+     *
+     * 不分块下发的原因：内联与句柄是两条完全不同的调用方代码路径，中途切换比
+     * 统一一次性交付更难用。进度仍按 binaryProgressMs 节流推给调用方。
+     */
+    const binary = spec.output === 'binary'
+      ? { parts: [], total: 0, mime: 'application/octet-stream', lastProgress: 0 }
+      : null;
     /**
      * 每次调用独立的流控句柄。不能挂在 adapter 上：同一个 adapter 会并发服务多个
      * 调用，adapter 级的 pause 会把别人的流一起停掉。
@@ -306,6 +361,43 @@ class ModelGateway {
         return;
       }
       if (type !== EVENTS.CHUNK) return;
+
+      if (binary) {
+        const buf = payload && payload.binary ? toBuffer(payload.binary) : null;
+        if (!buf) {
+          // output=binary 的 task 收到文本：上游答应了音频却回了 JSON/文本。
+          // 静默忽略会让调用方拿到一个"成功但空"的结果，比报错难查得多。
+          abort.abort('protocol');
+          this._finish(handle, EVENTS.ERROR, {
+            error: {
+              code: ERR.INVALID_RESPONSE,
+              message: `task=${req.task} 的输出是二进制，但上游给了文本`,
+            },
+          }, opts, dedupeKey);
+          return;
+        }
+        binary.parts.push(buf);
+        binary.total += buf.length;
+        if (payload.mime) binary.mime = String(payload.mime);
+        if (binary.total > LIMITS.maxBinaryBytes) {
+          abort.abort('result-too-large');
+          this._finish(handle, EVENTS.ERROR, {
+            error: {
+              code: ERR.RESULT_TOO_LARGE,
+              message: `结果超过 ${Math.round(LIMITS.maxBinaryBytes / 1024 / 1024)}MB 上限，已中止`,
+              retryable: false,
+            },
+          }, opts, dedupeKey);
+          return;
+        }
+        const now = this._now();
+        if (now - binary.lastProgress >= LIMITS.binaryProgressMs) {
+          binary.lastProgress = now;
+          this._emit(handle, EVENTS.PROGRESS, { received: binary.total, mime: binary.mime }, opts);
+        }
+        return;
+      }
+
       buffer.push({ data: payload.data, bytes: payload.bytes || 0 });
       bufferBytes += payload.bytes || 0;
       if (!flushTimer) flushTimer = setTimeout(flush, LIMITS.chunkFlushMs);
@@ -346,12 +438,20 @@ class ModelGateway {
     };
     handle.on('__ack', applyBackpressure);
 
+    // 二进制输入在这里才读盘：授权已经在上面判过，未授权的调用方不该让宿主
+    // 先把 64MB 音频读进内存再说"不给"。
+    let adapterInput = req.input;
+    if (inputRef) {
+      const buf = this.handles.read(inputRef, subject);
+      adapterInput = Object.assign({}, req.input, { audio: buf, mime: inputStat.mime });
+    }
+
     try {
       await adapter.invoke({
         endpoint,
         task: req.task,
         model: (resolved.binding && resolved.binding.model) || req.model || null,
-        input: req.input,
+        input: adapterInput,
         signal: abort.signal,
         secret: this.store.getSecret(endpoint.id),
       }, emit, control);
@@ -372,7 +472,51 @@ class ModelGateway {
     if (typeof control.resume === 'function') control.resume();
     flush();
     if (handle.terminal) return;
-    this._finish(handle, EVENTS.DONE, { endpointId: endpoint.id }, opts, dedupeKey);
+
+    let extra = { endpointId: endpoint.id };
+    if (binary) {
+      try {
+        Object.assign(extra, this._deliverBinary(handle, subject, binary));
+      } catch (err) {
+        this._finish(handle, EVENTS.ERROR, { error: errPayload(err) }, opts, dedupeKey);
+        return;
+      }
+    }
+    this._finish(handle, EVENTS.DONE, extra, opts, dedupeKey);
+  }
+
+  /**
+   * 二进制结果交付：小的内联、大的落盘。
+   *
+   * 阈值是 256KB（LIMITS.inlineBytes）。内联结果直接放在 done 事件里，
+   * 不额外走一次 IPC 往返；落盘返回的是句柄，读取权按 subject 判。
+   */
+  _deliverBinary(handle, subject, binary) {
+    if (!binary.total) {
+      return {
+        binary: { base64: '', size: 0, mime: binary.mime, sha256: '', inline: true },
+      };
+    }
+    const data = Buffer.concat(binary.parts, binary.total);
+    const digest = crypto.createHash('sha256').update(data).digest('hex');
+    if (data.length <= LIMITS.inlineBytes) {
+      return {
+        binary: {
+          base64: data.toString('base64'),
+          size: data.length,
+          mime: binary.mime,
+          sha256: digest,
+          inline: true,
+        },
+      };
+    }
+    if (!this.handles) {
+      throw new ModelError(ERR.ADAPTER_UNSUPPORTED,
+        `结果 ${data.length} 字节超过内联上限，但宿主未启用结果存储`);
+    }
+    return {
+      handle: this.handles.put({ subject, jobId: handle.id, data, mime: binary.mime }),
+    };
   }
 
   _bypassFor(subject) {
@@ -447,6 +591,10 @@ class ModelGateway {
       ms: handle.endedAt - handle.startedAt,
       via: (opts && opts.via) || 'api',
       handleId: handle.id,
+      // 内联不豁免审计：小结果不落盘，但"产出了什么、多大、指纹多少"仍要留痕，
+      // 否则"这个插件调用过 TTS"在事后完全不可复盘。
+      ...(payload && payload.binary ? { bytes: payload.binary.size, sha256: payload.binary.sha256 } : {}),
+      ...(payload && payload.handle ? { bytes: payload.handle.size, sha256: payload.handle.sha256, fileRef: payload.handle.id } : {}),
     });
 
     if (dedupeKey) {

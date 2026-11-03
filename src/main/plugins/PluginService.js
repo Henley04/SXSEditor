@@ -29,6 +29,7 @@ const store = require('./PluginStateStore.js');
 const ipcFacade = require('./PluginIpcV2.js');
 const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
 const { panelUrl } = require('./PluginProtocol.js');
+const { PipelineHooks } = require('./PipelineHooks.js');
 
 class PluginService {
   constructor() {
@@ -112,10 +113,16 @@ class PluginService {
     this._pushDisposable = ipcFacade.pushSnapshotOnWindowLoad(this);
     this._changeDisposable = this.registry.onDidChange(() => {
       ipcFacade.broadcastSnapshot(this);
+      // 插件重载会换代码：熔断过的 hook 该再给一次机会
+      if (this.pipelineHooks) this.pipelineHooks.reset();
       if (this._menuDirtyHandler) {
         try { this._menuDirtyHandler(); } catch (err) { console.warn('[plugins] menu rebuild failed:', err && err.message); }
       }
     });
+
+    // pipeline hook 执行器：管线通过 setPipelineHookRunner 拿到它的 run 方法。
+    // 放在 registry 建好之后，构造期不需要 this.registry 存在。
+    this.pipelineHooks = new PipelineHooks({ service: this, logger: console });
 
     this.initialized = true;
     return this;
@@ -332,6 +339,9 @@ class PluginService {
       appVersion: app.getVersion(),
       runtimes: this.runtimes.list(),
       pendingProjectApply: ipcFacade.pendingProjectApplyCount(),
+      // 管线后处理 hook：管理器要能看到"谁挂了、熔断没有"，
+      // 否则一个失败的 hook 只表现为"合成结果听起来不对"。
+      pipelineHooks: this.pipelineHooks ? this.pipelineHooks.snapshot() : [],
     };
   }
 
@@ -622,8 +632,15 @@ class PluginService {
     }
   }
 
-  async _call(pluginId, method, params, timeoutMs) {
-    const record = this.registry.getPlugin(pluginId);
+  /**
+   * 调一次 pipeline hook。波形整段传过去（structured clone，不做 JSON），
+   * 所以插件侧拿到的是真正的 Float32Array，不是数组。
+   */
+  callPipelineHook(pluginId, hookId, payload, timeoutMs) {
+    return this._call(pluginId, 'pipeline.hook', { hookId, ...payload }, timeoutMs || TIMEOUTS.command);
+  }
+
+  async _call(pluginId, method, params, timeoutMs) {    const record = this.registry.getPlugin(pluginId);
     if (!record) throw Object.assign(new Error(`插件未加载：${pluginId}`), { code: ERR.NOT_FOUND });
     if (record.status !== 'loaded') {
       throw Object.assign(new Error(`插件状态为 ${record.status}`), { code: ERR.PLUGIN_QUARANTINED });
@@ -758,6 +775,15 @@ class PluginService {
       case 'models.ack': {
         if (!this.models) throw Object.assign(new Error('模型服务未启用'), { code: ERR.UNSUPPORTED });
         return this.models.ack(`plugin:${pluginId}`, String((params && params.handleId) || ''), (params && params.bytes) || 0);
+      }
+      case 'models.read': {
+        // 读大结果（音频 / MIDI）。不要求 fs 权限：句柄本身就是授权凭证，
+        // 归属由 ModelHandleStore 按 subject 判，与文件系统权限无关。
+        if (!(perms.models || []).includes('consume')) {
+          throw Object.assign(new Error('缺少权限 models:consume'), { code: ERR.PERMISSION_DENIED });
+        }
+        if (!this.models) throw Object.assign(new Error('模型服务未启用'), { code: ERR.UNSUPPORTED });
+        return this.models.read(`plugin:${pluginId}`, params && params.handle);
       }
       case 'ui.status': {
         // 状态栏文案由插件自己更新（"已处理 3/10"）。只允许改自己声明的条目：

@@ -198,6 +198,11 @@ class ModelEndpointStore {
       authKind: input.authKind || (input.adapter === 'local-process' ? 'none' : 'bearer'),
       authLabel: String(input.authLabel || '').slice(0, 64),
       helpUrl: String(input.helpUrl || '').slice(0, 300),
+      // local-process 的后端键。宿主自建端点（歌声后端投影）用它指到具体实现；
+      // 用户手建的本地端点没有这个字段，adapter 会退回用 id。
+      localBackend: input.adapter === 'local-process'
+        ? (String(input.localBackend || '') || (existing ? existing.localBackend || '' : ''))
+        : '',
       createdAt: existing ? existing.createdAt : this._now(),
       updatedAt: this._now(),
     };

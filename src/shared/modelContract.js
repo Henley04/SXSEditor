@@ -80,6 +80,8 @@ const ERR = Object.freeze({
   INVALID_RESPONSE: 'INVALID_RESPONSE',
   UPSTREAM_ERROR: 'UPSTREAM_ERROR',
   CANCELLED: 'CANCELLED',
+  /** 二进制结果超出单次上限。与"输入过大"分开：这是上游产出的东西太大。 */
+  RESULT_TOO_LARGE: 'RESULT_TOO_LARGE',
 });
 
 /**
@@ -124,6 +126,13 @@ const LIMITS = Object.freeze({
   handleTtlMs: 60 * 60 * 1000,
   /** model-cache 总容量上限。 */
   cacheBytes: 512 << 20,
+  /**
+   * 单次二进制结果上限。超了明确失败，不静默截断 —— 截断的音频/MIDI
+   * 比报错更难查（听起来"差不多对"，实际少了几秒）。
+   */
+  maxBinaryBytes: 128 << 20,
+  /** 二进制进度事件的最小间隔，避免每个 chunk 都刷一条。 */
+  binaryProgressMs: 200,
   /** 单次调用允许的最大 chunk 数（防止无限流占住管道）。 */
   maxChunks: 200000,
 });

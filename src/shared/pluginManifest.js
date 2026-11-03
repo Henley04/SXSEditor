@@ -622,6 +622,13 @@ function validatePipeline(raw) {
       if (!model.ok) return fail(model.error);
       item.model = model.value;
       item.io = hook.io && typeof hook.io === 'object' ? hook.io : null;
+    } else {
+      // js hook：指向插件模块里导出的 `pipelineHooks.<id>`。
+      // 必须是标识符而不是路径 —— js hook 跑在插件自己的 runtime 里，没有"另一个文件"。
+      if (!COMMAND_ID_RE.test(String(hook.hook || ''))) {
+        return fail(`pipeline.hooks(${hook.stage}).hook 必须是合法的 hook id`);
+      }
+      item.hook = String(hook.hook);
     }
     out.push(item);
   }

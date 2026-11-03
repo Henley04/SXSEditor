@@ -168,12 +168,18 @@ function createContext(init) {
      *   h.cancel();                // 主动取消 → done 以 { cancelled: true } 结算
      *
      * 没给 onChunk 时中间分片仍会被聚合，只是你不需要处理。
+     *
+     * 二进制 task（midi / tts / singing / accompaniment）的 done 里是：
+     *   { binary: { base64, mime, size, sha256 } }   小结果（≤256KB）
+     *   { handle: { id, mime, size, sha256, ... } } 大结果，用 ctx.models.read 取
      */
     models: {
       list: (options) => hostCall('models.list', { task: options && options.task }),
       invoke: (req, handlers) => startModelStream(req, handlers),
       /** 只要最终结果：内部仍走同一条流，但调用方不必处理分片。 */
       invokeOnce: (req, handlers) => startModelStream(req, handlers).done,
+      /** 读大结果。归属由宿主判（只能读自己那次调用的输出）。 */
+      read: (handle) => hostCall('models.read', { handle }, 60000),
     },
     /** 用户设置（settings 分区里填的值）。只读快照 + 变更事件。 */
     settings: {
@@ -282,6 +288,22 @@ async function handleRequest(msg) {
         result = await fn(ctx, params.args || {});
         break;
       }
+      case 'pipeline.hook': {
+        // 合成后处理。只有声明了 contributes.pipeline 且 kind='js' 的 hook 会走到这里，
+        // 归属与顺序由主进程的 PipelineHooks 决定，插件侧只管算。
+        const hooks = (moduleExports && moduleExports.pipelineHooks) || {};
+        const fn = hooks[params.hookId];
+        if (typeof fn !== 'function') {
+          throw Object.assign(new Error(`插件没有实现 pipeline hook '${params.hookId}'`), { code: 'NOT_FOUND' });
+        }
+        result = await fn(ctx, {
+          stage: params.stage,
+          audio: params.audio,
+          sampleRate: params.sampleRate,
+          bpm: params.bpm,
+        });
+        break;
+      }
       case 'panel.rpc': {
         // 面板 RPC 的入口有三种写法，按"越具体越优先"的顺序解析：
         //   1. panels.<panelId>.rpc(ctx, method, params)  —— 一个面板一个 dispatcher
@@ -308,7 +330,9 @@ async function handleRequest(msg) {
       default:
         throw Object.assign(new Error(`未知方法 ${method}`), { code: 'UNSUPPORTED' });
     }
-    post({ kind: 'res', id: msg.id, ok: true, result: safe(result) });
+    // pipeline.hook 的返回值是 Float32Array（整段波形），不能过 safe()：那里会把
+    // TypedArray 摊成数组并截断到 100 万项，音频会被静默截短。
+    post({ kind: 'res', id: msg.id, ok: true, result: method === 'pipeline.hook' ? result : safe(result) });
   } catch (err) {
     post({
       kind: 'res',
@@ -409,7 +433,12 @@ function handleModelEvent(evt) {
     }
     if (evt.type === 'done') {
       modelStreams.delete(evt.streamKey);
-      entry.resolveDone({ text: entry.chunks.join(''), endpointId: evt.endpointId || '' });
+      const out = { text: entry.chunks.join(''), endpointId: evt.endpointId || '' };
+      // 二进制结果二选一：内联（小）或句柄（大）。原样透传，不在这里替插件
+      // 决定"要不要 base64 解码" —— 解码要花内存，用不上的人不该付这笔钱。
+      if (evt.binary) out.binary = evt.binary;
+      if (evt.handle) out.handle = evt.handle;
+      entry.resolveDone(out);
       return;
     }
     if (evt.type === 'cancelled') {

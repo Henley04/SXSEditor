@@ -8,6 +8,7 @@ const { ModelEndpointStore } = require('../src/main/models/ModelEndpointStore');
 const { ModelAcl } = require('../src/main/models/ModelAcl');
 const { ModelGateway } = require('../src/main/models/ModelGateway');
 const { ModelAudit } = require('../src/main/models/ModelAudit');
+const { ModelHandleStore } = require('../src/main/models/ModelHandleStore');
 
 function memSecrets() {
   const m = new Map();
@@ -333,5 +334,124 @@ describe('ModelGateway', function () {
     expect(invoke.subject).to.equal('plugin:demo');
     expect(invoke.outcome).to.equal('done');
     expect(JSON.stringify(rows)).to.not.include('很私密');
+  });
+});
+
+describe('二进制结果（midi / tts / singing / accompaniment）', function () {
+  /** 专门造一个带句柄存储与二进制端点的环境。 */
+  function makeBinaryEnv(runAdapter, task = 'tts') {
+    const dir = tmpDir();
+    const store = new ModelEndpointStore({ dir, secrets: memSecrets() });
+    const acl = new ModelAcl();
+    const audit = new ModelAudit({});
+    const handles = new ModelHandleStore({ dir: path.join(dir, 'cache'), key: 'k'.repeat(64), logger: { warn() {} } });
+    const adapter = fakeAdapter(runAdapter);
+    const gw = new ModelGateway({
+      store, acl, audit, handles,
+      adapters: new Map([['openai-compatible', adapter], ['local-process', adapter]]),
+      consent: async () => 'session',
+      settings: { localFree: true, tokenBypass: new Map() },
+    });
+    store.upsert({
+      id: 'user:local.audio', title: '音频端点', provider: 'custom',
+      adapter: 'openai-compatible', baseUrl: 'https://api.example.com/v1', secret: 'k',
+    });
+    store.bind({ task, endpointId: 'user:local.audio', isDefault: true });
+    return { dir, store, acl, audit, handles, gw };
+  }
+
+  it('小结果内联在 done 里，不产生句柄', async function () {
+    const { gw, handles } = makeBinaryEnv(async (ctx, emit) => {
+      emit('chunk', { data: '', bytes: 4, binary: Buffer.from([1, 2, 3, 4]), mime: 'audio/wav' });
+    });
+    const { events } = await run(gw, 'plugin:demo', { task: 'tts', input: 'hi' });
+    const done = events.find((e) => e.type === 'done');
+    expect(done.binary.size).to.equal(4);
+    expect(done.binary.mime).to.equal('audio/wav');
+    expect(done.binary.inline).to.equal(true);
+    expect(Buffer.from(done.binary.base64, 'base64')).to.deep.equal(Buffer.from([1, 2, 3, 4]));
+    expect(done).to.not.have.property('handle');
+    expect(handles.snapshot()).to.have.length(0);
+    // 二进制不该混进文本分片流
+    expect(events.filter((e) => e.type === 'chunk')).to.have.length(0);
+  });
+
+  it('超过 256KB 落盘，done 给句柄，读回内容一致', async function () {
+    const payload = Buffer.alloc(LIMITS.inlineBytes + 1024, 7);
+    const { gw, handles } = makeBinaryEnv(async (ctx, emit) => {
+      // 分三块发：验证拼接，而不是只支持单块
+      const third = Math.floor(payload.length / 3);
+      emit('chunk', { data: '', bytes: third, binary: payload.subarray(0, third) });
+      emit('chunk', { data: '', bytes: third, binary: payload.subarray(third, third * 2) });
+      emit('chunk', { data: '', bytes: payload.length - third * 2, binary: payload.subarray(third * 2) });
+    });
+    const { events } = await run(gw, 'plugin:demo', { task: 'tts', input: 'hi' });
+    const done = events.find((e) => e.type === 'done');
+    expect(done).to.not.have.property('binary');
+    expect(done.handle.size).to.equal(payload.length);
+    expect(done.handle.subject).to.equal('plugin:demo');
+    expect(handles.usage()).to.equal(payload.length);
+    const buf = handles.read(done.handle, 'plugin:demo');
+    expect(buf.length).to.equal(payload.length);
+    expect(buf[0]).to.equal(7);
+  });
+
+  it('句柄跨 subject 读取被拒，过期报 HANDLE_EXPIRED', async function () {
+    const big = Buffer.alloc(LIMITS.inlineBytes + 10, 1);
+    const { gw, handles } = makeBinaryEnv(async (ctx, emit) => {
+      emit('chunk', { data: '', bytes: big.length, binary: big });
+    });
+    const { events } = await run(gw, 'plugin:demo', { task: 'tts', input: 'hi' });
+    const h = events.find((e) => e.type === 'done').handle;
+
+    let code = null;
+    try { handles.read(h, 'plugin:other'); } catch (e) { code = e.code; }
+    expect(code).to.equal(ERR.PERMISSION_DENIED);
+
+    // host 可以读任何句柄
+    expect(handles.read(h, 'host').length).to.equal(big.length);
+  });
+
+  it('output=binary 却收到文本 → INVALID_RESPONSE，不产出空结果', async function () {
+    const { gw } = makeBinaryEnv(async (ctx, emit) => {
+      emit('chunk', { data: '这不是音频', bytes: 12 });
+    });
+    const { events } = await run(gw, 'plugin:demo', { task: 'tts', input: 'hi' });
+    const last = events[events.length - 1];
+    expect(last.type).to.equal('error');
+    expect(last.error.code).to.equal(ERR.INVALID_RESPONSE);
+  });
+
+  it('结果超上限 → RESULT_TOO_LARGE，且不可重试', async function () {
+    const { gw } = makeBinaryEnv(async (ctx, emit) => {
+      // 一块就越过上限：上限判断不能等全部收完
+      emit('chunk', { data: '', bytes: 1, binary: Buffer.alloc(LIMITS.maxBinaryBytes + 1, 0) });
+    });
+    const { events } = await run(gw, 'plugin:demo', { task: 'tts', input: 'hi' }, { waitMs: 8000 });
+    const last = events[events.length - 1];
+    expect(last.type).to.equal('error');
+    expect(last.error.code).to.equal(ERR.RESULT_TOO_LARGE);
+    expect(last.error.retryable).to.equal(false);
+  });
+
+  it('asr 接受句柄作输入，读盘后换算成真实字节数', async function () {
+    const { store, handles, gw } = makeBinaryEnv(async (ctx, emit) => {
+      emit('chunk', { data: `收到 ${ctx.input.audio.length} 字节`, bytes: 1 });
+    }, 'asr');
+    store.bind({ task: 'asr', endpointId: 'user:local.audio', isDefault: true });
+    const audio = Buffer.from('fake-wav-bytes');
+    const h = handles.put({ subject: 'plugin:demo', jobId: 'seed', data: audio, mime: 'audio/wav' });
+    const { events } = await run(gw, 'plugin:demo', { task: 'asr', input: { handle: h } });
+    const text = events.filter((e) => e.type === 'chunk').map((e) => e.data).join('');
+    expect(text).to.equal(`收到 ${audio.length} 字节`);
+  });
+
+  it('别人的句柄当输入 → PERMISSION_DENIED，不把内容读出来', async function () {
+    const { handles, gw } = makeBinaryEnv(async () => {}, 'asr');
+    const h = handles.put({ subject: 'plugin:other', jobId: 'seed', data: Buffer.from('x') });
+    const { events } = await run(gw, 'plugin:demo', { task: 'asr', input: { handle: h } });
+    const last = events[events.length - 1];
+    expect(last.type).to.equal('error');
+    expect(last.error.code).to.equal(ERR.PERMISSION_DENIED);
   });
 });

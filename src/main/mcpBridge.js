@@ -23,6 +23,7 @@ const path = require('node:path');
 const { app, ipcMain, BrowserWindow } = require('electron');
 
 const { schema, getMethod, methodNames } = require('../shared/mcpSchema');
+const { ERR } = require('../shared/modelContract');
 const { validateParams } = require('./mcpValidate');
 const { McpError, normalizeError } = require('./mcpErrors');
 const jobs = require('./mcpJobs');
@@ -331,6 +332,31 @@ async function dispatchMain(method, params, ctx = {}) {
       }
       return invokeModelAggregated(modelService, ctx, params);
     }
+    case 'model.read': {
+      if (!modelService) throw new McpError('UNAVAILABLE', 'Model service is not enabled');
+      if (!params || !params.handle) throw new McpError('VALIDATION_ERROR', 'handle is required', { field: 'handle' });
+      let r;
+      try {
+        r = modelService.read(ctx.subject, params.handle);
+      } catch (err) {
+        // 归属失败与过期必须能分清：前者是越权，后者是"来晚了，重跑一次"
+        throw new McpError(err && err.code === ERR.HANDLE_EXPIRED ? 'NOT_FOUND' : 'FORBIDDEN',
+          (err && err.message) || 'Cannot read handle',
+          { details: { modelCode: err && err.code } });
+      }
+      if (params.saveAs) {
+        if (!path.isAbsolute(String(params.saveAs))) {
+          throw new McpError('VALIDATION_ERROR', 'saveAs must be an absolute path', { field: 'saveAs' });
+        }
+        if (isSystemPath(params.saveAs)) {
+          throw new McpError('FORBIDDEN', 'System path not allowed', { field: 'saveAs' });
+        }
+        await fs.promises.mkdir(path.dirname(params.saveAs), { recursive: true });
+        await fs.promises.writeFile(params.saveAs, Buffer.from(r.base64, 'base64'));
+        return { size: r.size, mime: r.mime, path: params.saveAs };
+      }
+      return { size: r.size, mime: r.mime, base64: r.base64 };
+    }
     default:
       throw new McpError('UNKNOWN_METHOD', `Unknown method ${method}`, { hint: 'see GET /schema' });
   }
@@ -391,7 +417,11 @@ function invokeModelAggregated(service, ctx, params) {
           return;
         }
         if (evt.type === 'done') {
-          done(resolve, { text: chunks.join(''), endpointId: evt.endpointId || '' });
+          const out = { text: chunks.join(''), endpointId: evt.endpointId || '' };
+          // 二进制结果二选一：小的内联 base64，大的给句柄（再走 model.read）
+          if (evt.binary) out.binary = evt.binary;
+          if (evt.handle) out.handle = evt.handle;
+          done(resolve, out);
           return;
         }
         if (evt.type === 'error') {

@@ -732,6 +732,26 @@ app.whenReady().then(() => {
         } catch (err) {
           console.error('[models] IPC 注册失败:', err && err.message);
         }
+
+        // 契约 v1 的歌声后端 → builtin:singing.* 端点。插件什么时候加载完成不确定
+        // （可能是这条语句之前，也可能之后），所以既挂回调、也立即试一次；
+        // syncSynthesisEndpoints 是幂等的，多跑一次只是多查一遍表。
+        try {
+          const { syncSynthesisEndpoints } = require('./main/models/synthesisBackend');
+          const { getPluginHost } = require('./main/pluginHost');
+          const syncLocalSinging = () => {
+            try {
+              const r = syncSynthesisEndpoints({ service: modelService, host: getPluginHost(), logger: console });
+              if (r.added || r.removed) console.log('[models] 歌声端点同步:', r);
+            } catch (err) {
+              console.warn('[models] 歌声端点同步失败:', err && err.message);
+            }
+          };
+          require('./main/pluginIpc').setAfterPluginsLoaded(syncLocalSinging);
+          syncLocalSinging();
+        } catch (err) {
+          console.warn('[models] 歌声后端接线失败:', err && err.message);
+        }
       } catch (err) {
         console.error('[models] 初始化失败:', err && err.message);
       }
@@ -764,6 +784,14 @@ app.whenReady().then(() => {
       // 省掉它等于新用户没有任何办法装第一个插件。
       require('./main/windowManager').rebuildAppMenu();
       registerHandler({ resolvePluginDir: (id) => pluginService.resolvePluginDir(id) });
+      // 把 pipeline hook 执行器接进推理管线。管线是纯计算模块，只有这里知道
+      // 插件服务的存在；两者不互相 require，避免把 Electron 依赖带进管线单测。
+      try {
+        const { setPipelineHookRunner } = require('./main/plugins/PipelineHooks');
+        setPipelineHookRunner((stage, audio, meta) => pluginService.pipelineHooks.run(stage, audio, meta));
+      } catch (err) {
+        console.warn('[plugins] pipeline hook 接线失败:', err && err.message);
+      }
       console.log(`[plugins] loaded: ${JSON.stringify(pluginService.registry.stats())}`);
     } catch (err) {
       // 插件系统坏了不能拖垮主程序

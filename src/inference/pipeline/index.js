@@ -20,6 +20,8 @@ const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrainAdaptive, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
+// pipeline hook 执行器。module 级注入，没注入时原样返回 —— 单测与 CLI 走这条。
+const { applyPipelineHooks } = require('../../main/plugins/PipelineHooks');
 
 /**
  * Read diagnosticMode flag lazily from settings. Returns false if settings
@@ -3311,7 +3313,11 @@ class OnnxSVSPipeline {
         }
         this._synthPromise = this._synthesizeImpl(notes, bpm, options);
         try {
-            return await this._synthPromise;
+            const audio = await this._synthPromise;
+            // postWaveform：交给插件做后处理（去咔嗒 / EQ / 增益）。
+            // 放在 _synthPromise 的持有期内 —— hook 也是这次合成的一部分，
+            // 下一次合成不该在它跑完前抢走 session。
+            return await applyPipelineHooks('postWaveform', audio, { sampleRate: SAMPLE_RATE, bpm });
         } finally {
             this._synthPromise = null;
         }

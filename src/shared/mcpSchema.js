@@ -371,6 +371,18 @@ const METHODS = {
       clientRequestId: str('Idempotency key; the same id within 5 minutes returns the same result'),
     }, ['task', 'input']),
   },
+  'model.read': {
+    summary: 'Read a binary model result (audio / MIDI) by handle.',
+    description: 'Handles come from model.invoke when the result is larger than 256KB. '
+      + 'Ownership is enforced: a token can only read handles its own calls produced; '
+      + 'other tokens get FORBIDDEN and expired ones get HANDLE_EXPIRED. '
+      + 'Pass saveAs to write the bytes to disk instead of returning base64.',
+    target: 'main',
+    params: obj({
+      handle: { type: 'object', additionalProperties: true, description: 'Handle object returned by model.invoke' },
+      saveAs: str('Absolute path to write the bytes to; base64 is omitted when given'),
+    }, ['handle']),
+  },
   'ui.open': {
     summary: 'Open a secondary window (singer creator, market, model download…).',
     target: 'renderer', mutates: true,

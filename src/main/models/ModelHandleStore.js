@@ -106,6 +106,33 @@ class ModelHandleStore {
     return buf;
   }
 
+  /**
+   * 只校验归属并返回元数据，不读盘。
+   *
+   * 用途是"读之前先知道多大"：确认弹窗要显示真实字节数，上限判断也不该先把
+   * 128MB 读进内存再拒绝。校验项与 read 一致（mac + subject + 有效期）。
+   */
+  stat(handle, subject) {
+    if (!handle || !handle.id) {
+      throw Object.assign(new Error('句柄无效'), { code: ERR.INVALID_REQUEST });
+    }
+    const row = this.index.get(handle.id);
+    if (!row || this._now() > row.expiresAt) {
+      if (row) this._drop(handle.id);
+      throw Object.assign(new Error('句柄已过期或不存在'), { code: ERR.HANDLE_EXPIRED });
+    }
+    if (subject !== 'host' && subject !== row.subject) {
+      throw Object.assign(new Error('无权读取该句柄'), { code: ERR.PERMISSION_DENIED });
+    }
+    // 引用里的字段是调用方带过来的：mac 对不上说明它改过 size / sha256 / expiresAt
+    const expect = this._mac([row.subject, row.jobId, row.sha256, row.size, row.expiresAt]);
+    if (expect !== handle.mac || handle.sha256 !== row.sha256 || Number(handle.size) !== row.size) {
+      throw Object.assign(new Error('句柄校验失败'), { code: ERR.PERMISSION_DENIED });
+    }
+    row.lastAccess = this._now();
+    return { id: row.id, subject: row.subject, jobId: row.jobId, sha256: row.sha256, size: row.size, mime: row.mime, expiresAt: row.expiresAt };
+  }
+
   /** 磁盘占用（字节）。 */
   usage() {
     let total = 0;

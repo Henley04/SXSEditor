@@ -24,6 +24,25 @@ const { getPluginHost } = require('./pluginHost');
 let _loadPromise = null;
 
 /**
+ * 插件加载/重载完成后的回调（宿主用它在端点表里同步"本地歌声后端"）。
+ * 只允许一个订阅者：这是内部接线，不是事件总线。
+ */
+let _afterLoad = null;
+
+function setAfterPluginsLoaded(fn) {
+  _afterLoad = typeof fn === 'function' ? fn : null;
+}
+
+function notifyAfterLoad(result) {
+  if (!_afterLoad) return;
+  try {
+    _afterLoad(result);
+  } catch (err) {
+    console.warn('[plugins] afterLoad 回调失败：', err && err.message);
+  }
+}
+
+/**
  * 确保插件已扫描加载（幂等、并发安全）。
  * @returns {Promise<object>} pluginHost.loadPlugins() 的结果
  */
@@ -32,6 +51,9 @@ function ensurePluginsLoaded() {
     _loadPromise = getPluginHost().loadPlugins().catch((err) => {
       console.error('[Main] 插件扫描失败：', err && err.message ? err.message : err);
       return { success: false, plugins: [], errors: [{ pluginId: null, stage: 'scan', message: String(err && err.message || err) }] };
+    }).then((result) => {
+      notifyAfterLoad(result);
+      return result;
     });
   }
   return _loadPromise;
@@ -165,6 +187,7 @@ function registerPluginIpc() {
   safeHandle(IPC_CHANNELS.PLUGIN_RELOAD, async () => {
     invalidateLoadPromise();
     const result = await getPluginHost().reloadPlugins();
+    notifyAfterLoad(result);
     return { success: true, pluginsDir: result.pluginsDir, plugins: result.plugins, errors: result.errors };
   });
 
@@ -234,6 +257,7 @@ module.exports = {
   runPluginBackend,
   ensurePluginsLoaded,
   invalidateLoadPromise,
+  setAfterPluginsLoaded,
   validateBackend,
   toBuiltinAudio,
 };

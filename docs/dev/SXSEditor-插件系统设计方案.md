@@ -2,8 +2,9 @@
 
 > **状态**：M1（纵向切片）已实现并提交（`a7109d8`、`36be137`），并通过真实 Electron
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
-> （§9.2，2026-11-03）**；**M3（模型调用面）四段全部落地，并通过实机走查（§12，
-> 2026-11-04）**；M4–M6 未开始。
+> （§9.2，2026-11-03）**；**M3（模型调用面）五段全部落地，并通过实机走查（§12，
+> 2026-11-04）**，含二进制结果、`synthesis.backend` 迁移与 `postWaveform` hook；
+> M4–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -270,7 +271,7 @@ src/main/plugins/runtime/{fs,net,llmBridge,projectCodec,audio}.js
 | `src/renderer/projectManager.js` | 拆 `loadProjectFromDocument(doc)` | ⬜ M4 |
 | `src/shared/projectFormat.js` | `validateProjectDocument(doc)` | ⬜ M4 |
 | `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry | ⬜ M4 |
-| `src/inference/pipeline/index.js` | 插入 `_runModelHooks(stage, …)` | ⬜ M3 |
+| `src/inference/pipeline/index.js` | 插入 `_runModelHooks(stage, …)` | ✅ M3（postWaveform） |
 | `src/settings.js` | 动态 sidebar + schema 渲染的 section（`panel` 指向给"打开插件面板"按钮） | ✅ M2 |
 | `src/i18n/index.js` | `registerPluginMessages(id, dict)`，键前缀 `plugin.<id>.` | ✅ M2 |
 | `src/renderer/{index,timelineRenderer,eventHandlers}.js` | 挂宿主、`app:state-changed` 广播、三处右键入口 | ✅ M2 |
@@ -437,8 +438,9 @@ toolbar / statusBar / contextMenus / timelineOverlays / keybindings / settings /
 已经能只靠投影驱动，停用/卸载/重载都表现为"下一次投影就什么都不剩"。剩下的是 M3 起的
 推理/数据/智能面。
 
-**M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具，先行落地）、
-`synthesis.backend` 迁移、v1 adapter、三种 pipeline hook。
+**M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具）、`synthesis.backend`
+迁移、二进制结果、`postWaveform` hook —— 均已落地。剩 v1 adapter（`compat/v1Adapter.js`）
+与 `preEncoder` / `postMel` 两个 stage。
 **M4 数据面**：工程格式 open/save/import/export、导出器、文件关联、dialog filter。
 **M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
 落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
@@ -730,9 +732,8 @@ locality 四档判定、ACL 指纹失效与 once 消费、终止事件唯一、c
 - 主 token 默认 `models: ['*']`（否则用户第一次用会莫名 FORBIDDEN），真正的花钱动作
   仍要过 ACL 首次确认；配置文件里没写 `models` 的额外 token 默认**不能用**模型。
 
-仍未接线：`tts` / `asr` / `midi` / `accompaniment` 的二进制结果（要把
-`ModelHandleStore` 接进 adapter 的 chunk 路径）、`local-process` 的真实后端
-（等 `synthesis.backend` 迁移）。
+当时未接线的部分（第 5 段已补齐）：`tts` / `asr` / `midi` / `accompaniment` 的二进制
+结果、`local-process` 的真实后端（`synthesis.backend` 迁移）。
 
 **第 3 段已落地（2026-11-04）**：
 
@@ -783,6 +784,57 @@ src/main/plugins/runtime/netGuard.js  插件进程出站封锁
 实机验证：插件安装后 `pendingContributions` 为空、`contributes.models` 齐全；
 `ask` 返回结果并写进状态栏；`probeNet` 的 `require('node:https')` 与 `fetch` 都被拦；
 把端点 `provider` 改成 `openai` 后，Chat 绑定行出现 ★ 且 tooltip 写明推荐原因。
+
+**第 5 段已落地（2026-11-04）—— 把承诺兑现成可用的东西**：
+
+```
+src/main/models/ModelGateway.js       二进制结果收集与交付（内联 / 落盘）
+src/main/models/ModelHandleStore.js   新增 stat()：读之前先知道多大
+src/main/models/adapters/openaiCompatible.js  /audio/speech、/audio/transcriptions
+src/main/models/synthesisBackend.js   v1 歌声后端 → local-process 的 singing
+src/main/plugins/PipelineHooks.js     postWaveform hook 执行器 + 熔断
+plugins/example-hook/                 hook 最小示例（淡入 + -3dB）
+```
+
+**二进制结果**（此前 `output === 'binary'` 的五个 task 实际不可用）：
+
+- 二进制分片**不进** 16ms 文本合并窗口 —— `Buffer.join('')` 是不可逆的损坏。改为
+  全收，结束时一次性交付：`≤256KB` 内联成 `done.binary = { base64, size, mime, sha256 }`，
+  超过则 `handles.put()` 落盘，`done.handle` 给 capability token。
+- 不分块下发的理由：内联与句柄是两条完全不同的调用方代码路径，中途切换比一次性
+  交付更难用。进度改用 `progress { received, mime }`，200ms 节流。
+- 新增 `RESULT_TOO_LARGE`（单次 128MB 上限）：截断的音频比报错难查得多 —— 听起来
+  "差不多对"，实际少了几秒。
+- 二进制输入（`asr`）走句柄：`input: { handle }`。`stat()` 先取大小用于确认弹窗与
+  上限判断，**授权通过之后**才 `read()` 读盘 —— 未授权的调用不该让宿主先把 64MB
+  读进内存再说"不给"。
+- 内联不豁免审计：`_finish` 里记 `bytes` + `sha256`，落盘再加 `fileRef`。
+
+**`synthesis.backend` 迁移**：v1 的歌声后端（`pluginHost.synthesize` 返回 pcm）被包装
+成 `local-process` 的 `singing` 实现，投影成 `builtin:singing.<pluginId>` 端点。从此
+歌声、TTS、MIDI 走**同一条**调用面：同一套授权、超时、审计、取消。pcm 统一编成
+32bit float WAV（`leadingSamples` 补零，多声道交错），不留 Float32Array 跨进程。
+插件列表为空时**不做孤儿清理** —— 那可能只是还没加载，删掉就连带绑定一起没了。
+
+**pipeline hook**：`contributes.pipeline` 此前是"接受但不生效"（注册表已登记，
+但没有执行器）。现在 `postWaveform` + `kind: 'js'` 真能跑：
+
+- 从**注册表**读 hook 而不是从 manifest 读。停用/重载过程中 manifest 还在 record 上，
+  但贡献表已撤销 —— 按 manifest 读会去调一个不存在的插件，表现为每次合成多等一次超时。
+- hook 失败不拖垮合成：跳过并记日志，连续 3 次熔断，插件重载后恢复。
+- 长度必须不变：改样本数 = 时间轴错位，拒绝并记失败。
+- 只对整段合成生效。多分片流式是边合成边推，末端再处理会让"听到的"与"导出的"不一致。
+- 返回值不过 `safe()`：那里会把 TypedArray 摊成数组并截断到 100 万项，音频会被静默截短。
+
+实机验证（xvfb + CDP + 假 OpenAI 兼容端点）：
+`model.invoke { task: 'tts' }` → 32KB WAV 内联（sha256 与审计一致）；12 秒音频
+（384KB）→ `handle`，`model.read { saveAs }` 落盘 384044 字节、RIFF 头正确；
+同一句柄作 `asr` 的输入 → 返回假转写文本（多分段总量 384309 字节）；
+`example-hook` 安装后 `registry.stats().hook === 1`，`admin().pipelineHooks` 显示
+`{ pluginId: 'example-hook', hook: 'soften', stage: 'postWaveform', disabled: false }`。
+
+仍待做：`contributes.pipeline` 的 `kind: 'model'` 与 `preEncoder` / `postMel` 两个
+stage（需要张量留在推理进程里）；`contributes.models.provides`（插件注册自己的端点）。
 
 ## 13. 参考
 

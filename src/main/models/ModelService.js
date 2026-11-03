@@ -93,6 +93,7 @@ class ModelService {
       acl: this.acl,
       adapters,
       audit: this.audit,
+      handles: this.handles,
       logger: this.log,
       now: this._now,
       consent: opts.consent || (async () => 'deny'),
@@ -225,6 +226,26 @@ class ModelService {
   /** 解析某次调用的目标端点（MCP 需要在调之前做 scope 判定）。 */
   resolveEndpoint(task, endpointId) {
     return this.store.resolve(task, endpointId);
+  }
+
+  /**
+   * 读一个二进制结果。
+   *
+   * 归属判定在 ModelHandleStore 里（mac + subject + sha256 + size），这里不做二次
+   * 判权，只负责把 Buffer 变成能过 IPC/JSON 的形态。
+   */
+  read(subject, handle) {
+    const buf = this.handles.read(handle, subject);
+    return {
+      base64: buf.toString('base64'),
+      size: buf.length,
+      mime: (handle && handle.mime) || 'application/octet-stream',
+    };
+  }
+
+  /** 供诊断：当前二进制缓存占用。 */
+  handleUsage() {
+    return { bytes: this.handles.usage(), entries: this.handles.snapshot().length };
   }
 
   /** 能力发现。调用方只看见被允许（或可能被允许）的端点。 */
