@@ -17,6 +17,7 @@ const {
   CONTEXT_AREAS, STATUS_ALIGNMENTS, OVERLAY_ANCHORS, WHEN_CLAUSES,
 } = require('./pluginApi.js');
 const { normalizeChord } = require('./pluginKeys.js');
+const { TASKS, parseEndpointId } = require('./modelContract.js');
 
 const ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
@@ -652,6 +653,64 @@ function validateServices(raw) {
   return { ok: true, value: out };
 }
 
+/**
+ * `contributes.models`：插件要用模型面时声明什么。
+ *
+ *   consumes   —— 会调用哪些 task。安装时给用户看的就是这份清单，别漏报。
+ *   preferred  —— "哪个端点上跑这个 task 更合适"。仅用于设置页的 ★ 标注，
+ *                 **不参与路由**：插件不知道用户装了哪些端点，也没资格替他选。
+ *                 按 provider 指定是常态（同厂商任意端点），按 endpoint 精确指定
+ *                 只有插件自己注册的端点才有意义。
+ *
+ * 声明了其中任何一项就必须有 permissions.models: ['consume'] —— 否则用户看到的
+ * 权限清单与实际行为对不上。
+ */
+function validateModels(raw) {
+  if (raw === undefined) return { ok: true, value: { consumes: [], preferred: [] } };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fail('contributes.models 必须是对象');
+
+  for (const key of Object.keys(raw)) {
+    if (key !== 'consumes' && key !== 'preferred') return fail(`未知的 contributes.models.${key}`);
+  }
+
+  const consumesRaw = raw.consumes === undefined ? [] : raw.consumes;
+  if (!Array.isArray(consumesRaw)) return fail('contributes.models.consumes 必须是数组');
+  if (consumesRaw.length > 8) return fail('contributes.models.consumes 最多 8 项');
+  const consumes = [];
+  for (const task of consumesRaw) {
+    if (!TASKS.includes(task)) return fail(`未知 task：${JSON.stringify(task)}（允许：${TASKS.join(', ')}）`);
+    if (!consumes.includes(task)) consumes.push(task);
+  }
+
+  const preferredRaw = raw.preferred === undefined ? [] : raw.preferred;
+  if (!Array.isArray(preferredRaw)) return fail('contributes.models.preferred 必须是数组');
+  if (preferredRaw.length > 16) return fail('contributes.models.preferred 最多 16 项');
+  const preferred = [];
+  for (const item of preferredRaw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return fail('models.preferred 的每一项必须是对象');
+    if (!TASKS.includes(item.task)) {
+      return fail(`models.preferred.task 非法：${JSON.stringify(item.task)}`);
+    }
+    const endpoint = item.endpoint === undefined ? null : String(item.endpoint);
+    const provider = item.provider === undefined ? null : String(item.provider).toLowerCase();
+    if (!endpoint && !provider) return fail('models.preferred 的每一项要给出 endpoint 或 provider');
+    if (endpoint && !parseEndpointId(endpoint)) {
+      return fail(`models.preferred.endpoint 不是合法端点 id：${endpoint}`);
+    }
+    if (provider && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(provider)) {
+      return fail(`models.preferred.provider 非法：${provider}`);
+    }
+    preferred.push({
+      task: item.task,
+      endpoint,
+      provider,
+      note: typeof item.note === 'string' ? item.note.slice(0, 140) : '',
+    });
+  }
+
+  return { ok: true, value: { consumes, preferred } };
+}
+
 // ------------------------------------------------------------ 主入口
 /**
  * @param {object} manifest
@@ -765,8 +824,18 @@ function validateManifest(manifest, ctx = {}) {
   const services = validateServices(contributes.services);
   if (!services.ok) return services;
 
+  const modelContrib = validateModels(contributes.models);
+  if (!modelContrib.ok) return modelContrib;
+
   const i18n = validateI18n(contributes.i18n);
   if (!i18n.ok) return i18n;
+
+  // 要用模型面就得先声明 consume：权限清单是给用户看的，不能与实际行为脱节。
+  const modelPerms = perms.value.models || [];
+  if (!modelPerms.includes('consume')
+    && (modelContrib.value.consumes.length || modelContrib.value.preferred.length)) {
+    return fail("声明了 contributes.models，但 permissions.models 里没有 'consume'");
+  }
 
   // 界面贡献必须与声明的权限对得上。
   //
@@ -791,7 +860,7 @@ function validateManifest(manifest, ctx = {}) {
 
   // 尚未落地的贡献点：接受但不生效，管理器里会标注"未实现"
   const pending = [];
-  for (const key of ['services', 'intents', 'models', 'synthesis']) {
+  for (const key of ['services', 'intents', 'synthesis']) {
     if (contributes[key] !== undefined) pending.push(key);
   }
 
@@ -824,6 +893,7 @@ function validateManifest(manifest, ctx = {}) {
         pipeline: pipeline.value,
         services: services.value,
         automation: automation.value,
+        models: modelContrib.value,
       },
       pendingContributions: pending,
     },

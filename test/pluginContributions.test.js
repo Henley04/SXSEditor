@@ -187,6 +187,48 @@ describe('pluginManifest · M2 贡献点', function () {
     expect(bad.ok).to.equal(false);
     expect(bad.error).to.match(/必须是字符串/);
   });
+
+  it('contributes.models：声明消费的 task 与推荐端点', function () {
+    const ok = validateManifest(manifest({
+      models: {
+        consumes: ['chat', 'midi'],
+        preferred: [
+          { task: 'chat', provider: 'OpenAI', note: '长上下文更稳' },
+          { task: 'midi', endpoint: 'plugin:com.example.demo.gen' },
+        ],
+      },
+    }, { models: ['consume'] }), ctx);
+    expect(ok.ok, ok.error).to.equal(true);
+    expect(ok.value.contributes.models.consumes).to.deep.equal(['chat', 'midi']);
+    // provider 统一小写：scope 匹配用的是规范化后的值
+    expect(ok.value.contributes.models.preferred[0].provider).to.equal('openai');
+    expect(ok.value.pendingContributions).to.not.include('models');
+  });
+
+  it('contributes.models：拼错的 task / 缺权限 / 空指向都拒绝', function () {
+    const badTask = validateManifest(manifest({
+      models: { consumes: ['chat', 'chatting'] },
+    }, { models: ['consume'] }), ctx);
+    expect(badTask.ok).to.equal(false);
+    expect(badTask.error).to.match(/未知 task/);
+
+    // 没声明 consume 权限就写 models：安装弹窗的权限清单会与实际行为脱节
+    const noPerm = validateManifest(manifest({ models: { consumes: ['chat'] } }), ctx);
+    expect(noPerm.ok).to.equal(false);
+    expect(noPerm.error).to.match(/consume/);
+
+    // 既不写 endpoint 也不写 provider：这条推荐匹配不到任何端点，等于没写
+    const empty = validateManifest(manifest({
+      models: { preferred: [{ task: 'chat', note: 'x' }] },
+    }, { models: ['consume'] }), ctx);
+    expect(empty.ok).to.equal(false);
+    expect(empty.error).to.match(/endpoint 或 provider/);
+
+    const badEndpoint = validateManifest(manifest({
+      models: { preferred: [{ task: 'chat', endpoint: 'not-an-id' }] },
+    }, { models: ['consume'] }), ctx);
+    expect(badEndpoint.ok).to.equal(false);
+  });
 });
 
 // ===========================================================================

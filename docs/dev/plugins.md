@@ -1,5 +1,8 @@
 # SXSEditor 歌声后端插件系统（主进程侧 · 契约 v1）
 
+> 本文只讲 **v1 歌声后端契约**。如果你的插件要调用大模型 / MIDI 生成 / TTS 等模型能力，
+> 看 [`plugins-models.md`](plugins-models.md)（`apiVersion: 2` 的模型调用面）。
+
 > **全应用插件系统（v2，含菜单/面板/ORT/工程格式）的设计方案见
 > [`SXSEditor-插件系统设计方案.md`](SXSEditor-插件系统设计方案.md)。**
 > 本文只描述 v1 歌声后端契约，v2 会通过 adapter 兼容它。

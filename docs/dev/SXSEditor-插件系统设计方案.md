@@ -765,5 +765,6 @@ src/settings.html|js|css             模型端点、访问控制两块 + .model-
 ## 13. 参考
 
 - v1 契约（歌声后端）：[`plugins.md`](plugins.md)
+- v2 模型调用（插件作者视角）：[`plugins-models.md`](plugins-models.md)
 - 实施过程中的取舍记录：[`SXSEditor-实施记录.md`](SXSEditor-实施记录.md)
 - 界面走查清单：`/workspace/SXSEditor-界面走查清单.md`（仓库外）

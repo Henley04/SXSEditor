@@ -25,6 +25,7 @@ const path = require('node:path');
 
 const { OrtRunner } = require('./ortRunner.js');
 const { FsSandbox } = require('./sandbox.js');
+const { installNetworkGuard } = require('./netGuard.js');
 
 function parentPort() {
   // Electron utilityProcess 提供 process.parentPort；worker_threads 没有。
@@ -238,6 +239,13 @@ let disposed = false;
 async function handleInit(msg) {
   const { plugin, entry } = msg;
   ctx = createContext(msg);
+
+  // 必须在 require 插件入口之前装好：插件完全可能在模块顶层就 require('https')
+  // 发一个"初始化"请求，那时候再拦已经晚了。
+  installNetworkGuard({
+    pluginId: plugin.id,
+    log: (level, message) => ctx.log[level] ? ctx.log[level](message) : undefined,
+  });
 
   const entryPath = path.resolve(plugin.dir, entry);
   if (!entryPath.startsWith(path.resolve(plugin.dir) + path.sep)) {

@@ -1994,7 +1994,22 @@ details > summary { cursor: pointer; color: var(--accent); font-size: var(--font
     font-size: var(--font-sm);
 }
 
-.model-bind-name { flex: 1; min-width: 0; }
+/* 名称 + ★ 自成一组并吃掉剩余宽度：星标必须紧跟在它标注的端点名后面，
+   被 flex:1 推到行尾就变成"这一行有个星"，看不出在标谁。 */
+.model-bind-label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.model-bind-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .model-bind-add {
     display: flex;

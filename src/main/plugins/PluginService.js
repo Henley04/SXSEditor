@@ -97,6 +97,10 @@ class PluginService {
     // 模型调用面（可选）：没接的时候插件调 models.* 会得到 UNSUPPORTED，
     // 而不是一个空指针崩溃 —— 单测与精简构建不必为了跑插件系统起整套网关。
     this.models = options.models || null;
+    if (this.models) {
+      // 惰性取：插件什么时候被停用/卸载都不是这里说了算，缓存一份必然过期。
+      this.models.setPreferenceSource(() => this._collectModelPreferences());
+    }
 
     const p = store.ensureDirs();
     this._pluginsDir = p.plugins;
@@ -120,6 +124,33 @@ class PluginService {
   /** windowManager 注册重建菜单的回调（避免两边循环 require）。 */
   setMenuDirtyHandler(fn) {
     this._menuDirtyHandler = fn;
+  }
+
+  /**
+   * 汇总各插件在 `contributes.models.preferred` 里标的 ★。
+   *
+   * 只用于设置页展示，**不参与路由**：插件不知道用户装了哪些端点，也没资格替用户
+   * 决定用哪个。条目可以按 `endpoint`（精确）或 `provider`（同厂商任意端点）指定，
+   * 后者是插件唯一能合理预判的东西。
+   */
+  _collectModelPreferences() {
+    const out = [];
+    for (const record of this.registry.listPlugins()) {
+      // 'loaded' 是正常启用态；'disabled' / 'quarantined' 的插件不该再影响界面。
+      if (record.status !== 'loaded' && record.status !== 'degraded') continue;
+      const declared = record.manifest && record.manifest.contributes && record.manifest.contributes.models;
+      const list = declared && Array.isArray(declared.preferred) ? declared.preferred : [];
+      for (const p of list) {
+        out.push({
+          pluginId: record.id,
+          task: p.task,
+          endpoint: p.endpoint || null,
+          provider: p.provider || null,
+          note: p.note || '',
+        });
+      }
+    }
+    return out;
   }
 
   getMenuFragment() {

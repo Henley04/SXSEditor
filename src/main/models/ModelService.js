@@ -232,20 +232,54 @@ class ModelService {
     const opts = { localFree: this.gateway.settings.localFree, bypassAll };
     if (task) opts.tasks = task;
     const rows = this.store.listForCaller(subject, this.acl, opts);
-    // preferredBy：哪些插件为这个端点标了 ★（只影响展示，不影响路由）
-    const prefs = this._preferences();
-    for (const row of rows) {
-      row.preferredBy = prefs.filter((p) => p.endpoint === row.id).map((p) => ({ task: p.task, note: p.note, pluginId: p.pluginId }));
-    }
+    this._attachPreferences(rows, task);
     return { endpoints: rows };
   }
 
-  /** 插件 manifest 里声明的 modelPreferences，注册时由 PluginService 写进来。 */
+  /**
+   * 给端点挂上"哪个插件推荐了它"。
+   *
+   * 只影响展示（设置页的 ★），不参与路由、不排序。匹配规则：声明了 `endpoint`
+   * 就精确匹配，否则按 `provider`——插件并不知道用户装了哪些端点，同厂商是它唯一
+   * 能合理预判的东西。
+   */
+  _attachPreferences(rows, task) {
+    const prefs = this._preferences();
+    for (const row of rows) {
+      const hit = prefs.filter((p) => {
+        if (task && p.task && p.task !== task) return false;
+        if (p.endpoint) return p.endpoint === row.id;
+        if (p.provider) return p.provider === row.provider;
+        return false;
+      });
+      row.preferredBy = hit.map((p) => ({
+        task: p.task || '', note: p.note || '', pluginId: p.pluginId,
+      }));
+    }
+    return rows;
+  }
+
+  /** 插件 manifest 里声明的 preferred 端点，注册时由 PluginService 写进来。 */
   setPreferences(rows) {
     this._prefs = Array.isArray(rows) ? rows : [];
   }
 
+  /**
+   * 惰性取偏好：插件随时可能被启用 / 停用 / 卸载，快照式地存一份必然过期。
+   * 传入的函数在每次 list() 时被调用，插件侧不需要在状态变化时记得来通知。
+   */
+  setPreferenceSource(fn) {
+    this._prefSource = typeof fn === 'function' ? fn : null;
+  }
+
   _preferences() {
+    if (this._prefSource) {
+      try {
+        return this._prefSource() || [];
+      } catch (_) {
+        return [];
+      }
+    }
     return this._prefs || [];
   }
 
@@ -271,6 +305,8 @@ class ModelService {
   // ------------------------------------------------------------ 设置页
   snapshot() {
     const base = this.store.snapshot();
+    // 设置页的绑定区要显示"插件推荐"，所以快照里的端点也要带 preferredBy。
+    this._attachPreferences(base.endpoints || [], null);
     return {
       ...base,
       tasks: TASKS,

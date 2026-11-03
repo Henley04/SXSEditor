@@ -3473,15 +3473,19 @@ async function installModelSettings() {
                     await reload();
                 });
                 line.appendChild(radio);
-                line.appendChild(el('span', 'model-bind-name', endpointName(b.endpointId)));
+                const label = el('span', 'model-bind-label');
+                label.appendChild(el('span', 'model-bind-name', endpointName(b.endpointId)));
 
-                // 插件推荐（preferredBy）只做标注，不影响路由、不排序
-                const prefs = (b.endpoint && b.endpoint.preferredBy) || [];
+                // 插件推荐（preferredBy）只做标注，不影响路由、不排序。
+                // 快照里推荐挂在端点上，不在绑定上 —— 绑定只有 endpointId。
+                const prefs = ((snapshot?.endpoints || []).find((e) => e.id === b.endpointId)?.preferredBy || [])
+                    .filter((p) => !p.task || p.task === task);
                 for (const p of prefs) {
                     const star = el('span', 'model-star', '★');
                     star.title = t('models.preferredBy', { plugin: p.pluginId }) + (p.note ? `: ${p.note}` : '');
-                    line.appendChild(star);
+                    label.appendChild(star);
                 }
+                line.appendChild(label);
 
                 const un = el('button', 'btn-secondary btn-sm', t('models.unbind'));
                 un.type = 'button';
