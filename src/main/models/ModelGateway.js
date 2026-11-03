@@ -459,8 +459,11 @@ class ModelGateway {
       return;
     }
     try {
-      if (opts && typeof opts.onEvent === 'function') opts.onEvent({ type, handleId: handle.id, ...payload });
-      handle.emit('event', { type, ...payload });
+      // streamKey 由调用方给（插件自己生成的请求号）：事件可能比 invoke() 的
+      // 返回值更早到达，调用方需要它才能把事件对上自己那次调用。
+      const envelope = { type, handleId: handle.id, ...(opts && opts.streamKey ? { streamKey: opts.streamKey } : {}), ...payload };
+      if (opts && typeof opts.onEvent === 'function') opts.onEvent(envelope);
+      handle.emit('event', envelope);
     } catch (err) {
       this.log.warn('[models] 事件回调抛错：', err && err.message);
     }

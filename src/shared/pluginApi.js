@@ -16,7 +16,9 @@ const SUPPORTED_API_VERSIONS = Object.freeze([1, 2]);
 const CONTRIBUTION_KEYS = Object.freeze([
   'commands', 'menus', 'panels', 'fileTypes', 'settings', 'keybindings',
   'toolbar', 'statusBar', 'contextMenus', 'timelineOverlays',
-  'pipeline', 'synthesis', 'services', 'automation', 'llm', 'intents',
+  // `models` 取代了早期的 `llm`：模型调用面不局限于大模型，MIDI 生成 / 伴奏生成 /
+  // 歌声合成 / TTS / ASR 都走同一套端点与授权（见设计方案 §12）。
+  'pipeline', 'synthesis', 'services', 'automation', 'models', 'intents',
   // 宿主渲染的文案（工具栏 tooltip、状态栏、右键菜单）由插件自带字典，
   // 统一挂在 `plugin.<id>.` 前缀下；manifest 里只放扁平键值，不接受嵌套对象。
   'i18n',
@@ -73,7 +75,8 @@ const PERMISSION_GROUPS = Object.freeze({
   secrets: ['read', 'write'],
   clipboard: ['read', 'write'],
   notification: ['show'],
-  llm: ['provider', 'consume'],
+  // consume = 调用他人端点；provide = 注册自己的端点（出站仍由宿主代发）
+  models: ['consume', 'provide'],
 });
 
 /** 面板可以申请的能力（iframe 内可见的 RPC 方法白名单）。 */
@@ -84,7 +87,7 @@ const PANEL_SCOPES = Object.freeze([
   'ui.notify', 'ui.progress', 'ui.setTitle', 'ui.resize', 'ui.status',
   'state.get', 'state.set', 'state.delete',
   'ort.run', 'ort.manifest',
-  'llm.chat',
+  'models.invoke', 'models.list',
   'audio.decode', 'audio.encode',
   'i18n.t', 'theme.tokens', 'host.version',
 ]);

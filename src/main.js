@@ -686,6 +686,41 @@ app.whenReady().then(() => {
       const { getPluginService } = require('./main/plugins/PluginService');
       const { registerHandler } = require('./main/plugins/PluginProtocol');
       const { getLocale } = require('./main/locale');
+
+      // 模型调用面：端点 / 绑定 / 网关 / 授权（设计方案 §12）。初始化失败不能拖垮
+      // 主程序——插件调 models.* 会得到"未启用"，其余功能照常。
+      let modelService = null;
+      try {
+        const nodePath = require('node:path');
+        const { ModelService } = require('./main/models/ModelService');
+        const { createSafeStorageSecrets } = require('./main/models/safeSecrets');
+        const modelDir = nodePath.join(app.getPath('userData'), 'models');
+        modelService = new ModelService({
+          dir: modelDir,
+          secrets: createSafeStorageSecrets({
+            file: nodePath.join(modelDir, 'secrets.enc'),
+            safeStorage: require('electron').safeStorage,
+          }),
+          logger: console,
+          eventSink: (subject, evt) => {
+            // subject 决定事件往哪推。放在这里而不是内核里，是为了让 ModelService
+            // 能脱离 Electron 单测。
+            try {
+              if (subject.startsWith('plugin:')) {
+                getPluginService().runtimes.sendEvent(subject.slice(7), 'models.event', evt);
+              }
+            } catch (err) {
+              console.warn('[models] 事件路由失败:', err && err.message);
+            }
+          },
+        });
+        app.on('will-quit', () => {
+          try { modelService.dispose(); } catch (_) { /* 退出路径不抛 */ }
+        });
+      } catch (err) {
+        console.error('[models] 初始化失败:', err && err.message);
+      }
+
       const pluginService = getPluginService();
       pluginService.init({
         getMainWindow: () => {
@@ -696,6 +731,7 @@ app.whenReady().then(() => {
           }
         },
         locale: getLocale(),
+        models: modelService,
       });
       pluginService.setMenuDirtyHandler(() => {
         try {

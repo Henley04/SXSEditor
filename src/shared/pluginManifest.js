@@ -705,7 +705,7 @@ function validateManifest(manifest, ctx = {}) {
   // 先算总数，再逐项校验 —— 一个 512 项的 manifest 不该在校验通过后才被发现太大
   let total = 0;
   for (const [key, value] of Object.entries(contributes)) {
-    if (key === 'pipeline' || key === 'synthesis' || key === 'services' || key === 'automation' || key === 'llm') continue;
+    if (key === 'pipeline' || key === 'synthesis' || key === 'services' || key === 'automation' || key === 'models') continue;
     if (Array.isArray(value)) total += value.length;
   }
   if (total > LIMITS.totalContributions) {
@@ -791,7 +791,7 @@ function validateManifest(manifest, ctx = {}) {
 
   // 尚未落地的贡献点：接受但不生效，管理器里会标注"未实现"
   const pending = [];
-  for (const key of ['services', 'intents', 'llm', 'synthesis']) {
+  for (const key of ['services', 'intents', 'models', 'synthesis']) {
     if (contributes[key] !== undefined) pending.push(key);
   }
 

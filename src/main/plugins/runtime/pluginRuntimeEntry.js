@@ -38,6 +38,15 @@ const port = parentPort();
 const pendingHost = new Map();
 let hostSeq = 0;
 
+/**
+ * 在途的模型调用。key 是插件自己生成的 streamKey。
+ *
+ * 为什么不用 handleId 做 key：主进程的 start 事件可能比 hostCall 的返回值更早到，
+ * 那时我们还没有 handleId。streamKey 是插件在发请求之前就有的，天然能对上。
+ */
+const modelStreams = new Map();
+let modelStreamSeq = 0;
+
 function post(message) {
   if (port) {
     port.postMessage(message);
@@ -150,6 +159,21 @@ function createContext(init) {
        */
       status: (itemId, text) => hostCall('ui.status', { itemId: String(itemId || ''), text: String(text == null ? '' : text) }),
     },
+    /**
+     * 模型调用。调用方只说 task，不关心背后是本地还是云端。
+     *
+     *   const h = ctx.models.invoke({ task: 'chat', input: '...' }, { onChunk: (t) => ... });
+     *   await h.done;              // { text, endpointId } | { cancelled: true }
+     *   h.cancel();                // 主动取消 → done 以 { cancelled: true } 结算
+     *
+     * 没给 onChunk 时中间分片仍会被聚合，只是你不需要处理。
+     */
+    models: {
+      list: (options) => hostCall('models.list', { task: options && options.task }),
+      invoke: (req, handlers) => startModelStream(req, handlers),
+      /** 只要最终结果：内部仍走同一条流，但调用方不必处理分片。 */
+      invokeOnce: (req, handlers) => startModelStream(req, handlers).done,
+    },
     /** 用户设置（settings 分区里填的值）。只读快照 + 变更事件。 */
     settings: {
       get: (key) => settings[key],
@@ -173,7 +197,8 @@ function createContext(init) {
     }
   };
 
-  ctx.__cleanup = async () => {    for (const fn of cleanups.splice(0).reverse()) {
+  ctx.__cleanup = async () => {    cancelModelStreams();
+    for (const fn of cleanups.splice(0).reverse()) {
       try {
         await fn();
       } catch (err) {
@@ -300,6 +325,114 @@ async function dispose() {
   return { ok: true };
 }
 
+/**
+ * 发起一次模型调用，返回 { id, cancel(), done }。
+ * 事件由主进程经 `models.event` 推回，按 streamKey 认领。
+ */
+function startModelStream(req, handlers = {}) {
+  if (!req || typeof req !== 'object') {
+    throw Object.assign(new Error('models.invoke 需要请求对象'), { code: 'INVALID_REQUEST' });
+  }
+  const streamKey = `ms${++modelStreamSeq}`;
+  let resolveDone;
+  let rejectDone;
+  const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+  const entry = {
+    handlers: handlers || {},
+    chunks: [],
+    handleId: null,
+    cancelRequested: false,
+    resolveDone,
+    rejectDone,
+  };
+  modelStreams.set(streamKey, entry);
+
+  const handle = {
+    get id() { return entry.handleId; },
+    cancel() {
+      if (entry.handleId) {
+        hostCall('models.cancel', { handleId: entry.handleId }).catch(() => { /* 已结束 */ });
+      } else {
+        // 启动还没回来：等 handleId 到手再取消（见下面成功分支）
+        entry.cancelRequested = true;
+      }
+    },
+    done,
+  };
+
+  hostCall('models.invoke', { ...req, streamKey }, 60000).then((result) => {
+    if (!result || !result.handleId) {
+      modelStreams.delete(streamKey);
+      rejectDone(Object.assign(new Error('模型调用未启动'), { code: 'INTERNAL' }));
+      return;
+    }
+    entry.handleId = result.handleId;
+    if (entry.cancelRequested) handle.cancel();
+  }).catch((err) => {
+    modelStreams.delete(streamKey);
+    rejectDone(err);
+  });
+
+  return handle;
+}
+
+function handleModelEvent(evt) {
+  const entry = modelStreams.get(evt.streamKey);
+  if (!entry) return;
+  const h = entry.handlers || {};
+  try {
+    if (evt.type === 'start') {
+      entry.handleId = evt.handleId || entry.handleId;
+      if (h.onStart) h.onStart(evt);
+      return;
+    }
+    if (evt.type === 'chunk') {
+      entry.chunks.push(evt.data == null ? '' : String(evt.data));
+      if (h.onChunk) h.onChunk(evt.data, evt);
+      // 背压回执：网关按未确认的条数/字节数暂停生产方
+      if (entry.handleId) {
+        hostCall('models.ack', { handleId: entry.handleId, bytes: evt.bytes || 0 }).catch(() => { /* 已结束 */ });
+      }
+      return;
+    }
+    if (evt.type === 'progress') {
+      if (h.onProgress) h.onProgress(evt);
+      return;
+    }
+    if (evt.type === 'done') {
+      modelStreams.delete(evt.streamKey);
+      entry.resolveDone({ text: entry.chunks.join(''), endpointId: evt.endpointId || '' });
+      return;
+    }
+    if (evt.type === 'cancelled') {
+      modelStreams.delete(evt.streamKey);
+      entry.resolveDone({ cancelled: true, text: entry.chunks.join('') });
+      return;
+    }
+    if (evt.type === 'error') {
+      modelStreams.delete(evt.streamKey);
+      const info = evt.error || {};
+      const err = Object.assign(new Error(info.message || '模型调用失败'), {
+        code: info.code || 'INTERNAL',
+        retryable: info.retryable === true,
+      });
+      if (info.hint) err.hint = info.hint;
+      entry.rejectDone(err);
+    }
+  } catch (err) {
+    ctx && ctx.log && ctx.log.warn(`models handler failed: ${err && err.message}`);
+  }
+}
+
+/** 插件被卸载/停用时取消它所有在途调用，避免宿主还在往一个死进程里推事件。 */
+function cancelModelStreams() {
+  for (const [streamKey, entry] of [...modelStreams]) {
+    modelStreams.delete(streamKey);
+    try { entry.resolveDone({ cancelled: true, text: '' }); } catch (_) { /* ignore */ }
+    if (entry.handleId) hostCall('models.cancel', { handleId: entry.handleId }).catch(() => {});
+  }
+}
+
 function onMessage(raw) {
   const msg = raw && raw.data ? raw.data : raw;
   if (!msg || typeof msg !== 'object') return;
@@ -330,6 +463,10 @@ function onMessage(raw) {
       try {
         if (msg.event === 'settings.changed' && ctx) {
           ctx.__setSettings((msg.payload && msg.payload.values) || {});
+          return;
+        }
+        if (msg.event === 'models.event') {
+          handleModelEvent(msg.payload || {});
           return;
         }
         if (moduleExports && typeof moduleExports.onHostEvent === 'function') {

@@ -94,6 +94,9 @@ class PluginService {
     if (this.initialized) return this;
     this.mainWindowGetter = options.getMainWindow || (() => null);
     this._locale = options.locale || 'zh-CN';
+    // 模型调用面（可选）：没接的时候插件调 models.* 会得到 UNSUPPORTED，
+    // 而不是一个空指针崩溃 —— 单测与精简构建不必为了跑插件系统起整套网关。
+    this.models = options.models || null;
 
     const p = store.ensureDirs();
     this._pluginsDir = p.plugins;
@@ -692,6 +695,38 @@ class PluginService {
           level: payload.level === 'error' || payload.level === 'warn' ? payload.level : 'info',
         });
         return { ok: true };
+      }
+      case 'models.list': {
+        if (!(perms.models || []).includes('consume')) {
+          throw Object.assign(new Error('缺少权限 models:consume'), { code: ERR.PERMISSION_DENIED });
+        }
+        if (!this.models) throw Object.assign(new Error('模型服务未启用'), { code: ERR.UNSUPPORTED });
+        return this.models.list(`plugin:${pluginId}`, { task: params && params.task });
+      }
+      case 'models.invoke': {
+        if (!(perms.models || []).includes('consume')) {
+          throw Object.assign(new Error('缺少权限 models:consume'), { code: ERR.PERMISSION_DENIED });
+        }
+        if (!this.models) throw Object.assign(new Error('模型服务未启用'), { code: ERR.UNSUPPORTED });
+        const payload = params || {};
+        const streamKey = String(payload.streamKey || '');
+        if (!streamKey) throw Object.assign(new Error('缺少 streamKey'), { code: ERR.INVALID_REQUEST });
+        // 事件不在这里推：ModelService 的 eventSink 统一按 subject 路由，否则
+        // 插件会收到两份（这里一份、sink 一份），表现为每个 chunk 都重复。
+        const r = this.models.invoke(`plugin:${pluginId}`, payload, {
+          via: 'plugin',
+          streamKey,
+        });
+        if (r.error) throw Object.assign(new Error(r.error.message), { code: r.error.code });
+        return { handleId: r.handleId };
+      }
+      case 'models.cancel': {
+        if (!this.models) throw Object.assign(new Error('模型服务未启用'), { code: ERR.UNSUPPORTED });
+        return this.models.cancel(`plugin:${pluginId}`, String((params && params.handleId) || ''));
+      }
+      case 'models.ack': {
+        if (!this.models) throw Object.assign(new Error('模型服务未启用'), { code: ERR.UNSUPPORTED });
+        return this.models.ack(`plugin:${pluginId}`, String((params && params.handleId) || ''), (params && params.bytes) || 0);
       }
       case 'ui.status': {
         // 状态栏文案由插件自己更新（"已处理 3/10"）。只允许改自己声明的条目：
