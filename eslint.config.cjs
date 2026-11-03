@@ -96,6 +96,8 @@ module.exports = [
             'src/shared/pluginKeys.js',
             // 窗口标识与 preload 高危能力裁剪表（CJS，单测要拿它校验入口名）
             'src/shared/windowCapabilities.js',
+            // 模型调用面的公共契约（task/locality/错误码，三层共用，CJS）
+            'src/shared/modelContract.js',
             // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
             'src/shared/safeCall.js',
             // .sxssinger 解析（主进程用，纯函数便于单测）

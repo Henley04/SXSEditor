@@ -2,7 +2,8 @@
 
 > **状态**：M1（纵向切片）已实现并提交（`a7109d8`、`36be137`），并通过真实 Electron
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
-> （§9.2，2026-11-03）**；M3–M6 未开始。
+> （§9.2，2026-11-03）**；**M3（模型调用面）规格已定稿（§12，2026-11-04），待实施**；
+> M4–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -436,10 +437,11 @@ toolbar / statusBar / contextMenus / timelineOverlays / keybindings / settings /
 已经能只靠投影驱动，停用/卸载/重载都表现为"下一次投影就什么都不剩"。剩下的是 M3 起的
 推理/数据/智能面。
 
-**M3 推理面**：`synthesis.backend` 迁移、v1 adapter、三种 pipeline hook。
+**M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具，先行落地）、
+`synthesis.backend` 迁移、v1 adapter、三种 pipeline hook。
 **M4 数据面**：工程格式 open/save/import/export、导出器、文件关联、dialog filter。
-**M5 智能面**：`llm.provider`、`automation.method` 进 MCP、`--cli plugin`、跨插件
-service、secrets —— 落地"一句话 → 一句唱"。
+**M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
+落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。
 
 ## 10. 风险与取舍
@@ -488,7 +490,234 @@ service、secrets —— 落地"一句话 → 一句唱"。
 - 是否提供"导出已安装插件为 .sxsp"（便于分享，成本极低）。
 - 冲突的一对插件是否需要"让用户手动指定谁优先"（当前是双方都不绑，简单但保守）。
 
-## 12. 参考
+## 12. 模型调用面（M3 规格，2026-11-04 定稿）
+
+### 12.0 定位
+
+原来的 `llm.provider` 只设想"接一个大模型"。实际需求是**所有生成式能力统一入口**：
+LLM、MIDI 生成、伴奏生成、歌声合成、TTS/ASR，本地与云端一视同仁。核心约束三条：
+
+1. **调用方只认 task，不认厂商**。插件说"我要 accompaniment"，不关心背后是本地 ONNX 还是云端 HTTP。
+2. **出站收归宿主**。密钥不出主进程；所有 HTTP 由主进程代发；插件拿不到 baseUrl 与凭据。
+3. **授权落在端点上**。用户能理解"允许这个插件访问我的 OpenAI"，理解不了"允许访问 task=midi"。
+
+`llm` 贡献点更名为 `models`（`llm` 从未生效，无兼容负担）；`API_VERSION` 保持 2。
+
+### 12.1 领域模型
+
+```
+Task        调用方视角的能力：chat / completion / embed / midi / accompaniment / singing / tts / asr
+   ↓ 由 Binding 解析
+Binding     某 task 用哪个 endpoint：{ task, endpointId, model?, isDefault }
+   ↓
+Endpoint    一个网络位置 + 一把钥匙，ACL 客体：
+            { id, owner, provider, adapter, baseUrl, title, locality, auth, models, createdAt }
+   ↓
+owner       谁注册的（卸载级联用）：builtin | plugin | user
+provider    哪家服务（scope 分组用）：openai | anthropic | ollama | custom | 插件自定义
+adapter     协议怎么说话：openai-compatible | anthropic | local-process（封闭集合）
+locality    device | lan | cloud（决定是否免确认，见 §12.5）
+```
+
+- **endpoint 没有 `tasks` 字段**。一个连接被 `chat` 和 `embed` 同时绑定就是两条 binding，不在端点侧打勾。
+- **同一 baseUrl 不同 key = 两个 endpoint**，因为钥匙挂在 endpoint 上。
+- **一个 task 可有多条 binding**，其中一条 `isDefault`；没有默认就报 `NEED_ENDPOINT`，**绝不自动挑第一个**（端点之间价差可能两个数量级，兜底等于替用户花钱）。
+- **task 与 endpoint 冲突不静默回退**：显式给 endpointId 但它不支持该 task → `INVALID_REQUEST`。
+- **endpoint id 格式** `<owner>:<ownerId>.<localId>`，如 `builtin:singing.rvc`、`plugin:com.example.midi.gen`、`user:local.7f3a`。
+- **`synthesis.backend` 不并入**，注册时投影成 `builtin:singing.<backendId>`（`adapter: local-process`），调用方仍按 task 找过来。
+
+**基础 task 封闭，子能力开放**：加一个基础 task 需要宿主发版（每个 task 对应一套编解码 + 校验描述符，放在 `src/main/models/tasks/<task>.js`）；端点可声明自由字符串 `subtasks`（如 `midi.inpaint`），只用于路由粗筛与展示，不改变契约。
+
+### 12.2 调用协议：统一流式
+
+```js
+invoke({ task, endpointId?, model?, input, clientRequestId? }) → handle { id, cancel() }
+事件：start → chunk* → (progress*) → done | error | cancelled
+```
+
+| 规则 | 内容 |
+|---|---|
+| 终止事件 | **恰好一个**。流关闭后再发任何事件 → 网关断流 + `PROTOCOL_VIOLATION` + 该次结果作废 |
+| cancelled vs error | `cancel()` → `cancelled`；超时、上游失败 → `error`。二者审计与重试语义不同，不可混用 |
+| idleTimeout | 默认 60s 无事件判超时；**端点可覆写**（MIDI/音频常几十秒无输出）；判 `error(TIMEOUT)` |
+| maxDuration | 全局 10 分钟硬上限；**端点只能调小不能调大**，否则插件声明 24h 就把硬上限架空 |
+| chunk 合并 | 宿主按 16ms 聚合再下发，终止前强制 flush（首字延迟最多多一帧） |
+| 背压 | 调用方每收 N 个 chunk 回 `ack`；在途未确认超过 32 chunk / 1MB 即暂停生产 |
+| 可暂停通道 | HTTP 流 → 真背压（`response.pause()`） |
+| 不可暂停通道 | 本地原子推理 → 缓冲到上限**失败**，`BACKPRESSURE_OVERFLOW`（`retryable:false`，`hint:'consumer_too_slow'`），不静默丢弃 |
+| invokeOnce | SDK 语法糖，内部同一条流，但**在进程内聚合**，不把中间 chunk 推过 MessagePort，因此不受背压窗口约束（仍受总时长与内存上限约束） |
+| 缓冲上限 | 宿主强制，端点可声明 `suggestedBufferLimit`，实际取 `min(建议, 宿主上限)` |
+| 去重 | `subject + clientRequestId`，5 分钟窗口；在途返同一 handle，已完成返同一结果；**cancelled / failed 不缓存**（否则一次抖动后重试永远拿到失败） |
+
+### 12.3 二进制与句柄
+
+```js
+handle = { id, subject, jobId, sha256, size, mime, expiresAt, mac }
+```
+
+- **句柄是不可伪造的 capability，不是可猜的 jobId + 路径**。引用里不含真实路径，`ctx.files.read(handle)` 校验 `mac + subject + sha256 + size` 通过才返回内容。
+- **≤256KB 内联**：走 `binary_inline` chunk，受同一背压窗口管理，不落盘；**内联不豁免审计**（记 subject/jobId/size/sha256）。
+- **>256KB 落盘**：`userData/model-cache/<jobId>/`，LRU GC + 总量上限；引用带 `expiresAt`。
+- **读取权按 subject 判，fs 权限不参与**：
+
+| 读取方 | 句柄归属 | 结果 |
+|---|---|---|
+| 插件 A | A 自己（本次或历史） | 允许，即使无 `fs` 权限 |
+| 插件 A | 插件 B / host | `PERMISSION_DENIED` |
+| 面板 iframe | 同插件 | 允许（继承插件身份） |
+| MCP token | 该 token 发起 | 允许 |
+| host | 任意 | 允许 |
+| 任何 | 已 GC | `HANDLE_EXPIRED`（与拒绝区分，审计语义不同） |
+
+### 12.4 授权模型
+
+```
+ACL 记录 = (subject, endpointId) → { decision, scope, fingerprint, grantedAt }
+  decision    = allow | deny | ask（无记录时等效 ask）
+  scope       = once | session | always
+  fingerprint = hash(baseUrl + provider + adapter)
+```
+
+- **默认 ask**。allow 太松（装个插件就交出付费端点），deny 太硬（每个插件都要先去设置页手配，用户会放弃）。
+- **粒度 subject × endpoint**。运行时弹窗**永远单端点**，不允许"允许访问全部 OpenAI 端点"——用户在弹窗里的注意力只够判断一件事。
+- **持久化三档**，默认按钮落在 `session` 而非 `always`（减少手滑永久授权）。
+- **指纹变化即失效**：`baseUrl` / `provider` / `adapter` 任一变化 → 旧记录作废，重新确认。否则端点从 `api.example.com` 换成 `api.evil.com` 还能沿用上次授权。
+- **subject 级开关只能往严走**：可把某插件/某 token 的整体默认改成 `deny`（连问都不问，直接拒）；不能设成"全部 allow"。
+
+**首次确认弹窗**：
+
+```
+⚠ 「歌词助手」想要使用模型
+   端点    我的 DeepSeek（provider: deepseek）
+   任务    chat
+   将发送  约 1.2 KB 文本（当前分片的歌词）
+   将接收  流式文本
+   [ 拒绝 ] [ 仅本次 ] [ 本次运行 ] [ 始终允许 ]
+```
+
+- **"将发送"必须量化**（字节数 + 内容类别）。做不到量化就不弹窗、直接拒绝——不允许"未知数据发往未知地址"。
+- **模态、阻塞该次调用**；**30s 无响应视为拒绝**，审计记 `CONSENT_TIMEOUT`（与用户主动拒绝区分）。
+- **连击合并**：同一 subject 500ms 内连续 ask 多个端点 → 合成一个弹窗，逐项勾选，**默认全不勾**，不提供"全部允许"。
+- **后台不抢焦点**：主窗口无焦点时不弹模态，改通知条 + 托盘提示；30s 从"用户看到窗口"起算。
+
+**MCP 预授权**（设置 → 模型 → 访问控制）：
+
+```
+☑ 本地端点免确认（插件与 MCP 共用，默认开）
+☐ 跳过所有确认（危险；token 级；勾选后下方置灰；二次确认 + 常驻警示）
+已授权：[我的 Ollama] [内网 Llama] [+ 添加]     ← 与 always ACL 是同一份数据
+```
+
+- **bypass 只跳过确认，不跳过审计**：每次调用仍记录 subject / endpoint / task / 字节数 / 结果。
+- **加严要确认、放松不用**：勾选"跳过所有确认"要二次确认，取消不需要。
+- **"跳过所有确认"只对该 MCP token 生效**，不影响插件（否则用户为自己的脚本顺手勾上，所有插件一并免确认）。
+- 该 token 的调用在审计里标 `bypass: all`，便于事后追账。
+
+### 12.5 本地判定与免确认
+
+| 端点来源 | locality | 免确认 |
+|---|---|---|
+| `local-process`（进程内推理） | device | 自动 |
+| HTTP + `127.0.0.1` / `localhost` / `::1` | device | 自动 |
+| HTTP + 私网 IP（10/8、172.16/12、192.168/16、fc00::/7） | **cloud** | 需用户勾"视作本地" |
+| HTTP + 公网 | cloud | 需授权 |
+
+内网服务器不自动信任：那台机器可能计费、可能是共享集群，得由用户声明。手动标记处写明代价：*"标记为本地后，该端点的调用将不再询问。若它实际计费，你不会收到提示。"*
+
+**插件作者规范**：本地模型优先 `local-process`；必须走 HTTP 的（ollama / llama.cpp server / ComfyUI）注册成端点并声明 `locality`，**不允许在插件进程内自己发请求**（见 §12.7）。
+
+### 12.6 四类调用方
+
+| 调用方 | 入口 | 鉴权主体 |
+|---|---|---|
+| 插件 runtime | `ctx.models.invoke/list` | `plugin:<id>` |
+| 面板 iframe | `apiScopes: ['model.invoke']` → 宿主 postMessage 桥 | 同插件（身份取自面板注册表，不信 iframe 自报） |
+| MCP 客户端 | 工具 `model.list` / `model.invoke` | `mcp:<tokenId>` |
+| 宿主自身 | 命令面板 / 自动化 / 智能功能 | `host` |
+
+**面板双闸门**：必须同时满足（a）面板声明 `model.invoke`；（b）所属插件对该 endpoint 的 ACL 通过。审计标 `via:'panel'`。
+
+**能力发现 `list(task)`** 返回最小充分集，**不含 baseUrl / 凭据 / 失败详情**：
+
+```js
+{ id, title, owner, provider, tasks, subtasks, models, locality, ready, requiresConsent, preferredBy }
+```
+
+可见性：自己注册的（完整）、ACL=allow（脱敏）、**ACL=ask（可见，标 `requiresConsent`）**、ACL=deny（不可见）、其他插件的端点（可见，脱敏）。
+
+**MCP token scope 只有三种形态**，不做前缀通配：
+
+```
+models: '*'
+models: ['provider:openai', ...]              // 只匹配 owner ∈ {builtin,user} 的端点
+models: ['endpoint:user:local.7f3a', ...]
+```
+
+`provider:` 必须做来源隔离：插件注册的端点无论声明什么 provider，**一律只能 `endpoint:` 精确授权**——否则插件冒用 `provider:'openai'` 就能蹭用户对 OpenAI 的信任。`provider` 变更视为新 scope，已有授权不继承。
+
+`host` 主体：与插件走同一条审计管道（主体标 `host`），**跳过插件级 ACL**（无 pluginId，不该被插件配额/net 白名单误杀），但**保留端点可用性检查**（用户禁用某端点则宿主也不能用）；**独立配额桶**，不与插件共享。
+
+### 12.7 与既有安全模型的关系
+
+| 既有机制 | 关系 |
+|---|---|
+| `permissions.net` | 插件注册端点**不需要** net（出站全在宿主侧）；net 只用于插件自己的资源访问。两套不互相污染 |
+| `permissions.secrets` | 只管插件自己数据目录下的命名空间；**端点凭据在宿主 safeStorage 区，任何插件权限组合都读不到** |
+| `permissions.llm` → `models` | 改为 `models: ['consume', 'provide']`：consume = 调用他人端点，provide = 注册自己的端点 |
+| 面板 `apiScopes` | 新增 `model.invoke` / `model.list`，与插件 ACL 双闸门叠加 |
+
+**C 方案的收口是"防误用"，不是安全边界**（`runtime/sandbox.js` 自己声明"这不是沙箱"）：
+
+- runtime 入口劫持 `Module._load`，拦 `node:http` / `node:https` / `node:net` / `node:tls` / `node:dns` / `undici` → 抛 `UNSUPPORTED`（提示改用 `ctx.models.invoke`）+ 审计 `net_bypass_attempt`
+- 挡不住刻意的 `process.binding` / 动态 import / WASI；价值在于让普通作者走对路、让恶意行为变成"需要刻意动作"从而可追责、让用户在日志里看见谁不守规矩
+- 安装权限清单与文档明示"该插件可自由访问网络"，不制造"已经被关住"的错觉
+
+### 12.8 错误码与实施切片
+
+新增错误码：
+
+```
+NEED_ENDPOINT        该 task 没有默认端点，且调用方未指定
+CONSENT_REQUIRED     需要用户确认（弹窗已发起）
+CONSENT_TIMEOUT      30s 未响应，视为拒绝
+TIMEOUT              idleTimeout 或 maxDuration 触发
+BACKPRESSURE_OVERFLOW 消费方太慢（retryable:false, hint:'consumer_too_slow'）
+PROTOCOL_VIOLATION   终止事件后仍有事件
+HANDLE_EXPIRED       句柄已 GC
+ADAPTER_UNSUPPORTED  宿主不认识该 adapter（端点登记为 unsupported，不影响其他端点）
+ENDPOINT_UNAVAILABLE 端点被用户禁用或凭据缺失
+```
+
+四段实施，每段独立提交、独立验证：
+
+| 段 | 内容 | 验证 |
+|---|---|---|
+| 1. 内核 | EndpointStore / BindingStore、Gateway（流 / cancel / 双超时 / 背压 / 去重 / handle）、Audit、ACL | 纯 Node 单测，不依赖窗口 |
+| 2. 接入 | `ctx.models.*`、面板 `model.invoke`、MCP `model.list` / `model.invoke` + token scope、host 主体 | 单测 + 真实窗口对本地假端点 |
+| 3. UI | 设置页三块（端点 / 任务绑定 / 访问控制）、确认弹窗、审计面板、管理器显示来源 | 实机走查：首次调用 → 弹窗 → 允许 → 撤销 → 再拒 |
+| 4. 文档 + 示例 | 作者文档（task 契约、endpoint 声明、locality、禁止自建 HTTP）、示例插件真跑一次 `chat` 或 `midi` | 打包安装跑通 |
+
+**第 1 段已落地（2026-11-04）**，纯 Node 可测，不依赖窗口：
+
+```
+src/shared/modelContract.js          task 集合 / adapter↔task / locality 判定 / 错误码 / 限额
+src/main/models/ModelEndpointStore.js 端点与绑定持久化（元数据与密钥分文件）
+src/main/models/ModelAcl.js          (subject, endpoint) 判定 / 指纹失效 / once-session-always
+src/main/models/ModelGateway.js      统一流 / 双超时 / 背压 / 去重 / 终止事件唯一
+src/main/models/ModelHandleStore.js  capability 句柄（mac + subject + sha256）+ LRU GC
+src/main/models/ModelAudit.js        元数据审计（不记内容，bypass 留痕）
+src/main/models/adapters/            openai-compatible / anthropic / local-process
+```
+
+`test/modelContract.test.js`（19）+ `test/modelGateway.test.js`（20）覆盖：
+locality 四档判定、ACL 指纹失效与 once 消费、终止事件唯一、cancel 与 error 的区分、
+端点 idle 覆写、去重命中与失败不缓存、可暂停/不可暂停两条背压路径、审计不含输入内容。
+
+未接线的部分（第 2 段）：`tts` / `asr` / `midi` / `accompaniment` 的二进制结果
+（需要把 `ModelHandleStore` 接进 adapter 的 chunk 路径）、`local-process` 的真实后端
+（等 `synthesis.backend` 迁移）、以及四类调用方的 IPC。
+
+## 13. 参考
 
 - v1 契约（歌声后端）：[`plugins.md`](plugins.md)
 - 实施过程中的取舍记录：[`SXSEditor-实施记录.md`](SXSEditor-实施记录.md)
