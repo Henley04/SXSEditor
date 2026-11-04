@@ -31,6 +31,7 @@ const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
 const { panelUrl } = require('./PluginProtocol.js');
 const { PipelineHooks } = require('./PipelineHooks.js');
 const { PluginDataPlane } = require('./PluginDataPlane.js');
+const { PluginSecrets } = require('./PluginSecrets.js');
 const { buildAutomationDef } = require('../../shared/pluginAutomation.js');
 
 class PluginService {
@@ -107,6 +108,15 @@ class PluginService {
 
     const p = store.ensureDirs();
     this._pluginsDir = p.plugins;
+
+    // 密钥：每个插件一个文件，宿主只负责存放与权限门。
+    // safeStorage 在 Linux 无 keyring 时会报"不可用"，PluginSecrets 会如实带出
+    // encrypted:false —— 这里不拦，拦了插件就只能把 token 写进自己的 state.json。
+    this.secrets = new PluginSecrets({
+      dir: p.data,
+      safeStorage: safeStorageOrNull(),
+      logger: console,
+    });
 
     // 数据面：文件 → 插件 codec → 工程文档。构造在这里、用在这里，
     // 但它依赖的 registry 在构造期就有了，所以不涉及初始化顺序问题。
@@ -612,6 +622,13 @@ class PluginService {
 
     // 3. 删文件
     const removed = installer.uninstall(id, { keepData: !!options.keepData });
+    // 密钥是敏感数据：不保留数据时连内存缓存一起丢；keepData 时文件随目录保留，
+    // 但缓存仍要失效 —— 不然重装同一个 id 会拿到上一份内存里的旧密钥。
+    if (!options.keepData) {
+      try { this.secrets.clear(id); } catch (_) { /* 目录已被删，忽略 */ }
+    } else if (this.secrets) {
+      this.secrets.invalidate(id);
+    }
 
     // 4. 断言（失败只记录：此时内存与磁盘都已干净，计数偏差来自异步回收）
     try {
@@ -961,6 +978,16 @@ class PluginService {
     if (!record) throw Object.assign(new Error('插件未加载'), { code: ERR.NOT_FOUND });
     const perms = record.manifest.permissions;
 
+    // 拒绝也要留痕：一个没有 secrets 权限的插件反复尝试读密钥，是权限声明写错了，
+    // 还是它在试探边界？审计里能看出频次，这比只看一次异常有用。
+    const needSecretsPerm = (mode, action, key) => {
+      if ((perms.secrets || []).includes(mode)) return;
+      store.audit('secret-denied', pluginId, {
+        action, key: key === null || key === undefined ? null : String(key).slice(0, 64),
+      });
+      throw Object.assign(new Error(`缺少权限 secrets:${mode}`), { code: ERR.PERMISSION_DENIED });
+    };
+
     switch (method) {
       case 'project.read': {
         if (!(perms.project || []).includes('read')) {
@@ -1048,6 +1075,39 @@ class PluginService {
         ipcFacade.broadcastSnapshot(this);
         return { ok: true };
       }
+      // ---- 密钥 ----
+      // 值只在这一条往返里出现：不进审计、不进日志、不进快照。
+      // 读与写分成两个权限，是因为"能读"与"能改"在威胁模型里不是一回事：
+      // 一个只读的展示面板没有理由能覆盖用户的 token。
+      case 'secrets.get': {
+        needSecretsPerm('read', 'get', params && params.key);
+        const r = this.secrets.get(pluginId, params && params.key);
+        if (!r.ok) throw Object.assign(new Error(r.error), { code: ERR.INVALID_REQUEST });
+        return r.value;
+      }
+      case 'secrets.set': {
+        needSecretsPerm('write', 'set', params && params.key);
+        const payload = params || {};
+        const r = this.secrets.set(pluginId, payload.key, payload.value);
+        if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code || ERR.INVALID_REQUEST });
+        store.audit('secret', pluginId, {
+          action: 'set', key: String(payload.key), created: r.created, encrypted: r.encrypted,
+        });
+        return { ok: true, created: r.created, encrypted: r.encrypted };
+      }
+      case 'secrets.delete': {
+        needSecretsPerm('write', 'delete', params && params.key);
+        const payload = params || {};
+        const r = this.secrets.delete(pluginId, payload.key);
+        if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code || ERR.INVALID_REQUEST });
+        store.audit('secret', pluginId, { action: 'delete', key: String(payload.key), existed: r.existed });
+        return { ok: true, existed: r.existed };
+      }
+      case 'secrets.keys': {
+        needSecretsPerm('read', 'keys', null);
+        const r = this.secrets.keys(pluginId);
+        return { keys: r.keys, encrypted: r.encrypted };
+      }
       default:
         throw Object.assign(new Error(`未实现宿主能力：${method}`), { code: ERR.UNSUPPORTED });
     }
@@ -1115,6 +1175,15 @@ class PluginService {
     // registry 的变更已经会触发 onDidChange；这里只处理"状态变化但贡献没变"的情况
     if (!this._changeDisposable) return;
     ipcFacade.broadcastSnapshot(this);
+  }
+}
+
+function safeStorageOrNull() {
+  try {
+    const { safeStorage } = require('electron');
+    return safeStorage || null;
+  } catch (_) {
+    return null;
   }
 }
 

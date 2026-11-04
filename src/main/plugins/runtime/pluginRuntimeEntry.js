@@ -181,6 +181,24 @@ function createContext(init) {
       /** 读大结果。归属由宿主判（只能读自己那次调用的输出）。 */
       read: (handle) => hostCall('models.read', { handle }, 60000),
     },
+    /**
+     * 插件密钥（`permissions.secrets`）。
+     *
+     *   await ctx.secrets.set('cloud.apiKey', 'sk-...');
+     *   const key = await ctx.secrets.get('cloud.apiKey');   // string | null
+     *   await ctx.secrets.delete('cloud.apiKey');
+     *   const { keys, encrypted } = await ctx.secrets.keys();
+     *
+     * 值只在这一条往返里出现：不进日志、不进审计、不进界面快照。`encrypted:false`
+     * 表示这台机器没有可用的系统密钥环，宿主仍会存（否则你只能写进 state.json），
+     * 但你应该在界面上如实告诉用户"当前是明文"。
+     */
+    secrets: {
+      get: (key) => hostCall('secrets.get', { key: String(key || '') }),
+      set: (key, value) => hostCall('secrets.set', { key: String(key || ''), value }),
+      delete: (key) => hostCall('secrets.delete', { key: String(key || '') }),
+      keys: () => hostCall('secrets.keys', {}),
+    },
     /** 用户设置（settings 分区里填的值）。只读快照 + 变更事件。 */
     settings: {
       get: (key) => settings[key],
