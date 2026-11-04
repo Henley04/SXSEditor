@@ -128,8 +128,8 @@ SXSEditor --cli plugin call example-sv2.stats --json
 ## 7. 还没做的部分
 
 - 长任务形态：`async: true` 提交成 job（桥接层支持，插件侧还没有进度/取消语义）；
-- 跨插件 service 调用（`contributes.services` 已校验，未接线）；
-- secrets 的加密存储与权限门（`permissions.secrets` 已有词表，未接线）。
+- 密钥的读写见 [`plugins-secrets.md`](plugins-secrets.md)（已落地，不在此列）；
+- 跨插件 service 调用（`contributes.services` 已校验，未接线）。
 
 ## 8. 完整示例
 

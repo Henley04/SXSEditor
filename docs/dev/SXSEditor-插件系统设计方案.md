@@ -8,10 +8,12 @@
 > 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4）；
 > 第 3 段是插件音素在分片编辑器里的只读呈现（§9.5）；第 4 段是 `ext.curve` 的绘制、
 > `ext.render` 的工程级意图、`contributes.exporters` 成品导出、旁挂文件与 Windows
-> 插件扩展名关联（§9.6，2026-11-04）；**M5（智能面）第 1–2 段落地**：`contributes.automation`
-> 的方法进 MCP（§9.7），以及 `--cli plugin list|methods|call|automation` —— 命令行默认
-> 转发现有实例的 `/automation`，与 agent 看到的能力表、权限门、审计完全一致（§9.8，
-> 2026-11-05）。M5 剩余（跨插件 service、secrets）与 M6 未开始。
+> 插件扩展名关联（§9.6，2026-11-04）；**M5（智能面）第 1–3 段落地**：`contributes.automation`
+> 的方法进 MCP（§9.7），`--cli plugin list|methods|call|automation` —— 命令行默认
+> 转发现有实例的 `/automation`，与 agent 看到的能力表、权限门、审计完全一致（§9.8），
+> 以及**插件密钥** `permissions.secrets`（每插件隔离、读写分权、审计只记 key、
+> `encrypted` 如实报告，§9.9，2026-11-05）。M5 剩余（跨插件 service、方法的长任务
+> 形态）与 M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -628,10 +630,10 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 §9.6 曲线/渲染意图/导出器/旁挂/系统关联）。`ext.render` 的语义有单测覆盖，
 但本机没有模型文件，**没有一次带声音的端到端验证**（见 §9.6"没验到的部分"）。
 **M5 智能面**：`automation.method` 进 MCP **已落地**（§9.7），命令行入口
-`--cli plugin` **也已落地**（§9.8：默认转发运行实例、`--local` 临时实例、开关写盘带
-`via:'cli'` 审计，11 条单测 + 实机走查）。剩余：跨插件 service 提供/消费、secrets
-加密存储与权限门、插件方法的长任务形态 —— 落地"一句话 → 一句唱"（`llm.provider`
-已并入 M3 的模型调用面）。
+`--cli plugin` **已落地**（§9.8），插件密钥 `permissions.secrets` **已落地**（§9.9：
+每插件一个加密文件、读写分权、审计只记 key、`encrypted` 如实报告，作者指南见
+[`plugins-secrets.md`](plugins-secrets.md)）。剩余：跨插件 service 提供/消费、插件
+方法的长任务形态 —— 落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。
 
 ### 9.6 M4 第 4 段端到端验证（2026-11-04）
@@ -814,6 +816,64 @@ docs/dev/plugins-automation.md  作者视角的命令行用法
   操作，不适合做成一行命令；需要脚本化时走 MCP 也没有对应方法（M6 的 marketplace 再谈）；
 - CLI 本地调用与 MCP 调用在 `automation-invoke` 里不带入口标记（只有开关变更带 `via`）。
   要区分入口，MCP 侧看 `mcp-audit.log`，CLI 本地侧只能靠时间戳 —— 够用，但不算完备。
+
+### 9.9 M5 第 3 段：插件密钥（2026-11-05）
+
+**这一段要回答的是**：插件要存一个 token 时应该放哪。在此之前只有两个选择：
+`ctx.state`（明文 JSON，随备份/日志/用户文件夹四处跑）和 `ctx.settings`（用户
+在设置页看得见、改得了）。两者都不适合凭据，于是作者只能自己 `require('node:fs')`
+去写文件 —— 每人都要重新实现一遍加密、权限位与落盘。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | 每个插件一个文件 `plugin-data/<id>/secrets.enc` | 不用一张大表：卸载时"删不删数据"、备份、只清某个插件的密钥，都要按插件粒度操作。一张表会让一次误删波及所有人 |
+| 2 | 把模型端点的 `safeSecrets` 抽成 `src/main/secretsStore.js`，原文件变 re-export | 加密、0600、tmp→rename、"降级时必须说出来"这四件事一旦有两份实现就会漂移，而漂移的方向通常是"某一边忘了标记明文" |
+| 3 | 读与写是**两个**权限 | 只读的展示面板没有理由能覆盖用户的 token。`secrets.get/keys` 要 `read`，`set/delete` 要 `write` |
+| 4 | `encrypted` 是事实而不是承诺 | Linux 无 keyring 时 `safeStorage` 不可用：宿主仍然存（否则作者只能写明文 state），但返回值、文件头、`ctx.secrets.keys()` 都会带 `encrypted:false`。让用户知道，比让用户以为安全要好 |
+| 5 | 审计只记 key 名与动作 | `secret` 事件含 `{action, key, created|existed, encrypted}`，**不含值**。能回答"谁在什么时候改了哪个密钥"，答不出"值是什么"——后者不该由日志承担 |
+| 6 | 上限 64 key × 8KB（UTF-8 字节） | 密钥不是数据库。超过这个量级说明插件在拿它当存储用；早拒比晚崩好 |
+| 7 | 目录显式 `chmod 700` | `mkdirSync(mode:0o700)` 只对**新建**目录生效；而 `plugin-data/<id>` 是 installer 用默认 umask 建的（755）。不改的话同机其他用户能列出"这个插件存了密钥文件" |
+| 8 | 单条解密失败不拖垮整个文件 | 换机、重装、从备份恢复 userData 都会让旧密文解不开。跳过该条并 warn，其余条目照常可用 |
+| 9 | 卸载时清缓存，`keepData` 时保留文件 | 重新安装同一 id 必须从磁盘重读（`invalidate`），否则会拿到上一份内存里的旧密钥 |
+
+新增/改动文件：
+
+```
+src/main/secretsStore.js             加密存储（models 与 plugins 共用），新增 keys/has/size
+src/main/models/safeSecrets.js       改为 re-export（调用点与测试路径不变）
+src/main/plugins/PluginSecrets.js    每插件归属、键值校验、上限、invalidate/clear
+src/main/plugins/PluginService.js    secrets.get/set/delete/keys 四个 host 分支 + 权限门 + 审计
+src/main/plugins/runtime/pluginRuntimeEntry.js   ctx.secrets
+plugins/example-secrets/*            示例：save / reveal / clear（可被自动化调用）
+test/pluginSecrets.test.js           18（校验 / 存储 / 隔离 / 权限门 / 审计）
+docs/dev/plugins-secrets.md          作者指南
+```
+
+#### 走查（xvfb + 真实 utilityProcess，经 `--cli plugin call --local`）
+
+| 场景 | 结果 |
+|---|---|
+| `example-secrets.save --params '{"value":"sk-walkthrough-2026"}'` | `{key:"demo.token", created:true, bytes:19, encrypted:false}` |
+| 落盘文件 | `{"version":1,"encrypted":false,"data":{"demo.token":"sk-walkthrough-2026"}}`，模式 **600**；目录从 755 收紧为 **700** |
+| 新进程 `example-secrets.reveal` | `{present:true, token:"sk-walkthrough-2026", keys:["demo.token"], encrypted:false}` —— 跨进程从磁盘读回，不是内存 |
+| 审计 | 一条 `secret {action:"set", key:"demo.token", created:true, encrypted:false}`；`grep` 明文值命中 **0** 次 |
+| `example-secrets.clear` 后再 reveal | 文件变 `{"data":{}}`，`present:false`、`keys:[]` |
+| 无 `secrets` 权限的插件调 `ctx.secrets.get` | 跨进程返回 `{ok:false, code:"PERMISSION_DENIED", message:"缺少权限 secrets:read"}`；审计多一条 `secret-denied` |
+| 非法 key `../x` / 9KB 值 | `INVALID_REQUEST`，且不创建文件（单测断言） |
+
+本机是 Linux + Xvfb，没有可用密钥环，因此 `encrypted:false` 是**预期的真实结果**；
+Windows（DPAPI）与 macOS（Keychain）下的密文路径由单测里的假 `safeStorage` 覆盖，
+没有在本机验证。
+
+#### 边界（写在明处）
+
+- **这不是沙箱**。插件仍可 `require('node:fs')` 读别人的 `secrets.enc`；加密可用时
+  读到的是密文，不可用时就是明文。`ctx.secrets` 防的是"意外泄漏到日志/界面/工程
+  文件/备份"，不是"恶意插件偷看"。真正的边界是 utilityProcess + 安装时的权限告知。
+- **管理器界面还没有密钥视图**：现在只能在插件自己的 UI 里看到 `keys()` 的数量，
+  或从命令行查。用户级"清除这个插件的密钥"按钮属于 M6 的权限界面。
+- **示例插件把 token 回显在返回值里**，只为让命令行验证往返；真实插件不该这么做
+  （文档里已用加粗写了这一条）。
 
 ## 10. 风险与取舍
 
