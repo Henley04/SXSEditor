@@ -30,6 +30,11 @@
  *                   可选：--file <project.sxsproj>（可重复，必需）--fragment <N> --out <dir>
  *                         --max-items-per-frag <N> --min-sec <s> --max-sec <s>
  *                         --max-prompt-frames <N> --full-prompt-items <N> --force --dry-run
+ *   plugin list     列出已安装插件（磁盘状态）与运行实例里真正暴露的方法
+ *   plugin methods  列出可被自动化调用的方法（--plugin <id> 过滤）
+ *   plugin call     调用一个插件方法：plugin call <pluginId>.<commandId>
+ *                   可选：--params <json|-> --json --local
+ *   plugin automation  开关某插件的外部调用：plugin automation <id> on|off
  *
  * 退出码：0=成功，1=运行时错误，2=参数错误
  */
@@ -73,6 +78,14 @@ Commands:
                            --seed <N>                fix initial noise (required
                                                      for any precision comparison)
                            --dry-run                 only print the parsed plan
+  plugin          Work with plugin-provided automation methods.
+                  plugin list           installed plugins + methods the app exposes
+                  plugin methods        callable methods (--plugin <id> to filter)
+                  plugin call <pluginId>.<commandId> [--params <json|->] [--json]
+                                        invoke one method (defaults to the running app)
+                  plugin automation <id> on|off
+                                        allow/block external calls (after reload)
+                  Add --local to use a temporary instance instead of the running app.
   qdrift-conds    Export calibration conditions (prompt mel + cond) from one or
                   more .sxsproj projects for Q-Drift recalibration.
                   Writes <item>_prompt.bin / <item>_cond.bin / <item>.json plus
@@ -909,9 +922,14 @@ function parseArgs(argv) {
   if (rest.length === 0) return { command: 'help', opts: {} };
 
   const command = rest[0];
-  const opts = {};
+  const opts = { _: [] };
   for (let i = 1; i < rest.length; i++) {
     const a = rest[i];
+    // ---- plugin：位置参数（子命令与方法名）与它自己的开关 ----
+    if (a === '--plugin') { opts.plugin = rest[++i]; continue; }
+    if (a === '--params') { opts.params = rest[++i]; continue; }
+    if (a === '--json') { opts.json = true; continue; }
+    if (a === '--local') { opts.local = true; continue; }
     if (a === '--out') { opts.out = rest[++i]; continue; }
     if (a === '--out-f32') { opts.outF32 = rest[++i]; continue; }
     if (a === '--steps') { opts.steps = parseInt(rest[++i], 10); continue; }
@@ -960,6 +978,9 @@ function parseArgs(argv) {
       catch (e) { throw new Error(`Invalid --notes JSON: ${e.message}`); }
       continue;
     }
+    // 位置参数（plugin call 的方法名、plugin automation 的 id 与 on/off）。
+    // 已知开关的值都在上面用 ++i 消费掉了，走到这里的一定是真的位置参数。
+    if (!a.startsWith('--')) { opts._.push(a); continue; }
     // 未知参数忽略
   }
   return { command, opts };
@@ -992,6 +1013,12 @@ async function runCli(argv) {
       case 'synth': return await cmdSynth(opts);
       case 'synth-project': return await cmdSynthProject(opts);
       case 'qdrift-conds': return await cmdQdriftConds(opts);
+      case 'plugin': {
+        // 插件子命令放在独立模块里：它要处理"运行实例 vs 临时实例"两条路径，
+        // 塞进这个已经 1000 行的文件会让两条路径的差异更难被看见。
+        const { runPluginCommand } = require('./cliPlugin');
+        return await runPluginCommand(opts._ || [], opts);
+      }
       default:
         logErr(`Unknown command: ${command}\n`);
         logErr(HELP_TEXT);
@@ -1003,4 +1030,4 @@ async function runCli(argv) {
   }
 }
 
-module.exports = { runCli, HELP_TEXT };
+module.exports = { runCli, HELP_TEXT, parseArgs };
