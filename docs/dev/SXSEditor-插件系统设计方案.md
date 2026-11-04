@@ -4,9 +4,10 @@
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
 > （§9.2，2026-11-03）**；**M3（模型调用面）五段全部落地，并通过实机走查（§12，
 > 2026-11-04）**，含二进制结果、`synthesis.backend` 迁移与 `postWaveform` hook；
-> **M4（数据面）两段均已落地**：第 1 段是打开链路、对话框过滤器与投递（§9.3）；
-> 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4，
-> 2026-11-04）。系统级文件关联、音频导出器、`ext` 的绘制/渲染接线未做。M5–M6 未开始。
+> **M4（数据面）三段均已落地**：第 1 段是打开链路、对话框过滤器与投递（§9.3）；
+> 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4）；
+> 第 3 段是插件音素在分片编辑器里的只读呈现（§9.5，2026-11-04）。
+> 系统级文件关联、音频导出器、`ext.curve` / `ext.render` 的运行时接线未做。M5–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -250,12 +251,13 @@ src/renderer/platformInfo.js             平台判定（Mod 显示成 Ctrl 还�
 plugins/example-hello/overlay/           示例浮层
 ```
 
-**M4 新增（两段均已落地）**
+**M4 新增（三段均已落地）**
 
 ```
 src/main/plugins/PluginDataPlane.js      文件 ↔ 插件 codec ↔ 校验过的工程文档（open/save）
 src/shared/projectFormat.js              validateProjectDocument（跨进程数据的唯一入口）
 src/shared/pluginExt.js                  extSchema / ext 的声明与数据分离、规模上限
+src/shared/pluginPhonemes.js             插件音素 → 可绘制的形态（归一化 / 命名空间 / 反查）
 src/main/atomicWrite.js                  原子写盘（宿主 JSON 与插件字节共用一份）
 plugins/example-sv2/                     示例：接管 .sv2，read/write 严格对称
 ```
@@ -280,8 +282,10 @@ src/main/plugins/runtime/{fs,net,llmBridge,projectCodec,audio}.js
 | `forge.config.js` / `webpack.*.config.js` | `plugin_manager_window` 入口；runtime 目录裸拷贝 | ✅ |
 | `scripts/check-ipc-channels.js` | 无裸字符串通道 | ✅ 未改（静态常量已识别） |
 | `src/main/svsIpc.js` | 删除 `registerPluginIpc()` 调用 | ⬜ M3 |
-| `src/renderer/projectManager.js` | 拆出 `applyProjectDocument(doc, path)`；打开先问插件；`_writeProjectTo` 按扩展名分派保存 | ✅ M4-1/2 |
+| `src/renderer/projectManager.js` | 拆出 `applyProjectDocument(doc, path)`；打开先问插件；`_writeProjectTo` 按扩展名分派保存（自动保存也走它） | ✅ M4-1/2/3 |
 | `src/shared/projectFormat.js` | `validateProjectDocument(doc)`（规模/深度/原型污染/ext 各层） | ✅ M4-1/2 |
+| `src/shared/pluginPhonemes.js` | `readPhonemeField` / `normalizePhonemeList` / `isHostPhonemeName` | ✅ M4-3 |
+| `src/fragmentEditor/canvasRenderer.js` | `getPhonemeBarLayout` / `getExternalPhonemes` / 外部音素带绘制 | ✅ M4-3 |
 | `src/main/plugins/PluginDataPlane.js` | `saveDocument`（权限 → 校验 → codec.write → 原子写 → 审计） | ✅ M4-2 |
 | `src/renderer/mcpAutomation.js` | `project.saveTo` 按扩展名分派，可导出插件格式 | ✅ M4-2 |
 | `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry | ✅ M4-1（Windows 注册表项除外） |
@@ -549,11 +553,69 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 且"不认识的东西"有一条明确的通道可以活着回来。剩下的是把 `ext` 的声明真正接到
 界面上（音素只读呈现）与 `export.audio`。
 
+### 9.5 M4 第 3 段端到端验证（2026-11-04）
+
+这一段做「呈现」：把 `extSchema.note.phonemes` 真正接到分片编辑器的音素面板上。
+
+#### 为什么是两条带，不是一条
+
+宿主自己的音素是**推导出来的**（`lyric` → 音素表），它决定合成；插件带来的音素是
+**别人家坐标系里的同一件事**。合并成一个数组看起来"信息更全"，实际是灾难：
+
+- 用户改一个音素的时长，改的是谁家的？两者没有一一对应关系（`["tS"]` 可能对应
+  宿主的一个音素，也可能对应两个）。
+- 宿主对不认识的符号（`tS`、`sil`）无法定出时长比例，等宽铺开只是权宜；
+  把它混进可拖拽的数组会让人以为"拖了有效"，而合成根本不看它。
+
+所以面板分成上下两层：上层是宿主音素条（彩色、有音量包络、可拖），下层是外部
+音素带（灰、只读、等宽切分）。视觉上互不从属，用户一眼知道哪条能改。
+
+#### 关键决定
+
+| 决定 | 为什么 |
+|---|---|
+| **等宽切分外部音素** | 插件没有给出时长比例，宿主也不能替它编一个。等宽是"我只知道顺序"的诚实表达 |
+| **宿主不认识的名字画虚线框** | `en_/jp_/zh_/yue_` 命名空间内画实心灰块，其余（`tS`、`sil`）只画虚线框 —— 后者连"看起来像宿主音素"都不该 |
+| **`editable:true` 也不给编辑** | 写回要经过插件的语义校验，宿主代劳只会造出插件不认的值。当前一律只读，`editable` 只影响提示语 |
+| **一条 note 只呈现第一个声明的插件** | 两家插件同时声明音素时，界面没有"并列显示两家"的位置。取第一个并在带子右端标出来源 |
+| **布局抽成 `getPhonemeBarLayout`** | 渲染与命中检测各算一遍是"点在带子上却选中了宿主音素"的老来源 |
+| **逐帧结果用 WeakMap 缓存** | 绘制是 16ms 路径，`readPhonemeField` 每次都要遍历 ext 键 + 字段表 |
+| **`extSchema` 挂在 project payload 上带进分片编辑器** | 它本来就是文档属性，主进程转发时不需要认识它；另开一个 IPC 字段等于让主进程替渲染层解释插件 |
+
+#### 实机走查
+
+手段同前（xvfb + CDP + 真实 second-instance 投递）。测试文件 4 个音符：
+`["l","a"]`（全外部）、`["en_AA1","tS"]`（混合）、`["s","a"]`、无音素。
+
+| 场景 | 结果 |
+|---|---|
+| 打开 `ext-phon.sv2` → 双击分片 → Phoneme 面板 | 上排 4 段宿主音素条（la/ah/sa/ma + 音量包络），下排灰色带：`l` `a` / `en_AA1` `tS` / `s` `a` / 第 4 条留空 |
+| 边框样式 | `en_AA1` 实心浅灰块（宿主命名空间内），`l`/`a`/`tS`/`s` 虚线框（宿主不认识的方言） |
+| 标题行 | 左侧 `Phoneme`，右侧 `外部音素只读`；带子右端 `外部 · example-sv2` |
+| 点宿主音素条 | 该格出现选中框与包络控制点（原有行为不变） |
+| 点外部音素带 | 选中态清除并重绘 —— 带子不接受任何指针交互 |
+| 悬停外部带 | 光标保持默认（不是 `ew-resize` / `crosshair`） |
+| 内置工程（无 `extSchema`） | 面板高度与 M4 之前完全一致，没有灰带、没有"只读"字样 |
+| 改 BPM / 拖动音符（触发 400ms 自动保存） | `.sv2` 仍是 `"format": "sv2"`，`phonemes` 三处逐字保留 |
+| 单测 | `pluginPhonemes` 19（归一化 / 命名空间 / 反查） |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | **自动保存把 `.sv2` 写成一坨 SXSEditor JSON**，下次插件读它报"不是 SV2 工程" | `_commitAutoSave` 绕过 `_writeProjectTo`，直接 `serializeProject` + `saveFile`；M4-2 只覆盖了 Ctrl+S 与 MCP 两条路径 | 自动保存改走同一分派；插件警告在自动保存时静默（存入 `state.projectSaveWarnings`），手动保存照常弹 —— 否则拖一个音符弹一次 |
+| 2 | 点面板空白 / 外部带后高亮不消失，看起来"点不掉" | `handlePhonemeMouseDown` 清了状态却没重绘，等下一次性渲染才消失 | 清除选中后若之前有选中则 `render()` |
+
+**结论**：`ext` 从"能存能取"变成"能看见"。用户打开一份别家的工程，能对照看到
+两套音素体系，而不是只看到宿主自己解释出来的那一套。剩余：`ext.curve` /
+`ext.render` 的运行时接线（声明已能通过校验，尚未参与绘制与音频后处理）。
+
 **M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具）、`synthesis.backend`
 迁移、二进制结果、`postWaveform` hook —— 均已落地。剩 v1 adapter（`compat/v1Adapter.js`）
 与 `preEncoder` / `postMel` 两个 stage。
-**M4 数据面**：两段均已落地（§9.3 打开、§9.4 保存与扩展域）。剩余：`export.audio`
-音频导出器、系统级文件关联（Windows 注册表项）、`ext` 的绘制与渲染接线。
+**M4 数据面**：三段均已落地（§9.3 打开、§9.4 保存与扩展域、§9.5 音素呈现）。剩余：
+`export.audio` 音频导出器、系统级文件关联（Windows 注册表项）、`ext.curve` /
+`ext.render` 的绘制与渲染接线。
 **M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
 落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。

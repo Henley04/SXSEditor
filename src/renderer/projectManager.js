@@ -698,11 +698,15 @@ async function _commitAutoSave() {
   const epoch = _saveEpoch;
   const path = state.currentProjectFilePath;
   try {
-    const data = await serializeProject(false);
-    await _enqueueProjectWrite(async () => {
-      const res = await window.electronAPI.saveFile(path, data);
-      _checkSaveResult(res);
-    });
+    // 必须走与 Ctrl+S 同一条路径：按目标扩展名分派。
+    // 这里原先直接 `serializeProject` + `saveFile` —— 对 .sxsproj 没问题，
+    // 但插件格式（.sv2）的工程一编辑就被写成一坨 JSON，下次插件再读它会
+    // 直接报"不是 SV2 工程"。走查里就是这么把 /tmp/*.sv2 写坏的。
+    //
+    // `silentWarnings`：自动保存是每 400ms 的冷路径，插件的"没写进去的东西"
+    // 提示不能在这里弹 —— 拖一个音符就弹一次没人受得了。警告仍然记在
+    // `state.projectSaveWarnings` 里，手动保存时照常弹。
+    await _writeProjectTo(path, { silentWarnings: true });
     // 仅在写盘期间没有新编辑时清除脏标记。
     if (epoch === _saveEpoch) markClean();
     console.log('Project auto-saved to', path);
@@ -906,6 +910,9 @@ async function _writeProjectTo(filePath, opts = {}) {
       const res = await window.electronAPI.saveFile(filePath, data);
       _checkSaveResult(res);
     });
+    // 内置格式是完整序列化，不存在"没写进去的字段" —— 把上一次插件保存留下的
+    // 告警清掉，否则界面上会一直挂着一条已经与当前文件无关的提示。
+    state.projectSaveWarnings = [];
     return { ok: true };
   }
 
@@ -919,7 +926,10 @@ async function _writeProjectTo(filePath, opts = {}) {
       err.code = res && res.code;
       throw err;
     }
-    _notifySaveWarnings(res.warnings);
+    // 无论弹不弹，都把最近一次的警告记下来：自动保存静默，但信息不能凭空消失
+    // —— 自动化与"导出后检查"都能读到它。
+    state.projectSaveWarnings = Array.isArray(res.warnings) ? res.warnings : [];
+    if (!opts.silentWarnings) _notifySaveWarnings(res.warnings);
     return res;
   });
 }
@@ -1225,6 +1235,7 @@ export async function applyProjectDocument(obj, targetPath, options = {}) {
     schema: obj.extSchema || null,
     root: obj.ext || null,
   };
+  state.projectSaveWarnings = [];
   history.clear();
   state.selectedFragmentId = null;
   markClean();

@@ -85,6 +85,7 @@ import {
   findAnchorPointAt,
   convertBrushStrokeToAnchorPoints,
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
+  getPhonemeBarLayout,
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
   getParentHeightCached,
@@ -1764,10 +1765,9 @@ function handlePitchMouseDown(e, pos) {
 function handlePhonemeMouseDown(e, pos) {
   const areaTop = _getParamCurveAreaTop();
   const areaBottom = _getParamCurveAreaBottom();
-  const barPadding = 6;
-  const labelH = 16;
-  const barTop = areaTop + labelH;
-  const barBottom = areaBottom - barPadding;
+  // 布局由渲染层给出：面板里宿主音素条与外部音素带各占一段，
+  // 点在外部带上（pos.y > barBottom）不进入任何编辑路径 —— 那块是只读的。
+  const { barTop, barBottom } = getPhonemeBarLayout(areaTop, areaBottom);
   const barHeight = barBottom - barTop;
   const notes = getNotes();
 
@@ -1874,8 +1874,12 @@ function handlePhonemeMouseDown(e, pos) {
       x = boundaryX;
     }
   }
+  // 点到面板空白（含只读的外部音素带）＝取消音素选中。清除后必须重绘：
+  // 原先只改状态不刷新，高亮要等到下一次偶然重绘才消失，看起来像"点不掉"。
+  const hadSelection = getSelectedPhonemeNoteId() !== null;
   setSelectedPhonemeNoteId(null);
   setSelectedPhonemeIndex(-1);
+  if (hadSelection) render();
 }
 
 function handlePhonemeMouseMove(pos) {
@@ -1902,10 +1906,7 @@ function handlePhonemeMouseMove(pos) {
     const pts = adj.volumePoints;
     const pi = phonemeDragState.pointIndex;
     const areaTop = _getParamCurveAreaTop();
-    const labelH = 16;
-    const barPadding = 6;
-    const barTop = areaTop + labelH;
-    const barBottom = _getParamCurveAreaBottom() - barPadding;
+    const { barTop, barBottom } = getPhonemeBarLayout(areaTop, _getParamCurveAreaBottom());
     const barHeight = barBottom - barTop;
     const newV = Math.max(0, Math.min(1, 1 - (pos.y - barTop) / barHeight));
     pts[pi].v = newV;
@@ -1920,10 +1921,7 @@ function handlePhonemeMouseMove(pos) {
     const adj = adjustments[phonemeDragState.phonemeIndex];
     const dy = phonemeDragState.startY - pos.y;
     const areaTop = _getParamCurveAreaTop();
-    const labelH = 16;
-    const barPadding = 6;
-    const barTop = areaTop + labelH;
-    const barBottom = _getParamCurveAreaBottom() - barPadding;
+    const { barTop, barBottom } = getPhonemeBarLayout(areaTop, _getParamCurveAreaBottom());
     const barHeight = barBottom - barTop;
     const dVol = dy / barHeight;
     for (let p = 0; p < adj.volumePoints.length; p++) {
@@ -2785,6 +2783,12 @@ export function setupEventListeners() {
         const areaTop = _getParamCurveAreaTop();
         const areaBottom = _getParamCurveAreaBottom();
         if (pos.y >= areaTop && pos.y <= areaBottom) {
+          const { barTop, barBottom } = getPhonemeBarLayout(areaTop, areaBottom);
+          // 外部音素带不接受任何指针交互：光标保持默认，不显示拖拽/十字。
+          if (pos.y < barTop || pos.y > barBottom) {
+            canvas.style.cursor = 'default';
+            return;
+          }
           const BOUNDARY_ZONE = 10;
           // 先用 notesIndex 按 x 视口裁剪候选（原实现每次 mousemove 线性遍历
           // 全部音符），只对落在 ±BOUNDARY_ZONE 内的音符查音素边界。

@@ -11,11 +11,19 @@ export function openFragmentEditor(fragment) {
     const singer = trackManager.getSingers().find(s => s.id === fragment.singerId);
     const wavBuffer = singer?.wavBuffer || null;
 
+    // 扩展域的**声明**要跟着分片一起过去：分片编辑器靠它判断
+    // "这条 note 上的 ext 该不该画、能不能改"（音素目前是只读呈现）。
+    // 声明挂在 project 上而不是单独字段，是因为它本来就是文档属性，
+    // 主进程转发 payload 时不需要认识它。
+    const project = state.projectExt?.schema
+      ? { ...state.project, extSchema: state.projectExt.schema }
+      : state.project;
+
     // 轨道后端随分片一起送到分片编辑器：跨进程 payload 由主进程原样转发。
     // 老工程 / 内置轨道没有 backend 字段，缺省按内置后端处理。
     window.electronAPI.openFragmentEditor({
       fragment,
-      project: state.project,
+      project,
       wavBuffer,
       backend: singer?.backend ?? { type: 'sxs' },
     });

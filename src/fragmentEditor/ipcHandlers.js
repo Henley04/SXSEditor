@@ -34,6 +34,7 @@ import {
   setPitchMode,
   setCurrentFragment,
   setCurrentProject,
+  setProjectExtSchema,
   setTrackBackend,
   invalidatePitchCurveCache,
   setFragmentDataReceived,
@@ -209,6 +210,9 @@ async function handleFragmentData(data) {
 
   setCurrentFragment(data.fragment);
   setCurrentProject(data.project);
+  // 扩展声明：只有插件来源的工程才有。内置工程为 null，音素面板的行为
+  // 与 M4 之前完全一致（只画宿主推导出来的那一份）。
+  setProjectExtSchema(data.project && data.project.extSchema);
   // 轨道后端（内置 {type:'sxs'} 或插件 {type:'plugin', pluginId, kindId}）。
   // 走 getFragmentData 兜底路径时 payload 可能没有 backend 字段（老工程/旧主进程），
   // 这里退化成内置后端而不是报错 —— 形态裁剪由 pluginEditorMode.js 负责。

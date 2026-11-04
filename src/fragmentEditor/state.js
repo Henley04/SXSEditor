@@ -33,6 +33,11 @@ let wavFileBuffer = null;
 
 let currentFragment = null;
 let currentProject = null;
+// 当前工程文档的 extSchema（插件对"这份文档里有哪些扩展字段"的声明）。
+// 分片编辑器不解释它，只拿它反查"这条 note 的音素该不该画、画成什么样"。
+// 与 currentProject 分开：project 是可写回的工程对象，extSchema 是只读的呈现依据，
+// 混在一起会让"保存工程"这条路径无意间把声明也写回插件格式里。
+let projectExtSchema = null;
 // 当前分片所属轨道的后端 {type:'sxs'} 或 {type:'plugin', pluginId, kindId, ...}。
 // 由 handleFragmentData() 从 loadFragment payload 的 backend 字段写入；
 // 为 null 表示分片数据还没到（此时一律按内置轨道处理）。
@@ -229,6 +234,11 @@ export function setCurrentFragment(v) { currentFragment = v; }
 
 export function getCurrentProject() { return currentProject; }
 export function setCurrentProject(v) { currentProject = v; }
+
+export function getProjectExtSchema() { return projectExtSchema; }
+export function setProjectExtSchema(v) {
+  projectExtSchema = (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+}
 
 export function getTrackBackend() { return trackBackend; }
 export function setTrackBackend(v) { trackBackend = v; }

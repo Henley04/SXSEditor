@@ -27,6 +27,10 @@ export const state = {
   // 扩展数据，它没有"来源插件"，但这些数据仍然必须跟着工程走 —— 否则
   // `sv2 → 存成 sxsproj → 再导出 sv2` 这一趟就会把用户的元数据抹掉。
   projectExt: { schema: null, root: null },
+  // 最近一次插件格式保存时插件报的"没能完整写回"的条目。
+  // 自动保存为了不打断编辑不弹窗，但警告不能凭空消失 —— 存在这里，
+  // 手动保存 / 自动化导出时仍会弹给用户看。
+  projectSaveWarnings: [],
   isDirty: false,
 
   // Audio

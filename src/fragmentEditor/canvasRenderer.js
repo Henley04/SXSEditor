@@ -14,6 +14,7 @@ import {
 } from '../shared/autoPitchCurve.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import { resolvePitchMode } from '../shared/pitchControl.js';
+import { readPhonemeField } from '../shared/pluginPhonemes.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
 import { applyGlideOwnership } from '../shared/postprocessCurves.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
@@ -67,6 +68,7 @@ import {
   getNextNoteId, setNextNoteId,
   getBrushSmoothing,
   getPhonemeCache,
+  getProjectExtSchema,
   getSampleRate,
   getParamPanelCollapsed,
   getParamPanelMode,
@@ -1938,11 +1940,181 @@ export function computeInitialScrollY() {
   return HEADER_HEIGHT + (127 - targetPitch) * NOTE_HEIGHT - centerY;
 }
 
-function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
+/** 外部音素带的固定高度。18px 刚好够放一行 8px 文字 + 上下留白。 */
+const EXT_PHONEME_BAND_HEIGHT = 18;
+/** 外部带与宿主音素条之间的间隔。 */
+const EXT_PHONEME_BAND_GAP = 3;
+
+/**
+ * 音素面板的纵向分区。
+ *
+ * 抽出来给渲染和命中检测共用：两处各算一遍是"点在带子上却选中了宿主音素"
+ * 这类 bug 的老来源。返回的 `barTop/barBottom` 是宿主音素条的范围，
+ * `extTop/extBottom` 是外部音素带（没有外部音素时退化成零高度）。
+ *
+ * @param {number} areaTop
+ * @param {number} areaBottom
+ */
+export function getPhonemeBarLayout(areaTop, areaBottom) {
   const barPadding = 6;
   const labelH = 16;
-  const barTop = areaTop + labelH;
-  const barBottom = areaBottom - barPadding;
+  const withExt = hasExternalPhonemes();
+  const extBottom = areaBottom - barPadding;
+  const extTop = withExt ? extBottom - EXT_PHONEME_BAND_HEIGHT : extBottom;
+  const barBottom = withExt ? extTop - EXT_PHONEME_BAND_GAP : extBottom;
+  return {
+    barTop: areaTop + labelH,
+    barBottom,
+    extTop,
+    extBottom,
+    hasExt: withExt,
+  };
+}
+
+// "这一分片里有没有外部音素"决定了面板要不要留出那条带子。逐帧扫全部 notes
+// 太浪费（长分片 5000 条），用 notes 版本号 + schema 引用做失效条件：
+// 两者都没变就说明扫描结果还成立。
+let _extScanCache = { notes: null, version: -1, schema: null, has: false };
+
+/** 当前分片是否存在"插件声明了音素"的音符。 */
+export function hasExternalPhonemes() {
+  const notes = getNotes();
+  const version = getNotesVersion();
+  const schema = getProjectExtSchema();
+  const c = _extScanCache;
+  if (c.notes === notes && c.version === version && c.schema === schema) return c.has;
+  let has = false;
+  if (schema) {
+    for (const n of notes) {
+      if (n && n.ext && readPhonemeField(n.ext, schema, 'note')) { has = true; break; }
+    }
+  }
+  _extScanCache = { notes, version, schema, has };
+  return has;
+}
+
+// 单个 note 的外部音素备忘录。键是 note 对象本身：note.ext 被替换（重新加载、
+// 撤销恢复）时引用会变，自然失效；schema 只在工程级变化，一并比对。
+const _extPhonemeCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+/**
+ * 取一条 note 的**外部**音素（插件给的、宿主只读呈现的那一份）。
+ *
+ * 与 `getPhonemeAdjustments` 是两个世界：那个是宿主按歌词推导、可编辑、参与合成；
+ * 这个是别人家的坐标系，只用来对照显示。
+ *
+ * @returns {{pluginId:string, phonemes:object[], editable:boolean, truncated:boolean}|null}
+ */
+export function getExternalPhonemes(note) {
+  const schema = getProjectExtSchema();
+  if (!schema || !note || !note.ext) return null;
+  if (_extPhonemeCache) {
+    const hit = _extPhonemeCache.get(note);
+    if (hit && hit.ext === note.ext && hit.schema === schema) return hit.value;
+  }
+  const value = readPhonemeField(note.ext, schema, 'note');
+  if (_extPhonemeCache) _extPhonemeCache.set(note, { ext: note.ext, schema, value });
+  return value;
+}
+
+/**
+ * 画外部音素带。
+ *
+ * 视觉上刻意与宿主音素条分开：宿主条是彩色半透明 + 音量包络曲线，
+ * 外部带是灰底小方块、没有曲线、没有选中态 —— 用户一眼能看出"这条不是我能改的"。
+ * 宿主不认识的名字（不在 `en_/jp_/zh_/yue_` 命名空间）额外画虚线边框。
+ */
+function _drawExternalPhonemeBand(ctx, w, c, layout, visibleNotes) {
+  const { extTop, extBottom } = layout;
+  if (extBottom - extTop < 6) return;
+  const bandH = extBottom - extTop;
+
+  ctx.fillStyle = c.bgElevated;
+  ctx.fillRect(0, extTop, w, bandH);
+  ctx.strokeStyle = c.gridLineMinor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, extTop + 0.5);
+  ctx.lineTo(w, extTop + 0.5);
+  ctx.stroke();
+
+  let anyLabel = null;
+
+  for (const note of visibleNotes) {
+    const ext = getExternalPhonemes(note);
+    if (!ext) continue;
+    const noteStartX = timeToX(note.start);
+    const noteWidth = note.duration * BEAT_WIDTH * getZoomX();
+    if (noteWidth < 8 || noteStartX + noteWidth < 0 || noteStartX > w) continue;
+
+    const list = ext.phonemes;
+    const cellW = noteWidth / list.length;
+    const top = extTop + 2;
+    const h = bandH - 4;
+
+    for (let i = 0; i < list.length; i++) {
+      const ph = list[i];
+      const x = noteStartX + i * cellW;
+      const cw = cellW;
+      // 视口裁剪：整格在画布外就不画（长分片 + 小缩放时省下大量 fill）
+      if (x + cw < 0 || x > w) continue;
+
+      if (ph.host) {
+        // 宿主认识的：浅灰实心块
+        ctx.fillStyle = c.fgDisabled;
+        ctx.globalAlpha = 0.22;
+        ctx.fillRect(x + 0.5, top, Math.max(1, cw - 1), h);
+        ctx.globalAlpha = 1.0;
+      } else {
+        // 宿主不认识的：只有虚线框，明显更"虚"
+        ctx.strokeStyle = c.fgDisabled;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(x + 0.5, top + 0.5, Math.max(1, cw - 1), h - 1);
+        ctx.setLineDash([]);
+      }
+
+      if (cw > 14) {
+        ctx.fillStyle = c.fgMuted;
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // 单格放不下就截断加省略号 —— 小缩放时宁可看不全，也不要压到邻居上
+        let label = ph.display || ph.name;
+        const maxW = cw - 4;
+        if (ctx.measureText(label).width > maxW) {
+          while (label.length > 1 && ctx.measureText(`${label}…`).width > maxW) {
+            label = label.slice(0, -1);
+          }
+          label = `${label}…`;
+        }
+        ctx.fillText(label, x + cw / 2, top + h / 2);
+      }
+    }
+
+    if (!anyLabel) anyLabel = ext.pluginId;
+  }
+
+  // 带子右端标注来源。只在有外部音素时出现，避免空带子还挂个说明。
+  if (anyLabel) {
+    const text = `外部 · ${anyLabel}`;
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(text).width;
+    ctx.fillStyle = c.bgElevated;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(w - tw - 8, extTop + 1, tw + 8, bandH - 2);
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = c.fgMuted;
+    ctx.fillText(text, w - 4, extTop + bandH / 2);
+  }
+}
+
+function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
+  const layout = getPhonemeBarLayout(areaTop, areaBottom);
+  const barTop = layout.barTop;
+  const barBottom = layout.barBottom;
   const barHeight = barBottom - barTop;
 
   ctx.fillStyle = c.bgElevated;
@@ -1955,10 +2127,17 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
   ctx.lineTo(w, areaTop);
   ctx.stroke();
 
+  // 标题左对齐：右侧让给"外部音素 · 来源"的说明（见 _drawExternalPhonemeBand）。
   ctx.fillStyle = c.fgDisabled;
   ctx.font = '10px sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText('Phoneme', w - 4, areaTop + 12);
+  ctx.textAlign = 'left';
+  ctx.fillText('Phoneme', 4, areaTop + 12);
+  if (layout.hasExt) {
+    ctx.textAlign = 'right';
+    ctx.font = '9px sans-serif';
+    ctx.fillStyle = c.fgMuted;
+    ctx.fillText('外部音素只读', w - 4, areaTop + 12);
+  }
 
   for (let v = 0; v <= 1; v += 0.25) {
     const y = barBottom - barHeight * v;
@@ -2103,6 +2282,10 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
       x = phEnd;
     }
   }
+
+  // 外部音素带画在宿主音素条之下：同一 x 轴对齐，用户能逐音对照，
+  // 但视觉上是两条互不从属的东西（一条能改、一条只能看）。
+  if (layout.hasExt) _drawExternalPhonemeBand(ctx, w, c, layout, visibleNotes);
 }
 
 function renderPianoKeys(c) {
