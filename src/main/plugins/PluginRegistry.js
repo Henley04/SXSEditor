@@ -21,7 +21,7 @@ class PluginRegistry {
     this._listeners = new Set();
     this.revision = 0;
     for (const type of [
-      'command', 'menu', 'panel', 'fileType', 'setting', 'hook',
+      'command', 'menu', 'panel', 'fileType', 'exporter', 'setting', 'hook',
       // M2：界面贡献点。与命令分开存，卸载时按 pluginId 一律清掉，
       // 不依赖插件自己报"我往工具栏塞了什么"。
       'toolbar', 'statusBar', 'contextMenu', 'overlay', 'keybinding',
@@ -184,6 +184,7 @@ class PluginRegistry {
       panel: byPlugin('panel'),
       setting: byPlugin('setting'),
       fileType: byPlugin('fileType'),
+      exporter: byPlugin('exporter'),
       toolbar: byPlugin('toolbar'),
       statusBar: byPlugin('statusBar'),
       contextMenu: byPlugin('contextMenu'),
@@ -213,6 +214,9 @@ class PluginRegistry {
           id: s.id, localId: s.localId, title: s.title, panel: s.panelId, fields: s.fields,
         })),
         fileTypes: rows('fileType', record.id),
+        exporters: rows('exporter', record.id).map((e) => ({
+          id: e.id, ext: e.ext, label: e.label, mime: e.mime, description: e.description,
+        })),
         toolbar: rows('toolbar', record.id).map((t) => ({
           id: t.id, localId: t.localId, command: t.command, title: t.title,
           icon: t.icon, group: t.group, when: t.when,

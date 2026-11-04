@@ -236,6 +236,7 @@ function initQDriftListeners() {
     }
 }
 const diagnosticModeCheckbox = document.getElementById('diagnosticMode');
+const pluginFileAssociationsCheckbox = document.getElementById('pluginFileAssociations');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
 const audioSampleRateSelect = document.getElementById('audioSampleRate');
@@ -493,6 +494,7 @@ function applySavedSettingsToUI(currentSetting) {
     _qdriftTouched.export = false;
     updateQDriftLocks();
     if (diagnosticModeCheckbox) diagnosticModeCheckbox.checked = currentSetting.diagnosticMode === true;
+    if (pluginFileAssociationsCheckbox) pluginFileAssociationsCheckbox.checked = currentSetting.pluginFileAssociations === true;
 
     // Audio settings
     if (currentSetting.audioOutputMode) audioOutputModeSelect.value = currentSetting.audioOutputMode;
@@ -1582,6 +1584,7 @@ function collectSettings() {
             ? Math.max(0, Math.min(0xFFFFFFFF, Math.floor(Number(fixedNoiseSeedInput.value) || 0)))
             : 1234,
         diagnosticMode: diagnosticModeCheckbox ? diagnosticModeCheckbox.checked : false,
+        pluginFileAssociations: pluginFileAssociationsCheckbox ? pluginFileAssociationsCheckbox.checked : false,
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : false,
         // ORT 高级设置

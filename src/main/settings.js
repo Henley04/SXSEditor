@@ -53,6 +53,9 @@ function normalizeSettings(settings) {
   if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
   if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
   if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
+  // 写注册表的开关：只认严格的 true。字符串 "true" / 1 一律当关 —— 这个开关的
+  // 副作用是改用户系统，宽松解析的代价不对称。
+  if (out.pluginFileAssociations !== undefined) out.pluginFileAssociations = out.pluginFileAssociations === true;
   return out;
 }
 
@@ -483,6 +486,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
   'diagnosticMode',
+  'pluginFileAssociations',
   'vocoderOverlapFrames',
   'enableLoudnormFinal',
   'enableAntiAliasing',

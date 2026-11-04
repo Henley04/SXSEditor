@@ -23,6 +23,9 @@
                 <div class="sidebar-item" data-target="section-theme">
                     <span data-i18n="settings.theme.title">主题</span>
                 </div>
+                <div class="sidebar-item" data-target="section-system">
+                    <span data-i18n="settings.systemIntegration">系统集成</span>
+                </div>
 
                 <div class="sidebar-category" data-i18n="settings.catInference">推理</div>
                 <div class="sidebar-item" data-target="section-inference">
@@ -193,6 +196,18 @@
                     <button class="btn-theme-action" id="themeExportBtn" data-i18n="settings.theme.export" data-icon="upload">导出主题</button>
                     <button class="btn-theme-action btn-theme-danger" id="themeDeleteBtn" data-i18n="settings.theme.delete" data-icon="trash">删除用户主题</button>
                     <button class="btn-theme-action btn-theme-secondary" id="themeResetBtn" data-i18n="settings.theme.reset" data-icon="refresh">重置为默认</button>
+                </div>
+            </div>
+
+            <!-- System integration: OS-level file associations for plugin formats -->
+            <div class="settings-section hidden" id="section-system">
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="pluginFileAssociations">
+                        <span class="radio-label" data-i18n="settings.pluginFileAssociations">插件文件格式的系统关联</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.pluginFileAssociationsHint">开启后，插件声明的扩展名（例如 .sv2）会写进系统注册表：应用未启动时双击这类文件也能拉起 SXSEditor。仅在安装版（打包后）的 Windows 上生效。</p>
+                    <p class="hint" data-i18n="settings.pluginFileAssociationsNote">关闭时会移除应用写过的全部插件关联。已被其它程序占用的默认关联不会被强行改写。</p>
                 </div>
             </div>
 

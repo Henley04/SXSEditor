@@ -100,6 +100,22 @@ function registerPluginHostIpc(service, options = {}) {
   ));
   track(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS);
 
+  // 工程级渲染意图：打开/新建工程后由渲染层推一次。pipeline hook 执行器在主进程，
+  // 这里只做"把声明放到执行器手上"，不解释内容。
+  safeHandle(IPC_CHANNELS.PLUGINHOST_SET_RENDER_INTENT, async (_event, intent) => (
+    service.setRenderIntent(intent)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_SET_RENDER_INTENT);
+
+  // M4 第 4 段：成品导出。清单给导出对话框填下拉，执行把音频交给插件编码。
+  safeHandle(IPC_CHANNELS.PLUGINHOST_LIST_EXPORTERS, async () => service.listExporters());
+  track(IPC_CHANNELS.PLUGINHOST_LIST_EXPORTERS);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_EXPORT_AUDIO, async (_event, filePath, ref, audio) => (
+    service.exportAudio(String(filePath || ''), ref || {}, audio || {})
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_EXPORT_AUDIO);
+
   safeHandle(IPC_CHANNELS.PLUGINHOST_INSTALL, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) || service.getMainWindow();
     const picked = await dialog.showOpenDialog(win || null, {

@@ -187,6 +187,13 @@ const IPC_CHANNELS = {
   // codec 进程里完成，渲染层只负责把文档装进 state。
   PLUGINHOST_OPEN_DOCUMENT: 'plugin-host:open-document',
   PLUGINHOST_SAVE_DOCUMENT: 'plugin-host:save-document',
+  // 当前工程的渲染意图（document.extSchema[*].render）。pipeline 在主进程跑，
+  // 工程文档在渲染层 —— 这是"这份工程要求哪个插件做后处理"唯一能过来的路。
+  PLUGINHOST_SET_RENDER_INTENT: 'plugin-host:set-render-intent',
+  // M4 第 4 段：成品导出。渲染层跑完合成，把交错浮点采样交过来，插件编码成
+  // 目标格式的字节，写盘仍由主进程完成（插件没有文件系统权限）。
+  PLUGINHOST_LIST_EXPORTERS: 'plugin-host:list-exporters',
+  PLUGINHOST_EXPORT_AUDIO: 'plugin-host:export-audio',
   // 插件声明的文件格式（对话框过滤器用）。投影里也有 fileTypes，但那份要按
   // 插件分组、还要算 UI 渲染状态；对话框只要一张扁平的"扩展名 → 显示名"。
   PLUGINHOST_FILE_FILTERS: 'plugin-host:file-filters',

@@ -159,6 +159,16 @@ function regAdd(args) {
   });
 }
 
+/** 删键 / 删值。失败（键本来就不存在）不算错。 */
+function regDelete(key, valueArgs) {
+  return new Promise((resolve) => {
+    const args = ['delete', key];
+    if (Array.isArray(valueArgs)) args.push(...valueArgs);
+    args.push('/f');
+    execFile('reg', args, { windowsHide: true }, (err) => resolve(!err));
+  });
+}
+
 /**
  * 打包后图标随 extraResource 落进 resources/。
  *
@@ -231,14 +241,13 @@ async function registerWindowsType(type) {
 }
 
 /**
- * 确保 Windows 上两类文件都关联到当前可执行文件。
+ * 确保 Windows 上两类内置文件都关联到当前可执行文件，并同步插件扩展名。
  *
  * 只在打包后执行：开发模式跑的是 electron.exe，写进注册表会把 .sxsproj 绑到
  * 一个随时会消失的调试二进制上。失败不抛错 —— 关联不上不该拦住应用启动。
  *
- * 插件声明的扩展名**不写注册表**：注册表项的生命周期比插件长（卸载、升级、
- * 重装都可能留下孤儿项），而 Windows 的清理只能在下次启动做。先让"应用内
- * 打开"和"运行中双击"两条路可用，系统级关联留到插件市场/签名那一步一起定。
+ * 插件扩展名走独立开关（见 syncWindowsPluginFileAssociations）：它们会随插件
+ * 装卸而变化，写进系统的副作用比内置格式大，所以默认关闭、由用户显式选择。
  */
 async function ensureWindowsFileAssociations() {
   if (process.platform !== 'win32' || !app.isPackaged) return;
@@ -250,6 +259,11 @@ async function ensureWindowsFileAssociations() {
     }
   }
   refreshShellIcons();
+  try {
+    await syncWindowsPluginFileAssociations();
+  } catch (err) {
+    console.warn('[fileAssoc] 插件关联同步失败:', err && err.message);
+  }
 }
 
 /**
@@ -263,6 +277,131 @@ function refreshShellIcons() {
   execFile('ie4uinit.exe', ['-show'], { windowsHide: true }, () => {});
 }
 
+// ---------------------------------------------------------------------------
+// 插件扩展名的系统级关联（M4）
+// ---------------------------------------------------------------------------
+/**
+ * 插件扩展名的 ProgId 前缀。
+ *
+ * 用固定前缀而不是每个插件随便起名，是为了让"清理"有一个可枚举的边界：
+ * 只要扫 `HKCU\Software\Classes` 下这个前缀的子键，就知道我们往系统里写过什么。
+ * 这是孤儿项唯一的可靠解法 —— 靠内存记录的话，崩溃一次就再也找不到它们。
+ */
+const PLUGIN_PROGID_PREFIX = 'SXSEditor.Plugin.';
+
+/**
+ * `pluginId` + 扩展名 → ProgId。
+ *
+ * 插件 id 允许点分（com.example.sv2），所以扩展名放在**最后**一段并用
+ * 去掉点的形式：反解时取最后一个点之后就是扩展名。
+ */
+function pluginProgId(pluginId, ext) {
+  const safeId = String(pluginId || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 48);
+  const safeExt = String(ext || '').replace(/^\./, '').replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return `${PLUGIN_PROGID_PREFIX}${safeId}.${safeExt}`;
+}
+
+/** 从 ProgId 反解扩展名（清理时要知道 OpenWithProgids 挂在哪个扩展名下）。 */
+function extFromPluginProgId(progId) {
+  if (typeof progId !== 'string' || !progId.startsWith(PLUGIN_PROGID_PREFIX)) return null;
+  const rest = progId.slice(PLUGIN_PROGID_PREFIX.length);
+  const i = rest.lastIndexOf('.');
+  if (i <= 0 || i === rest.length - 1) return null;
+  return `.${rest.slice(i + 1)}`;
+}
+
+/** 枚举我们写进系统的插件 ProgId。非 Windows / 无权限时返回空数组。 */
+function listPluginProgIds() {
+  return new Promise((resolve) => {
+    execFile(
+      'reg',
+      ['query', 'HKEY_CURRENT_USER\\Software\\Classes'],
+      { windowsHide: true },
+      (err, stdout) => {
+        if (err || !stdout) return resolve([]);
+        const out = [];
+        for (const line of stdout.split(/\r?\n/)) {
+          const m = /\\Classes\\(SXSEditor\.Plugin\.[^\s]+)\s*$/.exec(line.trim());
+          if (m) out.push(m[1]);
+        }
+        resolve(out);
+      },
+    );
+  });
+}
+
+/**
+ * 摘掉一个插件 ProgId。
+ *
+ * 顺序有讲究：先删 `OpenWithProgids` 里的值、再删默认值、最后删 ProgId 树。
+ * 反过来的话，删完树之后我们仍然知道 ext（从 ProgId 反解），但如果中途失败，
+ * 扩展名下会留下一个指向"已经不存在的 ProgId"的默认值 —— 资源管理器双击时
+ * 找不到处理程序，比"打开方式里没有我们"更糟。
+ */
+async function unregisterPluginProgId(progId) {
+  const ext = extFromPluginProgId(progId);
+  const classes = 'HKCU\\Software\\Classes';
+  if (ext) {
+    await regDelete(`${classes}\\${ext}\\OpenWithProgids`, ['/v', progId]);
+    const current = await queryReg(`${classes}\\${ext}`);
+    if (current === progId) await regDelete(`${classes}\\${ext}`, ['/ve']);
+  }
+  await regDelete(`${classes}\\${progId}`);
+}
+
+/**
+ * 同步插件扩展名的系统关联。
+ *
+ * 三态：
+ *   · 设置里 `pluginFileAssociations` 未开 → 期望集合为空，把写过的全删掉；
+ *   · 开了 → 每个插件扩展名一个 ProgId，标签用插件给的显示名；
+ *   · 插件被卸载/停用 → 它从 `pluginFileTypes` 消失，下次同步即被删掉。
+ *
+ * 只在**打包后的 Windows** 上执行：开发模式跑的是 electron.exe，写进注册表
+ * 会把 .sv2 绑到一个随时会消失的调试二进制上 —— 卸载重装后用户的文件就打不开了。
+ *
+ * 默认关闭。注册表项的生命周期比插件长，`pluginFileAssociations` 是让用户
+ * 显式选择"我愿意让这个应用接管这些扩展名"，而不是装个插件就悄悄改系统。
+ */
+async function syncWindowsPluginFileAssociations() {
+  if (process.platform !== 'win32' || !app.isPackaged) return { changed: false, registered: 0, removed: 0 };
+
+  let enabled = false;
+  try {
+    const s = require('./settings').loadSettings();
+    enabled = s && s.pluginFileAssociations === true;
+  } catch (_) { /* 设置读不到就当作关 */ }
+
+  const desired = new Map();
+  if (enabled) {
+    for (const t of pluginFileTypes) desired.set(pluginProgId(t.pluginId, t.ext), t);
+  }
+
+  let removed = 0;
+  let registered = 0;
+  for (const progId of await listPluginProgIds()) {
+    if (desired.has(progId)) continue;
+    try {
+      await unregisterPluginProgId(progId);
+      removed++;
+    } catch (err) {
+      console.warn('[fileAssoc] 清理插件关联失败:', progId, err.message);
+    }
+  }
+  for (const [progId, type] of desired) {
+    try {
+      // 插件类型统一用工程的图标：插件的 .sxsp 里没有独立 ico 的落位约定，
+      // 用一个能打开的图标比每个插件各带一份资源现实得多。
+      await registerWindowsType({ ...type, progId, icon: 'project' });
+      registered++;
+    } catch (err) {
+      console.warn('[fileAssoc] 注册插件关联失败:', type.ext, err.message);
+    }
+  }
+  if (registered || removed) refreshShellIcons();
+  return { changed: Boolean(registered || removed), registered, removed };
+}
+
 module.exports = {
   FILE_TYPES: BASE_FILE_TYPES,
   getFileTypes,
@@ -272,4 +411,7 @@ module.exports = {
   setPendingTarget,
   takePendingTarget,
   ensureWindowsFileAssociations,
+  syncWindowsPluginFileAssociations,
+  pluginProgId,
+  extFromPluginProgId,
 };

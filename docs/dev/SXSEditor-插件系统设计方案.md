@@ -4,10 +4,11 @@
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
 > （§9.2，2026-11-03）**；**M3（模型调用面）五段全部落地，并通过实机走查（§12，
 > 2026-11-04）**，含二进制结果、`synthesis.backend` 迁移与 `postWaveform` hook；
-> **M4（数据面）三段均已落地**：第 1 段是打开链路、对话框过滤器与投递（§9.3）；
+> **M4（数据面）四段全部落地**：第 1 段是打开链路、对话框过滤器与投递（§9.3）；
 > 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4）；
-> 第 3 段是插件音素在分片编辑器里的只读呈现（§9.5，2026-11-04）。
-> 系统级文件关联、音频导出器、`ext.curve` / `ext.render` 的运行时接线未做。M5–M6 未开始。
+> 第 3 段是插件音素在分片编辑器里的只读呈现（§9.5）；第 4 段是 `ext.curve` 的绘制、
+> `ext.render` 的工程级意图、`contributes.exporters` 成品导出、旁挂文件与 Windows
+> 插件扩展名关联（§9.6，2026-11-04）。M5–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -109,7 +110,7 @@
 | 贡献点 | 注册层 | 形态 | 撤销动作 |
 |---|---|---|---|
 | `project.open/save/import/export` | main 登记，runtime 编解码 | 声明 `fileTypes` + 代码 | 摘 dialog filter、文件关联分类、路由表项 |
-| `export.audio` | main + runtime | 声明格式 + 代码 | 同上；进行中导出 `AbortSignal` 中止 |
+| `export.audio` | main + runtime | 声明 `exporters`（id/ext/label/mime）+ 代码 | 从导出对话框格式表消失；进行中导出拒绝新请求（本版无 `AbortSignal`） |
 | `menu.item` | main（native Menu） | 声明式 | 标记 dirty → `rebuildAppMenu()`（整体重建，不做增量 patch） |
 | `toolbar.button` | renderer | 声明式 + command（`group` 分段，组内保持声明序） | 移除节点 + 解绑监听 |
 | `panel` / `editor` | main 发 URL，renderer 挂 iframe | 声明式 | 销毁 iframe、关闭 port、nonce 失效 |
@@ -259,7 +260,9 @@ src/shared/projectFormat.js              validateProjectDocument（跨进程数�
 src/shared/pluginExt.js                  extSchema / ext 的声明与数据分离、规模上限
 src/shared/pluginPhonemes.js             插件音素 → 可绘制的形态（归一化 / 命名空间 / 反查）
 src/main/atomicWrite.js                  原子写盘（宿主 JSON 与插件字节共用一份）
-plugins/example-sv2/                     示例：接管 .sv2，read/write 严格对称
+src/shared/pluginCurve.js                曲线字段的取值与声明修饰（绘制/求值唯一来源）
+src/shared/pluginRenderIntent.js         工程级渲染意图（extSchema.render → pipeline）
+plugins/example-sv2/                     示例：接管 .sv2（read/write 对称）+ .pcm 导出器
 ```
 
 **待落地（M3–M5）**
@@ -285,10 +288,15 @@ src/main/plugins/runtime/{fs,net,llmBridge,projectCodec,audio}.js
 | `src/renderer/projectManager.js` | 拆出 `applyProjectDocument(doc, path)`；打开先问插件；`_writeProjectTo` 按扩展名分派保存（自动保存也走它） | ✅ M4-1/2/3 |
 | `src/shared/projectFormat.js` | `validateProjectDocument(doc)`（规模/深度/原型污染/ext 各层） | ✅ M4-1/2 |
 | `src/shared/pluginPhonemes.js` | `readPhonemeField` / `normalizePhonemeList` / `isHostPhonemeName` | ✅ M4-3 |
+| `src/shared/pluginCurve.js` | `normalizeCurvePoints` / `sampleCurve` / `collectCurves` | ✅ M4-4 |
+| `src/shared/pluginRenderIntent.js` | `buildRenderIntent` / `missingRenderPlugins` | ✅ M4-4 |
+| `src/main/plugins/PipelineHooks.js` | `setRenderIntent` + 白名单/调序 | ✅ M4-4 |
+| `src/renderer/exportDialog.js` | 格式下拉、扩展名跟随、插件导出分支、warnings 展示 | ✅ M4-4 |
+| `src/main/settings.js` / `settingsIpc.js` / `settings.html` | `pluginFileAssociations` 开关（默认关） | ✅ M4-4 |
 | `src/fragmentEditor/canvasRenderer.js` | `getPhonemeBarLayout` / `getExternalPhonemes` / 外部音素带绘制 | ✅ M4-3 |
 | `src/main/plugins/PluginDataPlane.js` | `saveDocument`（权限 → 校验 → codec.write → 原子写 → 审计） | ✅ M4-2 |
 | `src/renderer/mcpAutomation.js` | `project.saveTo` 按扩展名分派，可导出插件格式 | ✅ M4-2 |
-| `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry | ✅ M4-1（Windows 注册表项除外） |
+| `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry；插件扩展名的系统关联（ProgId 前缀 + 清理 + 开关） | ✅ M4-1/4 |
 | `src/inference/pipeline/index.js` | 插入 `_runModelHooks(stage, …)` | ✅ M3（postWaveform） |
 | `src/settings.js` | 动态 sidebar + schema 渲染的 section（`panel` 指向给"打开插件面板"按钮） | ✅ M2 |
 | `src/i18n/index.js` | `registerPluginMessages(id, dict)`，键前缀 `plugin.<id>.` | ✅ M2 |
@@ -613,12 +621,67 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 **M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具）、`synthesis.backend`
 迁移、二进制结果、`postWaveform` hook —— 均已落地。剩 v1 adapter（`compat/v1Adapter.js`）
 与 `preEncoder` / `postMel` 两个 stage。
-**M4 数据面**：三段均已落地（§9.3 打开、§9.4 保存与扩展域、§9.5 音素呈现）。剩余：
-`export.audio` 音频导出器、系统级文件关联（Windows 注册表项）、`ext.curve` /
-`ext.render` 的绘制与渲染接线。
+**M4 数据面**：四段全部落地（§9.3 打开、§9.4 保存与扩展域、§9.5 音素呈现、
+§9.6 曲线/渲染意图/导出器/旁挂/系统关联）。`ext.render` 的语义有单测覆盖，
+但本机没有模型文件，**没有一次带声音的端到端验证**（见 §9.6"没验到的部分"）。
 **M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
 落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。
+
+### 9.6 M4 第 4 段端到端验证（2026-11-04）
+
+**这一轮要把 `ext` 从"存得住"推到"用得上"**：曲线要画出来、渲染意图要能到
+pipeline、成品要能交给插件编码、一次保存要能写多个文件、插件扩展名要能进系统。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | `ext.curve` 绘制 | 曲线画在**音符矩形内**（按音符高度归一），不画进参数 lane —— lane 上的东西用户会以为能拖，而拖了不会有任何效果 |
+| 2 | `ext.render` 工程级意图 | `extSchema[*].render` 折成 `{stage: {pluginId: order}}` 推到主进程。**有声明时该 stage 变白名单**：工程说了"我的声音靠谁处理"，就不该让别的插件偷偷插进来；没声明时保持现状（装了就跑） |
+| 3 | `contributes.exporters` | 成品格式独立于工程格式：入参是交错浮点采样，出参是字节。扩展名必须与声明一致（否则改个后缀就能让插件往任意后缀写字节） |
+| 4 | 旁挂文件 | `codec.write` 可返回 `files: [{name, bytes}]`。名字只能是纯文件名，与主文件同名、带分隔符、点开头一律拒绝 |
+| 5 | Windows 插件扩展名关联 | 独立开关（默认关），ProgId 固定前缀 `SXSEditor.Plugin.`，靠前缀枚举做清理 —— 孤儿项唯一可靠的解法。开发模式（未打包）永不执行 |
+
+新增文件：
+
+```
+src/shared/pluginCurve.js          曲线取值：归一 / 求值 / 声明修饰（linear/step/smooth）
+src/shared/pluginRenderIntent.js   extSchema.render → pipeline 执行器的意图快照
+test/pluginCurve.test.js           23
+test/pluginRenderIntent.test.js    16
+test/pluginExporters.test.js       19
+test/pluginSidecar.test.js          9
+```
+
+#### 走查（xvfb + CDP + 真实 second-instance）
+
+| 场景 | 结果 |
+|---|---|
+| 打开带 `dynamics` 的 `.sv2`（4 个音符：升降曲线 / 波浪 / 水平 / 无数据） | 前三条音符内部出现灰色虚线，形状与数据一致；第四条没有线 |
+| 打开不带任何曲线的 `.sv2` | 音符内部干净，无任何折线 |
+| 导出对话框 | "格式"下拉出现 `WAV (built-in encoder)` 与 `PCM 16-bit (example) · .pcm`，切换后路径扩展名自动从 `.wav` 变成 `.pcm` |
+| `pluginHost.exportAudio()`（绕过合成，直接给采样） | `{ok:true, bytes:19200}` = 4800 帧 × 2 声道 × 2 字节；warnings 带回"裸 PCM 不含格式信息" |
+| PCM 内容 | 前 12 个采样的左右声道一致，峰值 16384（= 0.5 × 32767），正弦未被截断 |
+| 导出器与扩展名不符（`.wav` 用 pcm16） | `INVALID_REQUEST: Exporter pcm16 writes .pcm, target is .wav`，文件未创建 |
+| `pluginHost.setRenderIntent()` / `null` | 均返回 `{ok:true}`（通道通；语义由单测覆盖） |
+| MCP `project.save` 往返 | `.sv2` 重新写出：bpm 96→98 生效，`meta` / `phonemes` / `dynamics` 逐字保留 |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | Agent 用 MCP `project.replace` / `loadFrom` 载入一份带 `extSchema` 的工程，再保存时插件数据全丢 | `replace()` 只搬 `project/singers/fragments`，`ext` 与 `extSchema` 不在它的视野里；且不推渲染意图 | `replace()` 里一并写 `state.projectExt` 并调 `syncRenderIntent()`（`projectManager` 导出这个函数） |
+
+#### 没验到的部分（写在明处）
+
+本机没有模型文件（`svs:init` 报 `Model file does not exist`），所以：
+
+- **导出对话框的完整流程**只验到"选了格式、路径对了、IPC 能编码写盘"，
+  没有跑过一次"合成 → 重采样 → 插件编码"的完整链路；
+- `ext.render` 的白名单效果没有一次带声音的验证，只有 `PipelineHooks` 单测
+  （顺序改变真的改变处理结果那一条）。
+
+Windows 注册表相关代码在本机（Linux）不会执行，只能验证 ProgId 的生成与反解；
+`reg add/query/delete` 的实际行为需要在 Windows 安装版上再过一遍。
 
 ## 10. 风险与取舍
 

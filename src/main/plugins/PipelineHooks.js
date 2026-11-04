@@ -29,6 +29,56 @@ class PipelineHooks {
     /** @type {Map<string, number>} `${pluginId}.${hookId}` → 连续失败次数 */
     this._fails = new Map();
     this._disabledHooks = new Set();
+    /**
+     * 当前工程的渲染意图（`extSchema[*].render`）。
+     *
+     * 形状：`{ [stage]: { [pluginId]: order } }`。
+     *
+     * 两态语义（刻意不一致，理由在下面的 collect 里）：
+     *   · 工程**没有**任何 render 声明 → 保持默认：装了的插件都生效。
+     *   · 工程**有** render 声明 → 该 stage 变成白名单：只有被点名的插件跑，
+     *     顺序按工程给的 order。工程一旦对"这条渲染链该由谁处理"有主张，
+     *     就不该让另一个无关插件的后处理悄悄插进来。
+     */
+    this._renderIntent = null;
+  }
+
+  /**
+   * 由渲染层在打开/新建工程后推过来。
+   *
+   * 只收声明，不收数据 —— 这里不需要知道 `ext` 里有什么，只关心"这份工程
+   * 要求哪个插件在哪个阶段做什么"。空/null 表示回到默认语义。
+   *
+   * @param {null|object} intent
+   */
+  setRenderIntent(intent) {
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)) {
+      this._renderIntent = null;
+      return;
+    }
+    const out = {};
+    for (const stage of Object.keys(intent)) {
+      const byPlugin = intent[stage];
+      if (!byPlugin || typeof byPlugin !== 'object') continue;
+      const row = {};
+      for (const pluginId of Object.keys(byPlugin)) {
+        const order = Number(byPlugin[pluginId]);
+        if (!Number.isFinite(order)) continue;
+        row[pluginId] = Math.max(-1000, Math.min(1000, order));
+      }
+      if (Object.keys(row).length) out[stage] = row;
+    }
+    this._renderIntent = Object.keys(out).length ? out : null;
+  }
+
+  /** 供管理界面 / 走查观察：当前生效的意图（副本）。 */
+  getRenderIntent() {
+    if (!this._renderIntent) return null;
+    const out = {};
+    for (const stage of Object.keys(this._renderIntent)) {
+      out[stage] = { ...this._renderIntent[stage] };
+    }
+    return out;
   }
 
   /**
@@ -45,7 +95,22 @@ class PipelineHooks {
     } catch (_) {
       return [];
     }
-    return rows.filter((h) => h && h.kind === 'js' && h.hook);
+    const js = rows.filter((h) => h && h.kind === 'js' && h.hook);
+    const intent = this._renderIntent && this._renderIntent[stage];
+    if (!intent) return js;
+
+    // 工程点名了这条 stage：白名单 + 按工程给的 order 重排。
+    // 理由：声明 `render: { hook: 'postWaveform' }` 的工程是在说"我的声音要靠
+    // 这个插件处理"。此时让另一个装着的插件也来改一遍波形，结果既不在这份工程
+    // 的预期里，也无法从文件本身复现（换台机器少装一个插件，声音就变了）。
+    const picked = [];
+    for (const h of js) {
+      const order = intent[h.pluginId];
+      if (order === undefined) continue;
+      picked.push({ ...h, order });
+    }
+    picked.sort((a, b) => (a.order - b.order) || a.pluginId.localeCompare(b.pluginId));
+    return picked;
   }
 
   /**

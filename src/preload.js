@@ -647,6 +647,15 @@ const _fullElectronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, filePath, document, options || {})
     ),
     fileFilters: (role) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, role || 'open'),
+    // 工程级渲染意图（document.extSchema[*].render）：pipeline 在主进程跑，
+    // 这是"这份工程要求谁做后处理"唯一能过去的路。传 null 表示回到默认语义。
+    setRenderIntent: (intent) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_RENDER_INTENT, intent || null),
+    // 音频导出器：清单 + 执行。音频走结构化克隆（Float32Array 原样过），
+    // 不要在这里 JSON 化 —— 14M 个采样点转成数组会慢到用户以为卡死。
+    listExporters: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_LIST_EXPORTERS),
+    exportAudio: (filePath, ref, audio) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_EXPORT_AUDIO, filePath, ref || {}, audio || {})
+    ),
     // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
     onSync: (callback) => {
       const handler = (event, data) => callback(data);

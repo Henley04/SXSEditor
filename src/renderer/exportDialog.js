@@ -12,7 +12,7 @@
 
 import '../exportDialog.css';
 import { t } from '../i18n/index.js';
-import { dom, trackManager } from './state.js';
+import { dom, state, trackManager } from './state.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { runExportJob } from './audioPlayback.js';
@@ -139,7 +139,21 @@ export async function openExportDialog() {
       exportEnableQDrift: (settings.modelPrecision === 'fp16' || settings.modelPrecision === 'int8')
         && resolveQDriftDefault(settings, 'exportEnableQDrift'),
       outputPath: '',
+      // 成品格式。'wav' 是宿主内置编码器；插件导出器存成 {pluginId,id,ext,label}。
+      // 存对象而不是 id 字符串：导出时要同时知道"问哪个插件的哪个导出器"，
+      // 以及"目标扩展名必须是什么"（主进程会校验两者一致）。
+      exporter: null,
+      _exporters: [],
     };
+
+    // 插件导出器清单。拿不到（插件系统未初始化 / 一个都没装）就是空数组，
+    // 界面上格式下拉只剩 WAV 一项 —— 这是正常状态，不是错误。
+    try {
+      const list = await window.electronAPI?.pluginHost?.listExporters?.();
+      if (Array.isArray(list)) form._exporters = list;
+    } catch (err) {
+      console.warn('[ExportDialog] listExporters failed:', err && err.message);
+    }
 
     // 默认输出路径：用户上次导出位置或桌面
     const defaultName = `${t('main.exportDialog.defaultFileName')}_${formatTimestamp(new Date())}.wav`;
@@ -881,6 +895,23 @@ function updateSifiganPrecisionVisibility(content, form) {
   if (group) group.hidden = form.vocoderType !== 'sifigan';
 }
 
+/**
+ * 换掉路径的最后一段扩展名，目录与主文件名不动。
+ *
+ * 不用 `path` 模块：这段代码在渲染层，没有 Node 的 path；
+ * 也不能用 URL 解析 —— Windows 盘符会被当成协议。
+ */
+function swapOutputExt(p, ext) {
+  const s = String(p || '').trim();
+  if (!s) return s;
+  const m = /[\\/]([^\\/]*)$/.exec(s);
+  const base = m ? m[1] : s;
+  const dirLen = s.length - base.length;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return `${s.slice(0, dirLen)}${stem}${ext}`;
+}
+
 function buildOutputSection(form) {
   const section = document.createElement('div');
   section.className = 'export-dialog-section';
@@ -891,10 +922,57 @@ function buildOutputSection(form) {
   hint.textContent = t('main.exportDialog.outputHint');
   section.appendChild(hint);
 
+  // 格式下拉：内置 WAV + 插件导出器。
+  //
+  // 放在路径之前，是因为"选格式"决定了路径该是什么扩展名 —— 顺序反过来，
+  // 用户会先看到 .wav 的路径，再选 FLAC，然后疑惑文件名为什么没变。
+  let pathInput = null;
+  if (form._exporters && form._exporters.length) {
+    const fmtField = document.createElement('div');
+    fmtField.className = 'export-dialog-field';
+    const fmtLabel = document.createElement('div');
+    fmtLabel.className = 'export-dialog-field-label';
+    const fmtLabelText = document.createElement('span');
+    fmtLabelText.textContent = t('main.exportDialog.formatLabel');
+    fmtLabel.appendChild(fmtLabelText);
+    fmtField.appendChild(fmtLabel);
+
+    const select = document.createElement('select');
+    select.className = 'export-dialog-select';
+    const wavOpt = document.createElement('option');
+    wavOpt.value = 'wav';
+    wavOpt.textContent = t('main.exportDialog.formatWav');
+    select.appendChild(wavOpt);
+    for (const ex of form._exporters) {
+      const opt = document.createElement('option');
+      opt.value = `plugin:${ex.pluginId}:${ex.id}`;
+      opt.textContent = `${ex.label} · ${ex.ext}`;
+      if (ex.description) opt.title = ex.description;
+      select.appendChild(opt);
+    }
+    select.value = form.exporter ? `plugin:${form.exporter.pluginId}:${form.exporter.id}` : 'wav';
+    select.addEventListener('change', () => {
+      if (select.value === 'wav') {
+        form.exporter = null;
+      } else {
+        const ex = form._exporters.find((e) => `plugin:${e.pluginId}:${e.id}` === select.value);
+        form.exporter = ex
+          ? { pluginId: ex.pluginId, id: ex.id, ext: ex.ext, label: ex.label }
+          : null;
+      }
+      const next = swapOutputExt(form.outputPath, form.exporter ? form.exporter.ext : '.wav');
+      form.outputPath = next;
+      if (pathInput) pathInput.value = next;
+    });
+    fmtField.appendChild(select);
+    section.appendChild(fmtField);
+  }
+
   const row = document.createElement('div');
   row.className = 'export-dialog-path-row';
 
   const input = document.createElement('input');
+  pathInput = input;
   input.type = 'text';
   input.value = form.outputPath;
   input.placeholder = t('main.exportDialog.outputHint');
@@ -908,10 +986,14 @@ function buildOutputSection(form) {
   if (browseIcon) browseBtn.appendChild(browseIcon);
   browseBtn.appendChild(document.createTextNode(t('main.exportDialog.browse')));
   browseBtn.addEventListener('click', async () => {
+    const ext = form.exporter ? form.exporter.ext : '.wav';
     const result = await window.electronAPI.showSaveDialog({
       title: t('main.exportDialog.title'),
       defaultPath: form.outputPath || undefined,
-      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+      filters: [{
+        name: form.exporter ? form.exporter.label : 'WAV Audio',
+        extensions: [ext.slice(1)],
+      }],
     });
     if (!result.canceled && result.filePath) {
       form.outputPath = result.filePath;
@@ -1038,18 +1120,24 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
   // an absolute path before starting the expensive synthesis job.
   const candidate = (form.outputPath || '').trim();
   const isAbsolute = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(candidate);
+  const targetExt = form.exporter ? form.exporter.ext : '.wav';
   if (!isAbsolute) {
     const result = await window.electronAPI.showSaveDialog({
       title: t('main.exportDialog.title'),
       defaultPath: candidate || undefined,
-      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+      filters: [{
+        name: form.exporter ? form.exporter.label : 'WAV Audio',
+        extensions: [targetExt.slice(1)],
+      }],
     });
     if (result.canceled || !result.filePath) return;
     form.outputPath = result.filePath;
   }
   const trimmedPath = form.outputPath.trim();
-  if (!trimmedPath.toLowerCase().endsWith('.wav')) {
-    form.outputPath = trimmedPath + '.wav';
+  // 扩展名以当前格式为准：用户可能手打了一个 .wav 却选了 FLAC 导出器，
+  // 而主进程会拒绝"导出器与扩展名不符" —— 与其让他在 98% 处失败，不如现在改对。
+  if (!trimmedPath.toLowerCase().endsWith(targetExt)) {
+    form.outputPath = swapOutputExt(trimmedPath, targetExt);
   } else {
     form.outputPath = trimmedPath;
   }
@@ -1227,24 +1315,58 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setStatus('progressEncoding');
     setProgress(95);
 
-    // 编码 WAV
-    // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
-    const { encodeWav } = require('../audio/wavEncoder.js');
+    // 重采样到用户在"采样率"里选的档位。插件拿到的是**成品采样**，
+    // 不是 24k 的中间结果：导出设置里写了 48k，插件的编码器就该看到 48k。
     const outputAudio = resampleForExport(mixedAudio, SAMPLE_RATE, form.outputSampleRate, numChannels || 1);
-    const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1, form.outputBitDepth);
 
-    setStatus('progressSaving');
-    setProgress(98);
+    if (form.exporter) {
+      // 插件导出：不经过 WAV 编码器。宿主只负责合成、重采样、写盘，
+      // 压缩/封装是插件的事（这正是导出器贡献点存在的理由）。
+      const res = await window.electronAPI.pluginHost.exportAudio(
+        form.outputPath,
+        { pluginId: form.exporter.pluginId, id: form.exporter.id },
+        {
+          interleaved: outputAudio,
+          channels: numChannels || 1,
+          sampleRate: form.outputSampleRate,
+          durationSec: maxDuration,
+          meta: {
+            bpm: state.project.bpm,
+            exporter: form.exporter.id,
+            fragmentCount,
+          },
+        },
+      );
+      if (!res || !res.ok) {
+        const err = new Error((res && res.message) || t('main.exportDialog.progressFailed'));
+        err.code = res && res.code;
+        throw err;
+      }
+      if (Array.isArray(res.warnings) && res.warnings.length) {
+        // 插件说"有些东西没能完整写进去"必须让用户看见，不能只 console：
+        // 导出是终点，用户拿到的文件就是最终产物。
+        console.warn('[ExportDialog] 插件导出警告:\n' + res.warnings.join('\n'));
+        form._exportWarnings = res.warnings;
+      }
+    } else {
+      // 编码 WAV
+      // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
+      const { encodeWav } = require('../audio/wavEncoder.js');
+      const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1, form.outputBitDepth);
 
-    // 保存文件
-    const saveResult = await window.electronAPI.saveFile(form.outputPath, wavData);
-    if (saveResult && saveResult.success === false) throw new Error(saveResult.error || 'Failed to save export');
+      setStatus('progressSaving');
+      setProgress(98);
+
+      // 保存文件
+      const saveResult = await window.electronAPI.saveFile(form.outputPath, wavData);
+      if (saveResult && saveResult.success === false) throw new Error(saveResult.error || 'Failed to save export');
+    }
 
     setProgress(100);
     setStatus('progressDone');
 
     // 显示成功视图
-    showSuccessView(body, footer, form.outputPath, maxDuration, fragmentCount, fullCleanup);
+    showSuccessView(body, footer, form.outputPath, maxDuration, fragmentCount, form._exportWarnings || [], fullCleanup);
 
     // 自动打开导出位置
     try {
@@ -1271,7 +1393,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
 
 // ==================== 成功/失败视图 ====================
 
-function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, fullCleanup) {
+function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, warnings, fullCleanup) {
   body.innerHTML = '';
 
   const progressView = document.createElement('div');
@@ -1305,6 +1427,17 @@ function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, f
   metaEl.style.textAlign = 'center';
   metaEl.textContent = `${formatDuration(maxDuration)} · ${t('main.exportDialog.fragmentCount', { count: fragmentCount })}`;
   result.appendChild(metaEl);
+
+  // 插件的导出警告（"8bit 目标被量化"这类）。放在成功视图里而不是弹窗：
+  // 文件确实写出来了，用户需要的是"哪里不完整"，不是一个打断流程的错误框。
+  if (Array.isArray(warnings) && warnings.length) {
+    const warnEl = document.createElement('div');
+    warnEl.className = 'export-dialog-field-hint export-dialog-field-warn';
+    warnEl.style.textAlign = 'center';
+    warnEl.style.whiteSpace = 'pre-line';
+    warnEl.textContent = warnings.slice(0, 8).join('\n');
+    result.appendChild(warnEl);
+  }
 
   // Footer 按钮
   footer.innerHTML = '';

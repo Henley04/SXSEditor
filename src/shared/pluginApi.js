@@ -14,7 +14,7 @@ const SUPPORTED_API_VERSIONS = Object.freeze([1, 2]);
 
 /** manifest 里可声明的贡献点名称（未知键直接拒绝，避免拼写错误静默失效）。 */
 const CONTRIBUTION_KEYS = Object.freeze([
-  'commands', 'menus', 'panels', 'fileTypes', 'settings', 'keybindings',
+  'commands', 'menus', 'panels', 'fileTypes', 'exporters', 'settings', 'keybindings',
   'toolbar', 'statusBar', 'contextMenus', 'timelineOverlays',
   // `models` 取代了早期的 `llm`：模型调用面不局限于大模型，MIDI 生成 / 伴奏生成 /
   // 歌声合成 / TTS / ASR 都走同一套端点与授权（见设计方案 §12）。
@@ -50,6 +50,7 @@ const LIMITS = Object.freeze({
   menus: 128,
   panels: 32,
   fileTypes: 64,
+  exporters: 16,
   settings: 32,
   keybindings: 128,
   toolbar: 32,

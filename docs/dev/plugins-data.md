@@ -131,6 +131,35 @@ codecs: {
 |---|---|---|
 | `bytes` | `Uint8Array` / `ArrayBuffer` / `string` | 必填。`string` 按 UTF-8 编码 |
 | `warnings` | `string[]` | 可选。**写不进去的东西必须在这里说**，宿主会弹给用户看 |
+| `files` | `Array<{name, bytes}>` | 可选。旁挂文件（见下） |
+
+### 旁挂文件：一次保存写出多个文件
+
+有些格式天生不是一个文件：工程 + 封面、工程 + 采样、工程 + 一份纯文本歌词。
+把 `files` 一起返回，宿主会写进**主文件所在目录**。
+
+```js
+async write(ctx, { document }) {
+  return {
+    bytes: mainBytes,
+    files: [
+      { name: 'cover.png', bytes: pngBytes },
+      { name: 'lyrics.txt', bytes: 'la la la' },
+    ],
+  };
+}
+```
+
+三条限制，全部来自同一件事 —— 你没有目录遍历能力：
+
+| 你会得到的 | 因为 |
+|---|---|
+| `name` 只能是**一个文件名** | 带 `/`、`\`、`:` 或以 `.` 开头一律拒绝（`../x` 能写到授权范围外） |
+| 与主文件同名会被拒 | 否则后写的覆盖先写的，用户得到一个内容不对的文件 |
+| 最多 16 个、单个不超过 256MB | 再多应该做成 zip（单文件），而不是往用户桌面上撒文件 |
+
+被拒绝的旁挂文件不会让整次保存失败：主文件照常落地，拒绝原因进 `warnings`。
+主文件是用户按 Ctrl+S 的直接目标，不能因为封面图写不出来就说"保存失败"。
 
 失败与 `read` 同构：`throw { code, message }` 或 `{ error }`、`{ cancelled: true }`。
 
@@ -224,7 +253,88 @@ note.ext     = { 'example-sv2': { phonemes: ['l', 'a'] } };
 `document → .sxsproj → document` 这一趟里继续带着它。**它不会判断这些数据是否过期**
 —— 你手上有 `document` 与 `ext`，只有你知道某个字段还对不对。
 
-## 6. 失败怎么说
+### 曲线字段长什么样
+
+`kind: 'curve'` 的值是一串**音符内的相对位置**，不是绝对拍号：
+
+```js
+note.ext = {
+  'example-sv2': {
+    // [[t, v], ...]，t ∈ [0,1] 是音符内的位置，v 是你的量纲
+    dynamics: [[0, 0.15], [0.5, 1], [1, 0.3]],
+  },
+};
+```
+
+为什么是相对位置：用户把音符拖长时，曲线要跟着拉伸。用绝对拍会让"改了时值，
+曲线就跑到音符外面"。
+
+宿主只做两件事，都不需要理解 v 是什么：
+
+1. **画一条只读虚线**在音符矩形内部，纵向按 `curve.clamp`（没写则按数据 min/max）归一。
+   画在音符里而不是音高/音量 lane 上 —— 画到 lane 上，用户会以为那是可拖的宿主参数，
+   而拖了不会有任何效果。
+2. **求某个位置的值**：`interp` 支持 `linear` / `step` / `smooth`（smoothstep），
+   `quantize` 按步长取整后再 `clamp`。
+
+`t` 超出 `[0,1]` 的点会被**丢弃**而不是夹到边界：夹边会把音符外的数据画成贴边竖线，
+看起来像一条有效自动化 —— 比看不见更糟。
+
+同一个音符上可以有多条曲线（不同插件、同一插件的不同字段），宿主逐条画。
+它们都不会参与合成：要让数据影响声音，走 `render.hook`。
+
+## 6. 导出成品：`contributes.exporters`
+
+工程格式（`fileTypes`）与成品格式（`exporters`）是两件事，别混：
+
+| | `fileTypes` | `exporters` |
+|---|---|---|
+| 输入 | 一个文件的字节 | 交错 `Float32Array` + 采样率 |
+| 输出 | 工程文档 | 成品音频的字节 |
+| 出现在 | 打开/另存为对话框 | 导出对话框的"格式"下拉 |
+| 需要 `codec` | 是 | 否（`exporters`） |
+
+```json
+{
+  "contributes": {
+    "exporters": [
+      {
+        "id": "flac",
+        "ext": ".flac",
+        "label": { "en": "FLAC", "zh-CN": "FLAC" },
+        "mime": "audio/flac"
+      }
+    ]
+  }
+}
+```
+
+```js
+module.exports = {
+  exporters: {
+    async export(ctx, { name, format, audio, meta }) {
+      // audio: { interleaved, channels, sampleRate, frames, duration }
+      // meta:  { bpm, fragmentCount, exporter }
+      return { bytes, warnings: [] };
+    },
+  },
+};
+```
+
+| 约束 | 原因 |
+|---|---|
+| `ext` 不能是 `.sxsproj` / `.sxs` / `.sxssinger` / `.sxsp` | 成品不该长得像工程 |
+| 目标路径扩展名必须与 `ext` 一致 | 否则等于"在保存对话框里改个后缀"就能让插件往任意后缀写字节 |
+| 需要 `permissions.fs: ["userPicked:write"]` | 写盘由宿主完成，但授权仍然是用户选定位置那一次 |
+| 单次产出上限 256MB | 与 `codec.write` 同一套上限 |
+
+入参的采样**已经按用户在导出对话框里选的采样率重采样**（24k/44.1k/48k/96k），
+你拿到的就是成品采样，不需要自己再转。
+
+同名扩展名被两个插件声明时，先注册的赢，其余在清单里标 `shadowed`；
+导出对话框只显示第一个。
+
+## 7. 失败怎么说
 
 三种结局各有各的码，宿主按码决定提示：
 
@@ -248,16 +358,15 @@ note.ext     = { 'example-sv2': { phonemes: ['l', 'a'] } };
 `message` 会原样出现在提示框里，**请按 `ctx.plugin.locale` 给出对应语言的文案**
 （示例插件 `example-sv2` 的 `msg()` 就是这么做的）。宿主只负责自己那半句。
 
-## 7. 还没做的部分（写在这里免得踩空）
+## 8. 还没做的部分（写在这里免得踩空）
 
-- `contributes.exporters`（`export.audio`）：声明音频导出格式，导出对话框里出现。
-- `ext.curve` / `ext.render` 的运行时接线：声明能通过校验，尚未参与绘制与渲染。
-- Windows 系统级文件关联：`.sv2` 现在能被运行中的实例接收，但还没写进注册表，
-  所以"未启动时双击"不会拉起应用。
-- 旁挂文件：`write` 目前只能产出**一个**文件。需要"工程 + 素材"多文件输出的格式
-  暂时得自己塞进单文件容器。
+- `ext.render` 的**端到端**验证：意图（哪个插件、什么顺序）已经能推到主进程的
+  pipeline 执行器，语义有单测覆盖；但这台机器没有模型文件，跑不了真实合成，
+  所以"工程 A 要求 A 插件后处理"这件事还没有一次带声音的验证。
+- `preset` / 批量导出：目前一次导出只有一组参数、一个格式、一个目标。
+- 签名与市场：`.sxsp` 的签名位是留的，校验没做（M6）。
 
-## 8. 完整示例
+## 9. 完整示例
 
 见 [`plugins/example-sv2/`](../../plugins/example-sv2/)：
 

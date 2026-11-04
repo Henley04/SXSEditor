@@ -225,7 +225,7 @@ function createContext(init) {
  * 对象深度封顶 6 层。这些限制对"看一眼的日志"是对的，对"整段波形"和
  * "整个工程文档"就是静默数据损坏。
  */
-const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read', 'codec.write']);
+const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read', 'codec.write', 'exporter.export']);
 
 function safe(value, depth = 0) {
   if (depth > 6) return null;
@@ -346,6 +346,25 @@ async function handleRequest(msg) {
           name: params.name,
           document: params.document,
           target: params.target,
+        });
+        break;
+      }
+      case 'exporter.export': {
+        // 成品导出（M4）。入参是浮点采样而不是文档：编码器要的是波形，
+        // 让它从工程文档自己合成等于把宿主的一半工作交给插件重做一遍。
+        // 插件只负责"采样 → 字节"，写盘仍由宿主完成。
+        const exporters = (moduleExports && moduleExports.exporters) || {};
+        const exporter = exporters[params.exporterId];
+        if (!exporter || typeof exporter.export !== 'function') {
+          throw Object.assign(new Error(`插件没有提供导出器 ${params.exporterId}`), { code: 'UNSUPPORTED' });
+        }
+        result = await exporter.export(ctx, {
+          exporterId: params.exporterId,
+          path: params.path,
+          name: params.name,
+          format: params.format,
+          audio: params.audio,
+          meta: params.meta,
         });
         break;
       }

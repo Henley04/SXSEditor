@@ -4,6 +4,7 @@ import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE } from './constants.js';
 import { PROJECT_FORMAT_VERSION, PROJECT_MIN_READER, PROJECT_FEATURES, checkProjectHeader } from '../shared/projectFormat.js';
 import { buildAutoCurve, resolvePitchRanges } from '../shared/autoPitchCurve.js';
 import { computeActiveClippedNotes, lastNoteEnd } from '../shared/activeNotes.js';
+import { buildRenderIntent } from '../shared/pluginRenderIntent.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog, showConfirmDialog } from '../alertDialog.js';
 import { createDialog, showSingerValidationReport } from './uiControls.js';
@@ -1127,6 +1128,25 @@ async function openProjectViaPlugin(targetPath) {
 }
 
 /**
+ * 把 `extSchema[*].render` 推给主进程的 pipeline hook 执行器。
+ *
+ * 为什么在"装载工程"里做而不是在导出前做：意图属于文档，属于打开那一刻。
+ * 用户可能在打开后立刻试听（不带 hook 的声音），如果等到导出才推，
+ * 试听与导出的听感就是两回事 —— 而这类差异用户几乎不可能归因。
+ */
+export function syncRenderIntent() {
+  const api = window.electronAPI?.pluginHost;
+  if (!api?.setRenderIntent) return;
+  const intent = buildRenderIntent(state.projectExt && state.projectExt.schema);
+  try {
+    const p = api.setRenderIntent(intent);
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch (_) {
+    /* 推不过去最多是顺序按默认走，不该拦住工程打开 */
+  }
+}
+
+/**
  * 把一份**已经解析并经校验**的工程文档装进编辑器状态。
  *
  * 从 loadProject 里拆出来的原因不只是"函数太长"：M4 之后有两个来源
@@ -1235,6 +1255,7 @@ export async function applyProjectDocument(obj, targetPath, options = {}) {
     schema: obj.extSchema || null,
     root: obj.ext || null,
   };
+  syncRenderIntent();
   state.projectSaveWarnings = [];
   history.clear();
   state.selectedFragmentId = null;

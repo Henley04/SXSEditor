@@ -306,6 +306,57 @@ function validateFileTypes(list) {
   return { ok: true, value: out };
 }
 
+/**
+ * `contributes.exporters`：音频导出格式（M4 第 4 段）。
+ *
+ * 与 `fileTypes` 的区别容易被混淆，这里划清：
+ *   · `fileTypes` 是**工程**格式 —— 打开/保存工程文件，走 codec；
+ *   · `exporters` 是**成品**格式 —— 导出音频，入参是浮点采样，出参是字节。
+ *
+ * 一个插件可以只做后者（"我能把唱好的东西压成 m4a"），不需要接管任何工程格式。
+ * 扩展名的保留集合同样生效：导出器不能叫 `.sxsproj`，那会把成品写成工程的样子。
+ */
+function validateExporters(list) {
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return fail('exporters 的每一项必须是对象');
+    const id = String(item.id || '').trim();
+    if (!COMMAND_ID_RE.test(id)) return fail(`exporters.id 非法：${JSON.stringify(item.id)}`);
+    if (seen.has(id)) return fail(`exporters 重复声明了 ${id}`);
+    seen.add(id);
+
+    let ext = String(item.ext || '').trim().toLowerCase();
+    if (ext && !ext.startsWith('.')) ext = `.${ext}`;
+    if (!/^\.[a-z0-9]{1,16}$/.test(ext)) return fail(`exporters(${id}).ext 非法：${JSON.stringify(item.ext)}`);
+    if (RESERVED_FILE_EXTS.has(ext)) {
+      return fail(`exporters(${id}) 不能用 ${ext}：那是工程/歌手格式，成品导出不该覆盖它`);
+    }
+
+    const label = localizedTitle(item.label, `exporters(${id}).label`);
+    if (!label.ok) return fail(label.error);
+
+    let mime = '';
+    if (item.mime !== undefined) {
+      const m = String(item.mime || '').trim();
+      // 只做形状校验：宿主不用它做路由，但导出成功视图与"用默认程序打开"
+      // 都靠它。乱填的 mime 会让系统把成品交给错误的程序。
+      if (!/^[a-z]+\/[a-z0-9.+-]+$/i.test(m) || m.length > 64) {
+        return fail(`exporters(${id}).mime 非法：${JSON.stringify(item.mime)}`);
+      }
+      mime = m.toLowerCase();
+    }
+    out.push({
+      id,
+      ext,
+      label: label.value,
+      mime,
+      description: typeof item.description === 'string' ? item.description.slice(0, 300) : '',
+    });
+  }
+  return { ok: true, value: out };
+}
+
 const FIELD_TYPES = Object.freeze(['boolean', 'number', 'string', 'select', 'multiline']);
 
 /**
@@ -824,6 +875,9 @@ function validateManifest(manifest, ctx = {}) {
   const fileTypes = validateFileTypes(arr('fileTypes', LIMITS.fileTypes));
   if (!fileTypes.ok) return fileTypes;
 
+  const exporters = validateExporters(arr('exporters', LIMITS.exporters));
+  if (!exporters.ok) return exporters;
+
   const settings = validateSettings(arr('settings', LIMITS.settings), id);
   if (!settings.ok) return settings;
 
@@ -912,6 +966,7 @@ function validateManifest(manifest, ctx = {}) {
         menus: menus.value,
         panels: panels.value,
         fileTypes: fileTypes.value,
+        exporters: exporters.value,
         settings: settings.value,
         toolbar: toolbar.value,
         statusBar: statusBar.value,

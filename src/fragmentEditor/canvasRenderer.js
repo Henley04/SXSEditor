@@ -80,6 +80,7 @@ import {
   getAnchorDragHud,
 } from './state.js';
 import { buildEffectiveValues, evalSortedCurve } from './automationCurve.js';
+import { collectCurves, sampleCurve, applyCurveSpec } from '../shared/pluginCurve.js';
 import { applyF0Postprocess } from './f0Smoothing.js';
 import {
   buildF0ParamArrays,
@@ -2823,6 +2824,95 @@ export function _drawAnchorDragHud(c, w, h) {
 }
 
 /**
+ * note 上插件曲线的解析缓存。
+ *
+ * 归一化要排序、要过滤非法点，每帧对每个可见音符重算是实打实的浪费。
+ * 缓存键取 `ext` 的**引用**而不是内容：编辑一个音符会重建它的 ext（或整条 note），
+ * 引用一变即失效；而 schema 换了（打开另一个工程）也要跟着失效。
+ */
+const _noteCurveCache = new WeakMap();
+
+function _noteCurves(note, schema) {
+  if (!note || !note.ext || typeof note.ext !== 'object' || !schema) return null;
+  const hit = _noteCurveCache.get(note);
+  if (hit && hit.ext === note.ext && hit.schema === schema) return hit.curves;
+  const curves = collectCurves(note.ext, schema, 'note').map((cv) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of cv.points) {
+      if (p.v < lo) lo = p.v;
+      if (p.v > hi) hi = p.v;
+    }
+    // 声明了 clamp 就用它做纵向标尺：插件说了"这条通道的合理范围是 0–1"，
+    // 按数据自身 min/max 拉伸会把"一直贴顶"和"波动很小"画成同一个样子。
+    if (cv.spec.clamp) {
+      lo = cv.spec.clamp[0];
+      hi = cv.spec.clamp[1];
+    }
+    if (!(hi > lo)) hi = lo + 1;
+    return { cv, lo, hi };
+  });
+  _noteCurveCache.set(note, { ext: note.ext, schema, curves });
+  return curves;
+}
+
+/**
+ * 在 note 内部叠加插件声明的曲线（`kind: 'curve'`）。
+ *
+ * 为什么画在 note 里、不画进参数 lane
+ * --------------------------------
+ * 宿主不知道这条曲线的量纲，也不知道它对应哪条参数。画到音高/音量 lane 上，
+ * 用户会以为那是可拖的宿主参数 —— 而拖了不会有任何效果，因为合成根本不读它。
+ * 画在 note 矩形内、按 note 自身高度归一，表达的是"这条数据属于这个音符"
+ * 这一件确定的事，不多也不少。
+ *
+ * 虚线 + 半透明的用意：它是**只读的旁证**，不是可以抓的东西。
+ */
+function _drawNoteExtCurves(ctx, c, notes, beatToPixel, scrollX, w) {
+  const schema = getProjectExtSchema();
+  if (!schema || !Array.isArray(notes) || notes.length === 0) return;
+  let started = false;
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 2]);
+  ctx.strokeStyle = c.fgMuted || c.fgSecondary;
+  ctx.globalAlpha = 0.8;
+  for (const note of notes) {
+    const curves = _noteCurves(note, schema);
+    if (!curves || curves.length === 0) continue;
+    const x = note.start * beatToPixel - scrollX;
+    const nw = note.duration * beatToPixel;
+    if (x + nw < 0 || x > w || nw < 10) continue;
+    const y = pitchToY(note.pitch);
+    const top = y + 2;
+    const bottom = y + NOTE_HEIGHT - 2;
+    const hh = bottom - top;
+    if (hh <= 2) continue;
+    for (const { cv, lo, hi } of curves) {
+      // 采样密度按像素宽自适应，上限 24 段：再宽的音符也只是一条示意线，
+      // 而每多一段就多一次二分求值（拖动时逐帧执行）。
+      const steps = Math.max(2, Math.min(24, Math.floor(nw / 4)));
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const mixed = sampleCurve(cv.points, t, cv.spec.interp);
+        if (mixed === null) continue;
+        const v = applyCurveSpec(mixed, cv.spec);
+        const norm = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+        const px = x + 1 + t * (nw - 2);
+        const py = bottom - norm * hh;
+        if (i === 0 || !started) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+        started = true;
+      }
+      ctx.stroke();
+      started = false;
+    }
+  }
+  ctx.restore();
+}
+
+/**
  * 在 note 上叠加颤音 / 渐入渐出的视觉指示，让用户一眼看出哪些 note 启用了效果。
  * - 渐入/渐出：在 note 左/右边缘画半透明三角形（从 0 → 1 / 1 → 0 的增益包络示意）。
  * - 颤音：在 note 左上角画一个小正弦波标记（≈），仅在 note 宽度足够时显示。
@@ -3189,6 +3279,9 @@ function _doRenderImpl(w, h) {
   // 这里显式复位，避免影响后续（pitch 曲线 / 参数面板）的文本绘制。
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
+
+  // 插件声明的曲线（kind: 'curve'）：画在 note 内部，只读旁证
+  _drawNoteExtCurves(ctx, c, visibleNotes, beatToPixel, scrollX, w);
 
   // 鼠标悬停在警告 note 上时显示提示（重叠未激活 / 音高超范围）
   const hoveredId = getHoveredNoteId();

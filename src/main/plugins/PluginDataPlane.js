@@ -31,6 +31,14 @@ const MAX_OPEN_BYTES = 64 * 1024 * 1024;
 const MAX_WRITE_BYTES = 256 * 1024 * 1024;
 
 /**
+ * 一次保存最多带几个旁挂文件。
+ *
+ * 16 足够"工程 + 封面 + 两三个采样"这类真实场景；再多半是插件把整个资源目录
+ * 都倒出来，那应该做成 zip（单文件），而不是往用户桌面上撒一堆文件。
+ */
+const MAX_SIDECAR_FILES = 16;
+
+/**
  * 双语文案。
  *
  * 这些 message 会经渲染层弹给用户看（`main.projectPluginOpenFailed` 的 {reason}），
@@ -433,6 +441,16 @@ class PluginDataPlane {
       ? result.warnings.filter((w) => typeof w === 'string' && w).slice(0, 64)
       : [];
 
+    // 旁挂文件（工程 + 素材的格式）。放在主文件写完之后：主文件是用户按 Ctrl+S
+    // 的直接目标，不能因为"封面图没写出来"就让它看起来保存失败。
+    const extra = await this._writeSidecarFiles(filePath, result.files, target.pluginId);
+    if (extra.written) {
+      store.audit('file-save-extras', target.pluginId, {
+        ext, count: extra.written, names: extra.names,
+      });
+    }
+    warnings.push(...extra.warnings);
+
     store.audit('file-save', target.pluginId, {
       ext,
       ok: true,
@@ -441,8 +459,321 @@ class PluginDataPlane {
       singers: checked.document.singers.length,
       fragments: checked.document.fragments.length,
     });
-    return { ok: true, pluginId: target.pluginId, ext, bytes: bytes.length, warnings };
+    return { ok: true, pluginId: target.pluginId, ext, bytes: bytes.length, warnings, files: extra.written };
+  }
+
+  /**
+   * 写旁挂文件（`codec.write` 返回的 `files`）。
+   *
+   * 为什么名字只允许纯文件名：目标目录来自用户刚选的保存位置，插件没有目录
+   * 遍历能力。`../` 或绝对路径的 `name` 等于让插件把字节放到授权范围之外 ——
+   * 那不是"多文件导出"，是绕过 `userPicked:write` 写任意位置。
+   *
+   * 实测最容易踩的三种写法都拦下：`sub/a.png`（带分隔符）、`../a.png`（穿越）、
+   * 与主文件同名（后写的覆盖先写的，用户得到一个内容错误的文件）。
+   *
+   * @returns {Promise<{written:number, names:string[], warnings:string[]}>}
+   */
+  async _writeSidecarFiles(mainPath, files, pluginId) {
+    const out = { written: 0, names: [], warnings: [] };
+    if (!Array.isArray(files) || files.length === 0) return out;
+
+    let dir;
+    try {
+      dir = path.dirname(mainPath);
+    } catch (_) {
+      return out;
+    }
+    const taken = new Set([path.basename(mainPath).toLowerCase()]);
+
+    for (const item of files) {
+      if (out.written >= MAX_SIDECAR_FILES) {
+        out.warnings.push(tr(
+          `旁挂文件超过 ${MAX_SIDECAR_FILES} 个，其余未写入`,
+          `More than ${MAX_SIDECAR_FILES} sidecar files; the rest were not written`,
+        ));
+        break;
+      }
+      const rawName = String((item && item.name) || '').trim();
+      // 只允许"一个文件名"：不含路径分隔符、不以点开头、不含 Windows 保留字符
+      if (!rawName || rawName.length > 120 || /[\\/:*?"<>|]/.test(rawName)
+        || rawName.startsWith('.') || rawName.includes('..')) {
+        out.warnings.push(tr(
+          `旁挂文件名不合法，已跳过：${JSON.stringify(rawName)}`,
+          `Invalid sidecar file name, skipped: ${JSON.stringify(rawName)}`,
+        ));
+        continue;
+      }
+      const lower = rawName.toLowerCase();
+      if (taken.has(lower)) {
+        out.warnings.push(tr(
+          `旁挂文件名与主文件重复，已跳过：${rawName}`,
+          `Sidecar name collides with the main file, skipped: ${rawName}`,
+        ));
+        continue;
+      }
+      const bytes = toBuffer(item && item.bytes);
+      if (!bytes) {
+        out.warnings.push(tr(
+          `旁挂文件 ${rawName} 没有可写入的字节，已跳过`,
+          `Sidecar ${rawName} has no writable bytes, skipped`,
+        ));
+        continue;
+      }
+      if (bytes.length > MAX_WRITE_BYTES) {
+        out.warnings.push(tr(
+          `旁挂文件 ${rawName} 超过 ${MAX_WRITE_BYTES / 1024 / 1024}MB，已跳过`,
+          `Sidecar ${rawName} exceeds ${MAX_WRITE_BYTES / 1024 / 1024}MB, skipped`,
+        ));
+        continue;
+      }
+      const target = path.join(dir, rawName);
+      // 目录已随主文件授权；仍走一次检查，防止插件同时给出主文件与旁挂到别处
+      // （例如主文件在 D:，旁挂路径被拼成允许目录里的某个软链）。
+      const { isPathAllowed } = require('../security');
+      if (!isPathAllowed(target)) {
+        out.warnings.push(tr(
+          `旁挂文件 ${rawName} 的目标位置未授权，已跳过`,
+          `Sidecar ${rawName} targets an unauthorized location, skipped`,
+        ));
+        continue;
+      }
+      try {
+        await writeFileAtomic(target, bytes);
+        taken.add(lower);
+        out.written++;
+        out.names.push(rawName);
+      } catch (err) {
+        out.warnings.push(tr(
+          `旁挂文件 ${rawName} 写入失败：${err.message}`,
+          `Sidecar ${rawName} failed to write: ${err.message}`,
+        ));
+        store.audit('file-save-extras', pluginId, { ok: false, name: rawName, error: err.message });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 用插件的导出器把成品音频编码成文件（M4 第 4 段）。
+   *
+   * 与 `saveDocument` 的分工：那边编码的是**工程**（文档进、工程文件出），
+   * 这边编码的是**成品**（浮点采样进、音频文件出）。两条链路的 trusted 边界不同：
+   * 工程文档必须过 `validateProjectDocument`，而音频是一串采样，只需要形状校验
+   * （是不是 Float32Array、长度是否与时长自洽）。
+   *
+   * 为什么导出器不能自己写文件：与 codec 同理 —— 插件进程没有文件系统权限，
+   * `userPicked:write` 授权的是"宿主替你写"，不是"你可以写"。
+   *
+   * @param {string} filePath
+   * @param {{pluginId:string, id:string}} ref 导出器引用（管理器/对话框给的是这两个值）
+   * @param {{sampleRate:number, channels:number, interleaved:Float32Array, durationSec?:number,
+   *          meta?:object}} audio
+   * @returns {Promise<{ok:true, pluginId:string, exporterId:string, ext:string, bytes:number, warnings:string[]}
+   *                 | {ok:false, code:string, message:string, warnings?:string[]}>}
+   */
+  async exportAudio(filePath, ref, audio) {
+    if (typeof filePath !== 'string' || !filePath) {
+      return { ok: false, code: ERR.INVALID_REQUEST, message: tr('缺少导出路径', 'Missing export path') };
+    }
+    const pluginId = String((ref && ref.pluginId) || '');
+    const exporterId = String((ref && ref.id) || '');
+    const entry = this.registry.list('exporter').find((e) => e.pluginId === pluginId && e.id === exporterId);
+    if (!entry) {
+      return {
+        ok: false,
+        code: FILE_ERR.NOT_HANDLED,
+        message: tr(`没有导出器 ${exporterId || '（未指定）'}`, `No such exporter: ${exporterId || '(none)'}`),
+      };
+    }
+    const record = this.registry.getPlugin(pluginId);
+    if (!record || record.status !== 'loaded') {
+      return {
+        ok: false,
+        code: FILE_ERR.NOT_HANDLED,
+        message: tr(`插件 ${pluginId} 当前不可用`, `Plugin ${pluginId} is not available`),
+      };
+    }
+
+    // 扩展名必须与声明一致：导出器叫 flac，却把字节写进 .exe，那是"用户在
+    // 保存对话框里改了个后缀"就能触发的可执行文件投放，不能只靠插件自觉。
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext !== entry.ext) {
+      return {
+        ok: false,
+        code: ERR.INVALID_REQUEST,
+        message: tr(
+          `导出器 ${exporterId} 只能写 ${entry.ext}，目标是 ${ext || '（无扩展名）'}`,
+          `Exporter ${exporterId} writes ${entry.ext}, target is ${ext || '(none)'}`,
+        ),
+      };
+    }
+
+    const perms = record.manifest.permissions || {};
+    if (!(perms.fs || []).includes('userPicked:write')) {
+      return {
+        ok: false,
+        code: ERR.PERMISSION_DENIED,
+        message: tr(
+          `插件 ${pluginId} 缺少权限 fs:userPicked:write`,
+          `Plugin ${pluginId} lacks the fs:userPicked:write permission`,
+        ),
+      };
+    }
+
+    const { isPathAllowed } = require('../security');
+    if (!isPathAllowed(filePath)) {
+      return {
+        ok: false,
+        code: ERR.PERMISSION_DENIED,
+        message: tr('路径未授权，请通过"导出"对话框选择位置', 'Path is not authorized; pick the location through the Export dialog'),
+      };
+    }
+
+    const interleaved = audio && audio.interleaved;
+    if (!(interleaved instanceof Float32Array) || interleaved.length === 0) {
+      return { ok: false, code: ERR.INVALID_REQUEST, message: tr('没有可导出的音频数据', 'No audio data to export') };
+    }
+    const channels = Math.max(1, Math.min(8, Math.round(Number(audio.channels) || 1)));
+    const sampleRate = Math.round(Number(audio.sampleRate) || 0);
+    if (!(sampleRate >= 8000 && sampleRate <= 192000)) {
+      return {
+        ok: false,
+        code: ERR.INVALID_REQUEST,
+        message: tr(`采样率不合法：${audio.sampleRate}`, `Invalid sample rate: ${audio.sampleRate}`),
+      };
+    }
+    if (interleaved.length % channels !== 0) {
+      return {
+        ok: false,
+        code: ERR.INVALID_REQUEST,
+        message: tr(
+          `交错采样数 ${interleaved.length} 不是通道数 ${channels} 的整数倍`,
+          `Interleaved sample count ${interleaved.length} is not a multiple of ${channels} channels`,
+        ),
+      };
+    }
+
+    let result;
+    try {
+      result = await this.call(
+        pluginId,
+        'exporter.export',
+        {
+          exporterId,
+          path: filePath,
+          name: path.basename(filePath),
+          format: { id: entry.id, ext: entry.ext, mime: entry.mime || '' },
+          audio: {
+            interleaved,
+            channels,
+            sampleRate,
+            frames: interleaved.length / channels,
+            duration: audio.durationSec,
+          },
+          meta: audio.meta && typeof audio.meta === 'object' ? audio.meta : {},
+        },
+        // 编码整首歌是重活：默认 120s，比普通命令宽松，但仍要有上限 ——
+        // 插件卡死时用户的导出对话框不能永远停在 98%。
+        120000,
+      );
+    } catch (err) {
+      store.audit('audio-export', pluginId, { exporterId, ok: false, error: err && err.message });
+      return {
+        ok: false,
+        code: (err && err.code) || ERR.INTERNAL,
+        message: String((err && err.message) || err),
+      };
+    }
+
+    if (!result || result.cancelled) {
+      return { ok: false, code: FILE_ERR.CANCELLED, message: tr('插件取消了导出', 'The plugin cancelled the export') };
+    }
+    if (result.error) {
+      store.audit('audio-export', pluginId, { exporterId, ok: false, error: result.error });
+      return {
+        ok: false,
+        code: ERR.INTERNAL,
+        message: typeof result.error === 'string'
+          ? result.error
+          : (result.error.message || tr('插件返回了错误', 'The plugin returned an error')),
+      };
+    }
+
+    const bytes = toBuffer(result.bytes);
+    if (!bytes) {
+      store.audit('audio-export', pluginId, { exporterId, ok: false, error: 'invalid output type' });
+      return {
+        ok: false,
+        code: FILE_ERR.INVALID_OUTPUT,
+        message: tr(
+          '插件没有返回可写入的字节（需要 Uint8Array / ArrayBuffer / string）',
+          'The plugin returned no writable bytes (expected Uint8Array / ArrayBuffer / string)',
+        ),
+      };
+    }
+    if (bytes.length > MAX_WRITE_BYTES) {
+      return {
+        ok: false,
+        code: FILE_ERR.TOO_LARGE,
+        message: tr(
+          `插件产出 ${Math.round(bytes.length / 1024 / 1024)}MB，超过上限 ${MAX_WRITE_BYTES / 1024 / 1024}MB`,
+          `The plugin produced ${Math.round(bytes.length / 1024 / 1024)}MB, over the ${MAX_WRITE_BYTES / 1024 / 1024}MB limit`,
+        ),
+      };
+    }
+
+    try {
+      await writeFileAtomic(filePath, bytes);
+    } catch (err) {
+      store.audit('audio-export', pluginId, { exporterId, ok: false, error: err.message });
+      return { ok: false, code: ERR.INTERNAL, message: tr(`写入失败：${err.message}`, `Write failed: ${err.message}`) };
+    }
+
+    const warnings = Array.isArray(result.warnings)
+      ? result.warnings.filter((w) => typeof w === 'string' && w).slice(0, 64)
+      : [];
+    store.audit('audio-export', pluginId, {
+      exporterId, ok: true, bytes: bytes.length, warnings: warnings.length,
+      frames: interleaved.length / channels,
+    });
+    return { ok: true, pluginId, exporterId, ext, bytes: bytes.length, warnings };
+  }
+
+  /**
+   * 可用的音频导出格式（导出对话框用）。
+   *
+   * 按导出器的 `ext` 去重：两个插件都能压 flac 时，先注册的赢，其余标 shadowed ——
+   * 与 fileTypes 的处理一致，管理器里能看出"我装了但没生效"。
+   */
+  listExporters(pickLabel) {
+    const pick = typeof pickLabel === 'function' ? pickLabel : (label, fallback) => fallback;
+    const out = [];
+    const seen = new Map();
+    for (const entry of this.registry.list('exporter')) {
+      const record = this.registry.getPlugin(entry.pluginId);
+      if (!record || record.status !== 'loaded') continue;
+      const row = {
+        pluginId: entry.pluginId,
+        pluginName: record.manifest.name,
+        id: entry.id,
+        ext: entry.ext,
+        mime: entry.mime || '',
+        description: entry.description || '',
+        label: pick(entry.label, `${entry.ext.slice(1).toUpperCase()} (${record.manifest.name})`),
+      };
+      if (seen.has(entry.ext)) {
+        seen.get(entry.ext).shadowed.push({ pluginId: entry.pluginId, pluginName: record.manifest.name });
+        continue;
+      }
+      const withShadow = { ...row, shadowed: [] };
+      seen.set(entry.ext, withShadow);
+      out.push(withShadow);
+    }
+    return out;
   }
 }
 
-module.exports = { PluginDataPlane, FILE_ERR, MAX_OPEN_BYTES, MAX_WRITE_BYTES };
+module.exports = {
+  PluginDataPlane, FILE_ERR, MAX_OPEN_BYTES, MAX_WRITE_BYTES, MAX_SIDECAR_FILES,
+};

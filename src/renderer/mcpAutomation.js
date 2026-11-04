@@ -1,6 +1,6 @@
 import { state, trackManager, history } from './state.js';
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
-import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject, syncProjectControls, buildProjectObject, BUILTIN_PROJECT_EXTENSIONS } from './projectManager.js';
+import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject, syncProjectControls, buildProjectObject, BUILTIN_PROJECT_EXTENSIONS, syncRenderIntent } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
@@ -329,6 +329,14 @@ function replace(doc, { dryRun = false } = {}) {
     state.project = normalized.project;
     normalized.singers.forEach((s) => trackManager.addSinger(s));
     normalized.fragments.forEach((f) => trackManager.addFragment(f));
+    // 扩展域跟着文档走：`replace` 换掉的是整份工程内容，`extSchema` / `ext`
+    // 也属于内容。不带上它们，agent 载入一份 .sxsproj 再保存就会丢掉
+    // 插件数据 —— 而用户看到的是"文件还在，只是别人家的东西没了"。
+    state.projectExt = {
+      schema: doc.extSchema || null,
+      root: doc.ext || null,
+    };
+    syncRenderIntent();
     history.clear();
     markDirty();
     syncProjectControls();
@@ -728,6 +736,7 @@ async function execute(m, p = {}) {
       const r = replace(raw);
       state.currentProjectFilePath = p.path;
       markClean();
+      // replace 里已经同步过渲染意图；这里不再调，避免同一份声明推两遍
       return r;
     }
     case 'audio.export':

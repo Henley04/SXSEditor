@@ -158,13 +158,18 @@ class PluginService {
   _syncFileAssociations() {
     if (!this.dataPlane) return;
     try {
-      const { setPluginFileTypes } = require('../fileAssociation');
+      const { setPluginFileTypes, syncWindowsPluginFileAssociations } = require('../fileAssociation');
       setPluginFileTypes(this.dataPlane.listFileTypes().map((ft) => ({
         ext: ft.ext,
         pluginId: ft.pluginId,
         label: pickTitle(ft.label, this._locale)
           || `${ft.ext.slice(1).toUpperCase()} (${ft.pluginName})`,
       })));
+      // 装/卸/停用之后，系统里"哪些扩展名归我"也跟着变了。这个调用在非
+      // Windows 或未打包时直接返回 —— 开发机上不该碰注册表。
+      syncWindowsPluginFileAssociations().catch((err) => {
+        console.warn('[plugins] 同步系统文件关联失败:', err && err.message);
+      });
     } catch (err) {
       console.warn('[plugins] 同步文件关联失败:', err && err.message);
     }
@@ -321,6 +326,10 @@ class PluginService {
     }
     for (const fileType of c.fileTypes) {
       this.registry.register('fileType', `${record.id}:${fileType.ext}`, { ...fileType, pluginId: record.id });
+    }
+    // 导出器：键带插件 id 前缀，因为 `id` 只在插件内唯一（两个插件都能有 "flac"）
+    for (const exporter of c.exporters || []) {
+      this.registry.register('exporter', `${record.id}:${exporter.id}`, { ...exporter, pluginId: record.id });
     }
     for (const section of c.settings) {
       this.registry.register('setting', section.id, { ...section, pluginId: record.id });
@@ -677,6 +686,29 @@ class PluginService {
     return this._call(pluginId, 'pipeline.hook', { hookId, ...payload }, timeoutMs || TIMEOUTS.command);
   }
 
+  /**
+   * 当前工程的渲染意图（`extSchema[*].render`）。
+   *
+   * 由渲染层在打开工程后推过来：pipeline 跑在主进程，而工程文档在渲染层，
+   * 中间没有别的通道能让"这份工程要 postWaveform 处理"这件事传达到 hook 执行器。
+   * 失败不抛 —— 意图没传到最多是"顺序按默认走"，不该拦住工程打开。
+   */
+  setRenderIntent(intent) {
+    if (!this.pipelineHooks) return { ok: false };
+    try {
+      this.pipelineHooks.setRenderIntent(intent);
+      return { ok: true };
+    } catch (err) {
+      console.warn('[plugins] setRenderIntent failed:', err && err.message);
+      return { ok: false };
+    }
+  }
+
+  /** 走查 / 管理界面用：当前生效的渲染意图。 */
+  getRenderIntent() {
+    return this.pipelineHooks ? this.pipelineHooks.getRenderIntent() : null;
+  }
+
   // ------------------------------------------------------------ 数据面
   /**
    * 用插件打开一个文件，返回校验过的工程文档（M4）。
@@ -704,8 +736,7 @@ class PluginService {
     return this.dataPlane.saveDocument(filePath, document, options);
   }
 
-  /** 对话框过滤器：插件声明的文件格式（由 dialogIpc 合并到宿主过滤器之后）。 */
-  fileFilters(role) {
+  /** 对话框过滤器：插件声明的文件格式（由 dialogIpc 合并到宿主过滤器之后）。 */  fileFilters(role) {
     if (!this.dataPlane) return [];
     return this.dataPlane.fileFilters(role, (label, fallback) => pickTitle(label, this._locale) || fallback);
   }
@@ -714,6 +745,25 @@ class PluginService {
   listFileTypes(role) {
     if (!this.dataPlane) return [];
     return this.dataPlane.listFileTypes({ role });
+  }
+
+  /**
+   * 音频导出器（M4 第 4 段）：成品格式清单与执行。
+   *
+   * 与 `fileTypes` 分开两个方法而不是合成一个 "formats"：导出对话框要的是
+   * "我选了 flac 之后该问谁"（pluginId + id），而另存为对话框要的是"扩展名归谁"。
+   * 两个问题形状不同，混在一起会让界面层到处 if。
+   */
+  listExporters() {
+    if (!this.dataPlane) return [];
+    return this.dataPlane.listExporters((label, fallback) => pickTitle(label, this._locale) || fallback);
+  }
+
+  exportAudio(filePath, ref, audio) {
+    if (!this.dataPlane) {
+      return Promise.resolve({ ok: false, code: ERR.UNSUPPORTED, message: '插件系统未初始化' });
+    }
+    return this.dataPlane.exportAudio(filePath, ref, audio);
   }
 
   async _call(pluginId, method, params, timeoutMs) {    const record = this.registry.getPlugin(pluginId);

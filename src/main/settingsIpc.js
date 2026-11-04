@@ -36,6 +36,7 @@ const BOOLEAN_SETTING_KEYS = new Set([
   'previewEnableQDrift',
   'exportEnableQDrift',
   'diagnosticMode',
+  'pluginFileAssociations',
   'previewDynamicThresholdEnabled',
   'exportDynamicThresholdEnabled',
 ]);
@@ -266,6 +267,17 @@ function registerSettingsIpc() {
 
     if (settings.locale) {
       await updateLocaleSetting(settings.locale);
+    }
+
+    // 系统关联开关变了：立刻同步注册表。非 Windows / 未打包时这个调用内部直接
+    // 返回 —— 开发机上不该因为点了个设置项就去写注册表。
+    if (filtered.pluginFileAssociations !== undefined) {
+      try {
+        const { syncWindowsPluginFileAssociations } = require('./fileAssociation');
+        await syncWindowsPluginFileAssociations();
+      } catch (err) {
+        console.warn('[Main] 同步插件文件关联失败:', err && err.message);
+      }
     }
 
     // 精度 / 设备设置变化时必须重置 pipeline，

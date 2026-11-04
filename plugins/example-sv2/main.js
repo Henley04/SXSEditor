@@ -40,6 +40,14 @@ const EXT_SCHEMA = {
   [EXT_ID]: {
     note: {
       phonemes: { kind: 'phonemes', editable: false, maxLength: 200 },
+      // 力度曲线：`t` 是音符内的相对位置（0..1），`v` 是插件的量纲（这里 0..1）。
+      // 宿主不知道它是"力度"还是别的什么，只按声明画一条只读折线 —— 这正是
+      // 曲线字段存在的意义：让数据可见，但不假装宿主懂它。
+      dynamics: {
+        kind: 'curve',
+        label: '力度曲线',
+        curve: { interp: 'smooth', clamp: [0, 1] },
+      },
     },
   },
 };
@@ -117,11 +125,23 @@ function translate(raw, fileName) {
       };
       // 音素：宿主不认识的符号表，进 ext。它不会参与宿主的歌词→音素推导，
       // 所以用户改歌词时这里也不会被静默覆盖。
+      if (Array.isArray(n.dynamics) && n.dynamics.length >= 2) {
+        // 只收 [[t, v], ...] 形状；t 超出 0..1 的由宿主丢弃（它比这里更该管这件事）
+        note.ext = note.ext || { [EXT_ID]: {} };
+        note.ext[EXT_ID].dynamics = n.dynamics
+          .filter((pt) => Array.isArray(pt) && Number.isFinite(pt[0]) && Number.isFinite(pt[1]))
+          .slice(0, 512)
+          .map((pt) => [pt[0], pt[1]]);
+      }
       if (Array.isArray(n.phonemes) && n.phonemes.length) {
         const list = n.phonemes
           .filter((p) => typeof p === 'string' && p.length > 0 && p.length <= 24)
           .slice(0, 32);
-        if (list.length) note.ext = { [EXT_ID]: { phonemes: list } };
+        if (list.length) {
+          // 合并而不是覆盖：同一个 note 上可能已经有 dynamics，覆盖会让它静默消失
+          note.ext = note.ext || { [EXT_ID]: {} };
+          note.ext[EXT_ID].phonemes = list;
+        }
       }
       notes.push(note);
       end = Math.max(end, start + duration);
@@ -210,6 +230,13 @@ function encode(ctx, document) {
         const phonemes = n.ext && n.ext[EXT_ID] && n.ext[EXT_ID].phonemes;
         if (Array.isArray(phonemes) && phonemes.length) {
           note.phonemes = phonemes.filter((p) => typeof p === 'string').slice(0, 32);
+        }
+        const dynamics = n.ext && n.ext[EXT_ID] && n.ext[EXT_ID].dynamics;
+        if (Array.isArray(dynamics) && dynamics.length >= 2) {
+          note.dynamics = dynamics
+            .filter((pt) => Array.isArray(pt) && pt.length === 2 && Number.isFinite(pt[0]) && Number.isFinite(pt[1]))
+            .map((pt) => [Number(pt[0]), Number(pt[1])]);
+          if (!note.dynamics.length) delete note.dynamics;
         }
         if (Array.isArray(n.phonemeAdjustments) && n.phonemeAdjustments.length) unportedAdjustments++;
         if (n.vibrato && n.vibrato.enabled) unportedVibrato++;
@@ -317,6 +344,41 @@ module.exports = {
         await ctx.ui.status('state', statusText(name));
         ctx.log.info(`编码 ${name}：${bytes.length} 字节，${warnings.length} 条告警`);
         return { bytes, warnings };
+      },
+    },
+  },
+
+  /**
+   * 成品导出器（M4 第 4 段）。
+   *
+   * 入参是**成品采样**（交错 Float32、已经按用户在导出对话框里选的采样率重采样过），
+   * 出参是字节。宿主负责写盘与原子替换，插件不碰文件系统。
+   *
+   * 这里刻意选裸 PCM 而不是 WAV/FLAC：一是示例不该与宿主内置的 WAV 编码器争夺
+   * 同一个扩展名，二是它能顺带说明"导出器要对哪些东西负责"—— 裸 PCM 里没有
+   * 采样率和通道数，回放的人必须自己知道，所以这个事实只能写进 warnings。
+   */
+  exporters: {
+    pcm16: {
+      async export(ctx, { name, audio }) {
+        const { interleaved, channels, sampleRate } = audio;
+        const out = new Uint8Array(interleaved.length * 2);
+        const view = new DataView(out.buffer);
+        for (let i = 0; i < interleaved.length; i++) {
+          // 浮点 → int16：先夹再乘，直接乘会让 1.2 之类的越界值回绕成负峰
+          const v = Math.max(-1, Math.min(1, interleaved[i]));
+          view.setInt16(i * 2, Math.round(v * 32767), true);
+        }
+        return {
+          bytes: out,
+          warnings: [
+            msg(
+              ctx,
+              `裸 PCM 不含格式信息：回放时需指定 ${sampleRate}Hz / ${channels} 声道 / 16 位小端`,
+              `Raw PCM carries no format info: specify ${sampleRate}Hz / ${channels} ch / 16-bit LE when playing`,
+            ),
+          ],
+        };
       },
     },
   },
