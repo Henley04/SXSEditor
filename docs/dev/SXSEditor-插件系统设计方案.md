@@ -4,7 +4,8 @@
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
 > （§9.2，2026-11-03）**；**M3（模型调用面）五段全部落地，并通过实机走查（§12，
 > 2026-11-04）**，含二进制结果、`synthesis.backend` 迁移与 `postWaveform` hook；
-> M4–M6 未开始。
+> **M4（数据面）第 1 段已落地（§9.3，2026-11-04）**：插件文件格式的接管、打开路由、
+> 对话框过滤器与投递链路；保存/导出、系统级文件关联未做。M5–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -248,6 +249,14 @@ src/renderer/platformInfo.js             平台判定（Mod 显示成 Ctrl 还�
 plugins/example-hello/overlay/           示例浮层
 ```
 
+**M4 新增（第 1 段，已落地）**
+
+```
+src/main/plugins/PluginDataPlane.js      文件 → 插件 codec → 校验过的工程文档
+src/shared/projectFormat.js              validateProjectDocument（跨进程数据的唯一入口）
+plugins/example-sv2/                     示例：接管 .sv2，codecs['.sv2'].read
+```
+
 **待落地（M3–M5）**
 
 ```
@@ -268,9 +277,9 @@ src/main/plugins/runtime/{fs,net,llmBridge,projectCodec,audio}.js
 | `forge.config.js` / `webpack.*.config.js` | `plugin_manager_window` 入口；runtime 目录裸拷贝 | ✅ |
 | `scripts/check-ipc-channels.js` | 无裸字符串通道 | ✅ 未改（静态常量已识别） |
 | `src/main/svsIpc.js` | 删除 `registerPluginIpc()` 调用 | ⬜ M3 |
-| `src/renderer/projectManager.js` | 拆 `loadProjectFromDocument(doc)` | ⬜ M4 |
-| `src/shared/projectFormat.js` | `validateProjectDocument(doc)` | ⬜ M4 |
-| `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry | ⬜ M4 |
+| `src/renderer/projectManager.js` | 拆出 `applyProjectDocument(doc, path)`；打开前先问插件 | ✅ M4-1 |
+| `src/shared/projectFormat.js` | `validateProjectDocument(doc)`（规模/深度/原型污染） | ✅ M4-1 |
+| `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry | ✅ M4-1（Windows 注册表项除外） |
 | `src/inference/pipeline/index.js` | 插入 `_runModelHooks(stage, …)` | ✅ M3（postWaveform） |
 | `src/settings.js` | 动态 sidebar + schema 渲染的 section（`panel` 指向给"打开插件面板"按钮） | ✅ M2 |
 | `src/i18n/index.js` | `registerPluginMessages(id, dict)`，键前缀 `plugin.<id>.` | ✅ M2 |
@@ -438,10 +447,48 @@ toolbar / statusBar / contextMenus / timelineOverlays / keybindings / settings /
 已经能只靠投影驱动，停用/卸载/重载都表现为"下一次投影就什么都不剩"。剩下的是 M3 起的
 推理/数据/智能面。
 
+### 9.3 M4 第 1 段端到端验证（2026-11-04）
+
+这一段只做「打开」：插件声明的文件格式出现在对话框里 → 选中 → 路由到插件 codec →
+文档过校验 → 装进编辑器。保存/导出留到第 2 段（`codec.write` 与 `export.audio`），
+因为"导入"和"回写"对宿主状态的语义完全不同：导入来的内容**没有可回写的原生路径**，
+保存必须另存为 `.sxsproj`。先把这条语义跑通，比同时做两个方向更安全。
+
+手段沿用 §9.1/§9.2（`xvfb` + CDP 9222 + `electron-forge start`）。投递走**真实的
+second-instance 路径**：起第二个实例带文件参数，由第一个实例的 `second-instance`
+处理器 `classify()` 后放进 pending 槽，渲染层取走后 `loadProject()`。
+
+| 场景 | 结果 |
+|---|---|
+| 插件加载 | `registry.stats()` 里 `fileType: 1`；投影中 `example-sv2.fileTypes = [{ext:'.sv2', role:'open', label:{en,zh-CN}}]` |
+| 对话框过滤器 | `pluginHost.fileFilters('open')` → `[{name:'SV2 Project', extensions:['sv2']}]`；`fileFilters('save')` → `[]`（该插件只声明了 open） |
+| 打开 `demo.sv2`（2 轨 5 音符） | BPM 96、2 个歌手轨道、2 个分片（0–4 拍 / 4–6 拍）、5 个音符；时间轴正常绘制；状态栏变为 `SV2 · demo.sv2` |
+| 导入语义 | `currentProjectFilePath === null`、`isDirty === false` —— 保存会走"另存为"，不会把 sxsproj 的 JSON 写进 `.sv2` |
+| 审计 | `file-open` 一条：`{ext:'.sv2', ok:true, bytes:525, singers:2, fragments:2, warnings:0}` |
+| 坏文件（`format:'other'`） | 提示 `The plugin could not open this file: Not an SV2 project (missing "format": "sv2")`；当前工程**未被改动**（BPM 仍 96，2 个分片） |
+| 停用插件后投递 `.sv2` | `classify()` 不再认这个扩展名，投递根本不会发生（不弹"打开失败"）；`fileFilters('open')` 变回 `[]` |
+| 重新启用 | 立刻可再次打开同文件（fileAssociation 快照随 registry 变更重推） |
+| 内置 `.sxsproj` | 走宿主管线，`filePath` 被正常写入（不是导入语义），2 个分片内容一致 |
+| 从 `.sxsp` 安装 | `plugin:pack` 打包 → 卸载 → 物删目录 + 撤 4 项贡献 + 过滤器变 `[]` → `installFromPath` 装回 → 过滤器立刻恢复、`demo.sv2` 再次打开成功 |
+| 单测 | `projectFormatDocument` 15 / `pluginDataPlane` 13 / `dialogFilters` 7 |
+
+这一轮抓到并修掉的问题：
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 打开一个"合法 JSON 但不是工程"的文件，当前工程被**静默清空** | 内置管线只判 `typeof obj === 'object'`，随后三个 `if (obj.project/singers/fragments)` 全部跳过，最后还 `markClean()`。插件格式被停用后正好走到这条路上（`{"format":"sv2"}` 是合法 JSON） | 加"三个字段至少有一个"的判定，否则报 `projectNotAProject` |
+| 2 | 提示框里中英混杂：`The plugin could not open this file: 插件解码失败：...` | 宿主那句走 i18n，插件与 `PluginDataPlane` 的细节是写死的中文 | 宿主细节文案走 `tr(zh,en)`；插件侧用 `ctx.plugin.locale` 决定自己的那半句（示例插件演示这一点） |
+| 3 | `.sv2` 从对话框选中后 `file:authorizePath` 直接拒绝 | `AUTHORIZABLE_EXTENSIONS` 是写死的 Set，只含内置素材 | 改成"内置 + registry 快照"，插件卸载后自动失效 |
+
+**结论**：数据面的骨架（声明 → 过滤器 → 路由 → 跨进程解码 → 校验 → 装载）成立，
+且三处"边界"都落在该落的地方：扩展名归属只在主进程判、文档校验在跨进程返回值上、
+读盘授权独立于路由。第 2 段做保存/导出时可以复用同一条 `PluginDataPlane`。
+
 **M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具）、`synthesis.backend`
 迁移、二进制结果、`postWaveform` hook —— 均已落地。剩 v1 adapter（`compat/v1Adapter.js`）
 与 `preEncoder` / `postMel` 两个 stage。
-**M4 数据面**：工程格式 open/save/import/export、导出器、文件关联、dialog filter。
+**M4 数据面**：第 1 段（打开链路）已落地，见 §9.3。剩余：保存/导出（`codec.write`、
+`export.audio`）、系统级文件关联（Windows 注册表项）、`import/export` 命令。
 **M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
 落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。

@@ -218,6 +218,15 @@ function createContext(init) {
   return ctx;
 }
 
+/**
+ * 返回值必须原样透传的方法（不能过 `safe()` 的裁剪）。
+ *
+ * `safe()` 是给日志/事件用的：它把 TypedArray 摊成数组、数组截到 1000 项、
+ * 对象深度封顶 6 层。这些限制对"看一眼的日志"是对的，对"整段波形"和
+ * "整个工程文档"就是静默数据损坏。
+ */
+const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read']);
+
 function safe(value, depth = 0) {
   if (depth > 6) return null;
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
@@ -304,6 +313,24 @@ async function handleRequest(msg) {
         });
         break;
       }
+      case 'codec.read': {
+        // 打开插件格式的文件（M4）。字节由宿主读好后送进来 —— 插件进程没有、
+        // 也不需要任意路径的读权限，`params.path` 只是给插件做"同目录找伴生文件"
+        // 之类的判断用的提示，真正可信的是 bytes。
+        const codecs = (moduleExports && moduleExports.codecs) || {};
+        const codec = codecs[params.ext];
+        if (!codec || typeof codec.read !== 'function') {
+          throw Object.assign(new Error(`插件没有为 ${params.ext} 提供 codec.read`), { code: 'NOT_FOUND' });
+        }
+        result = await codec.read(ctx, {
+          ext: params.ext,
+          path: params.path,
+          name: params.name,
+          size: params.size,
+          bytes: params.bytes,
+        });
+        break;
+      }
       case 'panel.rpc': {
         // 面板 RPC 的入口有三种写法，按"越具体越优先"的顺序解析：
         //   1. panels.<panelId>.rpc(ctx, method, params)  —— 一个面板一个 dispatcher
@@ -332,7 +359,10 @@ async function handleRequest(msg) {
     }
     // pipeline.hook 的返回值是 Float32Array（整段波形），不能过 safe()：那里会把
     // TypedArray 摊成数组并截断到 100 万项，音频会被静默截短。
-    post({ kind: 'res', id: msg.id, ok: true, result: method === 'pipeline.hook' ? result : safe(result) });
+    // codec.* 同理：工程文档可能有成千上万个分片，safe() 的 1000 项上限会直接把
+    // 文档削掉一半，而宿主侧已经有 validateProjectDocument 做规模与结构调整。
+    const raw = NO_SAFE_METHODS.has(method);
+    post({ kind: 'res', id: msg.id, ok: true, result: raw ? result : safe(result) });
   } catch (err) {
     post({
       kind: 'res',

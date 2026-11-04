@@ -912,6 +912,15 @@ export async function saveProjectAs() {
   return { saved: false, canceled: true };
 }
 
+/**
+ * 宿主自己解析的工程扩展名。
+ *
+ * 其余扩展名一律先问插件（见 openProjectViaPlugin）：插件没接管时会回
+ * FILE_NOT_HANDLED，继续走宿主的 JSON 管线。这条"先问插件"的顺序很重要 ——
+ * 反过来做的话，任何插件格式都会被 JSON.parse 先炸一次。
+ */
+const BUILTIN_PROJECT_EXTENSIONS = ['sxsproj', 'sxs'];
+
 export async function loadProject(filePath = null) {
   // 立刻取消在途的自动保存。否则：
   //   · 用户确认"丢弃未保存改动"的对话框停留期间，400ms 定时器会把即将被丢弃的
@@ -928,7 +937,13 @@ export async function loadProject(filePath = null) {
   if (!targetPath) {
     if (!window.electronAPI?.showOpenDialog) return { loaded: false, canceled: true };
     const result = await window.electronAPI.showOpenDialog({
-      filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj', 'sxs'] }],
+      // 第一项是"所有支持的格式"：主进程会把插件声明的扩展名并进这一项
+      // （dialogIpc 的 includePluginFormats），所以渲染层不需要知道装了哪些插件。
+      filters: [
+        { name: t('main.projectFilterAll') || '所有支持的格式', extensions: BUILTIN_PROJECT_EXTENSIONS },
+        { name: 'SXSEditor Project', extensions: BUILTIN_PROJECT_EXTENSIONS },
+      ],
+      includePluginFormats: true,
       properties: ['openFile'],
     });
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
@@ -946,9 +961,20 @@ export async function loadProject(filePath = null) {
     if (window.electronAPI?.closeAllFragmentEditors) {
       await window.electronAPI.closeAllFragmentEditors();
     }
+
+    // M4：先问插件。内置格式与"没有插件接管"的扩展名都会在第一步被挡回来。
+    const fromPlugin = await openProjectViaPlugin(targetPath);
+    if (fromPlugin) return fromPlugin;
+
     const data = await window.electronAPI.readFile(targetPath);
     const obj = JSON.parse(data);
     if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
+    // 合法 JSON 不等于工程：`{}`、`{"format":"sv2"}`、随便一份配置文件都能 parse 成功。
+    // 少了这道判断，打开一个陌生 .json 会把当前工程**静默清空**（三个字段都 undefined，
+    // 下面每个 if 都跳过，最后还 markClean）。插件格式被停用后正好会走到这条路径上。
+    if (!obj.project && !obj.singers && !obj.fragments) {
+      throw new Error(t('main.projectNotAProject') || 'Not a SXSEditor project file');
+    }
     // 版本判定收敛到 shared/projectFormat.checkProjectHeader（可单测）：
     //   reject  —— major 更高，或 minReader 高于当前版本（会算错/丢数据）
     //   confirm —— major 相同、minor 更高（新字段会被忽略，重存即丢）
@@ -959,7 +985,7 @@ export async function loadProject(filePath = null) {
         compat.reason === 'min-reader' ? 'main.projectMinReaderTooHigh' : 'main.projectVersionTooHigh',
         { version: obj.version, minReader: obj.minReader, currentVersion: PROJECT_FORMAT_VERSION },
       ));
-      return;
+      return { loaded: false, canceled: false, rejected: true };
     }
     if (compat.action === 'confirm') {
       const proceed = await showConfirmDialog(
@@ -974,101 +1000,154 @@ export async function loadProject(filePath = null) {
       // 前向兼容：未知特性不阻断，只记录（将来可在 UI 上提示）
       console.warn('[project] 未知特性（可能来自更新版本）:', compat.unknownFeatures.join(', '));
     }
-    if (obj.project) {
-      state.project.bpm = obj.project.bpm ?? 120;
-      state.project.timeSignature = obj.project.timeSignature ?? [4, 4];
-      syncProjectControls();
-    }
-    if (obj.singers) {
-      trackManager.singers.length = 0;
-      // 先清后端缺失标记：下面的校验会按当前插件清单重新判定
-      for (const s of obj.singers) {
-        if (s && typeof s === 'object') delete s.backendMissing;
-      }
-      for (const s of obj.singers) {
-        const singer = trackManager.addSinger(s);
-        // Accompaniment track: load from embedded data or file path
-        if (singer.type === 'accompaniment') {
-          if (s.embeddedAudioData) {
-            await applyAccompanimentDataToSinger(singer, s.embeddedAudioData);
-          } else if (s.audioFilePath) {
-            await window.electronAPI.authorizePath(s.audioFilePath);
-            const exists = await window.electronAPI.fileExists(s.audioFilePath);
-            if (!exists) {
-              singer.audioFileMissing = true;
-            } else {
-              try {
-                const buffer = await window.electronAPI.readFileBuffer(s.audioFilePath);
-                const decoded = await decodeAudioPreserveChannels(buffer);
-                singer.audioChannels = decoded.audioChannels;
-                singer.analysisMono = null;
-                singer.audioBuffer = decoded.audioChannels[0];
-                singer.audioSampleRate = decoded.sampleRate;
-                singer.audioDuration = decoded.duration;
-                singer.audioFileMissing = false;
-              } catch (_err) {
-                singer.audioFileMissing = true;
-              }
-            }
-          }
-          continue;
-        }
-        // Singer track: existing load logic
-        if (s.embeddedSingerData) {
-          await applySingerDataToSinger(singer, s.embeddedSingerData);
-          if (s.embeddedSingerData.wavDuration) {
-            singer.wavDuration = s.embeddedSingerData.wavDuration;
-          }
-        }
-        if (s.singerFilePath && !s.embeddedSingerData) {
-          await window.electronAPI.authorizePath(s.singerFilePath);
-          const exists = await window.electronAPI.fileExists(s.singerFilePath);
-          if (!exists) {
-            singer.singerFileMissing = true;
-          } else {
-            try {
-              const buffer = await window.electronAPI.readFileBuffer(s.singerFilePath);
-              const text = new TextDecoder().decode(buffer);
-              const singerData = JSON.parse(text);
-              const validation = validateSingerData(singerData);
-              if (validation.warnings.length > 0) {
-                 console.warn('File load validation warnings:', validation.warnings);
-              }
-              if (validation.valid) {
-                await applySingerDataToSinger(singer, singerData);
-                if (singerData.wavDuration) {
-                  singer.wavDuration = singerData.wavDuration;
-                }
-                singer.singerFileMissing = false;
-              }
-            } catch (err) {
-              console.warn('Unable to restore singer file:', err);
-              singer.singerFileMissing = true;
-            }
-          }
-        }
-      }
-    }
-    // 插件后端存在性校验：插件被删掉时只标记，不阻断工程加载
-    await validatePluginBackends();
-    if (obj.fragments) {
-      trackManager.fragments.length = 0;
-      // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），
-      // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
-      for (const f of obj.fragments) trackManager.addFragment(f);
-    }
-    state.currentProjectFilePath = targetPath;
-    history.clear();
-    state.selectedFragmentId = null;
-    markClean();
-    // refreshAll will be called by the caller
-    console.log('Project loaded', targetPath);
+    await applyProjectDocument(obj, targetPath);
+    return { loaded: true };
   } catch (err) {
     console.error('Load failed', err);
     showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
+    return { loaded: false, canceled: false, error: err.message };
   }
 }
 
+/**
+ * 走插件 codec 打开。返回 null 表示"这件事不归插件管，继续走内置管线"。
+ *
+ * 判定交给主进程而不是渲染层：扩展名归属只有注册表说了算，渲染层若自己维护一份
+ * "哪些扩展名是插件的"，插件装/卸之后两边必然对不上，表现是"文件打不开也没提示"。
+ *
+ * 导入进来的内容**不认作原生工程路径**：本段插件只实现了 codec.read，没有 write，
+ * 直接按原路径保存会把 sxsproj 的 JSON 写进 .sv2，把用户的文件毁掉。所以这里
+ * 只保留"内容来源于哪个插件的哪个文件"，currentProjectFilePath 留空 ——
+ * 用户保存时自然走"另存为"，落成真正的 .sxsproj。
+ */
+async function openProjectViaPlugin(targetPath) {
+  const api = window.electronAPI?.pluginHost;
+  if (!api?.openDocument) return null;
+
+  let res;
+  try {
+    res = await api.openDocument(targetPath);
+  } catch (err) {
+    console.warn('[project] 插件打开失败:', err && err.message);
+    return null;
+  }
+  if (!res || res.code === 'FILE_NOT_HANDLED') return null;
+  if (!res.ok) {
+    showAlertDialog(t('main.projectPluginOpenFailed', { reason: res.message || res.code || '' }));
+    return { loaded: false, canceled: false, error: res };
+  }
+  if (Array.isArray(res.warnings) && res.warnings.length) {
+    console.warn('[project] 插件解码警告:\n' + res.warnings.join('\n'));
+  }
+  await applyProjectDocument(res.document, targetPath, { pluginId: res.pluginId });
+  return { loaded: true, pluginId: res.pluginId, warnings: res.warnings || [] };
+}
+
+/**
+ * 把一份**已经解析并经校验**的工程文档装进编辑器状态。
+ *
+ * 从 loadProject 里拆出来的原因不只是"函数太长"：M4 之后有两个来源
+ * （宿主 JSON / 插件 codec），它们只在"怎么解析"和"怎么判定版本"上不同，
+ * 装载步骤必须逐字相同 —— 拆开才能保证这一点，也才能被单独测试。
+ *
+ * @param {object} obj 工程文档（{ project, singers, fragments }）
+ * @param {string} targetPath 来源路径
+ * @param {{pluginId?: string}} [options] 来自插件时给出 pluginId，表示这是一次导入
+ */
+export async function applyProjectDocument(obj, targetPath, options = {}) {
+  const fromPlugin = !!options.pluginId;
+  if (obj.project) {
+    state.project.bpm = obj.project.bpm ?? 120;
+    state.project.timeSignature = obj.project.timeSignature ?? [4, 4];
+    syncProjectControls();
+  }
+  if (obj.singers) {
+    trackManager.singers.length = 0;
+    // 先清后端缺失标记：下面的校验会按当前插件清单重新判定
+    for (const s of obj.singers) {
+      if (s && typeof s === 'object') delete s.backendMissing;
+    }
+    for (const s of obj.singers) {
+      const singer = trackManager.addSinger(s);
+      // Accompaniment track: load from embedded data or file path
+      if (singer.type === 'accompaniment') {
+        if (s.embeddedAudioData) {
+          await applyAccompanimentDataToSinger(singer, s.embeddedAudioData);
+        } else if (s.audioFilePath) {
+          await window.electronAPI.authorizePath(s.audioFilePath);
+          const exists = await window.electronAPI.fileExists(s.audioFilePath);
+          if (!exists) {
+            singer.audioFileMissing = true;
+          } else {
+            try {
+              const buffer = await window.electronAPI.readFileBuffer(s.audioFilePath);
+              const decoded = await decodeAudioPreserveChannels(buffer);
+              singer.audioChannels = decoded.audioChannels;
+              singer.analysisMono = null;
+              singer.audioBuffer = decoded.audioChannels[0];
+              singer.audioSampleRate = decoded.sampleRate;
+              singer.audioDuration = decoded.duration;
+              singer.audioFileMissing = false;
+            } catch (_err) {
+              singer.audioFileMissing = true;
+            }
+          }
+        }
+        continue;
+      }
+      // Singer track: existing load logic
+      if (s.embeddedSingerData) {
+        await applySingerDataToSinger(singer, s.embeddedSingerData);
+        if (s.embeddedSingerData.wavDuration) {
+          singer.wavDuration = s.embeddedSingerData.wavDuration;
+        }
+      }
+      if (s.singerFilePath && !s.embeddedSingerData) {
+        await window.electronAPI.authorizePath(s.singerFilePath);
+        const exists = await window.electronAPI.fileExists(s.singerFilePath);
+        if (!exists) {
+          singer.singerFileMissing = true;
+        } else {
+          try {
+            const buffer = await window.electronAPI.readFileBuffer(s.singerFilePath);
+            const text = new TextDecoder().decode(buffer);
+            const singerData = JSON.parse(text);
+            const validation = validateSingerData(singerData);
+            if (validation.warnings.length > 0) {
+               console.warn('File load validation warnings:', validation.warnings);
+            }
+            if (validation.valid) {
+              await applySingerDataToSinger(singer, singerData);
+              if (singerData.wavDuration) {
+                singer.wavDuration = singerData.wavDuration;
+              }
+              singer.singerFileMissing = false;
+            }
+          } catch (err) {
+            console.warn('Unable to restore singer file:', err);
+            singer.singerFileMissing = true;
+          }
+        }
+      }
+    }
+  }
+  // 插件后端存在性校验：插件被删掉时只标记，不阻断工程加载
+  await validatePluginBackends();
+  if (obj.fragments) {
+    trackManager.fragments.length = 0;
+    // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），
+    // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
+    for (const f of obj.fragments) trackManager.addFragment(f);
+  }
+  // 导入来的内容没有"可回写的原生路径"：保存必须另存为（见 openProjectViaPlugin）。
+  state.currentProjectFilePath = fromPlugin ? null : targetPath;
+  state.projectImportSource = fromPlugin ? { pluginId: options.pluginId, path: targetPath } : null;
+  history.clear();
+  state.selectedFragmentId = null;
+  markClean();
+  // refreshAll will be called by the caller
+  console.log('Project loaded', targetPath, fromPlugin ? `(via ${options.pluginId})` : '');
+}
 
 /**
  * 生成「旧版兼容工程」（1.1.0）。

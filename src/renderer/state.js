@@ -19,6 +19,10 @@ export const state = {
   // Project
   project: { bpm: 120, timeSignature: [4, 4] },
   currentProjectFilePath: null,
+  // 由插件格式导入时记录来源（{ pluginId, path }）。导入的内容没有可回写的原生
+  // 路径，currentProjectFilePath 会是 null，保存走"另存为"；这个字段用于标题栏
+  // 与"重新导入"提示，不参与保存逻辑。
+  projectImportSource: null,
   isDirty: false,
 
   // Audio

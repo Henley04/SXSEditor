@@ -182,6 +182,13 @@ const IPC_CHANNELS = {
   // 设置页/管理器 → 主窗口：把某个面板挂到主窗口的右侧抽屉（设置分区用它对
   // 自定义界面；管理器用它做"打开面板"）。面板的 apiScopes 校验仍在主进程做。
   PLUGINHOST_OPEN_PANEL_REQUEST: 'plugin-host:open-panel-request',
+  // M4：数据面。渲染层给出路径，主进程按扩展名路由到插件 codec，返回校验过的
+  // 工程文档。路径不经过渲染层的文件系统 API —— 插件格式的解析全在主进程的
+  // codec 进程里完成，渲染层只负责把文档装进 state。
+  PLUGINHOST_OPEN_DOCUMENT: 'plugin-host:open-document',
+  // 插件声明的文件格式（对话框过滤器用）。投影里也有 fileTypes，但那份要按
+  // 插件分组、还要算 UI 渲染状态；对话框只要一张扁平的"扩展名 → 显示名"。
+  PLUGINHOST_FILE_FILTERS: 'plugin-host:file-filters',
   // 主进程 → 渲染进程
   PLUGINHOST_SYNC: 'plugin-host:sync',
   PLUGINHOST_EVENT: 'plugin-host:event',

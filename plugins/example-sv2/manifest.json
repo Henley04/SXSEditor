@@ -1,0 +1,72 @@
+{
+  "apiVersion": 2,
+  "id": "example-sv2",
+  "name": "Example: SV2 Project",
+  "version": "1.0.0",
+  "description": "数据面示例：声明接管 .sv2 文件，用 codecs['.sv2'].read 把它翻译成 SXSEditor 工程文档。文件对话框里会出现这个格式，打开后工程直接进入编辑器。复制这个目录改名即可开工。",
+  "author": "SXSEditor Dev",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {
+    "fs": ["pluginData", "userPicked:read"],
+    "project": ["read"],
+    "ui": ["menu", "statusBar"]
+  },
+  "contributes": {
+    "fileTypes": [
+      {
+        "ext": ".sv2",
+        "role": "open",
+        "label": {
+          "en": "SV2 Project",
+          "zh-CN": "SV2 工程"
+        },
+        "filters": ["SV2 Project"]
+      }
+    ],
+    "commands": [
+      {
+        "id": "about",
+        "title": {
+          "en": "About the SV2 example",
+          "zh-CN": "关于 SV2 示例"
+        },
+        "description": "说明这个插件接管的文件格式，以及打开后内容是怎么进到编辑器里的。"
+      }
+    ],
+    "menus": [
+      {
+        "path": "plugins/example",
+        "command": "about"
+      }
+    ],
+    "statusBar": [
+      {
+        "id": "state",
+        "text": {
+          "en": "@sv2Idle",
+          "zh-CN": "@sv2Idle"
+        },
+        "tooltip": {
+          "en": "Last file decoded by this plugin",
+          "zh-CN": "这个插件最近解码的文件"
+        },
+        "alignment": "right"
+      }
+    ],
+    "i18n": {
+      "en": {
+        "sv2Idle": "SV2: idle",
+        "sv2Opened": "SV2: {name}",
+        "sv2About": "This plugin owns .sv2 files. Open one from File → Open Project: the dialog lists it, and its content is decoded here, then handed to the host as a normal project document."
+      },
+      "zh-CN": {
+        "sv2Idle": "SV2：空闲",
+        "sv2Opened": "SV2：{name}",
+        "sv2About": "这个插件接管 .sv2 文件。从「文件 → 打开工程」选一个，对话框里会列出这个格式；内容在这里被解码，然后作为普通工程文档交给宿主。"
+      }
+    }
+  }
+}

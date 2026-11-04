@@ -80,6 +80,17 @@ function registerPluginHostIpc(service, options = {}) {
   ));
   track(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST);
 
+  // ---- M4：数据面 ----
+  safeHandle(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT, async (_event, filePath) => (
+    service.openDocument(String(filePath || ''))
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, async (_event, role) => (
+    service.fileFilters(role === 'save' ? 'save' : 'open')
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS);
+
   safeHandle(IPC_CHANNELS.PLUGINHOST_INSTALL, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) || service.getMainWindow();
     const picked = await dialog.showOpenDialog(win || null, {

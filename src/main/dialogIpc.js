@@ -56,6 +56,25 @@ const AUTHORIZABLE_EXTENSIONS = new Set([
   '.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac', '.lrc',
 ]);
 
+/**
+ * 当前允许"自我授权"的扩展名 = 内置素材 + 插件声明的文件格式。
+ *
+ * 插件格式必须算进来，否则"用户从对话框选了一个 .sv2"会被 file:authorizePath
+ * 拒绝，紧接着 openDocument 又因为路径不在白名单而拒绝 —— 功能整个不可用。
+ * 插件的扩展名来自注册表快照（fileAssociation 由 PluginService 注入），
+ * 插件卸载后自动从这张表里消失。
+ */
+function authorizableExtensions() {
+  try {
+    const { getFileTypes } = require('./fileAssociation');
+    const set = new Set(AUTHORIZABLE_EXTENSIONS);
+    for (const type of getFileTypes()) set.add(type.ext);
+    return set;
+  } catch (_) {
+    return AUTHORIZABLE_EXTENSIONS;
+  }
+}
+
 // 敏感目录 denylist —— 授权一个目录等于放行它下面的全部直接子文件，所以下列位置
 // 必须显式拒绝，即使它们恰好落在 userData / documents / desktop 三根之下。
 //
@@ -174,14 +193,58 @@ function _isUnder(childPath, parentPath) {
   return child === parent || child.startsWith(parent + '/');
 }
 
-// 目录内是否含有白名单扩展名的素材文件 —— 认定它是"素材/工程目录"的证据。
-// 只扫前 500 项，避免在大目录上卡住主线程。
+/**
+ * 合并过滤器：插件格式既并进"所有支持的格式"那一项，也各自单列一项。
+ *
+ * 只并进第一项不够（用户想"只看 .sv2"时还得靠单项），只单列也不够（默认选中的
+ * "所有格式"里看不到插件文件，用户会以为文件没被识别）。
+ *
+ * 放在模块级而不是 registerDialogIpc 里的闭包：它是一段纯数据变换，单测要能
+ * 直接调用 —— 原生对话框本身没法在测试里点。
+ *
+ * @param {Array<{name:string, extensions:string[]}>} base 宿主自己的过滤器
+ * @param {Array<{name:string, extensions:string[]}>} extra 插件格式
+ * @param {boolean} extendFirst 是否把插件扩展名并入第一项
+ */
+function mergeFiltersWithPlugins(base, extra, extendFirst = true) {
+  const out = (Array.isArray(base) ? base : []).map((f) => ({
+    name: String((f && f.name) || ''),
+    extensions: Array.isArray(f && f.extensions) ? f.extensions.slice() : [],
+  }));
+  const list = Array.isArray(extra) ? extra : [];
+  if (!list.length) return out;
+  const allPluginExts = [];
+  for (const item of list) {
+    for (const ext of item.extensions || []) {
+      if (!allPluginExts.includes(ext)) allPluginExts.push(ext);
+    }
+  }
+  if (extendFirst && out.length > 0) {
+    const merged = out[0].extensions.slice();
+    for (const ext of allPluginExts) if (!merged.includes(ext)) merged.push(ext);
+    out[0] = { ...out[0], extensions: merged };
+  }
+  const seen = new Set(out.map((f) => f.name.toLowerCase()));
+  for (const item of list) {
+    const key = String(item.name || '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * 目录内是否含有白名单扩展名的素材文件 —— 认定它是"素材/工程目录"的证据。
+ * 只扫前 500 项，避免在大目录上卡住主线程。
+ */
 function _containsAuthorizableFile(dirPath) {
   try {
+    const exts = authorizableExtensions();
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     for (let i = 0; i < entries.length && i < 500; i++) {
       if (!entries[i].isFile()) continue;
-      if (AUTHORIZABLE_EXTENSIONS.has(path.extname(entries[i].name).toLowerCase())) return true;
+      if (exts.has(path.extname(entries[i].name).toLowerCase())) return true;
     }
   } catch (_) { /* 读不了就当作没有证据 */ }
   return false;
@@ -220,12 +283,44 @@ function _resolveRealPath(targetPath) {
 }
 
 function registerDialogIpc() {
+  /**
+   * 插件声明的文件格式，追加到宿主自己的过滤器之后。
+   *
+   * 只有显式传 `includePluginFormats` 的对话框才合并：选音频、选模型文件那些
+   * 对话框如果也出现 `.sv2`，用户会以为选错了东西。顺序也固定成"宿主在前"——
+   * `.sxsproj` 永远是默认选项，插件格式是"另开一个口子"。
+   */
+  const pluginFiltersFor = (role) => {
+    try {
+      const { getPluginService } = require('./plugins/PluginService');
+      const service = getPluginService();
+      if (!service || !service.initialized || typeof service.fileFilters !== 'function') return [];
+      return service.fileFilters(role);
+    } catch (_) {
+      return [];
+    }
+  };
+
+  /**
+   * 合并过滤器：插件格式既并进"所有支持的格式"那一项，也各自单列一项。
+   *
+   * 只并进第一项不够（用户想"只看 .sv2"时还得靠单项），只单列也不够（默认选中
+   * 的"所有格式"里看不到插件文件，用户会以为文件没被识别）。
+   *
+   * @param {Array<{name:string, extensions:string[]}>} base 宿主自己的过滤器
+   * @param {Array<{name:string, extensions:string[]}>} extra 插件格式
+   * @param {boolean} extendFirst 是否把插件扩展名并入第一项
+   */
+
   safeHandle(IPC_CHANNELS.DIALOG_SAVE, async (event, options) => {
     const win = BrowserWindow.fromWebContents(event.sender);
+    const filters = options.includePluginFormats
+      ? mergeFiltersWithPlugins(options.filters, pluginFiltersFor('save'), options.extendFirstFilter !== false)
+      : (Array.isArray(options.filters) ? options.filters : undefined);
     const safeOptions = {
       title: typeof options.title === 'string' ? options.title : undefined,
       defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : undefined,
-      filters: Array.isArray(options.filters) ? options.filters : undefined,
+      filters: filters && filters.length ? filters : undefined,
     };
     const result = await dialog.showSaveDialog(win, safeOptions);
     if (!result.canceled && result.filePath) {
@@ -236,10 +331,13 @@ function registerDialogIpc() {
 
   safeHandle(IPC_CHANNELS.DIALOG_OPEN, async (event, options) => {
     const win = BrowserWindow.fromWebContents(event.sender);
+    const filters = options.includePluginFormats
+      ? mergeFiltersWithPlugins(options.filters, pluginFiltersFor('open'), options.extendFirstFilter !== false)
+      : (Array.isArray(options.filters) ? options.filters : undefined);
     const safeOptions = {
       title: typeof options.title === 'string' ? options.title : undefined,
       defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : undefined,
-      filters: Array.isArray(options.filters) ? options.filters : undefined,
+      filters: filters && filters.length ? filters : undefined,
       properties: Array.isArray(options.properties) ? options.properties.filter(p =>
         ['openFile', 'openDirectory', 'multiSelections'].includes(p)
       ) : ['openFile'],
@@ -380,7 +478,7 @@ function registerDialogIpc() {
     }
     // 3. 文件分支（stats 为 null = 目标文件尚不存在的导出目标）。
     // 扩展名必须命中白名单：工程、歌姬包、音频、MIDI、LRC。
-    if (!AUTHORIZABLE_EXTENSIONS.has(path.extname(realPath).toLowerCase())) {
+    if (!authorizableExtensions().has(path.extname(realPath).toLowerCase())) {
       return { success: false, error: 'Unsupported file type' };
     }
     if (!resolvedReal.existed) {
@@ -474,4 +572,6 @@ function registerDialogIpc() {
 
 module.exports = {
   registerDialogIpc,
+  // 供单测调用：原生对话框没法在测试里点，但"插件格式该出现在哪几项里"是纯逻辑
+  _mergeFiltersWithPlugins: mergeFiltersWithPlugins,
 };

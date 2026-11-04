@@ -30,6 +30,7 @@ const ipcFacade = require('./PluginIpcV2.js');
 const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
 const { panelUrl } = require('./PluginProtocol.js');
 const { PipelineHooks } = require('./PipelineHooks.js');
+const { PluginDataPlane } = require('./PluginDataPlane.js');
 
 class PluginService {
   constructor() {
@@ -106,7 +107,19 @@ class PluginService {
     const p = store.ensureDirs();
     this._pluginsDir = p.plugins;
 
+    // 数据面：文件 → 插件 codec → 工程文档。构造在这里、用在这里，
+    // 但它依赖的 registry 在构造期就有了，所以不涉及初始化顺序问题。
+    this.dataPlane = new PluginDataPlane({
+      service: this,
+      registry: this.registry,
+      call: (id, method, params, timeoutMs) => this._call(id, method, params, timeoutMs),
+      logger: console,
+      locale: () => this._locale,
+    });
+
     this.loadAll();
+    // 插件加载完才有 fileTypes 可注入；投递链路（fileAssociation）一直在等这份快照
+    this._syncFileAssociations();
 
     this.ipc = ipcFacade.registerPluginHostIpc(this, { probe: this.probe });
     // 窗口就绪 → 补发一次投影（冷启动竞态，见 pushSnapshotOnWindowLoad 注释）
@@ -115,6 +128,8 @@ class PluginService {
       ipcFacade.broadcastSnapshot(this);
       // 插件重载会换代码：熔断过的 hook 该再给一次机会
       if (this.pipelineHooks) this.pipelineHooks.reset();
+      // 装了/卸了/停用了插件，能双击打开的扩展名就变了
+      this._syncFileAssociations();
       if (this._menuDirtyHandler) {
         try { this._menuDirtyHandler(); } catch (err) { console.warn('[plugins] menu rebuild failed:', err && err.message); }
       }
@@ -131,6 +146,28 @@ class PluginService {
   /** windowManager 注册重建菜单的回调（避免两边循环 require）。 */
   setMenuDirtyHandler(fn) {
     this._menuDirtyHandler = fn;
+  }
+
+  /**
+   * 把插件声明的扩展名推给投递链路。
+   *
+   * 推的是"快照"而不是让 fileAssociation 反过来 require 本模块：后者会在
+   * main.js 顶层形成环（fileAssociation → PluginService → ... → fileAssociation）。
+   * 而且投递链路要能在任意时刻 O(1) 回答"认不认识这个扩展名"，拿快照最直接。
+   */
+  _syncFileAssociations() {
+    if (!this.dataPlane) return;
+    try {
+      const { setPluginFileTypes } = require('../fileAssociation');
+      setPluginFileTypes(this.dataPlane.listFileTypes().map((ft) => ({
+        ext: ft.ext,
+        pluginId: ft.pluginId,
+        label: pickTitle(ft.label, this._locale)
+          || `${ft.ext.slice(1).toUpperCase()} (${ft.pluginName})`,
+      })));
+    } catch (err) {
+      console.warn('[plugins] 同步文件关联失败:', err && err.message);
+    }
   }
 
   /**
@@ -638,6 +675,32 @@ class PluginService {
    */
   callPipelineHook(pluginId, hookId, payload, timeoutMs) {
     return this._call(pluginId, 'pipeline.hook', { hookId, ...payload }, timeoutMs || TIMEOUTS.command);
+  }
+
+  // ------------------------------------------------------------ 数据面
+  /**
+   * 用插件打开一个文件，返回校验过的工程文档（M4）。
+   *
+   * 失败不抛：返回值里的 `code` 就是给界面的分支依据（没插件接管 / 没权限 /
+   * 文件太大 / 文档非法），抛异常只剩一句 message，界面只能弹"打开失败"。
+   */
+  openDocument(filePath) {
+    if (!this.dataPlane) {
+      return Promise.resolve({ ok: false, code: ERR.UNSUPPORTED, message: '插件系统未初始化' });
+    }
+    return this.dataPlane.openDocument(filePath);
+  }
+
+  /** 对话框过滤器：插件声明的文件格式（由 dialogIpc 合并到宿主过滤器之后）。 */
+  fileFilters(role) {
+    if (!this.dataPlane) return [];
+    return this.dataPlane.fileFilters(role, (label, fallback) => pickTitle(label, this._locale) || fallback);
+  }
+
+  /** 插件文件格式清单（管理器"文件类型"区用，测试也用它断言注册结果）。 */
+  listFileTypes(role) {
+    if (!this.dataPlane) return [];
+    return this.dataPlane.listFileTypes({ role });
   }
 
   async _call(pluginId, method, params, timeoutMs) {    const record = this.registry.getPlugin(pluginId);

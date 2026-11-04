@@ -638,6 +638,11 @@ const _fullElectronAPI = {
     overlayUrl: (pluginId, overlayId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, pluginId, overlayId),
     // 请主窗口把某个面板挂到右侧抽屉（设置分区/管理器用）
     openPanel: (pluginId, panelId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST, pluginId, panelId),
+    // M4 数据面：按扩展名路由到插件 codec，拿回校验过的工程文档。
+    // 失败时返回 { ok:false, code, message }（没有插件接管 / 没权限 / 文档非法），
+    // 由渲染层决定怎么提示。
+    openDocument: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT, filePath),
+    fileFilters: (role) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, role || 'open'),
     // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
     onSync: (callback) => {
       const handler = (event, data) => callback(data);

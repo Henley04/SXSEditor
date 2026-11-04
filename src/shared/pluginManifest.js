@@ -266,19 +266,41 @@ function validatePanels(list, pluginId) {
   return { ok: true, value: out };
 }
 
+/** 宿主自己接管的扩展名。插件不能抢：工程/歌手文件走的是宿主格式与版本协商，
+ *  一旦被插件顶掉，用户双击 .sxsproj 打开的就是别人的解析器。 */
+const RESERVED_FILE_EXTS = new Set(['.sxsproj', '.sxs', '.sxssinger', '.sxsp']);
+
 function validateFileTypes(list) {
   const out = [];
+  const seen = new Set();
   for (const ft of list) {
     if (!ft || typeof ft !== 'object') return fail('fileTypes 的每一项必须是对象');
     let ext = String(ft.ext || '').trim().toLowerCase();
     if (ext && !ext.startsWith('.')) ext = `.${ext}`;
     if (!/^\.[a-z0-9]{1,16}$/.test(ext)) return fail(`fileTypes.ext 非法：${JSON.stringify(ft.ext)}`);
-    if (ext === '.sxsproj') return fail('不能注册 .sxsproj：内置工程格式不允许被插件接管');
+    if (RESERVED_FILE_EXTS.has(ext)) {
+      return fail(`不能注册 ${ext}：内置工程/歌手格式不允许被插件接管`);
+    }
+    // 同一个 manifest 里声明两遍同一个扩展名，宿主无法判断作者想要哪一种角色，
+    // 干脆拒绝 —— 否则两个注册项会同时进注册表，路由结果取决于遍历顺序。
+    if (seen.has(ext)) return fail(`fileTypes 重复声明了 ${ext}`);
+    seen.add(ext);
     const role = ft.role === 'save' || ft.role === 'both' ? ft.role : 'open';
+    const filters = Array.isArray(ft.filters)
+      ? ft.filters.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim().slice(0, 60)).slice(0, 4)
+      : [];
+    // label 是对话框过滤器里显示的格式名。M4 之前只有 filters（一个纯字符串数组），
+    // 用它当名字也能用，但作者想本地化就没处放，所以补一个显式的本地化标题。
+    let label = { ok: true, value: null };
+    if (ft.label !== undefined) {
+      label = localizedTitle(ft.label, `fileTypes('${ext}').label`);
+      if (!label.ok) return fail(label.error);
+    }
     out.push({
       ext,
       role,
-      filters: Array.isArray(ft.filters) ? ft.filters.filter((s) => typeof s === 'string').slice(0, 4) : [],
+      filters,
+      label: label.value || (filters[0] ? { en: filters[0] } : null),
     });
   }
   return { ok: true, value: out };

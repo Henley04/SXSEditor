@@ -21,8 +21,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 
-/** 支持的两种文件类型。新增类型只改这里，注册与分发都按它走。 */
-const FILE_TYPES = [
+/** 宿主自己接管的两种文件类型。插件声明的扩展名走 setPluginFileTypes 注入。 */
+const BASE_FILE_TYPES = [
   {
     kind: 'project',
     ext: '.sxsproj',
@@ -39,7 +39,52 @@ const FILE_TYPES = [
   },
 ];
 
-const EXT_TO_KIND = new Map(FILE_TYPES.map((t) => [t.ext, t.kind]));
+/**
+ * 插件声明的扩展名（M4）。
+ *
+ * 为什么要注入而不是让这里去读注册表：本模块在 `main.js` 顶层就被 require，
+ * 那时插件服务还没初始化；而"双击投递"发生在任意时刻，必须能 O(1) 回答
+ * "这个扩展名认不认识"。于是由 PluginService 在加载/卸载后主动推一份快照过来。
+ */
+let pluginFileTypes = [];
+
+/** 扩展名 → 类型表。内置优先：插件不可能抢走 .sxsproj（manifest 层已拒绝）。 */
+let extIndex = new Map(BASE_FILE_TYPES.map((t) => [t.ext, t]));
+
+function rebuildIndex() {
+  extIndex = new Map();
+  for (const t of BASE_FILE_TYPES) extIndex.set(t.ext, t);
+  for (const t of pluginFileTypes) {
+    if (!extIndex.has(t.ext)) extIndex.set(t.ext, t);
+  }
+}
+
+/**
+ * 用插件当前的 fileTypes 替换注入表。
+ *
+ * 只收扩展名、kind、归属插件与显示名 —— 投递链路只需要知道"该交给谁"，
+ * 不需要（也不该）在这里理解插件的 codec。
+ */
+function setPluginFileTypes(list) {
+  const next = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const ext = typeof item?.ext === 'string' ? item.ext.toLowerCase() : '';
+    if (!/^\.[a-z0-9]{1,16}$/.test(ext)) continue;
+    if (BASE_FILE_TYPES.some((t) => t.ext === ext)) continue;
+    next.push({
+      kind: 'plugin',
+      ext,
+      pluginId: String(item.pluginId || ''),
+      label: String(item.label || ext),
+    });
+  }
+  pluginFileTypes = next;
+  rebuildIndex();
+}
+
+function getFileTypes() {
+  return [...BASE_FILE_TYPES, ...pluginFileTypes];
+}
 
 /** 从命令行里挑出第一个我们认识的文件路径。 */
 function extractOpenPath(argv) {
@@ -47,7 +92,7 @@ function extractOpenPath(argv) {
   for (const arg of argv.slice(1)) {
     if (!arg || arg.startsWith('-')) continue;
     const ext = path.extname(arg).toLowerCase();
-    if (!EXT_TO_KIND.has(ext)) continue;
+    if (!extIndex.has(ext)) continue;
     try {
       const abs = path.resolve(arg);
       // 只接受真实存在的文件：命令行里可能是历史记录、网络路径残留
@@ -59,11 +104,18 @@ function extractOpenPath(argv) {
   return null;
 }
 
-/** 按扩展名判断文件类型，认不出返回 null。 */
+/**
+ * 按扩展名判断文件类型，认不出返回 null。
+ *
+ * 插件类型额外带上 pluginId：投递到渲染层后，界面要据此说明"这个文件由谁打开"，
+ * 也方便出问题时直接看出路由到了哪个插件。
+ */
 function classify(filePath) {
   if (!filePath) return null;
-  const kind = EXT_TO_KIND.get(path.extname(filePath).toLowerCase());
-  return kind ? { kind, path: filePath } : null;
+  const type = extIndex.get(path.extname(filePath).toLowerCase());
+  if (!type) return null;
+  if (type.kind === 'plugin') return { kind: 'plugin', path: filePath, pluginId: type.pluginId };
+  return { kind: type.kind, path: filePath };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,10 +235,14 @@ async function registerWindowsType(type) {
  *
  * 只在打包后执行：开发模式跑的是 electron.exe，写进注册表会把 .sxsproj 绑到
  * 一个随时会消失的调试二进制上。失败不抛错 —— 关联不上不该拦住应用启动。
+ *
+ * 插件声明的扩展名**不写注册表**：注册表项的生命周期比插件长（卸载、升级、
+ * 重装都可能留下孤儿项），而 Windows 的清理只能在下次启动做。先让"应用内
+ * 打开"和"运行中双击"两条路可用，系统级关联留到插件市场/签名那一步一起定。
  */
 async function ensureWindowsFileAssociations() {
   if (process.platform !== 'win32' || !app.isPackaged) return;
-  for (const type of FILE_TYPES) {
+  for (const type of BASE_FILE_TYPES) {
     try {
       await registerWindowsType(type);
     } catch (err) {
@@ -208,7 +264,9 @@ function refreshShellIcons() {
 }
 
 module.exports = {
-  FILE_TYPES,
+  FILE_TYPES: BASE_FILE_TYPES,
+  getFileTypes,
+  setPluginFileTypes,
   extractOpenPath,
   classify,
   setPendingTarget,

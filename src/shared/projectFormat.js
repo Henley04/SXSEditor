@@ -91,3 +91,215 @@ export function checkProjectHeader(obj, currentVersion = PROJECT_FORMAT_VERSION)
   }
   return { action: 'ok', reason: 'same', version, unknownFeatures };
 }
+
+// ---------------------------------------------------------------------------
+// 插件产出的工程文档
+// ---------------------------------------------------------------------------
+
+/**
+ * 工程文档的规模上限。
+ *
+ * 这不是"性能保护"而是**安全边界**：文档由第三方插件的 codec 生成，跨进程克隆
+ * 之后会直接进入渲染层的 state。没有上限时，一个 bug（或恶意）插件返回
+ * `{ fragments: new Array(1e8) }` 就能让宿主在 addFragment 循环里卡死；返回
+ * 深层嵌套对象则可能在递归克隆时爆栈。上限都按"真实工程远远够用"取值。
+ */
+export const PROJECT_DOC_LIMITS = Object.freeze({
+  singers: 256,
+  fragments: 5000,
+  notesPerFragment: 20000,
+  arrayLength: 50000,
+  stringLength: 100000,
+  depth: 12,
+  /** 克隆后 JSON 序列化的字节上限（100MB）。 */
+  bytes: 100 * 1024 * 1024,
+});
+
+/**
+ * 原型污染键。数据来自插件，`{"__proto__": {...}}` 在 JSON.parse 之后是自有键，
+ * 但一经 Object.assign / 展开就会改写原型链。这里在克隆阶段直接丢弃。
+ */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const TIME_SIGNATURE_DENOMS = new Set([1, 2, 4, 8, 16, 32]);
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && Object.prototype.toString.call(v) === '[object Object]';
+}
+
+/**
+ * 把插件给的对象收敛成"可安全进入宿主"的纯 JSON 结构。
+ *
+ * 三条规则：
+ *   · 非 JSON 类型（函数、Symbol、Map、TypedArray、Date）一律丢弃 —— 它们本来就
+ *     过不了跨进程的结构化克隆，或者进来之后语义已经变了；
+ *   · 超出深度/长度上限的部分截断并记一条 warning，不整体拒绝；
+ *   · 危险键直接跳过。
+ *
+ * 返回 undefined 表示"这一项不该存在"，调用方据此跳过数组元素或对象字段。
+ */
+function cloneJson(value, depth, warnings, label) {
+  if (depth > PROJECT_DOC_LIMITS.depth) {
+    warnings.push(`${label} 嵌套超过 ${PROJECT_DOC_LIMITS.depth} 层，已截断`);
+    return undefined;
+  }
+  if (value === null) return null;
+  const t = typeof value;
+  if (t === 'string') {
+    return value.length > PROJECT_DOC_LIMITS.stringLength
+      ? value.slice(0, PROJECT_DOC_LIMITS.stringLength)
+      : value;
+  }
+  // NaN / Infinity 不是合法 JSON：序列化时会变成 null，不如在这里就当作缺失
+  if (t === 'number') return Number.isFinite(value) ? value : undefined;
+  if (t === 'boolean') return value;
+  if (t === 'undefined' || t === 'function' || t === 'symbol' || t === 'bigint') return undefined;
+
+  if (Array.isArray(value)) {
+    const limit = Math.min(value.length, PROJECT_DOC_LIMITS.arrayLength);
+    if (value.length > limit) warnings.push(`${label} 长度超过 ${limit}，已截断`);
+    const out = [];
+    for (let i = 0; i < limit; i++) {
+      const item = cloneJson(value[i], depth + 1, warnings, `${label}[${i}]`);
+      if (item !== undefined) out.push(item);
+    }
+    return out;
+  }
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const key of Object.keys(value)) {
+      if (FORBIDDEN_KEYS.has(key)) {
+        warnings.push(`${label} 含被忽略的键 ${key}`);
+        continue;
+      }
+      const item = cloneJson(value[key], depth + 1, warnings, `${label}.${key}`);
+      if (item !== undefined) out[key] = item;
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function normalizeTimeSignature(raw, warnings) {
+  const fallback = [4, 4];
+  if (!Array.isArray(raw) || raw.length !== 2) return fallback;
+  const n = Number(raw[0]);
+  const d = Number(raw[1]);
+  if (!Number.isInteger(n) || n < 1 || n > 32) {
+    warnings.push(`拍号分子 ${JSON.stringify(raw[0])} 非法，按 4/4 处理`);
+    return fallback;
+  }
+  if (!TIME_SIGNATURE_DENOMS.has(d)) {
+    warnings.push(`拍号分母 ${JSON.stringify(raw[1])} 非法，按 4/4 处理`);
+    return fallback;
+  }
+  return [n, d];
+}
+
+/**
+ * 校验并归一化「插件产出的工程文档」。
+ *
+ * 两类调用方：`PluginDataPlane`（插件 codec 解码出的文档）与测试。返回值里的
+ * `document` 是**全新的克隆**，调用方可以放心把它交给 trackManager —— 不会与
+ * 插件进程里的对象共享引用，也不会带着原型链上的东西进来。
+ *
+ * 宽容 vs 严格：manifest 校验是"非法即拒绝"，因为插件作者能立刻改；这里是用户
+ * 手上已有的文件，整体拒绝等于"文件打不开"，所以坏项丢弃 + warning，能开多少开多少。
+ *
+ * @param {unknown} raw
+ * @returns {{ok:true, document:object, warnings:string[]}
+ *          |{ok:false, error:string, warnings:string[]}}
+ */
+export function validateProjectDocument(raw) {
+  const warnings = [];
+  if (!isPlainObject(raw)) {
+    return { ok: false, error: '工程文档必须是对象', warnings };
+  }
+
+  const project = isPlainObject(raw.project) ? raw.project : {};
+  const bpmRaw = Number(project.bpm);
+  const bpm = Number.isFinite(bpmRaw) && bpmRaw >= 20 && bpmRaw <= 400 ? bpmRaw : 120;
+  if (bpm !== bpmRaw) warnings.push(`BPM ${JSON.stringify(project.bpm)} 超出 20–400，按 120 处理`);
+  const timeSignature = normalizeTimeSignature(project.timeSignature, warnings);
+
+  const singersIn = Array.isArray(raw.singers) ? raw.singers : [];
+  if (!Array.isArray(raw.singers) && raw.singers !== undefined) {
+    warnings.push('singers 不是数组，已忽略');
+  }
+  if (singersIn.length > PROJECT_DOC_LIMITS.singers) {
+    warnings.push(`歌手轨道 ${singersIn.length} 条，超过上限 ${PROJECT_DOC_LIMITS.singers}，多余部分已丢弃`);
+  }
+  const singers = [];
+  const singerIds = new Set();
+  for (let i = 0; i < Math.min(singersIn.length, PROJECT_DOC_LIMITS.singers); i++) {
+    const s = cloneJson(singersIn[i], 0, warnings, `singers[${i}]`);
+    if (!isPlainObject(s)) {
+      warnings.push(`singers[${i}] 不是对象，已跳过`);
+      continue;
+    }
+    if (typeof s.id !== 'string' || !s.id) {
+      s.id = `plugin-singer-${i + 1}`;
+      warnings.push(`singers[${i}] 缺少 id，已补为 ${s.id}`);
+    }
+    if (singerIds.has(s.id)) {
+      warnings.push(`歌手 id ${s.id} 重复，已跳过`);
+      continue;
+    }
+    singerIds.add(s.id);
+    singers.push(s);
+  }
+
+  const fragmentsIn = Array.isArray(raw.fragments) ? raw.fragments : [];
+  if (!Array.isArray(raw.fragments) && raw.fragments !== undefined) {
+    warnings.push('fragments 不是数组，已忽略');
+  }
+  if (fragmentsIn.length > PROJECT_DOC_LIMITS.fragments) {
+    warnings.push(`分片 ${fragmentsIn.length} 个，超过上限 ${PROJECT_DOC_LIMITS.fragments}，多余部分已丢弃`);
+  }
+  const fragments = [];
+  for (let i = 0; i < Math.min(fragmentsIn.length, PROJECT_DOC_LIMITS.fragments); i++) {
+    const f = cloneJson(fragmentsIn[i], 0, warnings, `fragments[${i}]`);
+    if (!isPlainObject(f)) {
+      warnings.push(`fragments[${i}] 不是对象，已跳过`);
+      continue;
+    }
+    const start = Number(f.startTime);
+    f.startTime = Number.isFinite(start) && start >= 0 ? start : 0;
+    if (f.startTime !== start) warnings.push(`fragments[${i}].startTime 非法，按 0 处理`);
+    const duration = Number(f.duration);
+    f.duration = Number.isFinite(duration) && duration > 0 ? duration : 4;
+    if (f.duration !== duration) warnings.push(`fragments[${i}].duration 非法，按 4 拍处理`);
+
+    if (typeof f.id !== 'string' || !f.id) f.id = `plugin-fragment-${i + 1}`;
+    if (typeof f.name === 'string' && f.name.length > 200) f.name = f.name.slice(0, 200);
+    if (typeof f.singerId !== 'string' || !f.singerId) f.singerId = null;
+    if (!Array.isArray(f.notes)) f.notes = [];
+    if (f.notes.length > PROJECT_DOC_LIMITS.notesPerFragment) {
+      warnings.push(`fragments[${i}].notes 超过 ${PROJECT_DOC_LIMITS.notesPerFragment} 个，多余部分已丢弃`);
+      f.notes = f.notes.slice(0, PROJECT_DOC_LIMITS.notesPerFragment);
+    }
+    if (f.singerId && singerIds.size > 0 && !singerIds.has(f.singerId)) {
+      // 不丢弃：把分片留在一个"孤儿轨道"上，用户仍能看到内容并手动改挂；
+      // 静默删除才是真正丢数据。
+      warnings.push(`fragments[${i}] 引用了不存在的轨道 ${f.singerId}`);
+    }
+    fragments.push(f);
+  }
+
+  const document = {
+    version: typeof raw.version === 'string' && raw.version ? raw.version : PROJECT_FORMAT_VERSION,
+    project: { bpm, timeSignature },
+    singers,
+    fragments,
+  };
+
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(document).length;
+  } catch (err) {
+    return { ok: false, error: `工程文档无法序列化：${err.message}`, warnings };
+  }
+  if (bytes > PROJECT_DOC_LIMITS.bytes) {
+    return { ok: false, error: `工程文档过大（${bytes} 字节）`, warnings };
+  }
+  return { ok: true, document, warnings };
+}
