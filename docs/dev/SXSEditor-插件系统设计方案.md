@@ -8,9 +8,10 @@
 > 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4）；
 > 第 3 段是插件音素在分片编辑器里的只读呈现（§9.5）；第 4 段是 `ext.curve` 的绘制、
 > `ext.render` 的工程级意图、`contributes.exporters` 成品导出、旁挂文件与 Windows
-> 插件扩展名关联（§9.6，2026-11-04）；**M5（智能面）第 1 段落地**：`contributes.automation`
-> 的方法进 MCP（静态 schema + capabilities + 用户开关 + 审计，§9.7，2026-11-05）。
-> M5 剩余（`--cli plugin`、跨插件 service、secrets）与 M6 未开始。
+> 插件扩展名关联（§9.6，2026-11-04）；**M5（智能面）第 1–2 段落地**：`contributes.automation`
+> 的方法进 MCP（§9.7），以及 `--cli plugin list|methods|call|automation` —— 命令行默认
+> 转发现有实例的 `/automation`，与 agent 看到的能力表、权限门、审计完全一致（§9.8，
+> 2026-11-05）。M5 剩余（跨插件 service、secrets）与 M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -626,9 +627,10 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 **M4 数据面**：四段全部落地（§9.3 打开、§9.4 保存与扩展域、§9.5 音素呈现、
 §9.6 曲线/渲染意图/导出器/旁挂/系统关联）。`ext.render` 的语义有单测覆盖，
 但本机没有模型文件，**没有一次带声音的端到端验证**（见 §9.6"没验到的部分"）。
-**M5 智能面**：`automation.method` 进 MCP **已落地**（§9.7：方法命名、权限门、用户开关、
-审计、stdio 网关合并，26 条单测 + 实机走查）。剩余：`--cli plugin` 子命令、跨插件
-service 提供/消费、secrets 加密存储与权限门 —— 落地"一句话 → 一句唱"（`llm.provider`
+**M5 智能面**：`automation.method` 进 MCP **已落地**（§9.7），命令行入口
+`--cli plugin` **也已落地**（§9.8：默认转发运行实例、`--local` 临时实例、开关写盘带
+`via:'cli'` 审计，11 条单测 + 实机走查）。剩余：跨插件 service 提供/消费、secrets
+加密存储与权限门、插件方法的长任务形态 —— 落地"一句话 → 一句唱"（`llm.provider`
 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。
 
@@ -753,6 +755,65 @@ test/pluginAutomation.test.js         26（校验 / 命名 / 注册表 / 桥接�
 - secrets 的加密存储与权限门（`permissions.secrets` 已有词表，未接线）；
 - 插件方法的长任务形态：现在按命令超时 60s 掐断，尚未支持 `async: true` 提交成 job
   （桥接层的 job 通道本身支持，插件侧没有配合的"进度/取消"语义）。
+
+### 9.8 M5 第 2 段：`--cli plugin`（2026-11-05）
+
+**这一段要回答的是**：命令行入口和 MCP 是什么关系。答案不是"再实现一遍"，而是
+**CLI 是一个不需要配 token 的 MCP 客户端** —— 它默认把命令转给已运行实例的
+`/automation`，走同一个 `dispatch`、同一套权限门、同一份审计。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | `plugin list`：磁盘列 + live 列并排 | 左边是"装了哪些插件"（磁盘事实），右边是"现在真的能调什么"（运行时事实）。只报一个都会骗人：停在磁盘上看不到"用户关了开关"，只看运行态又看不到"为什么没装" |
+| 2 | `plugin methods` | live 模式读 `/schema` 里 `target: "plugin"` 的条目，与 agent 看到的能力表逐字一致；无实例时 init 一个临时服务走 `listAutomationMethods`，保持单一定义来源 |
+| 3 | `plugin call <pluginId>.<commandId>` | live 模式 POST `/automation`；`--params` 收 JSON，`-` 从 stdin 读；`--json` 单行输出、人类提示全走 stderr，保证可管道 |
+| 4 | **默认转发，而不是自己起一套** | 插件方法是运行期能力。两个进程共用同一个 `userData`：`loadAll` 结束时都会 `writeRegistry`，互相覆盖；审计里也会出现两份无法区分来源的 `automation-invoke`。转发还顺带保证了"CLI 看到的就是 GUI 看到的" |
+| 5 | `--local` 才起临时实例，且必须自报家门 | 无 GUI 的 CI / 调试需要它。但它的插件状态是新的（`stats.read` 从 0 开始），所以输出里明写"temporary local instance — plugin state is not shared with the GUI" |
+| 6 | `plugin automation <id> on\|off` 直接写 store，不起服务 | 改一个布尔值不值得 fork 每个插件的进程；而且 `PluginService.init()` 的 `loadAll` 会先读一遍磁盘，再把内存快照写回去，容易把刚写的值覆盖掉 |
+| 7 | 开关写盘后**不假装生效** | 运行实例用的是自己的内存投影，改文件不会让它重新读盘。命令输出"已写入；运行中的实例需要重载插件或重启后生效"，并用实机证明了这句话（见走查） |
+| 8 | 审计带 `via: 'cli'` | GUI 里点的开关与脚本写的开关必须能分开 —— 出问题时第一个要回答的就是"谁改的" |
+| 9 | 显式 `SXSEDITOR_MCP_ENDPOINT` 只认它 | 否则把环境变量指向一个"故意不存在"的文件时，会继续去读用户真实的 endpoint 并悄悄连上 GUI。测试与脚本都需要"确定连不到"的能力 |
+
+新增/改动文件：
+
+```
+src/main/cliPlugin.js        list / methods / call / automation（端点发现、转发、临时实例）
+src/main/cli.js              子命令分发、--plugin/--params/--json/--local、位置参数、HELP_TEXT
+test/cliPlugin.test.js       11（磁盘快照 / 转发 / 开关写盘）
+docs/dev/plugins-automation.md  作者视角的命令行用法
+```
+
+#### 走查（xvfb + 真实 GUI 实例 + 真实 second-instance）
+
+| 场景 | 结果 |
+|---|---|
+| 无实例 `plugin list` | `4 on disk, no running instance (disk state only)`，每行 `automation:--` / `automation:on` |
+| 无实例 `plugin methods` | 1 条 `example-sv2.stats`，末尾标注 `(temporary local instance …)` |
+| 无实例 `plugin call --params '{"includeLast":false}' --json` | `{"ok":true,"result":{"read":0,…,"lastFile":null,"uptimeMs":2}}`，exit 0 |
+| 有实例 `plugin list` | `live instance on port 45027 (pid …)`，该行 `live: example-sv2.stats` |
+| 连续两次 `call`（live） | `uptimeMs` 6 → 3881 → 11317 连续增长：三次调用落在**同一个**插件进程里，不是每次新 fork |
+| second-instance 投递 `auto.sv2` 后 `call` | `{"read":1,"lastFile":"auto.sv2"}`，同时 GUI 主窗口正常 —— CLI 与启动文件走的是同一份插件状态 |
+| 不存在的方法 | `[ERROR] UNKNOWN_METHOD: Unknown method example-sv2.nope`，exit 1 |
+| 方法名缺插件前缀 | 发请求前就拒绝，exit 2（`lastRequest` 为空，单测断言） |
+| `automation example-sv2 off` | `example-sv2: automation off — 已写入；运行中的实例（:45027）需要重载插件或重启后生效。`；审计多一条 `{expose:false, via:"cli"}` |
+| 关闭后立刻 live 调用 | 仍然成功（`read:1`，`uptimeMs:21693`）—— 证明第 7 条的提示是真的，不是免责声明 |
+| 关闭后 `--local` 调用 | `PERMISSION_DENIED: 用户已在插件管理器里关闭 example-sv2 的自动化调用`，exit 1 —— 磁盘状态确实变了，下次启动就会被挡住 |
+| `automation on` 后 `--local` | 恢复可调；用 `--params -` 从 stdin 传参，`lastFile` 变 `null` |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `list` 的 live 列把 `project.get` 也算成插件方法 | `capabilities.methods` 是**全部**方法名，按"带点"筛内置方法也会命中 | 改读 `/schema` 的 `target === 'plugin'`（权威标记） |
+| 2 | `plugin automation` 写盘后又变回原值 | 用 `PluginService.init()` 写盘：`loadAll()` 先读磁盘旧值，`setAutomationExpose` 再读一次写回，两个快照互相覆盖 | 改为直接走 `PluginStateStore` 的读改写，不启动服务 |
+| 3 | 单测里所有插件都判成 `invalid` | mocha 下 `require('electron')` 得到的是可执行文件路径字符串，取不到 `app.getVersion()`，engines 校验拿到 `undefined` | 抽出 `hostAppVersion()` 并对测试暴露钩子（与 `store._setRootForTests` 同形） |
+
+#### 没做的部分
+
+- `plugin install/uninstall/enable/disable` 没进 CLI：安装要解包、要确认权限，属于交互式
+  操作，不适合做成一行命令；需要脚本化时走 MCP 也没有对应方法（M6 的 marketplace 再谈）；
+- CLI 本地调用与 MCP 调用在 `automation-invoke` 里不带入口标记（只有开关变更带 `via`）。
+  要区分入口，MCP 侧看 `mcp-audit.log`，CLI 本地侧只能靠时间戳 —— 够用，但不算完备。
 
 ## 10. 风险与取舍
 

@@ -86,7 +86,8 @@ module.exports = {
 
 - 每次外部调用写一行 `automation-invoke`（方法、成败、错误码、耗时）到
   `<userData>/logs/plugins-audit.jsonl`，管理器「Activity log」可见；
-- 开关变更写 `automation`（`{expose: true|false}`）；
+- 开关变更写 `automation`（`{expose: true|false, via: 'cli'?}`）。`via` 只在命令行
+  改开关时出现 —— 同一天里用户点的开关与脚本写的开关必须能分开；
 - 单次调用按命令超时 **60 秒**掐断（`TIMEOUTS.command`）。桥接层的等待比它更宽，
   所以你给出的超时错误不会被"Automation timeout"抢走。
 
@@ -96,16 +97,39 @@ module.exports = {
 |---|---|---|
 | 菜单 / 工具栏 / 快捷键 | `command.run` | 是（主窗口） |
 | 面板 iframe | `panel.rpc`（受 `apiScopes` 限制） | 是（面板） |
-| MCP / CLI | `automation` 方法 → `command.run` | **否** |
+| MCP（HTTP / stdio 网关） | `automation` 方法 → `command.run` | **否** |
+| `--cli plugin call` | 同上（转发现有实例的 `/automation`） | **否** |
 
 同一个 `command.run` handler 会被两个入口调用，参数形状不同（菜单传 `{}`，自动化传
 调用方的对象）。写 handler 时把参数当成"可选"处理，别假设 `args` 里一定有值。
 
+### 命令行（`--cli plugin`）
+
+```bash
+# 装了哪些插件；右边一列是"现在真的能调什么"
+SXSEditor --cli plugin list
+SXSEditor --cli plugin methods --plugin example-sv2
+
+# 调用；--params 接受 JSON，`-` 表示从 stdin 读（适合管道）
+SXSEditor --cli plugin call example-sv2.stats --params '{"includeLast":false}'
+echo '{"includeLast":false}' | SXSEditor --cli plugin call example-sv2.stats --params -
+
+# 脚本里只想要 JSON：单行输出，人类提示全部走 stderr
+SXSEditor --cli plugin call example-sv2.stats --json
+```
+
+默认**连接到已经打开的 SXSEditor**，走的是 MCP 用的同一条 `/automation`，所以看到
+的状态、权限门、审计与 agent 完全一致。加 `--local` 才会另起一个临时实例（它会 fork
+自己的一套插件进程，看不到 GUI 里的运行时状态，输出里会标注）。
+
+`--cli plugin automation <id> off` 只改磁盘上的用户开关：正在运行的实例需要重载插件
+或重启才生效，命令会明确提示这一点，不会假装已经挡住了调用。
+
 ## 7. 还没做的部分
 
-- `--cli plugin` 子命令（命令行入口，当前只有 MCP）；
 - 长任务形态：`async: true` 提交成 job（桥接层支持，插件侧还没有进度/取消语义）；
-- 跨插件 service 调用（`contributes.services` 已校验，未接线）。
+- 跨插件 service 调用（`contributes.services` 已校验，未接线）；
+- secrets 的加密存储与权限门（`permissions.secrets` 已有词表，未接线）。
 
 ## 8. 完整示例
 
