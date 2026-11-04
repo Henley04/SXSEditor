@@ -8,7 +8,9 @@
 > 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4）；
 > 第 3 段是插件音素在分片编辑器里的只读呈现（§9.5）；第 4 段是 `ext.curve` 的绘制、
 > `ext.render` 的工程级意图、`contributes.exporters` 成品导出、旁挂文件与 Windows
-> 插件扩展名关联（§9.6，2026-11-04）。M5–M6 未开始。
+> 插件扩展名关联（§9.6，2026-11-04）；**M5（智能面）第 1 段落地**：`contributes.automation`
+> 的方法进 MCP（静态 schema + capabilities + 用户开关 + 审计，§9.7，2026-11-05）。
+> M5 剩余（`--cli plugin`、跨插件 service、secrets）与 M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -302,7 +304,7 @@ src/main/plugins/runtime/{fs,net,llmBridge,projectCodec,audio}.js
 | `src/i18n/index.js` | `registerPluginMessages(id, dict)`，键前缀 `plugin.<id>.` | ✅ M2 |
 | `src/renderer/{index,timelineRenderer,eventHandlers}.js` | 挂宿主、`app:state-changed` 广播、三处右键入口 | ✅ M2 |
 | `src/pluginManager/*` | 贡献计数 + 快捷键区块（总开关 / 组合 / 仲裁结果） | ✅ M2 |
-| `src/renderer/mcpAutomation.js` | 动态命令表 + `source: plugin:<id>` | ⬜ M5 |
+| `src/renderer/mcpAutomation.js` | ~~动态命令表~~ → **改在桥接层派发**：插件方法跑在 utilityProcess，不需要窗口；未注册方法在 `dispatch` 前就被拒（§9.7） | ✅ M5 修正 |
 
 > utilityProcess 的入口复用现有「裸拷贝 + 按路径 require」模式（与 `svsWorker.js`
 > 同构）。M1 已验证 `.webpack/main/plugin-runtime/` 落位正确；
@@ -624,8 +626,10 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 **M4 数据面**：四段全部落地（§9.3 打开、§9.4 保存与扩展域、§9.5 音素呈现、
 §9.6 曲线/渲染意图/导出器/旁挂/系统关联）。`ext.render` 的语义有单测覆盖，
 但本机没有模型文件，**没有一次带声音的端到端验证**（见 §9.6"没验到的部分"）。
-**M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
-落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
+**M5 智能面**：`automation.method` 进 MCP **已落地**（§9.7：方法命名、权限门、用户开关、
+审计、stdio 网关合并，26 条单测 + 实机走查）。剩余：`--cli plugin` 子命令、跨插件
+service 提供/消费、secrets 加密存储与权限门 —— 落地"一句话 → 一句唱"（`llm.provider`
+已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。
 
 ### 9.6 M4 第 4 段端到端验证（2026-11-04）
@@ -682,6 +686,73 @@ test/pluginSidecar.test.js          9
 
 Windows 注册表相关代码在本机（Linux）不会执行，只能验证 ProgId 的生成与反解；
 `reg add/query/delete` 的实际行为需要在 Windows 安装版上再过一遍。
+
+### 9.7 M5 第 1 段端到端验证：插件方法进 MCP（2026-11-05）
+
+**这一段要回答的是**：插件把命令交给自动化面之后，agent 看到的能力表到底由谁决定，
+以及一次调用经过哪些进程。答案必须在实机上验证，因为中间横着三层（桥接层校验 →
+插件服务 → utilityProcess），任何一层没接上，"能看到方法"和"能调用成功"就是两件事。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | 方法名 = 完整命令 id（`<pluginId>.<localId>`） | 用裸 `localId` 会让两个插件都声明的 `export` 互相顶掉，"谁装得晚谁赢"在自动化里是灾难：同一句 agent 脚本在别人机器上会调到另一个实现 |
+| 2 | 校验期三条硬规则 | ① 必须指向本插件已声明的命令（否则安装能过、调用才 404）；② `methods` 非空必须有 `permissions.automation: ['expose']`；③ 拼出的名字不得等于内置方法（`project` 插件 + `get` 命令就会撞 `project.get`） |
+| 3 | **在桥接层派发，不经渲染层** | 设计草案（§7 表格）原本写的是"渲染层动态命令表"。实际实现改在主进程：桥接层是所有调用的唯一闸门，未注册的方法在 `dispatch` 之前就被拒；而插件方法跑在 utilityProcess 里，本来就不需要窗口 —— 转发给渲染层会让"主窗口存在"变成前提，恰恰违背无界面自动化 |
+| 4 | `setPluginAutomation(provider)` 注入函数而非快照 | 插件随时装卸，桥接层每次请求现取 `list()`；否则装完插件要重启才出现 |
+| 5 | `/schema` 与 `capabilities` 合并插件条目，带 `source: plugin:<id>` | agent 必须能回答"这个方法是谁给的"，否则一个陌生方法名等于黑盒 |
+| 6 | 用户级开关（管理器勾选框） | manifest 权限是**作者**在安装前声明，这个开关是**用户**事后说"不要"。只有前者，用户要么接受要么卸载；只有后者，作者能从用户没看过的权限清单里偷偷暴露。关掉只影响自动化面，不影响插件自己的菜单 |
+| 7 | `headless: false` 的命令不导出 | 作者说了"这条命令需要有人看着界面"（例如弹向导），自动化调用它只会卡在没人点的对话框上 |
+| 8 | 审计 | 每次调用写 `automation-invoke`（方法、成败、错误码、耗时）；开关变更写 `automation` |
+| 9 | stdio 网关补拉 `/schema` | 网关的工具表来自本地 schema（静态），插件方法是运行期事实。`tools/list` 时按 30s 窗口拉一次；`tools/call` 未命中时强制补拉一次再重试 —— 客户端不回 `tools/list` 直接调也成立 |
+
+新增/改动文件：
+
+```
+src/shared/pluginAutomation.js        方法命名、公开条目投影、插件错误码 → MCP 错误码
+src/shared/pluginManifest.js          validateAutomation 交叉校验命令 / 权限 / 内置同名
+src/main/plugins/PluginRegistry.js    'automation' 贡献表 + 快照行
+src/main/plugins/PluginService.js     listAutomationMethods / runAutomationMethod / setAutomationExpose
+src/main/mcpBridge.js                 setPluginAutomation / publicSchema / target:'plugin' 派发
+src/main.js                           注入 provider
+scripts/sxseditor-mcp.js              tools/list 合并插件工具（+ miss 时补拉）
+src/pluginManager/index.js|.css       自动化块：开关 + 方法清单 + 状态
+src/shared/ipcChannels.js|preload|windowCapabilities  plugin-host:set-automation（仅管理器）
+plugins/example-sv2/*                 示例：stats 命令（返回处理计数，参数 includeLast）
+test/pluginAutomation.test.js         26（校验 / 命名 / 注册表 / 桥接）
+```
+
+#### 走查（xvfb + CDP 9222 + 主进程 Inspector 9229 + 真实 second-instance）
+
+| 场景 | 结果 |
+|---|---|
+| `POST /automation {method:"capabilities"}` | `features.pluginMethods: 1`，methods 里出现 `example-sv2.stats` |
+| `GET /schema` | 该条目 `target: "plugin"`、`source: "plugin:example-sv2"`、`long: true`、`params` 为开放 object |
+| 调用 `example-sv2.stats` | `{read:0,written:0,lastFile:"",uptimeMs:6}` —— 6ms 说明它刚刚 fork 出插件进程，是真在 utilityProcess 里跑的 |
+| 传 `{includeLast:false}` | `lastFile` 变 `null`：参数原样到达插件，宿主没有按内置 schema 过滤 |
+| second-instance 投递 `auto.sv2` 后再调 | `{read:1,lastFile:"auto.sv2"}`，同时 `project.get` 返回 bpm 96 / Lead —— 插件解码与自动化调用看到的是同一份插件状态 |
+| 未暴露的方法名 | `UNKNOWN_METHOD`，hint 指向 `capabilities` 而不是 `/schema` |
+| 管理器卡片 | "External automation" + 勾选框 + 方法行 `example-sv2.stats` / 绿色 `exposed`；无方法的插件显示"未声明任何自动化方法" |
+| 在管理器里取消勾选 | `/schema` 里条目消失、`capabilities.pluginMethods: 0`、直接调用变 `UNKNOWN_METHOD` |
+| 重新勾选 | 方法立即恢复，调用成功 |
+| 停用整个插件 | 方法同样消失；重新启用后恢复（插件进程重启，计数归零） |
+| stdio 网关 `tools/list` | 69 个工具，含 `sxs_example-sv2_stats`，描述带 `[plugin:example-sv2]` |
+| stdio 网关直接 `tools/call`（不先 list） | 补拉后调用成功，返回 `{read:1,lastFile:"auto.sv2"}` |
+| 审计 | `logs/plugins-audit.jsonl` 有 `automation-invoke`（含 ms/ok/code）与两次 `automation` 开关记录；`mcp-audit.log` 有对应 method 行 |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | stdio 网关：`tools/list` 里能看到插件工具，`tools/call` 却 `UNKNOWN_TOOL` | `route()` 只查本地静态表；合并只发生在 `tools/list` 分支 | 未命中时强制补拉一次 `/schema` 再重试（方法名 miss 是唯一"表该更新"的可靠信号） |
+| 2 | 管理器"External automation"标题折成两行，方法行挤在标签列里 | 复用了 `.pm-row-label`（普通行里固定 92px 宽） | 标题列在该块内改为自适应宽 + 方法行独立样式（等宽、底框、状态靠右） |
+
+#### 没做的部分（M5 剩余）
+
+- `--cli plugin` 子命令：把同一批方法暴露给命令行（当前只有 MCP 两个入口）；
+- 跨插件 service 提供/消费（manifest 已校验 `services.provides`，实现为零）；
+- secrets 的加密存储与权限门（`permissions.secrets` 已有词表，未接线）；
+- 插件方法的长任务形态：现在按命令超时 60s 掐断，尚未支持 `async: true` 提交成 job
+  （桥接层的 job 通道本身支持，插件侧没有配合的"进度/取消"语义）。
 
 ## 10. 风险与取舍
 
