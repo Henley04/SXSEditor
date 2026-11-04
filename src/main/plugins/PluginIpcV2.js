@@ -86,6 +86,15 @@ function registerPluginHostIpc(service, options = {}) {
   ));
   track(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT);
 
+  // 保存/导出：渲染层把当前工程文档交过来，主进程问插件要字节并写盘。
+  // document 是结构化克隆过来的（Uint8Array / 普通对象都能过），不经过 JSON。
+  safeHandle(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, async (_event, filePath, document, options) => (
+    service.saveDocument(String(filePath || ''), document, {
+      target: options && options.target === 'export' ? 'export' : 'save',
+    })
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT);
+
   safeHandle(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, async (_event, role) => (
     service.fileFilters(role === 'save' ? 'save' : 'open')
   ));

@@ -9,6 +9,8 @@
  *   · features  —— 能力清单。读到未知特性时提示但不阻断（前向兼容）。
  */
 
+import { normalizeExtSchema, normalizeExtData, summarizeExt, EXT_LIMITS } from './pluginExt.js';
+
 /** 当前写入的工程格式版本。新增可选字段 → minor+1；改语义/删字段 → major+1。 */
 export const PROJECT_FORMAT_VERSION = '1.3.0';
 export const PROJECT_FORMAT_PARTS = [1, 3, 0];
@@ -135,9 +137,12 @@ function isPlainObject(v) {
  *   · 超出深度/长度上限的部分截断并记一条 warning，不整体拒绝；
  *   · 危险键直接跳过。
  *
+ * `ext` 子树例外：那里是插件自己的数据，字符串被截断等于"看起来合法但内容已损坏"，
+ * 比整条丢掉更危险。所以 ext 下不截断字符串，长度由 `normalizeExtData` 按字节判定。
+ *
  * 返回 undefined 表示"这一项不该存在"，调用方据此跳过数组元素或对象字段。
  */
-function cloneJson(value, depth, warnings, label) {
+function cloneJson(value, depth, warnings, label, inExt = false) {
   if (depth > PROJECT_DOC_LIMITS.depth) {
     warnings.push(`${label} 嵌套超过 ${PROJECT_DOC_LIMITS.depth} 层，已截断`);
     return undefined;
@@ -145,9 +150,10 @@ function cloneJson(value, depth, warnings, label) {
   if (value === null) return null;
   const t = typeof value;
   if (t === 'string') {
-    return value.length > PROJECT_DOC_LIMITS.stringLength
-      ? value.slice(0, PROJECT_DOC_LIMITS.stringLength)
-      : value;
+    if (!inExt && value.length > PROJECT_DOC_LIMITS.stringLength) {
+      return value.slice(0, PROJECT_DOC_LIMITS.stringLength);
+    }
+    return value;
   }
   // NaN / Infinity 不是合法 JSON：序列化时会变成 null，不如在这里就当作缺失
   if (t === 'number') return Number.isFinite(value) ? value : undefined;
@@ -159,7 +165,7 @@ function cloneJson(value, depth, warnings, label) {
     if (value.length > limit) warnings.push(`${label} 长度超过 ${limit}，已截断`);
     const out = [];
     for (let i = 0; i < limit; i++) {
-      const item = cloneJson(value[i], depth + 1, warnings, `${label}[${i}]`);
+      const item = cloneJson(value[i], depth + 1, warnings, `${label}[${i}]`, inExt);
       if (item !== undefined) out.push(item);
     }
     return out;
@@ -171,7 +177,7 @@ function cloneJson(value, depth, warnings, label) {
         warnings.push(`${label} 含被忽略的键 ${key}`);
         continue;
       }
-      const item = cloneJson(value[key], depth + 1, warnings, `${label}.${key}`);
+      const item = cloneJson(value[key], depth + 1, warnings, `${label}.${key}`, inExt || key === 'ext');
       if (item !== undefined) out[key] = item;
     }
     return out;
@@ -245,6 +251,11 @@ export function validateProjectDocument(raw) {
       continue;
     }
     singerIds.add(s.id);
+    // 扩展数据跟着层走：轨道可以带插件私有的音色引用之类。
+    // 空的 ext 直接删掉 —— 留着空对象会让"有没有扩展"的判断变成"看键存不存在"以外的第二套逻辑。
+    const singerExt = normalizeExtData(s.ext, warnings, `singers[${i}].ext`);
+    if (Object.keys(singerExt).length) s.ext = singerExt;
+    else delete s.ext;
     singers.push(s);
   }
 
@@ -282,6 +293,21 @@ export function validateProjectDocument(raw) {
       // 静默删除才是真正丢数据。
       warnings.push(`fragments[${i}] 引用了不存在的轨道 ${f.singerId}`);
     }
+
+    const fragExt = normalizeExtData(f.ext, warnings, `fragments[${i}].ext`);
+    if (Object.keys(fragExt).length) f.ext = fragExt;
+    else delete f.ext;
+
+    // note 级 ext 只处理真的带了的音符。上限是 5000 分片 × 20000 音符，
+    // 无条件遍历一遍等于给每个工程加一次无意义的全扫描。
+    for (let k = 0; k < f.notes.length; k++) {
+      const n = f.notes[k];
+      if (!n || typeof n !== 'object' || !n.ext) continue;
+      const noteExt = normalizeExtData(n.ext, warnings, `fragments[${i}].notes[${k}].ext`);
+      if (Object.keys(noteExt).length) n.ext = noteExt;
+      else delete n.ext;
+    }
+
     fragments.push(f);
   }
 
@@ -292,6 +318,13 @@ export function validateProjectDocument(raw) {
     fragments,
   };
 
+  // 扩展域的声明放在文档级：它跟着"这份文件"走，不跟着插件的安装状态走。
+  // 同一个插件处理 .sv2 和 .vsqx 时方言不同，schema 只能由 codec 在打开时给出。
+  const extSchema = normalizeExtSchema(raw.extSchema, warnings);
+  if (Object.keys(extSchema).length) document.extSchema = extSchema;
+  const rootExt = normalizeExtData(raw.ext, warnings, 'ext');
+  if (Object.keys(rootExt).length) document.ext = rootExt;
+
   let bytes = 0;
   try {
     bytes = JSON.stringify(document).length;
@@ -301,5 +334,16 @@ export function validateProjectDocument(raw) {
   if (bytes > PROJECT_DOC_LIMITS.bytes) {
     return { ok: false, error: `工程文档过大（${bytes} 字节）`, warnings };
   }
-  return { ok: true, document, warnings };
+
+  // 单条合格不代表合起来合格。这里拒绝而不是截断：总量超限意味着插件在往
+  // 工程里灌非工程数据，截断会让"保存后还剩什么"变得不可预测。
+  const extStats = summarizeExt(document);
+  if (extStats.truncated) {
+    return {
+      ok: false,
+      error: `扩展数据合计超过 ${EXT_LIMITS.totalBytes} 字节`,
+      warnings,
+    };
+  }
+  return { ok: true, document, warnings, extStats };
 }

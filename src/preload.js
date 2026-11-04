@@ -642,6 +642,10 @@ const _fullElectronAPI = {
     // 失败时返回 { ok:false, code, message }（没有插件接管 / 没权限 / 文档非法），
     // 由渲染层决定怎么提示。
     openDocument: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT, filePath),
+    // 保存/导出：把当前工程文档交给插件编码，写盘仍由主进程完成。
+    saveDocument: (filePath, document, options) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, filePath, document, options || {})
+    ),
     fileFilters: (role) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, role || 'open'),
     // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
     onSync: (callback) => {

@@ -691,6 +691,19 @@ class PluginService {
     return this.dataPlane.openDocument(filePath);
   }
 
+  /**
+   * 用插件保存一个文件（M4 第 2 段）。
+   *
+   * 与 openDocument 对称：扩展名归属、权限、文档校验、写盘都在 dataPlane 里，
+   * 这里只做"插件系统没初始化"的兜底。
+   */
+  saveDocument(filePath, document, options) {
+    if (!this.dataPlane) {
+      return Promise.resolve({ ok: false, code: ERR.UNSUPPORTED, message: '插件系统未初始化' });
+    }
+    return this.dataPlane.saveDocument(filePath, document, options);
+  }
+
   /** 对话框过滤器：插件声明的文件格式（由 dialogIpc 合并到宿主过滤器之后）。 */
   fileFilters(role) {
     if (!this.dataPlane) return [];

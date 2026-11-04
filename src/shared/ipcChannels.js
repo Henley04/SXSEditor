@@ -186,6 +186,7 @@ const IPC_CHANNELS = {
   // 工程文档。路径不经过渲染层的文件系统 API —— 插件格式的解析全在主进程的
   // codec 进程里完成，渲染层只负责把文档装进 state。
   PLUGINHOST_OPEN_DOCUMENT: 'plugin-host:open-document',
+  PLUGINHOST_SAVE_DOCUMENT: 'plugin-host:save-document',
   // 插件声明的文件格式（对话框过滤器用）。投影里也有 fileTypes，但那份要按
   // 插件分组、还要算 UI 渲染状态；对话框只要一张扁平的"扩展名 → 显示名"。
   PLUGINHOST_FILE_FILTERS: 'plugin-host:file-filters',

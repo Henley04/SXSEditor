@@ -2,23 +2,47 @@
 /**
  * SV2 工程格式的示例 codec（跑在独立 utilityProcess 里，CommonJS）。
  *
- * 关键点：**宿主读文件、插件解析内容。**
+ * 关键点：**宿主读文件、插件解析内容、宿主写盘。**
  * 宿主把用户选中的那个文件的字节送进来（`bytes`），插件不碰文件系统 ——
  * 即使它声明了 `userPicked:read`，那也只是"允许宿主把用户选的文件给你"，
- * 不是"你可以自己遍历磁盘"。
+ * 不是"你可以自己遍历磁盘"。保存同理：插件返回字节，由宿主原子写落盘。
  *
  * 返回的 `document` 必须是宿主的工程文档形状（project / singers / fragments）。
  * 宿主还会再校验一遍（validateProjectDocument）：规模、类型、原型污染都在那里
  * 兜底，插件返回什么脏东西都进不了编辑器状态。
  *
- * SV2 是这里现造的一个极简文本格式，用来演示"外部工程 → 编辑器"：
- *   { "format": "sv2", "bpm": 96,
- *     "tracks": [{ "name": "Lead", "notes": [{ "start": 0, "duration": 1,
- *                                             "pitch": 60, "lyric": "la" }] }] }
+ * SV2 是这里现造的一个极简文本格式，用来演示"外部工程 ↔ 编辑器"的双向链路：
+ *   { "format": "sv2", "bpm": 96, "meta": {...},
+ *     "tracks": [{ "name": "Lead", "start": 0,
+ *                  "notes": [{ "start": 0, "duration": 1, "pitch": 60,
+ *                              "lyric": "la", "phonemes": ["l", "a"] }] }] }
  * 拍长以拍为单位，pitch 是 MIDI 音高。
+ *
+ * 这个示例刻意演示了三件容易被做错的事：
+ *   1. 宿主不认识的数据（`meta`）走 ext 原样保留，保存时写回；
+ *   2. 宿主不认识其合法性的数据（音素）声明成只读，界面上置灰但能看见；
+ *   3. 表达不了的东西（音素微调、颤音）**显式告警**，而不是静默丢弃。
  */
 
 const FORMAT_ID = 'sv2';
+
+/** ext 的命名空间。用插件 id，让用户能看出"这段数据来自谁"。 */
+const EXT_ID = 'example-sv2';
+
+/**
+ * 给宿主看的声明：这份文档里哪些东西宿主可以呈现。
+ *
+ * `kind: 'phonemes'` 让宿主知道该按音素切分显示，而不是当成一坨文本；
+ * `editable: false` 是因为 SV2 的音素符号表与宿主按歌词推导出来的那一套不同 ——
+ * 宿主无从判断 `["tS","a"]` 合不合法，所以不给改，但原样保留并回写。
+ */
+const EXT_SCHEMA = {
+  [EXT_ID]: {
+    note: {
+      phonemes: { kind: 'phonemes', editable: false, maxLength: 200 },
+    },
+  },
+};
 
 /**
  * 状态栏文案。
@@ -33,6 +57,11 @@ function statusText(name) {
 function toNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** 时间统一到 1/480 拍，避免 0.1+0.2 这类浮点尾数堆积到文件里。 */
+function roundTime(v) {
+  return Math.round(v * 480) / 480;
 }
 
 /**
@@ -79,12 +108,22 @@ function translate(raw, fileName) {
       const duration = toNumber(n.duration, 1);
       if (!Number.isFinite(pitch) || pitch < 0 || pitch > 127) continue;
       if (start < 0 || duration <= 0) continue;
-      notes.push({
+
+      const note = {
         pitch,
         start,
         duration,
         lyric: String(n.lyric || 'la').slice(0, 12),
-      });
+      };
+      // 音素：宿主不认识的符号表，进 ext。它不会参与宿主的歌词→音素推导，
+      // 所以用户改歌词时这里也不会被静默覆盖。
+      if (Array.isArray(n.phonemes) && n.phonemes.length) {
+        const list = n.phonemes
+          .filter((p) => typeof p === 'string' && p.length > 0 && p.length <= 24)
+          .slice(0, 32);
+        if (list.length) note.ext = { [EXT_ID]: { phonemes: list } };
+      }
+      notes.push(note);
       end = Math.max(end, start + duration);
     }
 
@@ -99,7 +138,7 @@ function translate(raw, fileName) {
     });
   });
 
-  return {
+  const document = {
     // version 交给宿主决定（它会用当前格式版本重写），这里只给个提示值
     version: '1.3.0',
     project: {
@@ -108,8 +147,119 @@ function translate(raw, fileName) {
     },
     singers,
     fragments,
-    // 额外字段宿主会忽略；写在这里是为了让示例读起来完整
-    source: { format: FORMAT_ID, file: fileName },
+    extSchema: EXT_SCHEMA,
+  };
+
+  // `meta`（作者、注释、自定义标签……）宿主没有任何字段能装下它。
+  // 不保留的话，"打开再保存"就会永久删掉用户的元数据，而且完全没有痕迹。
+  if (raw.meta && typeof raw.meta === 'object') {
+    document.ext = { [EXT_ID]: { meta: raw.meta } };
+  }
+
+  // 写在这里是为了让示例读起来完整；宿主不认识这个字段，也不会读它
+  document.source = { format: FORMAT_ID, file: fileName };
+  return document;
+}
+
+/**
+ * 把工程文档写回 SV2。
+ *
+ * 与 translate 严格对称：read 认下来的东西，write 必须能原样吐出去，
+ * 否则 round-trip 就是单向的，用户第二次保存才会发现文件已经不一样了。
+ *
+ * @returns {{bytes: Buffer, warnings: string[]}}
+ */
+function encode(ctx, document) {
+  const singers = Array.isArray(document.singers) ? document.singers : [];
+  const fragments = Array.isArray(document.fragments) ? document.fragments : [];
+  const ext = (document.ext && document.ext[EXT_ID]) || {};
+  const warnings = [];
+
+  let unportedAdjustments = 0;
+  let unportedVibrato = 0;
+
+  const singerIds = new Set(singers.map((s) => s.id));
+  const grouped = new Map();
+  const orphans = [];
+  for (const f of fragments) {
+    if (f && f.singerId && singerIds.has(f.singerId)) {
+      if (!grouped.has(f.singerId)) grouped.set(f.singerId, []);
+      grouped.get(f.singerId).push(f);
+    } else {
+      orphans.push(f);
+    }
+  }
+
+  const buildTrack = (name, ownFragments) => {
+    // 一个歌手在宿主里可以有多个分片；SV2 的 track 是"一条轨 + 绝对开始的音符"，
+    // 所以先把分片按时间摊平，取最早的分片作为 track.start，其余音符加偏移。
+    const starts = ownFragments.map((f) => toNumber(f.startTime, 0));
+    const trackStart = starts.length ? Math.min(...starts) : 0;
+    const notes = [];
+    for (let i = 0; i < ownFragments.length; i++) {
+      const f = ownFragments[i];
+      const offset = toNumber(f.startTime, 0) - trackStart;
+      for (const n of Array.isArray(f.notes) ? f.notes : []) {
+        if (!n || typeof n !== 'object') continue;
+        const note = {
+          start: roundTime(offset + toNumber(n.start, 0)),
+          duration: roundTime(toNumber(n.duration, 1)),
+          pitch: Math.round(toNumber(n.pitch, 60)),
+          lyric: String(n.lyric || 'la').slice(0, 12),
+        };
+        const phonemes = n.ext && n.ext[EXT_ID] && n.ext[EXT_ID].phonemes;
+        if (Array.isArray(phonemes) && phonemes.length) {
+          note.phonemes = phonemes.filter((p) => typeof p === 'string').slice(0, 32);
+        }
+        if (Array.isArray(n.phonemeAdjustments) && n.phonemeAdjustments.length) unportedAdjustments++;
+        if (n.vibrato && n.vibrato.enabled) unportedVibrato++;
+        notes.push(note);
+      }
+    }
+    return { name, start: roundTime(trackStart), notes };
+  };
+
+  const tracks = singers.map((s) => buildTrack(
+    String(s.trackName || s.singerName || s.id).slice(0, 60),
+    grouped.get(s.id) || [],
+  ));
+  if (orphans.length) {
+    tracks.push(buildTrack('Untitled', orphans));
+    warnings.push(msg(
+      ctx,
+      `${orphans.length} 个分片没有对应轨道，已写进 "Untitled"`,
+      `${orphans.length} fragment(s) had no track and were written to "Untitled"`,
+    ));
+  }
+
+  const raw = {
+    format: FORMAT_ID,
+    bpm: toNumber(document.project && document.project.bpm, 120),
+    timeSignature: (document.project && document.project.timeSignature) || [4, 4],
+  };
+  if (ext.meta && typeof ext.meta === 'object') raw.meta = ext.meta;
+  raw.tracks = tracks;
+
+  // 写不进去的东西必须让用户知道。静默丢弃会在下次打开时表现为"我的调整没了"，
+  // 而用户已经保存过一次，连回退的线索都没有。
+  if (unportedAdjustments > 0) {
+    warnings.push(msg(
+      ctx,
+      `${unportedAdjustments} 个音符的音素微调未写入（SV2 格式不支持）`,
+      `Phoneme adjustments on ${unportedAdjustments} note(s) were not written (unsupported by SV2)`,
+    ));
+  }
+  if (unportedVibrato > 0) {
+    warnings.push(msg(
+      ctx,
+      `${unportedVibrato} 个音符的颤音未写入（SV2 格式不支持）`,
+      `Vibrato on ${unportedVibrato} note(s) was not written (unsupported by SV2)`,
+    ));
+  }
+
+  return {
+    bytes: Buffer.from(JSON.stringify(raw, null, 2), 'utf8'),
+    warnings,
   };
 }
 
@@ -121,8 +271,8 @@ module.exports = {
   /**
    * 数据面入口。键是扩展名（小写，带点），宿主按 manifest.fileTypes 路由到它。
    *
-   * 只实现 read。若同时实现了 write，宿主在"另存为"时就能把工程写回这个格式；
-   * 本示例故意不实现 —— 演示"导入"这一条链路，保存仍落成 .sxsproj。
+   * read 与 write 成对实现，宿主才允许"另存为"选这个格式；只实现 read 时
+   * 它只会出现在"打开"对话框里。
    */
   codecs: {
     '.sv2': {
@@ -160,6 +310,13 @@ module.exports = {
         await ctx.ui.status('state', statusText(name));
         ctx.log.info(`解码 ${name}：${document.singers.length} 轨 / ${document.fragments.length} 段`);
         return { document };
+      },
+
+      async write(ctx, { name, document }) {
+        const { bytes, warnings } = encode(ctx, document);
+        await ctx.ui.status('state', statusText(name));
+        ctx.log.info(`编码 ${name}：${bytes.length} 字节，${warnings.length} 条告警`);
+        return { bytes, warnings };
       },
     },
   },

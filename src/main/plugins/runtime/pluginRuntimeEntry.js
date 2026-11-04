@@ -225,7 +225,7 @@ function createContext(init) {
  * 对象深度封顶 6 层。这些限制对"看一眼的日志"是对的，对"整段波形"和
  * "整个工程文档"就是静默数据损坏。
  */
-const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read']);
+const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read', 'codec.write']);
 
 function safe(value, depth = 0) {
   if (depth > 6) return null;
@@ -328,6 +328,24 @@ async function handleRequest(msg) {
           name: params.name,
           size: params.size,
           bytes: params.bytes,
+        });
+        break;
+      }
+      case 'codec.write': {
+        // 保存/导出（M4）。插件拿到**校验过**的工程文档，返回字节，由宿主写盘。
+        // 插件进程没有文件系统权限：`path` 只是给"要不要写旁挂文件"之类的判断做
+        // 提示（本版不支持旁挂写入），真正落地的是返回的 bytes。
+        const codecs = (moduleExports && moduleExports.codecs) || {};
+        const codec = codecs[params.ext];
+        if (!codec || typeof codec.write !== 'function') {
+          throw Object.assign(new Error(`插件没有为 ${params.ext} 提供 codec.write`), { code: 'UNSUPPORTED' });
+        }
+        result = await codec.write(ctx, {
+          ext: params.ext,
+          path: params.path,
+          name: params.name,
+          document: params.document,
+          target: params.target,
         });
         break;
       }

@@ -4,8 +4,9 @@
 > 窗口的端到端验证（§9.1，2026-11-02）；**M2（贡献面）已实现并通过同样的实链路走查
 > （§9.2，2026-11-03）**；**M3（模型调用面）五段全部落地，并通过实机走查（§12，
 > 2026-11-04）**，含二进制结果、`synthesis.backend` 迁移与 `postWaveform` hook；
-> **M4（数据面）第 1 段已落地（§9.3，2026-11-04）**：插件文件格式的接管、打开路由、
-> 对话框过滤器与投递链路；保存/导出、系统级文件关联未做。M5–M6 未开始。
+> **M4（数据面）两段均已落地**：第 1 段是打开链路、对话框过滤器与投递（§9.3）；
+> 第 2 段是 `codec.write` 保存链路、扩展域 `ext`（声明/数据分离）与往返保真（§9.4，
+> 2026-11-04）。系统级文件关联、音频导出器、`ext` 的绘制/渲染接线未做。M5–M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -249,12 +250,14 @@ src/renderer/platformInfo.js             平台判定（Mod 显示成 Ctrl 还�
 plugins/example-hello/overlay/           示例浮层
 ```
 
-**M4 新增（第 1 段，已落地）**
+**M4 新增（两段均已落地）**
 
 ```
-src/main/plugins/PluginDataPlane.js      文件 → 插件 codec → 校验过的工程文档
+src/main/plugins/PluginDataPlane.js      文件 ↔ 插件 codec ↔ 校验过的工程文档（open/save）
 src/shared/projectFormat.js              validateProjectDocument（跨进程数据的唯一入口）
-plugins/example-sv2/                     示例：接管 .sv2，codecs['.sv2'].read
+src/shared/pluginExt.js                  extSchema / ext 的声明与数据分离、规模上限
+src/main/atomicWrite.js                  原子写盘（宿主 JSON 与插件字节共用一份）
+plugins/example-sv2/                     示例：接管 .sv2，read/write 严格对称
 ```
 
 **待落地（M3–M5）**
@@ -277,8 +280,10 @@ src/main/plugins/runtime/{fs,net,llmBridge,projectCodec,audio}.js
 | `forge.config.js` / `webpack.*.config.js` | `plugin_manager_window` 入口；runtime 目录裸拷贝 | ✅ |
 | `scripts/check-ipc-channels.js` | 无裸字符串通道 | ✅ 未改（静态常量已识别） |
 | `src/main/svsIpc.js` | 删除 `registerPluginIpc()` 调用 | ⬜ M3 |
-| `src/renderer/projectManager.js` | 拆出 `applyProjectDocument(doc, path)`；打开前先问插件 | ✅ M4-1 |
-| `src/shared/projectFormat.js` | `validateProjectDocument(doc)`（规模/深度/原型污染） | ✅ M4-1 |
+| `src/renderer/projectManager.js` | 拆出 `applyProjectDocument(doc, path)`；打开先问插件；`_writeProjectTo` 按扩展名分派保存 | ✅ M4-1/2 |
+| `src/shared/projectFormat.js` | `validateProjectDocument(doc)`（规模/深度/原型污染/ext 各层） | ✅ M4-1/2 |
+| `src/main/plugins/PluginDataPlane.js` | `saveDocument`（权限 → 校验 → codec.write → 原子写 → 审计） | ✅ M4-2 |
+| `src/renderer/mcpAutomation.js` | `project.saveTo` 按扩展名分派，可导出插件格式 | ✅ M4-2 |
 | `src/main/dialogIpc.js` / `fileAssociation.js` | 过滤器与文件关联来自 registry | ✅ M4-1（Windows 注册表项除外） |
 | `src/inference/pipeline/index.js` | 插入 `_runModelHooks(stage, …)` | ✅ M3（postWaveform） |
 | `src/settings.js` | 动态 sidebar + schema 渲染的 section（`panel` 指向给"打开插件面板"按钮） | ✅ M2 |
@@ -484,11 +489,71 @@ second-instance 路径**：起第二个实例带文件参数，由第一个实�
 且三处"边界"都落在该落的地方：扩展名归属只在主进程判、文档校验在跨进程返回值上、
 读盘授权独立于路由。第 2 段做保存/导出时可以复用同一条 `PluginDataPlane`。
 
+### 9.4 M4 第 2 段端到端验证（2026-11-04）
+
+这一段做「回写」：`codec.write`、扩展域 `ext`、以及往返保真。
+
+#### 为什么先做 ext，再做 write
+
+回写的难点不是"把音符写出去"，而是**用户原文件里插件不认识的部分怎么办**。
+SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是三种不同目标函数下的投影：
+
+| 层 | 与外部格式的关系 | 处理 |
+|---|---|---|
+| L1 乐谱（音高/时值/歌词） | 真子集（缺音素等） | 精确保真 |
+| L2 表达（力度/气声/张力…） | 交叉 | 通道化，映射由插件声明 |
+| L3 引擎参数（VEL/DYN/BRE、宿主 DSP） | 互不相交 | 不映射，进 `ext` 原样带回 |
+
+没有 ext，write 就只能"从模型重新生成"，插件不认识的字段在第一次保存时被静默抹掉。
+所以 ext 必须先于 write 存在。
+
+#### 关键决定
+
+| 决定 | 为什么 |
+|---|---|
+| **声明与数据分离**：`document.extSchema`（声明）+ 各层 `ext`（数据） | 数据跟着层走（note 上有音素），声明跟着文档走。混在一起会让 5000 个音符各揣一份 schema |
+| **宿主只认 6 个 `kind`**（phonemes/text/number/enum/toggle/curve） | 宿主不需要理解"这个音素合不合法"，只需要知道"怎么显示、能不能改" |
+| **`editable:false` = 只读呈现** | 音素是引擎方言，宿主无从校验。让它可编辑只会制造无效值 |
+| **保存只看目标扩展名** | 不看"文档来源"：新建工程也能直接导出 .sv2，另存为 .sxsproj 之后就按 JSON 走 |
+| **warnings 必须往上传** | "3 个通道被量化" / "颤音未写入"不告诉用户，等于静默丢数据 |
+| **写盘复用 `writeFileAtomic`** | 两条保存路径共用一份原子写，避免"一边补了 fsync、另一边没有" |
+| **`ext` 不是塞原文件的地方** | 单条 512KB / 全文档 8MB，超了丢弃并告警。不认识的部分请结构化 |
+
+#### 实机走查
+
+手段同前（xvfb + CDP + 真实 second-instance 投递）。测试文件带 `meta`（中文）、
+两个带 `phonemes` 的音符、两条轨道。
+
+| 场景 | 结果 |
+|---|---|
+| 插件声明 `role: both` | `fileFilters('open')` 与 `fileFilters('save')` 都出现 `SV2 Project` |
+| 打开 `demo2.sv2` | BPM 96 / 2 轨（Lead、Harmony）/ 2 分片（0–4、4–6）/ 5 音符；`filePath` 为真实路径（不再是 null） |
+| 导出到 `rt.sv2` | `meta` 三段（含中文）、两个音符的 `phonemes`、轨道结构全部逐字保留；`warnings: []` |
+| 保存为 `.sxsproj` | `extSchema`、`document.ext`、`note.ext` 都在文件里 |
+| `.sxsproj` 重新加载 → 再导出 `.sv2` | `meta` 与 `phonemes` 仍然完整 —— **ext 与"来源插件"解耦**生效 |
+| 改 BPM 100 → Ctrl+S | 插件回写原文件，`bpm: 100`、`meta` 保留；`demo2.sv2.bak` 是旧版本 |
+| 审计 | 三次 `file-save`：`{ext:'.sv2', ok:true, bytes:1093, warnings:0, singers:2, fragments:2}` |
+| 音素微调 + 颤音 | 导出返回两条 warning（中/英随 locale），文件照常写出 |
+| 单测 | `pluginExt` 16 / `pluginSave` 15 |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `.sv2 → .sxsproj → .sv2` 之后 `meta` 与音素全丢 | ext 原先挂在 `projectImportSource` 上，而它只在"从插件打开"时设置；`loadFrom` 一份 .sxsproj 时 `fromPlugin=false`，ext 直接没接住 | 拆出独立的 `state.projectExt = { schema, root }`，与来源解耦 |
+| 2 | `ext` 里超过 10 万字符的值被静默截断（变成合法但损坏的数据） | 工程文档的 `stringLength` 上限套到了 ext 子树上 | `cloneJson` 识别 `ext` 键，该子树不截断，长度交给 ext 的字节上限判定 |
+| 3 | `codec.write` 返回的 `Uint8Array` 到主进程变成 `{__typed, data}` | 运行时统一过 `safe()`，它把 TypedArray 摊成对象 | 加入 `NO_SAFE_METHODS`（与 `pipeline.hook`、`codec.read` 同类） |
+| 4 | `saveProject` 固定写 JSON 字符串，插件格式会被写坏 | 它只认 `currentProjectFilePath` 然后 `saveFile(JSON)` | 抽出 `_writeProjectTo`，按目标扩展名分派；MCP 的 `project.saveTo` 共用同一判定 |
+
+**结论**：数据面形成闭环（声明 → 过滤器 → 路由 → 解码 → 校验 → 编辑 → 编码 → 写盘），
+且"不认识的东西"有一条明确的通道可以活着回来。剩下的是把 `ext` 的声明真正接到
+界面上（音素只读呈现）与 `export.audio`。
+
 **M3 模型与推理面**：模型调用面（§12，端点/绑定/网关/授权/MCP 工具）、`synthesis.backend`
 迁移、二进制结果、`postWaveform` hook —— 均已落地。剩 v1 adapter（`compat/v1Adapter.js`）
 与 `preEncoder` / `postMel` 两个 stage。
-**M4 数据面**：第 1 段（打开链路）已落地，见 §9.3。剩余：保存/导出（`codec.write`、
-`export.audio`）、系统级文件关联（Windows 注册表项）、`import/export` 命令。
+**M4 数据面**：两段均已落地（§9.3 打开、§9.4 保存与扩展域）。剩余：`export.audio`
+音频导出器、系统级文件关联（Windows 注册表项）、`ext` 的绘制与渲染接线。
 **M5 智能面**：`automation.method` 进 MCP、`--cli plugin`、跨插件 service、secrets ——
 落地"一句话 → 一句唱"（`llm.provider` 已并入 M3 的模型调用面）。
 **M6 硬化**：签名校验、marketplace 接口（只留接口）、三平台验证、a11y/主题。

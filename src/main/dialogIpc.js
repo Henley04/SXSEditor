@@ -4,6 +4,7 @@ const { t } = require('./locale');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeHandle } = require('./ipcSafe');
+const { writeFileAtomic } = require('./atomicWrite');
 const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 // file:authorizePath 允许渲染进程"自我授权"的最小路径集合。
@@ -349,44 +350,19 @@ function registerDialogIpc() {
     return result;
   });
 
-  // Atomic file save: write to a temp file in the same directory, then
-  // rename over the target. A crash/power loss mid-write can no longer leave
-  // a truncated .sxsproj. The previous version is kept as <file>.bak so the
-  // user always has one fallback copy.
+  // Atomic file save: 写临时文件 → 原文件改名 .bak → rename 覆盖。
+  // 崩溃/断电发生在任何一步都不会留下截断的工程。实现见 atomicWrite.js ——
+  // 插件的 codec.write 也走同一份，避免两条保存路径的行为漂移。
   safeHandle(IPC_CHANNELS.FILE_SAVE, async (event, filePath, data) => {
     if (!isPathAllowed(filePath)) {
       return { success: false, error: t('error.pathNotAllowed') };
     }
-    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-    const bakPath = `${filePath}.bak`;
     try {
-      await fs.promises.writeFile(tmpPath, data);
-      // Move the current file to .bak (ENOENT on first save is fine), then
-      // atomically replace the target with the temp file. If the final
-      // rename fails, restore the backup so nothing is lost.
-      let hadOriginal = false;
-      try {
-        await fs.promises.rename(filePath, bakPath);
-        hadOriginal = true;
-      } catch (err) {
-        if (err.code !== 'ENOENT') throw err;
-      }
-      try {
-        await fs.promises.rename(tmpPath, filePath);
-      } catch (err) {
-        if (hadOriginal) {
-          try { await fs.promises.rename(bakPath, filePath); } catch (_) {}
-        }
-        throw err;
-      }
+      await writeFileAtomic(filePath, data);
       return { success: true };
     } catch (err) {
       console.error('[Main] File save failed:', err.message);
       return { success: false, error: err.message };
-    } finally {
-      // Best-effort cleanup of a leftover temp file (rename already consumed
-      // it on success; this only fires on earlier failures).
-      fs.promises.unlink(tmpPath).catch(() => {});
     }
   });
 

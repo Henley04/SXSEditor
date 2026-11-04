@@ -1,6 +1,6 @@
 import { state, trackManager, history } from './state.js';
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
-import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject, syncProjectControls } from './projectManager.js';
+import { markDirty, markClean, loadAccompanimentFile, addSingerFromFile, serializeProject, saveProject, saveProjectAs, loadProject, syncProjectControls, buildProjectObject, BUILTIN_PROJECT_EXTENSIONS } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
@@ -701,6 +701,20 @@ async function execute(m, p = {}) {
       return shapeSnapshot(snapshot(), { includeNotes: false });
     case 'project.saveTo': {
       await authorize(p.path);
+      const ext = (String(p.path).split('.').pop() || '').toLowerCase();
+      // 与 Ctrl+S 走同一套判定：内置扩展名写 JSON，其余交给插件编码。
+      // 自动化路径尤其需要这个 —— 否则 agent 想"导出一份 .sv2"就得自己拼字节。
+      if (!BUILTIN_PROJECT_EXTENSIONS.includes(ext)) {
+        const api = window.electronAPI?.pluginHost;
+        if (!api?.saveDocument) throw mcpError('UNSUPPORTED', 'Plugin system is unavailable');
+        const { out } = await buildProjectObject(!!p.embedSingerFiles, !!p.embedAccompanimentAudio);
+        const r = await api.saveDocument(p.path, out, { target: 'export' });
+        if (!r || !r.ok) {
+          throw mcpError('INTERNAL', (r && r.message) || 'Plugin save failed', { pluginCode: r && r.code });
+        }
+        emit('project.saved', { path: p.path, pluginId: r.pluginId, bytes: r.bytes });
+        return { path: p.path, pluginId: r.pluginId, bytes: r.bytes, warnings: r.warnings || [] };
+      }
       const r = await window.electronAPI.saveFile(p.path, await serializeProject(!!p.embedSingerFiles, !!p.embedAccompanimentAudio));
       if (!r?.success) throw mcpError('INTERNAL', r?.error || 'Save failed');
       state.currentProjectFilePath = p.path;

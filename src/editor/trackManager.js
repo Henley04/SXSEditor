@@ -117,6 +117,9 @@ function createSinger(data = {}) {
     numberOfChannels: data.numberOfChannels ?? 1,
     // 'sxs' = 内置 SoulX-Singer 推理（缺省）；'plugin' = 第三方/自定义歌声后端
     backend: normalizeBackend(data.backend),
+    // 插件扩展域（轨道级）。白名单重建时必须显式列出，否则 round-trip 一过
+    // 就丢 —— 而这个字段的价值恰恰只在"打开再保存"这一趟里体现。
+    ext: data.ext ?? undefined,
   };
 }
 
@@ -155,6 +158,9 @@ function createFragment(data = {}) {
     // （postprocess 丢失后编辑器回退全默认，首次自动保存还会把默认值写回）。
     kanjiGroups: data.kanjiGroups ?? [],
     postprocess: data.postprocess ?? null,
+    // 插件扩展域（分片级）。同 ext 在 singer 上的理由：白名单重建是 F2 那类
+    // "存一次就永久丢失"的老坑，新字段必须显式登记。
+    ext: data.ext ?? undefined,
   };
 }
 

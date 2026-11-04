@@ -463,7 +463,17 @@ async function validatePluginBackends() {
   }
 }
 
-export async function serializeProject(embedSingerFiles = false, embedAccompanimentAudio = false) {
+/**
+ * 组装「当前工程」的可序列化对象。
+ *
+ * 从 serializeProject 拆出来是为了给插件保存用：`.sxsproj` 要的是 JSON 字符串，
+ * 而 codec.write 要的是**对象**（它自己决定编码成文本还是二进制）。两者必须
+ * 出自同一份组装逻辑，否则"存 sxsproj"与"导出 sv2"会带上不同的字段集 ——
+ * 那种差异极难发现，直到某天用户发现导出后少了东西。
+ *
+ * @returns {Promise<{out: object, hasEmbeddedPayload: boolean}>}
+ */
+export async function buildProjectObject(embedSingerFiles = false, embedAccompanimentAudio = false) {
   const singers = await Promise.all(trackManager.getSingers().map(async (singer) => {
     const singerObj = { ...singer };
     if (singer.type === 'accompaniment') {
@@ -557,7 +567,7 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
   // 嵌入模式包含大段 base64（无换行的长字符串），缩进只会白白增大体积、
   // 拖慢 stringify，此时改为紧凑输出；普通工程保留 2 空格缩进便于 diff/手查。
   const hasEmbeddedPayload = embedSingerFiles || embedAccompanimentAudio;
-  return JSON.stringify({
+  const out = {
     version: PROJECT_FORMAT_VERSION,
     // minReader：低于此版本读写会丢字段（auto 层于 1.2.0 引入）。
     // features：能力清单，旧版读到未知项应提示而不是静默忽略。
@@ -569,7 +579,23 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
     },
     singers,
     fragments: trackManager.getFragments(),
-  }, null, hasEmbeddedPayload ? undefined : 2);
+  };
+  // 插件扩展域的声明与文档级数据必须一起存回，否则"导入 → 编辑 → 存成 .sxsproj
+  // → 再导出回原格式"这一趟会丢数据，而这一趟正是 ext 唯一的存在理由。
+  const ext = state.projectExt || {};
+  if (ext.schema && Object.keys(ext.schema).length) {
+    out.extSchema = ext.schema;
+  }
+  if (ext.root && Object.keys(ext.root).length) {
+    out.ext = ext.root;
+  }
+  return { out, hasEmbeddedPayload };
+}
+
+/** 内置格式的落盘形态：JSON 字符串（缩进规则见 buildProjectObject 的说明）。 */
+export async function serializeProject(embedSingerFiles = false, embedAccompanimentAudio = false) {
+  const { out, hasEmbeddedPayload } = await buildProjectObject(embedSingerFiles, embedAccompanimentAudio);
+  return JSON.stringify(out, null, hasEmbeddedPayload ? undefined : 2);
 }
 
 /**
@@ -852,6 +878,52 @@ function _checkSaveResult(res) {
   }
 }
 
+/** 保存/导出后，把插件报的"没写进去的东西"显示出来。 */
+function _notifySaveWarnings(warnings) {
+  if (!Array.isArray(warnings) || !warnings.length) return;
+  const head = t('main.projectSaveWarnings', { count: warnings.length });
+  showAlertDialog(`${head}\n\n${warnings.slice(0, 8).join('\n')}${warnings.length > 8 ? '\n…' : ''}`);
+}
+
+/**
+ * 把当前工程写到指定路径。
+ *
+ * 判定只看**目标扩展名**：内置的 .sxsproj/.sxs 走 JSON，其余一律问插件。
+ * 用扩展名而不是"当前文档来源"是刻意的 —— 用户可以把一个 .sv2 工程另存为
+ * 另一个 .sv2、也可以把新建工程直接导出成 .sv2；这两种情况都该归插件管，
+ * 而"来源"只描述它最初从哪来。
+ *
+ * 两条路径都进 `_enqueueProjectWrite`：自动保存与手动保存可能几乎同时触发，
+ * 串行化与"用哪条路径"是两件独立的事，不能只有一条路径排队。
+ */
+async function _writeProjectTo(filePath, opts = {}) {
+  const ext = (String(filePath || '').split('.').pop() || '').toLowerCase();
+  const viaPlugin = !BUILTIN_PROJECT_EXTENSIONS.includes(ext);
+
+  if (!viaPlugin) {
+    const data = await serializeProject(opts.embedSingerFiles, opts.embedAccompanimentAudio);
+    await _enqueueProjectWrite(async () => {
+      const res = await window.electronAPI.saveFile(filePath, data);
+      _checkSaveResult(res);
+    });
+    return { ok: true };
+  }
+
+  const api = window.electronAPI?.pluginHost;
+  if (!api?.saveDocument) throw new Error(t('main.projectPluginUnavailable'));
+  return _enqueueProjectWrite(async () => {
+    const { out } = await buildProjectObject(opts.embedSingerFiles, opts.embedAccompanimentAudio);
+    const res = await api.saveDocument(filePath, out, { target: 'save' });
+    if (!res || !res.ok) {
+      const err = new Error((res && res.message) || t('main.projectPluginSaveFailed'));
+      err.code = res && res.code;
+      throw err;
+    }
+    _notifySaveWarnings(res.warnings);
+    return res;
+  });
+}
+
 export async function saveProject() {
   // 手动保存优先：取消尚未触发的自动保存，避免保存完成后再全量写一次。
   cancelPendingAutoSave();
@@ -860,11 +932,7 @@ export async function saveProject() {
   if (state.currentProjectFilePath) {
     try {
       const epoch = _saveEpoch;
-      const data = await serializeProject(false);
-      await _enqueueProjectWrite(async () => {
-        const res = await window.electronAPI.saveFile(state.currentProjectFilePath, data);
-        _checkSaveResult(res);
-      });
+      await _writeProjectTo(state.currentProjectFilePath, {});
       // 写盘期间若有新编辑，不能清掉 dirty。
       if (epoch === _saveEpoch) markClean();
       console.log('Project saved to', state.currentProjectFilePath);
@@ -888,15 +956,20 @@ export async function saveProjectAs() {
 
       const result = await window.electronAPI.showSaveDialog({
         filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj'] }],
+        // 让"另存为"也能选插件格式：主进程把 registry 里 role=save/both 的
+        // 扩展名并进来。渲染层不维护这份知识 —— 插件装/卸后两边不会对不上。
+        includePluginFormats: true,
         defaultPath: state.currentProjectFilePath || undefined,
       });
       if (!result.canceled && result.filePath) {
         const epoch = _saveEpoch;
-        const data = await serializeProject(saveOptions.embedSingerFiles, saveOptions.embedAccompanimentAudio);
-        await _enqueueProjectWrite(async () => {
-          const res = await window.electronAPI.saveFile(result.filePath, data);
-          _checkSaveResult(res);
+        await _writeProjectTo(result.filePath, {
+          embedSingerFiles: saveOptions.embedSingerFiles,
+          embedAccompanimentAudio: saveOptions.embedAccompanimentAudio,
         });
+        // projectImportSource 不清：它带着 extSchema 与文档级 ext，是**数据**而不是
+        // "当前格式"的标记。存成 .sxsproj 之后这些数据仍要跟着走，否则
+        // `sv2 → sxsproj → sv2` 这一趟会丢插件私有字段。
         state.currentProjectFilePath = result.filePath;
         // 写盘期间若有新编辑，不能清掉 dirty。
         if (epoch === _saveEpoch) markClean();
@@ -919,7 +992,7 @@ export async function saveProjectAs() {
  * FILE_NOT_HANDLED，继续走宿主的 JSON 管线。这条"先问插件"的顺序很重要 ——
  * 反过来做的话，任何插件格式都会被 JSON.parse 先炸一次。
  */
-const BUILTIN_PROJECT_EXTENSIONS = ['sxsproj', 'sxs'];
+export const BUILTIN_PROJECT_EXTENSIONS = ['sxsproj', 'sxs'];
 
 export async function loadProject(filePath = null) {
   // 立刻取消在途的自动保存。否则：
@@ -1039,7 +1112,7 @@ async function openProjectViaPlugin(targetPath) {
   if (Array.isArray(res.warnings) && res.warnings.length) {
     console.warn('[project] 插件解码警告:\n' + res.warnings.join('\n'));
   }
-  await applyProjectDocument(res.document, targetPath, { pluginId: res.pluginId });
+  await applyProjectDocument(res.document, targetPath, { pluginId: res.pluginId, ext: res.ext });
   return { loaded: true, pluginId: res.pluginId, warnings: res.warnings || [] };
 }
 
@@ -1139,9 +1212,19 @@ export async function applyProjectDocument(obj, targetPath, options = {}) {
     // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
     for (const f of obj.fragments) trackManager.addFragment(f);
   }
-  // 导入来的内容没有"可回写的原生路径"：保存必须另存为（见 openProjectViaPlugin）。
-  state.currentProjectFilePath = fromPlugin ? null : targetPath;
-  state.projectImportSource = fromPlugin ? { pluginId: options.pluginId, path: targetPath } : null;
+  // 插件格式也认作"原生路径"。M4 第 1 段只实现了 read，那时把它置空是对的：
+  // 回写会把 sxsproj 的 JSON 塞进 .sv2。现在 codec.write 落地了，覆盖原文件
+  // 才是用户按 Ctrl+S 时期望的行为（写盘有 .bak 兜底）。
+  state.currentProjectFilePath = targetPath;
+  state.projectImportSource = fromPlugin
+    ? { pluginId: options.pluginId, path: targetPath }
+    : null;
+  // 扩展域与来源解耦：从 .sxsproj 读出来的工程也带着这些数据，它没有来源插件，
+  // 但下次导出成 .sv2 时仍然要用。
+  state.projectExt = {
+    schema: obj.extSchema || null,
+    root: obj.ext || null,
+  };
   history.clear();
   state.selectedFragmentId = null;
   markClean();

@@ -3,14 +3,14 @@
   "id": "example-sv2",
   "name": "Example: SV2 Project",
   "version": "1.0.0",
-  "description": "数据面示例：声明接管 .sv2 文件，用 codecs['.sv2'].read 把它翻译成 SXSEditor 工程文档。文件对话框里会出现这个格式，打开后工程直接进入编辑器。复制这个目录改名即可开工。",
+  "description": "数据面示例：声明接管 .sv2 文件，用 codecs['.sv2'] 的 read/write 做双向转换。文件对话框里会出现这个格式，打开后工程直接进入编辑器；另存为 .sv2 时由它编码回字节。",
   "author": "SXSEditor Dev",
   "main": "main.js",
   "engines": {
     "app": ">=2.0.0"
   },
   "permissions": {
-    "fs": ["pluginData", "userPicked:read"],
+    "fs": ["pluginData", "userPicked:read", "userPicked:write"],
     "project": ["read"],
     "ui": ["menu", "statusBar"]
   },
@@ -18,7 +18,7 @@
     "fileTypes": [
       {
         "ext": ".sv2",
-        "role": "open",
+        "role": "both",
         "label": {
           "en": "SV2 Project",
           "zh-CN": "SV2 工程"
