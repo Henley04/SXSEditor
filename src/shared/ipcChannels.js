@@ -178,6 +178,8 @@ const IPC_CHANNELS = {
   PLUGINHOST_SETTINGS_GET: 'plugin-host:settings-get',
   PLUGINHOST_SETTINGS_SET: 'plugin-host:settings-set',
   PLUGINHOST_SET_KEYBINDINGS: 'plugin-host:set-keybindings',
+  // 用户级自动化开关：把某插件的命令从 MCP/CLI 面上摘掉（不影响它自己的菜单命令）
+  PLUGINHOST_SET_AUTOMATION: 'plugin-host:set-automation',
   PLUGINHOST_OVERLAY_URL: 'plugin-host:overlay-url',
   // 设置页/管理器 → 主窗口：把某个面板挂到主窗口的右侧抽屉（设置分区用它对
   // 自定义界面；管理器用它做"打开面板"）。面板的 apiScopes 校验仍在主进程做。

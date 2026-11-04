@@ -447,6 +447,13 @@ body {
   flex-wrap: wrap;
 }
 
+.pm-kb-head .pm-row-label {
+  /* 标签列在普通行里是固定 92px（为了两列对齐），搬到这块里会把
+     “External automation”折成两行 */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .pm-kb-toggle {
   display: inline-flex;
   align-items: center;
@@ -482,6 +489,39 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
+
+/* 自动化方法行：与快捷键行分开，因为它需要"是代码"的视觉语气（等宽 + 底框），
+   而快捷键行的主角是 <kbd>。 */
+.pm-auto-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 10px;
+}
+
+.pm-auto-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+}
+
+.pm-auto-method {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-auto-status { flex: 0 0 auto; font-size: 11px; }
+.pm-auto-status.is-on { color: var(--success, var(--accent)); }
+.pm-auto-status.is-off { color: var(--fg-muted); }
 
 .pm-kb-status {
   flex: 0 0 auto;

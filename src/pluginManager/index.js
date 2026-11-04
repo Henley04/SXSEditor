@@ -203,6 +203,59 @@ function renderKeybindings(plugin) {
   return box;
 }
 
+/**
+ * 自动化块：开关 + 说明 + 这个插件实际暴露的方法名。
+ *
+ * 列出方法名而不是只给一个开关，是因为用户要判断的正是"哪个能力被外面看见了"。
+ * 只写"允许外部自动化调用"的话，用户面对的是一个抽象承诺，只能凭信任点下去。
+ */
+function renderAutomation(plugin) {
+  const box = el('div', 'pm-kb');
+  const head = el('div', 'pm-kb-head');
+  head.appendChild(el('span', 'pm-row-label', t('plugins.automationLabel')));
+
+  const enabled = plugin.state ? plugin.state.automationExpose !== false : true;
+  const toggleLabel = el('label', 'pm-kb-toggle');
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = enabled;
+  checkbox.addEventListener('change', async () => {
+    checkbox.disabled = true;
+    const result = await safeCall(() => api.setAutomation(plugin.id, checkbox.checked));
+    checkbox.disabled = false;
+    if (result && result.ok === false) {
+      toast(t('plugins.automationToggleFailed', { error: (result && result.error) || '' }), true);
+      checkbox.checked = !checkbox.checked;
+    }
+    await refresh();
+  });
+  toggleLabel.appendChild(checkbox);
+  toggleLabel.appendChild(document.createTextNode(t('plugins.automationToggle')));
+  head.appendChild(toggleLabel);
+  box.appendChild(head);
+
+  const methods = plugin.automationMethods || [];
+  if (methods.length) {
+    const list = el('div', 'pm-auto-list');
+    for (const localId of methods) {
+      const row = el('div', 'pm-auto-row');
+      row.appendChild(el('code', 'pm-auto-method', `${plugin.id}.${localId}`));
+      row.appendChild(el(
+        'span',
+        `pm-auto-status ${enabled ? 'is-on' : 'is-off'}`,
+        enabled ? t('plugins.automationStatusOn') : t('plugins.automationStatusOff'),
+      ));
+      list.appendChild(row);
+    }
+    box.appendChild(list);
+  } else {
+    box.appendChild(el('p', 'pm-note', t('plugins.automationNoneDeclared')));
+  }
+
+  box.appendChild(el('p', 'pm-note', t('plugins.automationNote')));
+  return box;
+}
+
 function renderCard(plugin) {
   const card = el('li', 'pm-card');
   card.dataset.pluginId = plugin.id;
@@ -338,7 +391,7 @@ function renderCard(plugin) {
 
   // 有命令的插件才提示自动化外露：没有命令的插件没什么可被外部调用
   if (plugin.commands?.length) {
-    body.appendChild(el('p', 'pm-note', t('plugins.automationNote')));
+    body.appendChild(renderAutomation(plugin));
   }
 
   card.appendChild(body);

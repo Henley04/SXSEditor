@@ -70,6 +70,11 @@ function registerPluginHostIpc(service, options = {}) {
   ));
   track(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS);
 
+  safeHandle(IPC_CHANNELS.PLUGINHOST_SET_AUTOMATION, async (_event, pluginId, enabled) => (
+    service.setAutomationExpose(pluginId, !!enabled)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_SET_AUTOMATION);
+
   safeHandle(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, async (_event, pluginId, overlayId) => (
     service.overlayUrl(pluginId, overlayId)
   ));

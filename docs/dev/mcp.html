@@ -216,8 +216,8 @@ curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
         <span data-lang="en">Method Reference</span>
         <span data-lang="zh">方法参考</span>
       </h2>
-<p data-lang="en">All 46 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
-      <p data-lang="zh">全部 46 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
+<p data-lang="en">All 49 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
+      <p data-lang="zh">全部 49 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
       <h3>
         <span data-lang="en">Schema &amp; Capabilities</span>
         <span data-lang="zh">架构与能力</span>
@@ -232,6 +232,105 @@ curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
       <pre><code>{
   "method": "schema.get",
   "params": {}
+}</code></pre>
+
+      <h4><code>model.list</code></h4>
+      <p data-lang="en">List model endpoints this token may use.</p>
+      <p data-lang="zh">List model endpoints this token may use.</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>task</code></td>
+            <td><span data-lang="en">string · optional · Filter by task (chat / midi / accompaniment / singing / tts / asr / embed / completion)</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "model.list",
+  "params": {
+    "task": "${task}"
+  }
+}</code></pre>
+
+      <h4><code>model.invoke</code></h4>
+      <p data-lang="en">Invoke a model endpoint and return the aggregated result.</p>
+      <p data-lang="zh">Invoke a model endpoint and return the aggregated result.</p>
+      <p><em><span data-lang="en">target: <code>main</code> · long-running (job-able)</span><span data-lang="zh">目标：<code>main</code> · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>task</code></td>
+            <td><span data-lang="en">`chat` | `completion` | `embed` | `midi` | `accompaniment` | `singing` | `tts` | `asr` · required · What kind of generation</span><span data-lang="zh">`chat` | `completion` | `embed` | `midi` | `accompaniment` | `singing` | `tts` | `asr` · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>input</code></td>
+            <td><span data-lang="en">any · required · string | object | array, shaped by the task</span><span data-lang="zh">any · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>endpointId</code></td>
+            <td><span data-lang="en">string · optional · Explicit endpoint id; omit to use the task default</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>model</code></td>
+            <td><span data-lang="en">string · optional · Model name override for this call</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>clientRequestId</code></td>
+            <td><span data-lang="en">string · optional · Idempotency key; the same id within 5 minutes returns the same result</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "model.invoke",
+  "params": {
+    "task": "chat",
+    "endpointId": "${endpointId}",
+    "model": "${model}",
+    "clientRequestId": "${clientRequestId}"
+  }
+}</code></pre>
+
+      <h4><code>model.read</code></h4>
+      <p data-lang="en">Read a binary model result (audio / MIDI) by handle.</p>
+      <p data-lang="zh">Read a binary model result (audio / MIDI) by handle.</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>handle</code></td>
+            <td><span data-lang="en">object · required · Handle object returned by model.invoke</span><span data-lang="zh">object · 必填</span></td>
+          </tr>
+          <tr>
+            <td><code>saveAs</code></td>
+            <td><span data-lang="en">string · optional · Absolute path to write the bytes to; base64 is omitted when given</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "model.read",
+  "params": {
+    "handle": {},
+    "saveAs": "${saveAs}"
+  }
 }</code></pre>
 
       <h3>

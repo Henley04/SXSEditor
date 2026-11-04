@@ -24,6 +24,9 @@ class PluginRegistry {
       'command', 'menu', 'panel', 'fileType', 'exporter', 'setting', 'hook',
       // M2：界面贡献点。与命令分开存，卸载时按 pluginId 一律清掉，
       // 不依赖插件自己报"我往工具栏塞了什么"。
+      // M5：暴露给 MCP / CLI 的命令。与 command 表分开存：命令存在 ≠ 允许
+      // 无界面调用，两张表分开，卸载/停用时也能一起扫干净。
+      'automation',
       'toolbar', 'statusBar', 'contextMenu', 'overlay', 'keybinding',
     ]) {
       this._contrib.set(type, new Map());
@@ -185,6 +188,7 @@ class PluginRegistry {
       setting: byPlugin('setting'),
       fileType: byPlugin('fileType'),
       exporter: byPlugin('exporter'),
+      automation: byPlugin('automation'),
       toolbar: byPlugin('toolbar'),
       statusBar: byPlugin('statusBar'),
       contextMenu: byPlugin('contextMenu'),
@@ -216,6 +220,11 @@ class PluginRegistry {
         fileTypes: rows('fileType', record.id),
         exporters: rows('exporter', record.id).map((e) => ({
           id: e.id, ext: e.ext, label: e.label, mime: e.mime, description: e.description,
+        })),
+        // 管理器要能回答"这个插件给自动化开了什么"，用户在装之前也该看得到。
+        // 只给方法名与标题，不给参数形状 —— 管理器不渲染参数表单。
+        automation: rows('automation', record.id).map((a) => ({
+          id: a.id, method: a.method, title: a.title,
         })),
         toolbar: rows('toolbar', record.id).map((t) => ({
           id: t.id, localId: t.localId, command: t.command, title: t.title,
@@ -267,6 +276,9 @@ class PluginRegistry {
         commands: r.manifest.contributes.commands.map((c) => c.localId),
         panels: r.manifest.contributes.panels.map((p) => p.localId),
         fileTypes: r.manifest.contributes.fileTypes,
+        // 插件把哪些命令交给了自动化面。管理器直接列出来：这是"别人能替你
+        // 操作工程"的入口，用户有权在装完后就看见，而不是等 agent 调通了才知道。
+        automationMethods: r.manifest.contributes.automation.methods,
         // M2：界面贡献点的条目数与管理器要展示的快捷键状态。
         // 只给数量而不是内容 —— 管理器不渲染工具栏按钮，给内容只会多一份要维护的形状。
         uiContributions: {

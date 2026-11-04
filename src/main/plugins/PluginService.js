@@ -31,6 +31,7 @@ const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
 const { panelUrl } = require('./PluginProtocol.js');
 const { PipelineHooks } = require('./PipelineHooks.js');
 const { PluginDataPlane } = require('./PluginDataPlane.js');
+const { buildAutomationDef } = require('../../shared/pluginAutomation.js');
 
 class PluginService {
   constructor() {
@@ -338,6 +339,20 @@ class PluginService {
       this.registry.register('hook', `${record.id}:${hook.stage}:${hook.order}`, { ...hook, pluginId: record.id });
     }
 
+    // ---- M5：自动化方法 ----
+    // 键就是完整命令 id，它同时也是 MCP 方法名（见 pluginAutomation.js 里的
+    // 命名规则）。expose=false 的插件一个也不登记 —— 注册表里没有，桥接层就
+    // 查不到，方法在自动化面上等于不存在。
+    const automation = c.automation || { methods: [], expose: true };
+    if (automation.expose !== false) {
+      for (const localId of automation.methods) {
+        const id = `${record.id}.${localId}`;
+        this.registry.register('automation', id, {
+          id, method: id, localId, pluginId: record.id,
+        });
+      }
+    }
+
     // ---- M2 界面贡献点 ----
     // 每类单独一张表，键都用全局 id；卸载时 removeContributions 按 pluginId 一扫而空，
     // 插件即使不配合也留不下东西。
@@ -515,6 +530,32 @@ class PluginService {
   }
 
   /**
+   * 用户级自动化开关（管理器的勾选框）。
+   *
+   * 与 manifest 的 `permissions.automation` 是两道不同的门：
+   *   · 权限门是**作者**在安装前声明"我要被外部调用"；
+   *   · 这个开关是**用户**事后说"我不要它被外部调用"。
+   * 只有前者的话，用户要么接受、要么卸载插件；只有后者的话，作者可以从用户
+   * 没看过的权限清单里偷偷暴露命令。两者都必要。
+   *
+   * 关掉只影响自动化面（MCP/CLI），不影响插件自己的菜单/按钮 —— 用户要的是
+   * "别让外面的脚本动我的工程"，不是"别让我自己用这个插件"。
+   */
+  setAutomationExpose(pluginId, enabled) {
+    const record = this.registry.getPlugin(pluginId);
+    if (!record) return { ok: false, error: `未安装：${pluginId}` };
+    const registry = store.readRegistry();
+    store.setPluginState(registry, pluginId, { automationExpose: !!enabled });
+    store.writeRegistry(registry);
+    this.registry.updatePlugin(pluginId, { state: { ...(record.state || {}), automationExpose: !!enabled } });
+    store.audit('automation', pluginId, { expose: !!enabled });
+    // 注册表条目没变（方法仍在表里），变的是"这一份投影里它算不算数"，
+    // 所以主动推一次，管理器与其它窗口的计数才不会停在旧值。
+    ipcFacade.broadcastSnapshot(this);
+    return { ok: true, expose: !!enabled };
+  }
+
+  /**
    * 时间轴浮层的 iframe 地址。与面板同一条 mint 逻辑：entry 只在主进程可见，
    * 渲染层拿到的永远是成型 URL；每次挂载换 nonce，旧 URL 不会长期有效。
    */
@@ -654,6 +695,88 @@ class PluginService {
     } catch (err) {
       return { ok: false, error: { code: err.code || ERR.INTERNAL, message: err.message } };
     }
+  }
+
+  /**
+   * 自动化方法表 —— `GET /schema`、capabilities 里"插件贡献"的那一半。
+   *
+   * 从**注册表**读而不是从 manifest 读：停用、重载、卸载之后注册表是最先被
+   * 清理的，按 manifest 投影会让已经调不通的方法继续出现在 agent 的工具列表里。
+   * 那种"工具在、调用就 500"的状态比根本不出现更糟 —— agent 会一直重试。
+   *
+   * `headless: false` 的命令不导出：作者用这个字段明确说了"这条命令需要有人
+   * 看着界面才有意义"（例如弹一个向导），自动化调用它只会卡在没人点的对话框上。
+   */
+  listAutomationMethods() {
+    const defs = {};
+    for (const entry of this.registry.list('automation')) {
+      const record = this.registry.getPlugin(entry.pluginId);
+      if (!record || (record.status !== 'loaded' && record.status !== 'degraded')) continue;
+      // 用户在管理器里关掉的插件，方法直接从表里消失 —— 不是"调用时报错"，
+      // 而是根本不出现。agent 看到的能力表就应该是真实可用的那一份。
+      if (record.state && record.state.automationExpose === false) continue;
+      const cmd = this.registry.findCommand(entry.id);
+      if (!cmd || cmd.headless === false) continue;
+      const built = buildAutomationDef({
+        pluginId: entry.pluginId,
+        localId: entry.localId,
+        title: cmd.title,
+        description: cmd.description,
+        pluginName: record.manifest.name,
+        pluginVersion: record.manifest.version,
+      });
+      defs[built.name] = built.def;
+    }
+    return defs;
+  }
+
+  /**
+   * 跑一个插件自动化方法。
+   *
+   * 返回 `{ok, result}` / `{ok:false, error}` —— 与 `runCommand` 同形，桥接层
+   * 负责把它翻成 MCP 错误。这里不抛异常：MCP 的传输层不该看到插件的堆栈，
+   * 那既没意义（调用方读不懂）也会把内部路径泄出去。
+   *
+   * 每次调用都写审计：自动化面是"别人替用户点按钮"，出了事必须能回答
+   * "谁在什么时候调了哪个插件的哪个方法"。
+   */
+  async runAutomationMethod(name, params) {
+    const entry = this.registry.get('automation', name);
+    if (!entry) {
+      return { ok: false, error: { code: ERR.NOT_FOUND, message: `未暴露的自动化方法：${name}` } };
+    }
+    const record = this.registry.getPlugin(entry.pluginId);
+    if (!record || (record.status !== 'loaded' && record.status !== 'degraded')) {
+      return {
+        ok: false,
+        error: { code: ERR.PERMISSION_DENIED, message: `插件 ${entry.pluginId} 当前不可用（${record ? record.status : 'missing'}）` },
+      };
+    }
+    const cmd = this.registry.findCommand(name);
+    if (!cmd) {
+      return { ok: false, error: { code: ERR.NOT_FOUND, message: `方法对应的命令已不存在：${name}` } };
+    }
+    if (record.state && record.state.automationExpose === false) {
+      return {
+        ok: false,
+        error: { code: ERR.PERMISSION_DENIED, message: `用户已在插件管理器里关闭 ${entry.pluginId} 的自动化调用` },
+      };
+    }
+    if (cmd.headless === false) {
+      return {
+        ok: false,
+        error: { code: ERR.PERMISSION_DENIED, message: `命令 ${cmd.localId} 声明了 headless:false，不能经自动化调用` },
+      };
+    }
+    const started = Date.now();
+    const r = await this.runCommand(name, params || {});
+    store.audit('automation-invoke', entry.pluginId, {
+      method: name,
+      ok: r.ok,
+      code: r.ok ? null : (r.error && r.error.code) || null,
+      ms: Date.now() - started,
+    });
+    return r;
   }
 
   /**

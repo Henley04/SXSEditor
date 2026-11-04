@@ -708,17 +708,45 @@ function validatePipeline(raw) {
   return { ok: true, value: out };
 }
 
-function validateAutomation(raw) {
+/**
+ * `contributes.automation` —— 把哪些命令暴露给 MCP / CLI。
+ *
+ * 三条硬规则，都在加载期判，不留到运行期：
+ *   1. 每个方法必须是**本插件已声明的命令**。允许悬空引用的话，安装能过、
+ *      调用时才 NOT_FOUND，而用户根本不知道"这个插件自称有这个方法"；
+ *   2. `methods` 非空就必须有 `permissions.automation: ['expose']`。
+ *      权限清单是安装弹窗上给用户看的那张表，不能与实际暴露面脱节；
+ *   3. 拼出来的方法名不能与内置自动化方法同名。内置优先，撞名等于这个插件
+ *      的方法永远调不到 —— 必须在安装时报错，而不是让作者对着"我声明了但
+ *      调不通"排查半天。
+ *
+ * `expose: false` 是插件作者的总开关（比如某版本想临时关掉自动化面）。
+ * 与 `methods` 非空同时出现是自相矛盾的清单，直接拒绝：静默按 false 处理
+ * 会让作者以为"声明了但没生效"，而两条路都符合语义时，选哪种都是猜。
+ */
+function validateAutomation(raw, pluginId, commandIds) {
   if (raw === undefined) return { ok: true, value: { methods: [], expose: true } };
   if (!raw || typeof raw !== 'object') return fail('automation 必须是对象');
   const methods = Array.isArray(raw.methods) ? raw.methods : [];
+  const expose = raw.expose !== false;
   for (const m of methods) {
     if (!COMMAND_ID_RE.test(m)) return fail(`automation.methods 含非法 id：${JSON.stringify(m)}`);
+    const fullId = pluginId ? `${pluginId}.${m}` : m;
+    if (commandIds && !commandIds.has(fullId)) {
+      return fail(`automation.methods 引用了未声明的命令 '${m}'`);
+    }
+    if (pluginId) {
+      const { conflictsWithBuiltin } = require('./pluginAutomation.js');
+      if (conflictsWithBuiltin(fullId)) {
+        return fail(`automation 方法 '${fullId}' 与内置自动化方法同名，请改命令 id`);
+      }
+    }
   }
-  return {
-    ok: true,
-    value: { methods: [...new Set(methods)], expose: raw.expose !== false },
-  };
+  const unique = [...new Set(methods)];
+  if (!expose && unique.length) {
+    return fail('automation.expose=false 与 automation.methods 非空自相矛盾');
+  }
+  return { ok: true, value: { methods: unique, expose } };
 }
 
 function validateServices(raw) {
@@ -901,7 +929,7 @@ function validateManifest(manifest, ctx = {}) {
   const pipeline = validatePipeline(contributes.pipeline);
   if (!pipeline.ok) return pipeline;
 
-  const automation = validateAutomation(contributes.automation);
+  const automation = validateAutomation(contributes.automation, id, commandIds);
   if (!automation.ok) return automation;
 
   const services = validateServices(contributes.services);
@@ -939,6 +967,12 @@ function validateManifest(manifest, ctx = {}) {
     if (count > 0 && !uiPerms.includes(permission)) {
       return fail(`声明了 contributes.${contribution}，但 permissions.ui 里没有 '${permission}'`);
     }
+  }
+
+  // 自动化面同理：把命令暴露给 MCP/CLI 是"别人能替用户点按钮"级别的权限，
+  // 必须在安装前明说。`methods` 为空不算声明（expose 默认 true 是给未来留的位）。
+  if (automation.value.methods.length && !(perms.value.automation || []).includes('expose')) {
+    return fail("声明了 contributes.automation.methods，但 permissions.automation 里没有 'expose'");
   }
 
   // 尚未落地的贡献点：接受但不生效，管理器里会标注"未实现"

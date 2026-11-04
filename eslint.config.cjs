@@ -88,6 +88,7 @@ module.exports = [
             // 插件系统 v2 的共享层：CJS（插件 runtime 是裸拷贝，按路径 require，
             // 因此这几个文件不能写成 ESM），主进程与 runtime 共用。
             'src/shared/pluginApi.js',
+            'src/shared/pluginAutomation.js',
             'src/shared/pluginDisposable.js',
             'src/shared/pluginProtocol.js',
             'src/shared/pluginManifest.js',

@@ -61,6 +61,24 @@ Add `"async": true` to `POST /automation` for long methods (export, synthesis, M
 The call returns `202 {jobId, poll}`; poll `GET /jobs/<id>` for `status`
 (`queued` → `running` → `completed` / `failed` / `cancelled`) plus `result` or `error`.
 
+## Plugin-provided methods
+
+Methods from installed plugins are **not** in this file: which plugins are installed is a
+runtime fact. They show up in `GET /schema` (with `target: "plugin"` and
+`source: "plugin:<id>"`) and in `capabilities.methods` while the plugin is enabled and the
+user has left its "Allow external calls" switch on. The method name is always
+`<pluginId>.<commandId>`, so two plugins cannot shadow each other; a plugin can never
+take over a built-in name (rejected when the manifest is validated).
+
+Parameters and results are defined by the plugin: the host validates only that
+`params` is an object. Plugin error codes are translated at the bridge
+(`PERMISSION_DENIED` → `FORBIDDEN`, `TIMEOUT` → `TIMEOUT`, anything unknown → `INTERNAL`),
+and the original code stays in `error.details.pluginCode`.
+
+Because the list can change while a client is connected, re-read `/schema` (or
+`capabilities`) after a plugin is installed, disabled or removed instead of caching it
+for the lifetime of the session.
+
 ## Methods
 
 ### `schema.get`
@@ -934,6 +952,78 @@ Legacy aliases: `patch` → `settings` (accepted with a deprecation warning).
   "method": "settings.update",
   "params": {
     "settings": {}
+  }
+}
+```
+
+### `model.list`
+
+List model endpoints this token may use.
+
+Endpoints the token is scoped to (models: * / provider:x / endpoint:id). Base URLs and credentials are never included.
+
+_target: `main`_
+
+| Parameter | Type / notes |
+|---|---|
+| `task` | string · optional · Filter by task (chat / midi / accompaniment / singing / tts / asr / embed / completion) |
+
+```json
+{
+  "method": "model.list",
+  "params": {
+    "task": "${task}"
+  }
+}
+```
+
+### `model.invoke`
+
+Invoke a model endpoint and return the aggregated result.
+
+Server-side stream is collapsed into one result. Long generations (midi / accompaniment) should be submitted with async:true and polled via /jobs.
+
+_target: `main` · long-running (job-able)_
+
+| Parameter | Type / notes |
+|---|---|
+| `task` | `chat` | `completion` | `embed` | `midi` | `accompaniment` | `singing` | `tts` | `asr` · required · What kind of generation |
+| `input` | any · required · string | object | array, shaped by the task |
+| `endpointId` | string · optional · Explicit endpoint id; omit to use the task default |
+| `model` | string · optional · Model name override for this call |
+| `clientRequestId` | string · optional · Idempotency key; the same id within 5 minutes returns the same result |
+
+```json
+{
+  "method": "model.invoke",
+  "params": {
+    "task": "chat",
+    "endpointId": "${endpointId}",
+    "model": "${model}",
+    "clientRequestId": "${clientRequestId}"
+  }
+}
+```
+
+### `model.read`
+
+Read a binary model result (audio / MIDI) by handle.
+
+Handles come from model.invoke when the result is larger than 256KB. Ownership is enforced: a token can only read handles its own calls produced; other tokens get FORBIDDEN and expired ones get HANDLE_EXPIRED. Pass saveAs to write the bytes to disk instead of returning base64.
+
+_target: `main`_
+
+| Parameter | Type / notes |
+|---|---|
+| `handle` | object · required · Handle object returned by model.invoke |
+| `saveAs` | string · optional · Absolute path to write the bytes to; base64 is omitted when given |
+
+```json
+{
+  "method": "model.read",
+  "params": {
+    "handle": {},
+    "saveAs": "${saveAs}"
   }
 }
 ```

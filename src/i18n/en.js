@@ -1481,8 +1481,13 @@ export default {
     contribFileTypes: 'File types {n}',
     contribSettings: 'Settings {n}',
 
-    automationNote: 'Plugin commands are exposed to MCP / automation APIs by default so scripts and agents can call them. Every external call is written to the activity log; turn this off here if you do not want that.',
-    automationLabel: 'Allow external automation calls',
+    automationNote: 'Only the methods a plugin explicitly declares for automation can be called from MCP / CLI. Every external call is written to the activity log.',
+    automationLabel: 'External automation',
+    automationToggle: 'Allow external calls',
+    automationToggleFailed: 'The switch did not take effect: {error}',
+    automationStatusOn: 'exposed',
+    automationStatusOff: 'blocked',
+    automationNoneDeclared: 'This plugin declares no automation methods; its commands are only reachable from the UI.',
 
     logEmpty: 'No activity yet',
     logTime: 'Time',

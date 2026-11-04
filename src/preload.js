@@ -634,6 +634,7 @@ const _fullElectronAPI = {
     settingsGet: (pluginId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET, pluginId),
     settingsSet: (pluginId, patch) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET, pluginId, patch || {}),
     setKeybindings: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS, pluginId, !!enabled),
+    setAutomation: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_AUTOMATION, pluginId, !!enabled),
     // iframe 地址由主进程 mint：manifest.entry 只在主进程可见
     overlayUrl: (pluginId, overlayId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, pluginId, overlayId),
     // 请主窗口把某个面板挂到右侧抽屉（设置分区/管理器用）

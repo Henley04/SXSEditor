@@ -792,6 +792,16 @@ app.whenReady().then(() => {
       } catch (err) {
         console.warn('[plugins] pipeline hook 接线失败:', err && err.message);
       }
+      // 插件贡献的自动化方法进 MCP 方法表。注入的是**函数**而不是快照：
+      // 插件随时可装卸，桥接层每次请求现取，才不会有"装完插件还要重启"的空窗。
+      try {
+        require('./main/mcpBridge').setPluginAutomation({
+          list: () => pluginService.listAutomationMethods(),
+          run: (name, params) => pluginService.runAutomationMethod(name, params),
+        });
+      } catch (err) {
+        console.warn('[plugins] 自动化方法接线失败:', err && err.message);
+      }
       console.log(`[plugins] loaded: ${JSON.stringify(pluginService.registry.stats())}`);
     } catch (err) {
       // 插件系统坏了不能拖垮主程序

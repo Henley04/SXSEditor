@@ -113,6 +113,24 @@ lines.push('Add `"async": true` to `POST /automation` for long methods (export, 
 lines.push('The call returns `202 {jobId, poll}`; poll `GET /jobs/<id>` for `status`');
 lines.push('(`queued` → `running` → `completed` / `failed` / `cancelled`) plus `result` or `error`.');
 lines.push('');
+lines.push('## Plugin-provided methods');
+lines.push('');
+lines.push('Methods from installed plugins are **not** in this file: which plugins are installed is a');
+lines.push('runtime fact. They show up in `GET /schema` (with `target: "plugin"` and');
+lines.push('`source: "plugin:<id>"`) and in `capabilities.methods` while the plugin is enabled and the');
+lines.push('user has left its "Allow external calls" switch on. The method name is always');
+lines.push('`<pluginId>.<commandId>`, so two plugins cannot shadow each other; a plugin can never');
+lines.push('take over a built-in name (rejected when the manifest is validated).');
+lines.push('');
+lines.push('Parameters and results are defined by the plugin: the host validates only that');
+lines.push('`params` is an object. Plugin error codes are translated at the bridge');
+lines.push('(`PERMISSION_DENIED` → `FORBIDDEN`, `TIMEOUT` → `TIMEOUT`, anything unknown → `INTERNAL`),');
+lines.push('and the original code stays in `error.details.pluginCode`.');
+lines.push('');
+lines.push('Because the list can change while a client is connected, re-read `/schema` (or');
+lines.push('`capabilities`) after a plugin is installed, disabled or removed instead of caching it');
+lines.push('for the lifetime of the session.');
+lines.push('');
 lines.push('## Methods');
 lines.push('');
 

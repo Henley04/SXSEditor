@@ -23,6 +23,7 @@ const path = require('node:path');
 const { app, ipcMain, BrowserWindow } = require('electron');
 
 const { schema, getMethod, methodNames } = require('../shared/mcpSchema');
+const { mapPluginErrorCode } = require('../shared/pluginAutomation');
 const { ERR } = require('../shared/modelContract');
 const { validateParams } = require('./mcpValidate');
 const { McpError, normalizeError } = require('./mcpErrors');
@@ -44,6 +45,73 @@ const rateBuckets = new Map();
 const tokens = new Map();
 let modelService = null;
 let modelStreamSeq = 0;
+/**
+ * 插件自动化方法（M5）。
+ *
+ * 由 `main.js` 在插件服务初始化后注入：`{ list(): {name: def}, run(name, params) }`。
+ * 桥接层不 require 插件服务 —— 那个依赖是双向的（插件服务会用到桥接的事件），
+ * 而且单测里要能塞一个假的 provider。
+ *
+ * **插件方法只走主进程**：它们跑在插件的 utilityProcess 里，不需要任何窗口，
+ * 这正是"无界面自动化"的意义。转发给渲染层会让主窗口成为前提，MCP 客户端
+ * 关掉窗口就调不动插件了。
+ */
+let pluginAutomation = null;
+
+function setPluginAutomation(provider) {
+  pluginAutomation = provider && typeof provider.list === 'function' && typeof provider.run === 'function'
+    ? provider
+    : null;
+}
+
+/** 当前可用的插件方法表（每次现取：装/卸/停用之后要立刻反映）。 */
+function pluginMethodDefs() {
+  if (!pluginAutomation) return {};
+  try {
+    return pluginAutomation.list() || {};
+  } catch (err) {
+    // 插件服务自己坏了不能连带整张 MCP 方法表一起消失
+    console.warn('[MCP] 读取插件自动化方法失败:', err && err.message);
+    return {};
+  }
+}
+
+/** 内置方法优先：插件不能顶掉 `project.get` 这类名字（校验期已拦，这里是兜底）。 */
+function resolveMethod(name) {
+  return getMethod(name) || pluginMethodDefs()[name] || null;
+}
+
+/**
+ * 未知方法的提示。
+ *
+ * 插件方法会随插件消失（停用/卸载/重载），这时"看 /schema"是错的方向 ——
+ * 调用方手里那份 schema 可能还是五分钟前的，而它现在调的方法确实不存在了。
+ * 分开提示，省掉一轮"我明明在 schema 里见过它"的排查。
+ */
+function unknownMethodHint(method) {
+  if (!getMethod(method) && /^[a-z0-9][a-z0-9._-]*\./.test(String(method || ''))) {
+    return 'plugin-provided methods disappear when their plugin is disabled or removed; call capabilities for the current list';
+  }
+  return 'see GET /schema';
+}
+
+/**
+ * `GET /schema` 的完整内容：内置表 + 插件贡献。
+ *
+ * 合并发生在**读取时**而不是启动时：插件可以在应用运行中装卸，schema 是一份
+ * 会被 agent 缓存的文档，缓存的唯一可靠版本永远是"现在这一刻"。
+ */
+function publicSchema() {
+  const base = schema();
+  const pluginDefs = pluginMethodDefs();
+  if (Object.keys(pluginDefs).length) {
+    // 不覆盖内置：撞名在 manifest 校验期就被拒了，这里再让一次仍然安全
+    for (const [name, def] of Object.entries(pluginDefs)) {
+      if (!base.methods[name]) base.methods[name] = def;
+    }
+  }
+  return base;
+}
 
 /** 供设置页展示：只给 id/名称/范围，永远不回传 token 本身。 */
 function listTokens() {
@@ -262,21 +330,25 @@ function checkPreconditions(def) {
 async function dispatchMain(method, params, ctx = {}) {
   switch (method) {
     case 'schema.get':
-      return schema();
-    case 'capabilities':
+      return publicSchema();
+    case 'capabilities': {
+      const extra = Object.keys(pluginMethodDefs());
       return {
         schemaVersion: schema().version,
-        methods: methodNames().filter((m) => !getMethod(m).internal),
+        methods: [...methodNames().filter((m) => !getMethod(m).internal), ...extra],
         features: {
           models: modelsAvailable(),
           backend: process.platform === 'win32' ? 'directml-or-cpu' : 'cpu',
           platform: process.platform,
+          // 插件可能随时装卸：这个数字让调用方知道要不要重新拉一次 /schema
+          pluginMethods: extra.length,
         },
         limits: { rateLimit: RATE_LIMIT, defaultTimeoutMs: DEFAULT_TIMEOUT_MS, longTimeoutMs: LONG_TIMEOUT_MS },
         schemaUrl: '/schema',
         eventsUrl: '/events',
         jobsUrl: '/jobs',
       };
+    }
     case 'session.grantRoot':
       return windowOps.grantRoot(params);
     case 'session.roots':
@@ -440,9 +512,9 @@ function invokeModelAggregated(service, ctx, params) {
 }
 
 async function dispatch(method, params, ctx = {}) {
-  const def = getMethod(method);
+  const def = resolveMethod(method);
   if (!def || def.internal) {
-    throw new McpError('UNKNOWN_METHOD', `Unknown method ${method}`, { hint: 'see GET /schema' });
+    throw new McpError('UNKNOWN_METHOD', `Unknown method ${method}`, { hint: unknownMethodHint(method) });
   }
 
   const checked = validateParams(def, params);
@@ -457,6 +529,24 @@ async function dispatch(method, params, ctx = {}) {
   checkPreconditions(def);
 
   const timeoutMs = def.long ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+
+  // 插件方法：直接派发到插件运行时，不经任何窗口。
+  if (def.target === 'plugin') {
+    if (!pluginAutomation) {
+      throw new McpError('PRECONDITION_FAILED', 'The plugin system is not available', {
+        hint: 'plugin automation methods come from installed plugins; start the app with plugins enabled',
+      });
+    }
+    const r = await withTimeout(pluginAutomation.run(method, checked.value), timeoutMs, method);
+    if (!r || r.ok !== true) {
+      const info = (r && r.error) || {};
+      throw new McpError(mapPluginErrorCode(info.code), info.message || `Plugin method ${method} failed`, {
+        details: { pluginCode: info.code || null, method },
+      });
+    }
+    return { result: r.result === undefined ? null : r.result, warnings: checked.warnings };
+  }
+
   const result = def.target === 'main'
     ? await withTimeout(dispatchMain(method, checked.value, ctx), timeoutMs, method)
     : await callRenderer(def.target, method, checked.value, timeoutMs);
@@ -556,7 +646,7 @@ async function handle(req, res) {
   }
 
   if (req.method === 'GET' && url.pathname === '/schema') {
-    return sendJson(res, 200, { ok: true, result: schema() });
+    return sendJson(res, 200, { ok: true, result: publicSchema() });
   }
 
   if (req.method === 'GET' && url.pathname === '/events') {
@@ -613,9 +703,9 @@ async function handle(req, res) {
         delete body.params.async;
       }
 
-      const def = getMethod(methodName);
+      const def = resolveMethod(methodName);
       if (!def || def.internal) {
-        throw new McpError('UNKNOWN_METHOD', `Unknown method ${methodName}`, { hint: 'see GET /schema' });
+        throw new McpError('UNKNOWN_METHOD', `Unknown method ${methodName}`, { hint: unknownMethodHint(methodName) });
       }
 
       if (isAsync) {
@@ -731,11 +821,15 @@ function stopMcpBridge() {
 
 module.exports = {
   setModelService,
+  setPluginAutomation,
   listTokens,
   registerMcpReplyIpc,
   startMcpBridge,
   stopMcpBridge,
   emit,
   // exported for tests / diagnostics
-  _internal: { dispatch, handle, tokens, modelsAvailable, modelScopeAllows, normalizeModelScopes },
+  _internal: {
+    dispatch, handle, tokens, modelsAvailable, modelScopeAllows, normalizeModelScopes,
+    publicSchema, pluginMethodDefs, resolveMethod, setPluginAutomation,
+  },
 };

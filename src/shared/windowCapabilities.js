@@ -96,6 +96,8 @@ const HIGH_RISK_METHOD_WINDOWS = Object.freeze([
   // 设置值 / 快捷键开关：只有设置窗口能改设置，只有管理器能改快捷键总开关
   { path: ['pluginHost', 'settingsSet'], windows: ['settings'] },
   { path: ['pluginHost', 'setKeybindings'], windows: ['pluginmanager'] },
+  // 自动化开关同样只在管理器里改：它决定的是“外部能不能替你点这个插件的命令”
+  { path: ['pluginHost', 'setAutomation'], windows: ['pluginmanager'] },
   // 取 iframe 地址：浮层只在主窗口；打开面板可由设置页/管理器发起
   { path: ['pluginHost', 'overlayUrl'], windows: ['index'] },
   { path: ['pluginHost', 'openPanel'], windows: ['index', 'settings', 'pluginmanager'] },

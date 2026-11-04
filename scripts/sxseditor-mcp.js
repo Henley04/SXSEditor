@@ -151,6 +151,44 @@ function route(name, args) {
   return method ? [method, args] : null;
 }
 
+// ------------------------------------------------------ plugin-provided tools
+//
+// 插件可以把自己的命令暴露成自动化方法（`contributes.automation`）。它们不在
+// 本地 schema 里 —— 那是由安装了什么决定的运行期事实 —— 所以这里从运行中的
+// 应用现拉一次 `/schema`，把 `source: plugin:*` 的条目补进工具表。
+//
+// 只增不删，并节流 30 秒：插件卸载后残留的工具名调用时会被桥接层以
+// UNKNOWN_METHOD 拒绝（附带"插件方法会随插件消失"的提示），代价是一次明确的
+// 报错；反过来每次 tools/list 都全量重建，客户端那边的工具缓存会不停抖。
+const PLUGIN_SCHEMA_TTL_MS = 30000;
+let pluginToolsFetchedAt = 0;
+
+async function mergePluginTools({ force = false } = {}) {
+  if (!force && Date.now() - pluginToolsFetchedAt < PLUGIN_SCHEMA_TTL_MS) return;
+  pluginToolsFetchedAt = Date.now();
+  let remote;
+  try {
+    remote = await request('GET', '/schema');
+  } catch (_) {
+    return; // 应用没起来 / 还没初始化插件：保持内置工具表
+  }
+  const methods = (remote && remote.methods) || {};
+  for (const [name, def] of Object.entries(methods)) {
+    if (!def || typeof def.source !== 'string' || !def.source.startsWith('plugin:')) continue;
+    const toolName = `sxs_${name.replace(/\./g, '_')}`;
+    if (toolMethod.has(toolName)) continue;
+    toolMethod.set(toolName, name);
+    tools.push({
+      name: toolName,
+      description: `${def.summary} — ${def.description || ''} [${def.source}]`.trim(),
+      inputSchema: {
+        ...(def.params || { type: 'object', additionalProperties: true }),
+        $schema: 'http://json-schema.org/draft-07/schema#',
+      },
+    });
+  }
+}
+
 const RESOURCES = [
   { uri: 'sxseditor://project', name: 'Current project', mimeType: 'application/json' },
   { uri: 'sxseditor://schema', name: 'Automation method table', mimeType: 'application/json' },
@@ -191,9 +229,18 @@ async function handle(x) {
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') return;
     if (method === 'ping') return ok(id, {});
-    if (method === 'tools/list') return ok(id, { tools });
+    if (method === 'tools/list') {
+      await mergePluginTools();
+      return ok(id, { tools });
+    }
     if (method === 'tools/call') {
-      const r = route(params.name, params.arguments || {});
+      let r = route(params.name, params.arguments || {});
+      if (!r) {
+        // 客户端可能直接 tools/call（不回 tools/list）：补拉一次插件方法表再试。
+        // 只在这一条路径上强制刷新 —— 方法名 miss 是唯一能证明"表该更新了"的信号。
+        await mergePluginTools({ force: true });
+        r = route(params.name, params.arguments || {});
+      }
       if (!r) throw Object.assign(new Error('Unknown tool'), { code: 'UNKNOWN_TOOL' });
       try {
         const v = await call(r[0], r[1]);

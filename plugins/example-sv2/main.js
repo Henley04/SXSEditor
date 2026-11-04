@@ -30,6 +30,16 @@ const FORMAT_ID = 'sv2';
 const EXT_ID = 'example-sv2';
 
 /**
+ * 这个插件进程活到现在处理过什么。
+ *
+ * 只活在内存里：进程一重建就归零，因为它的用途是"让自动化调用方能观察到
+ * 插件确实跑了"，不是一个持久统计。真要做持久统计得写进插件自己的数据目录
+ * （`fs: pluginData`），那会把示例复杂化到掩盖重点。
+ */
+const stats = { read: 0, written: 0, lastFile: '' };
+const startedAt = Date.now();
+
+/**
  * 给宿主看的声明：这份文档里哪些东西宿主可以呈现。
  *
  * `kind: 'phonemes'` 让宿主知道该按音素切分显示，而不是当成一坨文本；
@@ -334,6 +344,8 @@ module.exports = {
         }
 
         const document = translate(raw, name);
+        stats.read += 1;
+        stats.lastFile = name;
         await ctx.ui.status('state', statusText(name));
         ctx.log.info(`解码 ${name}：${document.singers.length} 轨 / ${document.fragments.length} 段`);
         return { document };
@@ -341,6 +353,8 @@ module.exports = {
 
       async write(ctx, { name, document }) {
         const { bytes, warnings } = encode(ctx, document);
+        stats.written += 1;
+        stats.lastFile = name;
         await ctx.ui.status('state', statusText(name));
         ctx.log.info(`编码 ${name}：${bytes.length} 字节，${warnings.length} 条告警`);
         return { bytes, warnings };
@@ -387,6 +401,27 @@ module.exports = {
     async about(ctx) {
       await ctx.ui.notify('@sv2About', 'info');
       return { ok: true };
+    },
+
+    /**
+     * 自动化方法的示例实现（`contributes.automation.methods: ['stats']`）。
+     *
+     * 它演示三件与"能被 agent 调用"直接相关的事：
+     *   1. 参数是插件自己定的（这里的 `includeLast`），宿主不校验也不改写；
+     *   2. 返回值必须是可以 JSON 化的普通对象 —— 它要穿过 IPC 到主进程，
+     *      再变成 MCP 的 result，带函数/循环引用的东西会在这里就炸；
+     *   3. 不需要任何窗口。这个方法在应用最小化、主窗口都没有焦点时也能跑，
+     *      这就是"暴露给自动化"与"给菜单用"的区别。
+     */
+    async stats(ctx, args) {
+      const includeLast = !args || args.includeLast !== false;
+      ctx.log.info(`自动化调用 stats（includeLast=${includeLast}）`);
+      return {
+        read: stats.read,
+        written: stats.written,
+        lastFile: includeLast ? stats.lastFile : null,
+        uptimeMs: Date.now() - startedAt,
+      };
     },
   },
 };

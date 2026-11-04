@@ -1488,8 +1488,13 @@ export default {
     contribFileTypes: '文件类型 {n}',
     contribSettings: '设置页 {n}',
 
-    automationNote: '插件命令默认对外暴露给 MCP / 自动化接口，便于脚本与智能体调用。每次外部调用都会记入活动日志；如不需要，可在此关闭。',
-    automationLabel: '允许外部自动化调用',
+    automationNote: '只有插件显式声明为自动化方法的命令能被 MCP / CLI 调用。每次外部调用都会记入活动日志。',
+    automationLabel: '外部自动化',
+    automationToggle: '允许外部调用',
+    automationToggleFailed: '开关未生效：{error}',
+    automationStatusOn: '已暴露',
+    automationStatusOff: '已拦住',
+    automationNoneDeclared: '这个插件没有声明任何自动化方法，它的命令只能从界面调用。',
 
     logEmpty: '暂无活动记录',
     logTime: '时间',
