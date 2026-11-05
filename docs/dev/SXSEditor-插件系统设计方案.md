@@ -17,7 +17,8 @@
 > §9.10），第 5 段是**长任务形态**（`long: true` → job、按请求 id 回报进度、
 > 协作式取消，§9.11）。**M5 五段全部落地**；**M6（硬化）第 1 段是签名与信任**
 > （Ed25519 签名包、双向清单校验、逐密钥信任、安装期判定 + 按需重验，§9.12，
-> 2026-11-05）。
+> 2026-11-05），**第 2 段是市场接口**（静态索引 `sxs-plugin-index-v1`、源管理、
+> 搜索、下载前预览签名与权限，§9.13，2026-11-05）。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -1063,9 +1064,77 @@ docs/dev/plugins-signing.md          作者指南
 
 - **签名不等于安全**：它只说明"谁做的"，不说明"它不会干坏事"。权限清单与安装确认仍是主防线。
 - **不防本地攻击者**：能改安装目录的人通常也能改信任库；签名挡的是分发链路被替换。
-- **不防重放**：旧版本的合法签名包仍可安装，版本降级检测属于市场层。
+- **不防重放**：旧版本的合法签名包仍可安装。市场层会标 `DOWNGRADE` 警告（§9.13），
+  但那只是提示，不是拦截 —— 签名不回答"这是不是更新"。
 - **私钥泄露只能靠撤销**：没有时间戳/透明日志，撤销靠用户手动 `trust remove` 与通告。
-- **安装前不预览签名**：目前"谁签的"在装成功后显示在卡片上；下载/预览确认随 marketplace 一起做。
+- **安装前不预览签名**（第 1 段的边界）：第 2 段的市场预览补上了这一环——
+  下载后先验包内签名再让用户确认；但"从本地选一个 .sxsp"这条路径仍然只有装完才显示签名。
+
+### 9.13 M6 第 2 段：市场接口（2026-11-05）
+
+**这一段要回答的是**：插件从哪里来。答案不是"我们开一个商店"，而是**把索引格式定死**，
+让任何人（公司内网、社区、个人）都能托管一份，宿主只负责"取、搜、验、装"。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | 索引是静态 JSON（`sxs-plugin-index-v1`），不定义 RPC | 市场不需要成为服务：搜索在本地做（取一次索引），评审、发布、CDN 都可以交给现成设施。引入一套 RPC 只会让"没有后端"变成"永远做不完" |
+| 2 | 条目必须带 `file.sha256` 与 `size` | 没有摘要就发现不了"下载到的东西被换了"；这不是可选的完整性字段 |
+| 3 | `file.url` 只允许 https 或相对路径，且解析后必须同源同目录 | 相对路径从 `/plugins/index.json` 解析到 `/etc/passwd` 这类写法没有任何正当用途 |
+| 4 | 索引里的 `signature` 只是**自述**，不参与安装判定 | 索引是纯文本，改一个 `keyId` 就能把列表显示成任何作者。安装只认包内 `signature.json`（§9.12） |
+| 5 | 预览必须**下载整包**，而不是读索引字段 | 这是第 4 条的推论。预览=下载→核对 sha256/大小→用安装器同一条路径验签→把"索引怎么说"和"包里实际是什么"并排给用户 |
+| 6 | 预览与安装共用 `inspectPackage` | 两份实现最容易漂移的就是签名细节；漂移的后果是"预览说能装、装却拒"或更糟的反向 |
+| 7 | 预览**不写盘、不写安装审计** | 预览不是一次安装尝试。审计要回答"用户做了什么决定"，而不是"用户看了什么" |
+| 8 | 源只收 https；`file://` 需 `SXSEDITOR_ALLOW_FILE_SOURCES=1` | 索引决定"用户能看到哪些插件"，值得一张证书；离线镜像保留，但不能是默认能力 |
+| 9 | 单源失败不拖垮搜索，错误进 `errors[]` | 市场页最不该出现的状态是"一个源 502，整页空白" |
+| 10 | 降级只告警，不阻断 | 签名回答"谁做的"，不回答"是不是更新"。版本策略属于市场层，用户应当看到提示并自己决定 |
+| 11 | CLI `install` 必须显式 `--yes` | 装插件会改用户目录。不带 `--yes` 时只打印预览 —— 一次回车不该完成安装 |
+| 12 | 管理器**不做**市场页 | M6 的范围是"接口先定"。IPC（6 条）+ preload 已就位，接 UI 时不用改主进程 |
+
+新增/改动文件：
+
+```
+src/shared/pluginMarket.js           索引契约 / 条目校验 / 版本比较 / 检索 / 相对地址解析
+src/main/plugins/PluginMarket.js     源存储 / https 取索引 / 下载与摘要校验 / 预览（缓存 5 分钟）
+src/main/plugins/PluginInstaller.js  inspectPackage / previewPackage（安装与预览共用判定）
+src/main/plugins/PluginService.js    marketSources/AddSource/RemoveSource/Search/Preview/Install
+src/main/plugins/PluginIpcV2.js      6 条 IPC（仅 pluginmanager）
+src/shared/ipcChannels.js / windowCapabilities.js / preload.js
+src/main/cliPlugin.js + cli.js       plugin market sources/add/remove/search/preview/install/clear
+test/pluginMarket.test.js            22
+docs/dev/plugins-market.md           索引格式与自建源指南
+```
+
+#### 走查（xvfb + CDP + 真实 Ed25519 包 + file 源全链路）
+
+| 场景 | 结果 |
+|---|---|
+| `--gen-key` + 签名打包 example-clock | `keyId ed25519-13e30833ee4d5500`，3216 字节 |
+| 添加本地源 | `src-358ebd54f0  本地走查源  file://…/index.json  [file]` |
+| 搜索 `clock` | 命中 1 条，显示"签名 keyId（Example Studio）3216 字节" |
+| 未信任密钥时预览 | 打印权限/文件数/签名状态后 `[拒绝] …不在信任列表里`，并给出 `plugin trust add` 与指纹 |
+| `trust add` 后再预览 | `签名：已签名且密钥已信任`；`可安装。` |
+| `install` 不带 `--yes` | 只打印预览 + 「未安装：…加 --yes 重跑」 |
+| `install --yes` | `已安装 example-clock 1.0.0`；`plugin list` 显示 `sign:verified` |
+| 篡改索引里的 sha256 | `[ERROR] CHECKSUM_MISMATCH: 包的 sha256 与索引不符`，退出码 1 |
+| GUI IPC（管理器窗口） | `marketSources` 空 → `marketSearch` 返回 `needsSource:true` → 添加 `https://example.invalid` → 搜索返回 `FETCH_FAILED getaddrinfo ENOTFOUND` 且不抛错 → 删除源成功 |
+| 能力门 | 主窗口调用 `pluginHost.marketSources()` → `[preload] 当前窗口（index）未授权` |
+| 单测 | `test/pluginMarket.test.js` 22 passing（含真密钥、真 zip、真 sha256、降级、索引自述与实包不一致） |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 预览"索引摘要被改过"的包居然成功 | 两个测试源共用同一个 `index.json`，第二个源按 URL 去重命中第一个源，5 分钟索引缓存返回旧索引 | 测试按版本分文件；同时暴露了一个真实约束：**同 URL 的源就是同一个源**，发布新索引要 `--force` 或等缓存过期 |
+| 2 | 已装 1.0.1 时预览 1.0.0 显示 `new` 而不是 `downgrade` | `installedVersionOf` 去 registry 读 `version`，而 registry 只存启停/隔离状态 | 改读 `packages/<id>.json` 包记录（版本在安装时写入） |
+
+#### 边界（写在明处）
+
+- **没有市场后端**：仓库不含服务端，也不内置任何源地址。没有源时 `search` 返回 `needsSource`。
+- **不做自动更新**：宿主不后台轮询；每次下载都由用户动作触发。
+- **没有撤销列表**：索引删条目只能让新用户看不到；已下载的合法签名包仍可安装。
+- **源能骗展示、骗不了安装**：见决策 4/5。
+- **管理器暂无市场页**：接口与链路已通（CLI + IPC），UI 属于后续工作。
+- **`file://` 源默认关闭**：只给离线/内网镜像，需环境变量显式开启。
 
 ## 10. 风险与取舍
 
