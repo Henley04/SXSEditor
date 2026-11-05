@@ -74,8 +74,8 @@
       <div class="callout tip">
         <div class="callout-icon">🛠️</div>
         <div class="callout-body">
-          <p data-lang="en">Looking for the practical path instead of the contract? <a href="plugins-guide.html">Writing a Plugin</a> walks the whole pipeline — template, manifest, packaging, signing, publishing — and lists the mistakes that cost the most time.</p>
-          <p data-lang="zh">想先看怎么做而不是先看契约？<a href="plugins-guide.html">编写插件</a>从模板、manifest、打包、签名一路走到发布，并列出最耗时间的几个坑。</p>
+          <p data-lang="en">Starting from scratch? <a href="plugins-guide.html">Writing a Plugin</a> covers the complete workflow from an empty folder to a published package, and explains how to build a plugin that meets the standard.</p>
+          <p data-lang="zh">想直接开始？<a href="plugins-guide.html">编写插件</a>给出从编写到发布的完整流程，并说明如何开发符合标准的高质量插件。</p>
         </div>
       </div>
 
@@ -380,7 +380,7 @@ while (Date.now() - t &lt; 2000) { /* ordinary plugin code */ }</code></pre>
         <div class="callout-icon">✅</div>
         <div class="callout-body">
           <p data-lang="en"><strong>Why the scan is exhaustive.</strong> Sampling would be N times cheaper but can miss an isolated NaN from a division by zero or <code>log(0)</code>, which still corrupts the export. The measured cost of the full scan is 0.59ms per 1.0MiB, 3.15ms per 4.0MiB, and 12.57ms per 16.0MiB — roughly 3ms per million samples. Synthesizing 16MiB (about three minutes) takes seconds, so a linear pass is negligible. The hot loop makes no function calls (<code>v !== v</code> for NaN, direct comparison against ±Infinity) and allocates nothing.</p>
-          <p data-lang="zh"><strong>为何全量扫描。</strong>抽样成本约为 1/N，但会漏掉除零或 <code>log(0)</code> 产生的孤立 NaN，一旦漏掉照样导出损坏音频。全量扫描实测 1.0MiB≈0.59ms、4.0MiB≈3.15ms、16.0MiB≈12.57ms（约每百万样本 3ms）。合成 16MiB（约三分钟）音频本身耗时以秒计，线性扫描可忽略。热循环里不做函数调用（<code>v !== v</code> 判 NaN、直接与 ±Infinity 比较），也不额外分配内存。</p>
+          <p data-lang="zh"><strong>全量扫描的原因。</strong>抽样成本约为 1/N，但会漏掉除零或 <code>log(0)</code> 产生的孤立 NaN，一旦漏掉照样导出损坏音频。全量扫描实测 1.0MiB≈0.59ms、4.0MiB≈3.15ms、16.0MiB≈12.57ms（约每百万样本 3ms）。合成 16MiB（约三分钟）音频本身耗时以秒计，线性扫描可忽略。热循环里不做函数调用（<code>v !== v</code> 判 NaN、直接与 ±Infinity 比较），也不额外分配内存。</p>
         </div>
       </div>
 

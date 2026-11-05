@@ -60,14 +60,14 @@
         <span data-lang="zh">编写插件：从零到发布</span>
       </h1>
 
-      <p data-lang="en">This page is the practical path: what to decide before writing code, the seven steps from an empty folder to a signed package, and the mistakes that cost the most time. The normative contract for singing backends lives in <a href="plugins.html">Plugin Backends</a>; reference material for models, services, data access and secrets is listed at the end.</p>
-      <p data-lang="zh">这一页讲怎么落地：动手前先定什么、从空目录到签名包的七步流程，以及最容易耗时间的那几个坑。歌声后端的规范性契约在<a href="plugins.html">插件后端</a>；模型、服务、数据访问与密钥的参考文档列在文末。</p>
+      <p data-lang="en">This page covers the complete workflow: what to decide before writing code, the seven steps from an empty folder to a signed package, and how to keep the result maintainable. The normative contract for singing backends is in <a href="plugins.html">Plugin Backends</a>; reference material on models, services, data access and secrets is linked at the end.</p>
+      <p data-lang="zh">本页说明从编写到发布的完整流程：动手前的设计决策、从空目录到签名包的七个步骤，以及如何让插件保持可维护。歌声后端的规范性契约见<a href="plugins.html">插件后端</a>；模型、服务、数据访问与密钥的参考文档列在文末。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Every command on this page was run against a real build. Paths and outputs are copied from the terminal, not reconstructed.</p>
-          <p data-lang="zh">本页所有命令都在真实构建上跑过，路径与输出是从终端抄下来的，不是事后补写的。</p>
+          <p data-lang="en">The commands and outputs on this page were taken from an actual build.</p>
+          <p data-lang="zh">本页的命令与输出均取自实际构建。</p>
         </div>
       </div>
 
@@ -76,8 +76,8 @@
         <span data-lang="zh">设计目标</span>
       </h2>
 
-      <p data-lang="en">Five constraints shaped this system. They are not preferences — each one rules out an implementation that would otherwise look simpler.</p>
-      <p data-lang="zh">整个系统是被五条约束推出来的，不是偏好。每一条都否掉了一种「看起来更简单」的做法。</p>
+      <p data-lang="en">The system follows from five constraints rather than preference; each one rules out an approach that would otherwise look simpler.</p>
+      <p data-lang="zh">系统设计由五条约束决定，每一条都排除了一种看似更简单的做法。</p>
 
       <table class="doc-table">
         <thead>
@@ -183,8 +183,8 @@ cd SXSEditor
 npm ci</code></pre>
 
       <h3>
-        <span data-lang="en">1. Start from a template, not from scratch</span>
-        <span data-lang="zh">1. 从模板起步，别从空白开始</span>
+        <span data-lang="en">1. Start from a template</span>
+        <span data-lang="zh">1. 从模板开始</span>
       </h3>
 
       <p data-lang="en">Copy a template out of <code>plugins/</code> and rename the folder. The folder name must equal the <code>id</code> in the manifest; the installer refuses anything else, because two plugins claiming one id would make "disable plugin X" ambiguous.</p>
@@ -250,7 +250,7 @@ $EDITOR plugins/my-plugin/manifest.json</code></pre>
       </h3>
 
       <p data-lang="en">Two ways in, and they check different things. The manager shows what a user will see; the CLI shows what an agent will see.</p>
-      <p data-lang="zh">两条路，查的是不同的事。管理器呈现用户看到的东西；CLI 呈现 agent 看到的东西。</p>
+      <p data-lang="zh">两种方式验证的内容不同：管理器呈现用户看到的信息，CLI 呈现 agent 看到的信息。</p>
 
       <pre><code># 打包并安装到当前用户
 node scripts/package-plugin.js plugins/my-plugin -o dist-plugins
@@ -266,7 +266,7 @@ npm run cli -- --cli plugin call my-plugin.ping --json</code></pre>
         </a>
         <figcaption>
           <span data-lang="en"><strong>What the manager tells you.</strong> Each card is the manifest rendered back: contributions, signature state, every permission, and — the part authors usually forget — which commands are externally callable. If a method is missing here, it is missing from <code>contributes.automation</code>, not from your code.</span>
-          <span data-lang="zh"><strong>管理器把清单摊开给你看。</strong>每张卡片就是 manifest 的回显：贡献点、签名状态、每一项权限，以及作者最容易忘的那部分——哪些命令能被外部调用。这里没有的方法，是 <code>contributes.automation</code> 里没写，不是代码写错了。</span>
+          <span data-lang="zh"><strong>管理器展示 manifest 的全部内容。</strong>每张卡片回显贡献点、签名状态、各项权限，以及可被外部调用的命令。此处未列出的方法，说明 <code>contributes.automation</code> 中没有声明，而非实现有误。</span>
         </figcaption>
       </figure>
 
@@ -331,7 +331,7 @@ npm run cli -- --cli plugin market preview my-plugin
 npm run cli -- --cli plugin market install my-plugin --yes</code></pre>
 
       <p data-lang="en"><code>preview</code> downloads the whole package and runs the same inspection the installer uses — signature, permissions, portability — and stops before writing anything. <code>install</code> without <code>--yes</code> refuses; that flag is the difference between "show me" and "do it".</p>
-      <p data-lang="zh"><code>preview</code> 会下载整包、走与安装器同一套检查（签名、权限、可移植性），但在落盘前停下。<code>install</code> 不带 <code>--yes</code> 会被拒——这个开关就是「给我看看」与「动手」的分界。</p>
+      <p data-lang="zh"><code>preview</code> 会下载整包、走与安装器同一套检查（签名、权限、可移植性），但在落盘前停下。<code>install</code> 不带 <code>--yes</code> 会被拒绝，该开关用于区分预览与执行。</p>
 
       <h2>
         <span data-lang="en">Best Practices</span>
@@ -339,7 +339,7 @@ npm run cli -- --cli plugin market install my-plugin --yes</code></pre>
       </h2>
 
       <p data-lang="en">Each of these comes from a failure that actually happened during development, not from a style guide.</p>
-      <p data-lang="zh">下面每一条都来自开发中真实发生过的失败，不是风格指南抄来的。</p>
+      <p data-lang="zh">以下每条规则对应一种具体的失效场景，而非一般性风格建议。</p>
 
       <table class="doc-table">
         <thead>
@@ -382,7 +382,7 @@ npm run cli -- --cli plugin market install my-plugin --yes</code></pre>
             <td><span data-lang="en">Packaging adds <code>checksums.json</code> and normalises names. A plugin that works in-place can still fail to install — that is exactly what the packager is for.</span><span data-lang="zh">打包会加 <code>checksums.json</code> 并归一化文件名。源码能跑的插件照样可能装不上——打包器存在的意义就在这里。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Version the contract, not the vibe</span><span data-lang="zh">给契约定版本，别靠感觉</span></td>
+            <td><span data-lang="en">Version the contract</span><span data-lang="zh">为契约声明版本</span></td>
             <td><span data-lang="en"><code>engines.app</code> is checked at load. Bumping a major version without it means old builds try to load a manifest they cannot understand.</span><span data-lang="zh"><code>engines.app</code> 在加载时校验。改了主版本却不写它，旧构建就会去加载自己看不懂的清单。</span></td>
           </tr>
           <tr>
@@ -403,8 +403,8 @@ npm run cli -- --cli plugin market install my-plugin --yes</code></pre>
       </figure>
 
       <h2>
-        <span data-lang="en">Error Codes You Will Actually Hit</span>
-        <span data-lang="zh">你大概率会撞上的错误码</span>
+        <span data-lang="en">Common Error Codes</span>
+        <span data-lang="zh">常见错误码</span>
       </h2>
 
       <table class="doc-table">

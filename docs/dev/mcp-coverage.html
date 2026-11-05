@@ -56,12 +56,12 @@
       </nav>
 
       <h1>
-        <span data-lang="en">What MCP Covers — and What It Doesn't</span>
-        <span data-lang="zh">MCP 覆盖到哪，没覆盖到哪</span>
+        <span data-lang="en">MCP Coverage</span>
+        <span data-lang="zh">MCP 覆盖范围</span>
       </h1>
 
-      <p data-lang="en">The automation surface is 49 methods, and the stdio server exposes all of them (68 tool names including aliases and multi-action convenience tools). "All methods are reachable" is not the same as "all workflows are reachable", so this page audits scenarios rather than functions — and names the four places where an agent still has to stop.</p>
-      <p data-lang="zh">自动化面一共 49 个方法，stdio 服务器把它们全部暴露出来（含别名与多动作便利工具共 68 个工具名）。「所有方法都能调」不等于「所有事情都能办」，所以这页按场景审，而不是按函数列——并且点明 agent 必须停下来的四个地方。</p>
+      <p data-lang="en">The automation surface has 49 methods, all exposed by the stdio server (68 tool names including aliases and multi-action helpers). Being callable is not the same as being sufficient, so this page is organised by scenario rather than by function, and it identifies the tasks that MCP does not cover.</p>
+      <p data-lang="zh">自动化接口共 49 个方法，stdio 服务器将其全部暴露（含别名与多动作工具共 68 个工具名）。可调用不等于可完成，因此本页按使用场景而非方法清单组织，并说明 MCP 未覆盖的任务。</p>
 
       <h2>
         <span data-lang="en">Covered</span>
@@ -140,7 +140,7 @@
         <thead>
           <tr>
             <th><span data-lang="en">Scenario</span><span data-lang="zh">场景</span></th>
-            <th><span data-lang="en">Why it is out</span><span data-lang="zh">为什么不在里面</span></th>
+            <th><span data-lang="en">Reason</span><span data-lang="zh">未覆盖原因</span></th>
             <th><span data-lang="en">What to do instead</span><span data-lang="zh">替代做法</span></th>
           </tr>
         </thead>
@@ -171,14 +171,14 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">The first gap is a design decision, not an unfinished feature. If it ever changes, it should change by adding a separate, explicitly-granted capability — not by quietly adding methods to the same token.</p>
-          <p data-lang="zh">第一条是设计决定，不是没做完。真要放开，也应该作为单独一项显式授权的能力，而不是悄悄往同一个 token 上加方法。</p>
+      <p data-lang="en">The first item is a design decision. If it were to be exposed, it would require a separate, explicitly granted capability rather than additional methods on the existing token.</p>
+      <p data-lang="zh">第一项属于设计决定。若要开放，应作为单独的显式授权能力，而不是在现有 token 上增加方法。</p>
         </div>
       </div>
 
       <h2>
-        <span data-lang="en">Two Details That Bite</span>
-        <span data-lang="zh">两个会咬人的细节</span>
+        <span data-lang="en">Two implementation details</span>
+        <span data-lang="zh">两个实现细节</span>
       </h2>
 
       <h3>
@@ -187,7 +187,7 @@
       </h3>
 
       <p data-lang="en">The stdio server locates the running app by reading <code>mcp-endpoint.json</code> from the platform's standard userData path. If you start the app with <code>--user-data-dir=/tmp/something</code>, that file is written there instead and discovery silently fails with <code>ECONNREFUSED</code> against a stale port. Point the server at the right file:</p>
-      <p data-lang="zh">stdio 服务器通过在平台标准 userData 路径读 <code>mcp-endpoint.json</code> 来找到运行中的应用。如果你用 <code>--user-data-dir=/tmp/something</code> 启动，这个文件会写到那里，发现过程就会拿着旧端口报 <code>ECONNREFUSED</code>。把服务器指到正确的文件：</p>
+      <p data-lang="zh">stdio 服务器从平台标准的 userData 路径读取 <code>mcp-endpoint.json</code>，以定位正在运行的应用。若应用以 <code>--user-data-dir=/tmp/something</code> 启动，该文件会写入该目录，默认发现路径将读到旧端口并返回 <code>ECONNREFUSED</code>。此时需将服务器指向正确的文件：</p>
 
       <pre><code>SXSEDITOR_MCP_ENDPOINT=/tmp/something/mcp-endpoint.json node scripts/sxseditor-mcp.js</code></pre>
 

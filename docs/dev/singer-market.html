@@ -150,7 +150,7 @@
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
           <p data-lang="en"><strong>Why B2 over R2?</strong> B2's free tier gives 10 GB storage + 1 GB/day download, and through the Cloudflare Bandwidth Alliance the B2 → Workers egress leg is free. Workers → user egress is the only metered leg. The Worker streams uploads/downloads through itself so it can enforce auth, audit, and <code>Content-Disposition</code>.</p>
-          <p data-lang="zh"><strong>为何选 B2 而非 R2？</strong>B2 免费层提供 10 GB 存储 + 每天 1 GB 下载，且通过 Cloudflare Bandwidth Alliance，B2 → Workers 的出口流量免费。只有 Workers → 用户这一段才计费。Worker 把上传/下载都流经自身，以便实施鉴权、审计与 <code>Content-Disposition</code>。</p>
+          <p data-lang="zh"><strong>存储选型。</strong>B2 免费层提供 10 GB 存储 + 每天 1 GB 下载，且通过 Cloudflare Bandwidth Alliance，B2 → Workers 的出口流量免费。只有 Workers → 用户这一段才计费。Worker 把上传/下载都流经自身，以便实施鉴权、审计与 <code>Content-Disposition</code>。</p>
         </div>
       </div>
 
@@ -663,7 +663,7 @@ POST /api/bulk/tag | untag → { "updated": [
       <p data-lang="zh">应用内客户端在后端 URL 在 <code>src/main/singerMarketIpc.js</code> 中硬编码：</p>
       <pre><code>const API_BASE = 'https://singer-files.15240287482.workers.dev';</code></pre>
       <p data-lang="en">To use your own backend, fork the SXSEditor repo, change this constant, rebuild (<code>npm run package</code>), and distribute the resulting build. There is no UI setting for this — it's a build-time constant by design (it keeps the default UX zero-config for end users).</p>
-      <p data-lang="zh">若要使用自己的后端，请 fork SXSEditor 仓库，修改此常量，重新打包（<code>npm run package</code>），分发构建产物。此处没有 UI 设置——刻意做成构建时常量，让默认 UX 对终端用户零配置。</p>
+      <p data-lang="zh">若要使用自己的后端，请 fork SXSEditor 仓库，修改此常量，重新打包（<code>npm run package</code>），分发构建产物。该地址刻意设为构建时常量，不提供 UI 设置，从而使终端用户无需配置。</p>
 
       <h2>
         <span data-lang="en">Failure Modes</span>

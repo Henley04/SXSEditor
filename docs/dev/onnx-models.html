@@ -221,7 +221,7 @@
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
           <p data-lang="en"><strong>Why the names are resolved dynamically.</strong> Four separate exports of the same graph use different tensor names (legacy vs QDIT <code>diff_step</code>; <code>audio</code> vs <code>waveform</code> in <code>mel_transform</code>; <code>embeddings</code> vs <code>output</code> in the encoders). Hard-coding any one of them makes the pipeline break on a different precision folder, so every call site resolves names from <code>session.inputNames</code> / <code>session.outputNames</code> with a documented fallback order.</p>
-          <p data-lang="zh"><strong>为什么要动态解析名称。</strong>同一张图有四种不同导出，张量名各不相同（legacy 与 QDIT 的 <code>diff_step</code>；<code>mel_transform</code> 的 <code>audio</code> 与 <code>waveform</code>；编码器的 <code>embeddings</code> 与 <code>output</code>）。硬编码任何一个都会让管线在另一种精度目录下崩溃，因此所有调用点都从 <code>session.inputNames</code> / <code>session.outputNames</code> 解析名称，并配有明确的回退顺序。</p>
+          <p data-lang="zh"><strong>动态解析名称的原因。</strong>同一张图有四种不同导出，张量名各不相同（legacy 与 QDIT 的 <code>diff_step</code>；<code>mel_transform</code> 的 <code>audio</code> 与 <code>waveform</code>；编码器的 <code>embeddings</code> 与 <code>output</code>）。硬编码任何一个都会让管线在另一种精度目录下崩溃，因此所有调用点都从 <code>session.inputNames</code> / <code>session.outputNames</code> 解析名称，并配有明确的回退顺序。</p>
         </div>
       </div>
 
