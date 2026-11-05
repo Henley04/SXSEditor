@@ -105,6 +105,14 @@ const HIGH_RISK_METHOD_WINDOWS = Object.freeze([
   { path: ['pluginHost', 'trustRemove'], windows: ['pluginmanager'] },
   { path: ['pluginHost', 'setRequireSignature'], windows: ['pluginmanager'] },
   { path: ['pluginHost', 'verifyInstall'], windows: ['pluginmanager'] },
+  // 市场：源列表会决定"用户能装到什么"，改源与安装都只在管理器里做。
+  // 搜索/预览虽只读，但会联网并落下载缓存，同样不给其它窗口。
+  { path: ['pluginHost', 'marketSources'], windows: ['pluginmanager'] },
+  { path: ['pluginHost', 'marketAddSource'], windows: ['pluginmanager'] },
+  { path: ['pluginHost', 'marketRemoveSource'], windows: ['pluginmanager'] },
+  { path: ['pluginHost', 'marketSearch'], windows: ['pluginmanager'] },
+  { path: ['pluginHost', 'marketPreview'], windows: ['pluginmanager'] },
+  { path: ['pluginHost', 'marketInstall'], windows: ['pluginmanager'] },
   // 取 iframe 地址：浮层只在主窗口；打开面板可由设置页/管理器发起
   { path: ['pluginHost', 'overlayUrl'], windows: ['index'] },
   { path: ['pluginHost', 'openPanel'], windows: ['index', 'settings', 'pluginmanager'] },

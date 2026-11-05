@@ -182,11 +182,18 @@ function installFromDirectory(sourceDir, options = {}) {
 }
 
 /**
- * 从 `.sxsp` 安装。
- * @param {string} filePath
- * @param {{appVersion?:string}} options
+ * 只读地检查一个 `.sxsp`：结构、清单、签名。
+ *
+ * 抽出来是为了让"安装"和"下载前预览"走**同一条**判定路径。两份实现最容易漂移的
+ * 地方就是签名与覆盖率的细节，而漂移的后果是"预览说能装、安装却拒"或更糟——
+ * "预览说没签名、安装放行了"。
+ *
+ * 不写盘、不改状态、不发审计：审计由真正做出决定的调用方记（安装成功、
+ * 安装被拒），预览不是一次安装尝试，不该在日志里留痕。
+ *
+ * @returns {{ok:false,error:string}|{ok:true, ...}}
  */
-function installFromPackage(filePath, options = {}) {
+function inspectPackage(filePath, options = {}) {
   let buf;
   try {
     buf = fs.readFileSync(filePath);
@@ -224,8 +231,6 @@ function installFromPackage(filePath, options = {}) {
   if (!checked.ok) return { ok: false, error: checked.error };
 
   const checks = verifyChecksums(entries);
-  if (!checks.ok) return { ok: false, error: checks.error, code: 'CHECKSUM_FAILED' };
-
   // 签名在解包**之前**验：先决定"要不要装"，再决定"往哪写"。
   // 顺序反过来会留下一个中间态——文件已经落盘、策略却拒了。
   const policy = trustStore.read();
@@ -233,17 +238,119 @@ function installFromPackage(filePath, options = {}) {
     keys: trustStore.keyMap(),
     requireSignature: policy.requireSignature,
   });
-  if (!sig.ok) {
-    store.audit('install-rejected', checked.value.id, {
-      version: checked.value.version,
+
+  // 清单校验优先于签名：清单错了，签名覆盖的是一份与包内容对不上的文本，
+  // 此时报"签名无效"会把用户引向错误的方向（该修的是包，不是密钥）。
+  let blockCode = '';
+  let blockMessage = '';
+  if (!checks.ok) {
+    blockCode = 'CHECKSUM_FAILED';
+    blockMessage = checks.error;
+  } else if (!sig.ok) {
+    blockCode = `SIGNATURE_${String(sig.status).toUpperCase().replace(/-/g, '_')}`;
+    blockMessage = sig.message;
+  }
+
+  return {
+    ok: true,
+    entries,
+    manifest: checked.value,
+    checks,
+    sig,
+    policy,
+    checksumVerified: !checks.skipped,
+    installable: !blockCode,
+    blockCode,
+    blockMessage,
+  };
+}
+
+// 预览里最多列多少个文件。用户要判断的是"这个包大致装了些什么"，
+// 不是逐条读一份文件列表；完整清单在安装后由 verifyInstalled 负责。
+const PREVIEW_MAX_FILES = 200;
+
+function contributesCounts(manifest) {
+  const out = {};
+  for (const [key, value] of Object.entries((manifest && manifest.contributes) || {})) {
+    if (Array.isArray(value)) out[key] = value.length;
+    else if (value && typeof value === 'object') out[key] = Object.keys(value).length;
+  }
+  return out;
+}
+
+/**
+ * 下载前预览：给管理器的市场页 / CLI `plugin market preview` 用。
+ *
+ * 返回值刻意**不含包内容**（entries）。渲染层只需要"装进来会发生什么"，
+ * 把文件字节或完整清单递过去只会扩大暴露面。
+ */
+function previewPackage(filePath, options = {}) {
+  const inspected = inspectPackage(filePath, options);
+  if (!inspected.ok) return inspected;
+
+  const m = inspected.manifest;
+  const files = inspected.entries
+    .filter((e) => e.path !== PACKAGE.checksums && e.path !== PACKAGE.signature)
+    .map((e) => ({ path: e.path, size: e.data.length }));
+
+  return {
+    ok: true,
+    preview: {
+      id: m.id,
+      name: m.name,
+      version: m.version,
+      apiVersion: m.apiVersion,
+      description: m.description || '',
+      author: m.author || '',
+      main: m.main,
+      permissions: m.permissions || {},
+      permissionsHash: m.permissionsHash || '',
+      contributes: contributesCounts(m),
+      files: files.slice(0, PREVIEW_MAX_FILES),
+      truncated: files.length > PREVIEW_MAX_FILES,
+      fileCount: files.length,
+      totalBytes: files.reduce((sum, f) => sum + f.size, 0),
+      checksumVerified: inspected.checksumVerified,
+      signature: {
+        status: inspected.sig.status,
+        keyId: inspected.sig.keyId || '',
+        publisher: inspected.sig.publisher || '',
+        signedAt: inspected.sig.signedAt || '',
+        digest: inspected.sig.digest || '',
+      },
+      // 未知密钥时带着公钥回给调用方：管理器据此弹"信任并安装"。
+      pendingKey: inspected.sig.pendingKey || null,
+      installable: inspected.installable,
+      blockCode: inspected.blockCode,
+      blockMessage: inspected.blockMessage,
+    },
+  };
+}
+
+/**
+ * 从 `.sxsp` 安装。
+ * @param {string} filePath
+ * @param {{appVersion?:string}} options
+ */
+function installFromPackage(filePath, options = {}) {
+  const inspected = inspectPackage(filePath, options);
+  if (!inspected.ok) return inspected;
+
+  const { entries, manifest: checked, checks, sig } = inspected;
+  if (!inspected.installable) {
+    if (inspected.blockCode === 'CHECKSUM_FAILED') {
+      return { ok: false, error: inspected.blockMessage, code: 'CHECKSUM_FAILED' };
+    }
+    store.audit('install-rejected', checked.id, {
+      version: checked.version,
       signature: sig.status,
       keyId: sig.keyId || null,
       package: path.basename(filePath),
     });
     return {
       ok: false,
-      error: sig.message,
-      code: `SIGNATURE_${String(sig.status).toUpperCase().replace(/-/g, '_')}`,
+      error: inspected.blockMessage,
+      code: inspected.blockCode,
       signature: {
         status: sig.status,
         keyId: sig.keyId || '',
@@ -256,7 +363,7 @@ function installFromPackage(filePath, options = {}) {
   }
 
   const p = store.ensureDirs();
-  const staging = path.join(p.staging, `${checked.value.id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
+  const staging = path.join(p.staging, `${checked.id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
   try {
     fs.mkdirSync(staging, { recursive: true });
     writeEntries(staging, entries.filter((e) => e.path !== PACKAGE.checksums && e.path !== PACKAGE.signature));
@@ -269,7 +376,7 @@ function installFromPackage(filePath, options = {}) {
   const installed = installFromDirectory(staging, {
     appVersion: options.appVersion,
     source: 'package',
-    dirName: checked.value.id,
+    dirName: checked.id,
     signature: {
       status: sig.status,
       keyId: sig.keyId || '',
@@ -290,9 +397,9 @@ function installFromPackage(filePath, options = {}) {
   // 记下"安装那一刻的文件清单 + 签名"，用于之后的按需重验（verifyInstalled）。
   // 落在 plugins-state/packages/ 而不是插件目录里：插件目录是插件的只读语义领地，
   // 宿主自己的账本不该混进去。
-  writePackageRecord(checked.value.id, {
-    id: checked.value.id,
-    version: checked.value.version,
+  writePackageRecord(checked.id, {
+    id: checked.id,
+    version: checked.version,
     installedAt: Date.now(),
     files: sig.files || checks.files || null,
     signature: {
@@ -432,6 +539,8 @@ function ensureDataDir(id) {
 module.exports = {
   scanPlugins,
   readManifestFile,
+  inspectPackage,
+  previewPackage,
   installFromPackage,
   installFromDirectory,
   uninstall,

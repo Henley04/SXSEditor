@@ -629,6 +629,19 @@ const _fullElectronAPI = {
     trustRemove: (keyId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE, keyId),
     setRequireSignature: (enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE, !!enabled),
     verifyInstall: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL, id),
+    // ---- M6：市场接口 ----
+    // 搜索是"取一次索引、本地过滤"，不逐键发请求；预览一定会下载整包 ——
+    // 索引里的签名字段只是源的自述，包内 signature.json 才是判定依据。
+    marketSources: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_SOURCES),
+    marketAddSource: (input) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_ADD_SOURCE, input || {}),
+    marketRemoveSource: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_REMOVE_SOURCE, id),
+    marketSearch: (query, options) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_SEARCH, query, options || {}),
+    marketPreview: (sourceId, pluginId, options) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_PREVIEW, sourceId, pluginId, options || {})
+    ),
+    marketInstall: (sourceId, pluginId, options) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_INSTALL, sourceId, pluginId, options || {})
+    ),
     setEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_ENABLED, id, !!enabled),
     reload: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RELOAD),
     runCommand: (commandId, args) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RUN_COMMAND, commandId, args || {}),

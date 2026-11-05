@@ -206,6 +206,14 @@ const IPC_CHANNELS = {
   PLUGINHOST_TRUST_REMOVE: 'plugin-host:trust-remove',
   PLUGINHOST_REQUIRE_SIGNATURE: 'plugin-host:require-signature',
   PLUGINHOST_VERIFY_INSTALL: 'plugin-host:verify-install',
+  // M6：市场接口（只定契约，无内置源）。搜索不联网做，索引一次取回本地过滤；
+  // 预览要下载整包才能验签 —— 索引里的签名只是源的自述，不能作为安装依据。
+  PLUGINHOST_MARKET_SOURCES: 'plugin-host:market-sources',
+  PLUGINHOST_MARKET_ADD_SOURCE: 'plugin-host:market-add-source',
+  PLUGINHOST_MARKET_REMOVE_SOURCE: 'plugin-host:market-remove-source',
+  PLUGINHOST_MARKET_SEARCH: 'plugin-host:market-search',
+  PLUGINHOST_MARKET_PREVIEW: 'plugin-host:market-preview',
+  PLUGINHOST_MARKET_INSTALL: 'plugin-host:market-install',
   // 主进程 → 渲染进程
   PLUGINHOST_SYNC: 'plugin-host:sync',
   PLUGINHOST_EVENT: 'plugin-host:event',

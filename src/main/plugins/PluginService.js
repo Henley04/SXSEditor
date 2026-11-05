@@ -26,6 +26,7 @@ const { PluginLeakProbe } = require('./PluginLeakProbe.js');
 const { evaluateKeybindings, collectMenuChords } = require('./PluginKeybindings.js');
 const installer = require('./PluginInstaller.js');
 const trustStore = require('./PluginTrustStore.js');
+const pluginMarket = require('./PluginMarket.js');
 const store = require('./PluginStateStore.js');
 const ipcFacade = require('./PluginIpcV2.js');
 const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
@@ -677,6 +678,8 @@ class PluginService {
       // M6：签名策略与信任的密钥。管理器要能解释"为什么装不上"，
       // 也要让用户看见自己信任了谁。
       trust: trustStore.list(),
+      // M6：市场源。管理器暂未做市场页，但接口已经可用（CLI/后续 UI 同源）。
+      market: { sources: pluginMarket.listSources() },
     };
   }
 
@@ -903,6 +906,71 @@ class PluginService {
   verifyInstalled(id) {
     if (!this.registry.getPlugin(id)) return { ok: false, error: `未安装：${id}` };
     return installer.verifyInstalled(id);
+  }
+
+  // ------------------------------------------------------------ 市场（M6 接口层）
+  /**
+   * 市场这一段只定接口：源的增删、搜索、下载前预览、确认后安装。
+   *
+   * 管理器暂不做市场页（M6 的范围是"接口先定"），但 CLI 已经把这条链路走通，
+   * 将来接 UI 时不需要再改主进程。
+   */
+  marketSources() {
+    return { ok: true, sources: pluginMarket.listSources() };
+  }
+
+  marketAddSource(input) {
+    const result = pluginMarket.addSource(input || {});
+    if (result.ok) ipcFacade.broadcastSnapshot(this);
+    return result;
+  }
+
+  marketRemoveSource(id) {
+    const result = pluginMarket.removeSource(String(id || ''));
+    if (result.ok) ipcFacade.broadcastSnapshot(this);
+    return result;
+  }
+
+  marketSearch(query, options) {
+    return pluginMarket.search(query, {
+      sourceId: options && options.sourceId,
+      sort: options && options.sort,
+      limit: options && options.limit,
+      force: !!(options && options.force),
+    });
+  }
+
+  marketPreview(sourceId, id, options = {}) {
+    return pluginMarket.preview(sourceId, id, {
+      appVersion: app.getVersion(),
+      force: !!options.force,
+    });
+  }
+
+  /**
+   * 从市场安装 = 先走一遍预览（下载 + 验签 + 校验摘要），确认可装后再交给
+   * `installFromPackage`。绝不"跳过预览直接装"：预览是唯一一次用户能看到
+   * 权限与签名的地方。
+   */
+  async marketInstall(sourceId, id, options = {}) {
+    const preview = await this.marketPreview(sourceId, id, { force: !!options.force });
+    if (!preview.ok) return preview;
+    if (!preview.preview.installable) {
+      return {
+        ok: false,
+        error: preview.preview.blockMessage,
+        code: preview.preview.blockCode,
+        signature: preview.preview.signature,
+        pendingKey: preview.preview.pendingKey,
+        packagePath: preview.packagePath,
+      };
+    }
+    store.audit('market-install', preview.entry.id, {
+      source: preview.source.id,
+      version: preview.entry.version,
+      signature: preview.preview.signature.status,
+    });
+    return this.installFromPackage(preview.packagePath);
   }
 
   /**

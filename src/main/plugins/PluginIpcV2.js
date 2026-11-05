@@ -167,6 +167,35 @@ function registerPluginHostIpc(service, options = {}) {
   ));
   track(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL);
 
+  // ---- M6：市场接口 ----
+  safeHandle(IPC_CHANNELS.PLUGINHOST_MARKET_SOURCES, async () => service.marketSources());
+  track(IPC_CHANNELS.PLUGINHOST_MARKET_SOURCES);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_MARKET_ADD_SOURCE, async (_event, input) => (
+    service.marketAddSource(input || {})
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_MARKET_ADD_SOURCE);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_MARKET_REMOVE_SOURCE, async (_event, id) => (
+    service.marketRemoveSource(String(id || ''))
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_MARKET_REMOVE_SOURCE);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_MARKET_SEARCH, async (_event, query, options) => (
+    service.marketSearch(String(query || ''), options || {})
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_MARKET_SEARCH);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_MARKET_PREVIEW, async (_event, sourceId, pluginId, options) => (
+    service.marketPreview(sourceId, String(pluginId || ''), options || {})
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_MARKET_PREVIEW);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_MARKET_INSTALL, async (_event, sourceId, pluginId, options) => (
+    service.marketInstall(sourceId, String(pluginId || ''), options || {})
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_MARKET_INSTALL);
+
   safeHandle(IPC_CHANNELS.PLUGINHOST_OPEN_DIR, async () => {
     const dir = service.getPluginsDir();
     shell.openPath(dir);

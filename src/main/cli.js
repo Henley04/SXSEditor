@@ -92,6 +92,15 @@ Commands:
                   plugin verify <pluginId>
                                         re-check an installed plugin against its
                                         recorded checksums
+                  plugin market [sources|add <url>|remove <id>]
+                                        list/add/remove plugin index sources
+                  plugin market search [query] [--source <id>]
+                                        search configured sources
+                  plugin market preview <pluginId>
+                                        download + verify, show signature and
+                                        permissions before installing
+                  plugin market install <pluginId> --yes
+                                        install after the same preview
                   Add --local to use a temporary instance instead of the running app.
   qdrift-conds    Export calibration conditions (prompt mel + cond) from one or
                   more .sxsproj projects for Q-Drift recalibration.
@@ -938,6 +947,11 @@ function parseArgs(argv) {
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--local') { opts.local = true; continue; }
     if (a === '--name') { opts.name = rest[++i]; continue; }
+    // 市场：源 id / 排序 / 安装确认。`--yes` 单独存在，是为了让 `install`
+    // 在不带它时只打印预览 —— 装插件是改用户目录的动作，不该被一次回车完成。
+    if (a === '--source') { opts.source = rest[++i]; continue; }
+    if (a === '--sort') { opts.sort = rest[++i]; continue; }
+    if (a === '--yes' || a === '-y') { opts.yes = true; continue; }
     if (a === '--out') { opts.out = rest[++i]; continue; }
     if (a === '--out-f32') { opts.outF32 = rest[++i]; continue; }
     if (a === '--steps') { opts.steps = parseInt(rest[++i], 10); continue; }

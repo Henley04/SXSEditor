@@ -581,6 +581,169 @@ async function cmdVerify(opts) {
   return 1;
 }
 
+// ---------------------------------------------------------------- 市场（M6）
+
+const SIG_LABEL = {
+  verified: '已签名且密钥已信任',
+  unsigned: '未签名',
+  'unknown-key': '签名有效，但密钥不在信任列表',
+  invalid: '签名无效',
+  required: '未签名（当前策略要求必须签名）',
+};
+
+function describePermissions(perms) {
+  const entries = Object.entries(perms || {});
+  if (!entries.length) return '无';
+  return entries.map(([group, values]) => (
+    Array.isArray(values) && values.length ? `${group}(${values.join('/')})` : group
+  )).join(', ');
+}
+
+async function cmdMarket(opts) {
+  const [action, argument] = opts._;
+  const market = require('./plugins/PluginMarket.js');
+
+  if (!action || action === 'sources' || action === 'list' || action === 'ls') {
+    const sources = market.listSources();
+    if (opts.json) { printJson({ ok: true, sources }); return 0; }
+    if (!sources.length) {
+      process.stdout.write('还没有配置市场源。\n');
+      process.stdout.write('添加：--cli plugin market add https://example.com/plugins/index.json --name "我的源"\n');
+      return 0;
+    }
+    for (const s of sources) {
+      process.stdout.write(`${s.id}  ${s.name}  ${s.url}${s.kind === 'file' ? '  [file]' : ''}\n`);
+    }
+    return 0;
+  }
+
+  if (action === 'add') {
+    if (!argument) {
+      process.stderr.write('[ARG ERROR] 用法：plugin market add <https://…/index.json> [--name "显示名"]\n');
+      return 2;
+    }
+    const result = market.addSource({ url: argument, name: opts.name || '' });
+    if (!result.ok) {
+      process.stderr.write(`[ERROR] ${result.code || 'ERROR'}: ${result.error}\n`);
+      return 1;
+    }
+    if (opts.json) printJson(result);
+    else process.stdout.write(`${result.existed ? '已存在' : '已添加'} ${result.source.id}  ${result.source.name}\n`);
+    return 0;
+  }
+
+  if (action === 'remove' || action === 'rm') {
+    if (!argument) {
+      process.stderr.write('[ARG ERROR] 用法：plugin market remove <sourceId>\n');
+      return 2;
+    }
+    const result = market.removeSource(argument);
+    if (!result.ok) {
+      process.stderr.write(`[ERROR] ${result.error}\n`);
+      return 1;
+    }
+    process.stdout.write(`已移除 ${argument}\n`);
+    return 0;
+  }
+
+  if (action === 'clear') {
+    const result = market.clearCache();
+    if (opts.json) printJson(result);
+    else process.stdout.write(`已清理 ${result.removed} 个缓存的包\n`);
+    return 0;
+  }
+
+  if (action === 'search' || action === 'find') {
+    const result = await market.search(argument || '', {
+      sourceId: opts.source || '',
+      sort: opts.sort || 'relevance',
+    });
+    if (opts.json) { printJson(result); return result.ok ? 0 : 1; }
+    if (!result.ok) {
+      process.stderr.write(`[ERROR] ${result.error}\n`);
+      return 1;
+    }
+    if (result.needsSource) {
+      process.stdout.write('还没有配置市场源。先用 `plugin market add <索引地址>` 添加一个。\n');
+      return 0;
+    }
+    for (const err of result.errors) {
+      process.stderr.write(`[WARN] 源 ${err.name} 不可用：${err.code} ${err.error}\n`);
+    }
+    if (!result.results.length) {
+      process.stdout.write('没有匹配的插件。\n');
+      return 0;
+    }
+    for (const r of result.results) {
+      const sig = r.signatureClaim ? `签名 ${r.signatureClaim.keyId}` : '未签名';
+      process.stdout.write(`${r.id}  ${r.version}  ${r.name}\n`);
+      process.stdout.write(`    ${sig}${r.signatureClaim && r.signatureClaim.publisher ? `（${r.signatureClaim.publisher}）` : ''}  ${r.file.size} 字节\n`);
+    }
+    return 0;
+  }
+
+  if (action === 'preview' || action === 'install') {
+    if (!argument) {
+      process.stderr.write(`[ARG ERROR] 用法：plugin market ${action} <pluginId> [--source <sourceId>]\n`);
+      return 2;
+    }
+    // 安装前必须先看到"包里的签名 + 权限"，所以 install 也走同一条预览路径。
+    const result = await market.preview(opts.source || '', argument, {
+      appVersion: hostAppVersion(),
+      force: !!opts.force,
+    });
+    if (!result.ok) {
+      process.stderr.write(`[ERROR] ${result.code || 'ERROR'}: ${result.error}\n`);
+      return 1;
+    }
+    const p = result.preview;
+    if (opts.json && action === 'preview') { printJson(result); return 0; }
+
+    process.stdout.write(`${p.name} ${p.version}（${p.id}）\n`);
+    process.stdout.write(`  来源：${result.source.name}\n`);
+    process.stdout.write(`  签名：${SIG_LABEL[p.signature.status] || p.signature.status}`);
+    if (p.signature.keyId) process.stdout.write(`  keyId ${p.signature.keyId}`);
+    process.stdout.write('\n');
+    if (p.signature.publisher) process.stdout.write(`  发布者（包自称）：${p.signature.publisher}\n`);
+    process.stdout.write(`  权限：${describePermissions(p.permissions)}\n`);
+    process.stdout.write(`  文件：${p.fileCount} 个，共 ${(p.totalBytes / 1024).toFixed(1)} KiB\n`);
+    if (p.description) process.stdout.write(`  ${p.description}\n`);
+    for (const w of result.warnings) process.stderr.write(`[WARN] ${w.code}: ${w.message}\n`);
+    if (!p.installable) {
+      process.stderr.write(`[拒绝] ${p.blockMessage}\n`);
+      if (p.blockCode === 'SIGNATURE_UNKNOWN_KEY' && p.pendingKey) {
+        process.stderr.write(`  若确认这是作者的密钥，先运行：plugin trust add <公钥.pem> --name "${p.pendingKey.publisher || '发布者'}"\n`);
+        process.stderr.write(`  密钥指纹：${p.pendingKey.keyId}\n`);
+      }
+      return 1;
+    }
+    if (action === 'preview') {
+      process.stdout.write('可安装。\n');
+      return 0;
+    }
+    if (!opts.yes) {
+      process.stdout.write('未安装：安装会改动插件目录。确认无误后加 --yes 重跑本命令。\n');
+      return 0;
+    }
+
+    const installer = require('./plugins/PluginInstaller.js');
+    const installed = installer.installFromPackage(result.packagePath, { appVersion: hostAppVersion() });
+    if (!installed.ok) {
+      process.stderr.write(`[ERROR] ${installed.error}\n`);
+      return 1;
+    }
+    if (opts.json) printJson(installed);
+    else {
+      process.stdout.write(`已安装 ${p.id} ${p.version}\n`);
+      process.stdout.write('运行中的实例需要重载插件（或重启）后才会看到它。\n');
+    }
+    return 0;
+  }
+
+  process.stderr.write('[ARG ERROR] 用法：plugin market <sources|add|remove|search|preview|install|clear>\n');
+  return 2;
+}
+
 // ---------------------------------------------------------------- 分发
 
 /**
@@ -601,9 +764,10 @@ async function runPluginCommand(rest, opts) {
       case 'trust': return await cmdTrust(merged);
       case 'policy': return await cmdPolicy(merged);
       case 'verify': return await cmdVerify(merged);
+      case 'market': case 'marketplace': return await cmdMarket(merged);
       default:
         process.stderr.write(`Unknown plugin subcommand: ${sub}\n`);
-        process.stderr.write('Usage: --cli plugin <list|methods|call|automation|trust|policy|verify> [options]\n');
+        process.stderr.write('Usage: --cli plugin <list|methods|call|automation|trust|policy|verify|market> [options]\n');
         return 2;
     }
   } catch (err) {
