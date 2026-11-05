@@ -30,7 +30,7 @@
         {
           title: { en: 'Extending', zh: '扩展' },
           items: [
-            { href: 'plugins.html', title: { en: 'Plugin Backends', zh: '插件后端' } }
+            { href: 'plugins.html', title: { en: 'Plugins', zh: '插件' } }
           ]
         },
         {
@@ -67,7 +67,9 @@
           title: { en: 'Extending', zh: '扩展开发' },
           items: [
             { href: 'plugins.html', title: { en: 'Plugin Backends', zh: '插件后端' } },
+            { href: 'plugins-guide.html', title: { en: 'Writing a Plugin', zh: '编写插件' } },
             { href: 'mcp.html', title: { en: 'Automation API (MCP)', zh: '自动化 API（MCP）' } },
+            { href: 'mcp-coverage.html', title: { en: 'MCP Coverage', zh: 'MCP 覆盖边界' } },
             { href: 'themes.html', title: { en: 'Themes & UI', zh: '主题与界面' } },
             { href: 'testing-cli.html', title: { en: 'Testing & CLI', zh: '测试与命令行' } },
             { href: 'singer-market.html', title: { en: 'Singer Market', zh: '歌手市场' } }

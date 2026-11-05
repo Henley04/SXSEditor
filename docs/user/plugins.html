@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Plugin Backends — SXSEditor User Guide</title>
+  <title>Plugins — SXSEditor User Guide</title>
   <link rel="icon" href="../images/icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -52,106 +52,318 @@
         <span class="sep">/</span>
         <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
         <span class="sep">/</span>
-        <span data-lang="en">Plugin Backends</span><span data-lang="zh">插件后端</span>
+        <span data-lang="en">Plugins</span><span data-lang="zh">插件</span>
       </nav>
 
       <h1>
-        <span data-lang="en">Plugin Backends</span>
-        <span data-lang="zh">插件后端</span>
+        <span data-lang="en">Plugins</span>
+        <span data-lang="zh">插件</span>
       </h1>
 
-      <p data-lang="en">A plugin backend is an alternative way to generate singing audio. Instead of the built-in SoulX-Singer model, a track can be rendered by a third-party backend — a different neural model, or a classical concatenation scheme that uses no model at all. Plugins are ordinary folders: installing one is copying it into the plugins directory, and removing one is deleting that folder.</p>
-      <p data-lang="zh">插件后端是生成歌声音频的另一种方式。轨道可以不由内置的 SoulX-Singer 模型渲染，而交给第三方后端——另一个神经模型，或完全不使用模型的传统拼接方案。插件就是普通文件夹：安装即复制到插件目录，卸载即删除该文件夹。</p>
+      <p data-lang="en">A plugin adds something to SXSEditor that the built-in build does not have: another singing backend, extra commands, a side panel, a small on-screen overlay, or access to a model endpoint you configured yourself. All of it is managed from one window — <strong>Plugins → Manage Plugins…</strong> — where you can see what each plugin is allowed to do before you trust it.</p>
+      <p data-lang="zh">插件给 SXSEditor 增加内置版本没有的东西：另一种歌声后端、额外命令、侧边面板、屏幕上的小浮层，或者接上你自己配置的模型端点。这些都归一个窗口管——<strong>插件 → 插件管理器…</strong>——在信任它之前，你能先看清它能做什么。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">No plugin is bundled with the application. The plugin section in the Add Singer dialog reports <em>no plugins installed</em> until you add one yourself.</p>
-          <p data-lang="zh">应用不内置任何插件。在你自己添加之前，「添加歌手」对话框里的插件分区会显示<em>未安装可建轨的插件后端</em>。</p>
+          <p data-lang="en">No plugin ships with the application. A fresh install shows an empty list until you add one.</p>
+          <p data-lang="zh">应用不内置任何插件。全新安装的列表是空的，直到你自己加一个。</p>
         </div>
       </div>
 
       <h2>
-        <span data-lang="en">Where the Plugin Section Lives</span>
-        <span data-lang="zh">插件分区在哪里</span>
+        <span data-lang="en">What a Plugin Can Do</span>
+        <span data-lang="zh">插件能带来什么</span>
       </h2>
 
-      <p data-lang="en">The plugin section is not on the main toolbar. Open the singer selection dialog with the <strong>+</strong> button at the top of the track list in the main window — the plugin section sits below the built-in singer list, offering <em>Open Plugins Folder</em>, <em>Reload</em>, and an entry per available track kind.</p>
-      <p data-lang="zh">插件分区不在主窗口顶栏。在主窗口轨道列表上方的 <strong>+</strong> 按钮打开歌手选择对话框——插件分区位于内置歌手列表下方，提供「打开插件目录」「重新加载」，以及每个可用轨道种类的入口。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Kind</span><span data-lang="zh">类型</span></th>
+            <th><span data-lang="en">What you see</span><span data-lang="zh">你会看到什么</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Singing backend</span><span data-lang="zh">歌声后端</span></td>
+            <td><span data-lang="en">A new track kind in the Add Singer dialog. Tracks made with it are edited exactly like built-in ones and can be mixed into the same project.</span><span data-lang="zh">「添加歌手」里多出一种轨道。用它建的轨道与内置轨道编辑方式完全相同，可以混在同一个工程里。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Commands</span><span data-lang="zh">命令</span></td>
+            <td><span data-lang="en">Entries under the <strong>Plugins</strong> menu, toolbar buttons, status-bar items, context-menu items and keyboard shortcuts.</span><span data-lang="zh"><strong>插件</strong>菜单里的条目、工具栏按钮、状态栏项、右键菜单项与快捷键。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Panels</span><span data-lang="zh">面板</span></td>
+            <td><span data-lang="en">A docked panel with its own interface, plus optional timeline overlays drawn above the fragment lanes.</span><span data-lang="zh">一块带自己界面的停靠面板，以及可选的时间轴浮层（画在分片轨道上方）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Services</span><span data-lang="zh">服务</span></td>
+            <td><span data-lang="en">Nothing directly — one plugin lends a capability to another. If the provider is disabled, the consumer shows <em>degraded</em> instead of silently misbehaving.</span><span data-lang="zh">你不会直接看到——一个插件把能力借给另一个。提供方被停用时，消费方会显示 <em>degraded</em>，而不是悄悄出错。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Model access</span><span data-lang="zh">模型调用</span></td>
+            <td><span data-lang="en">A command that talks to a model endpoint you configured in Settings. The plugin never holds your API key; the host sends the request.</span><span data-lang="zh">调用你在设置里配置的模型端点的命令。插件拿不到你的 API 密钥，请求由宿主代发。</span></td>
+          </tr>
+        </tbody>
+      </table>
 
       <h2>
-        <span data-lang="en">Installing a Plugin</span>
-        <span data-lang="zh">安装插件</span>
+        <span data-lang="en">Opening the Manager</span>
+        <span data-lang="zh">打开插件管理器</span>
       </h2>
 
+      <p data-lang="en">Menu bar → <strong>Plugins → Manage Plugins…</strong>. Three tabs: <em>Installed</em>, <em>Signing &amp; trust</em>, <em>Activity log</em>. The window stays open while you work; installing a plugin does not require a restart.</p>
+      <p data-lang="zh">菜单栏 → <strong>插件 → 插件管理器…</strong>。三个页签：<em>已安装</em>、<em>签名与信任</em>、<em>活动日志</em>。窗口开着也能继续用主界面；装完插件不需要重启。</p>
+
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/plugin-manager-installed.en.webp" data-en="../images/webp/plugin-manager-installed.en.webp" data-zh="../images/webp/plugin-manager-installed.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/plugin-manager-installed.en.webp" data-en="../images/webp/plugin-manager-installed.en.webp" data-zh="../images/webp/plugin-manager-installed.zh.webp" alt="Plugin manager with three installed plugins: status badges, contribution counts, signature state, permission chips, externally exposed automation methods and cross-plugin services" width="1600" height="1376" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>One card per plugin.</strong> The badge is this run's real state, not a stored preference: <em>Running</em>, <em>Disabled</em>, <em>Degraded</em> or <em>Crashed</em>. Below it, the manifest is read back to you — contributions, signature, every permission, and which methods outside programs may call. <em>Uninstall</em> is red on purpose; it is the only destructive action here.</span>
+          <span data-lang="zh"><strong>每个插件一张卡片。</strong>徽章表示这次运行的真实状态，而不是磁盘上的开关：<em>运行中</em>、<em>已停用</em>、<em>降级</em>、<em>已崩溃</em>。下面把 manifest 摊开给你看：贡献点、签名、每一项权限，以及哪些方法允许外部程序调用。<em>卸载</em>用红色是刻意的——这里只有它会造成破坏。</span>
+        </figcaption>
+      </figure>
+
+      <h2>
+        <span data-lang="en">Installing</span>
+        <span data-lang="zh">安装</span>
+      </h2>
+
+      <p data-lang="en">Two routes, same checks underneath.</p>
+      <p data-lang="zh">两条路，底下是同一套检查。</p>
+
+      <h3>
+        <span data-lang="en">From a file</span>
+        <span data-lang="zh">从文件安装</span>
+      </h3>
+
       <ol>
-        <li>
-          <span data-lang="en">Click <strong>Open Plugins Folder</strong> in the plugin section. SXSEditor opens the plugin directory in your file manager. On Windows this is <code>%APPDATA%\SXSEditor\plugins</code>.</span>
-          <span data-lang="zh">在插件分区点<strong>「打开插件目录」</strong>。SXSEditor 会在文件管理器中打开插件目录；Windows 下路径为 <code>%APPDATA%\SXSEditor\plugins</code>。</span>
-        </li>
-        <li>
-          <span data-lang="en">Copy the plugin folder into it. Each plugin is one folder whose name matches the <code>id</code> in its <code>manifest.json</code>, and that folder must contain both <code>manifest.json</code> and its entry script.</span>
-          <span data-lang="zh">把插件文件夹复制进去。每个插件是一个文件夹，目录名须与其 <code>manifest.json</code> 中的 <code>id</code> 一致，且该目录内须同时包含 <code>manifest.json</code> 与入口脚本。</span>
-        </li>
-        <li>
-          <span data-lang="en">Click <strong>Reload</strong>. The list refreshes immediately — no restart needed.</span>
-          <span data-lang="zh">点<strong>「重新加载」</strong>。列表立即刷新，无需重启。</span>
-        </li>
+        <li><span data-lang="en">Click <strong>Install plugin…</strong> and pick a <code>.sxsp</code> package.</span><span data-lang="zh">点<strong>「安装插件…」</strong>，选一个 <code>.sxsp</code> 包。</span></li>
+        <li><span data-lang="en">If the package is signed with a key you have not trusted yet, a banner appears with the publisher name and the key fingerprint. Nothing is written to disk at this point.</span><span data-lang="zh">如果包用的密钥你还没信任，会出现一条横幅，显示发布者名字与密钥指纹。此时磁盘上什么都没有写。</span></li>
+        <li><span data-lang="en">Compare the fingerprint with what the author published. If it matches, choose <strong>Trust and install</strong>; otherwise close the banner.</span><span data-lang="zh">把指纹与作者公布的那串对照。一致就点<strong>「信任并安装」</strong>；不一致就关掉横幅。</span></li>
+        <li><span data-lang="en">The card appears in the list, already running. No restart.</span><span data-lang="zh">卡片出现在列表里，已经在运行。不用重启。</span></li>
       </ol>
 
-      <p data-lang="en">A valid plugin appears in the list and can be used immediately. If a folder does not load, the plugin section shows the reason — a missing <code>manifest.json</code>, a version this build does not support, or an entry script that failed to start.</p>
-      <p data-lang="zh">插件有效后会出现在列表中并可立即使用。若某个文件夹加载失败，插件分区会给出原因——缺少 <code>manifest.json</code>、版本不受当前构建支持，或入口脚本启动失败。</p>
+      <h3>
+        <span data-lang="en">From a market source</span>
+        <span data-lang="zh">从市场源安装</span>
+      </h3>
+
+      <p data-lang="en">A market source is just a URL to a JSON index. Adding one does not install anything; it only makes its packages searchable. <strong>Preview</strong> downloads the whole package and runs the same inspection as a file install — signature, permissions, path portability — then stops before writing. Installation is a separate click.</p>
+      <p data-lang="zh">市场源就是一个指向 JSON 索引的网址。添加它不会安装任何东西，只是让里面的包可被搜索。<strong>预览</strong>会下载整包、跑与本地安装同一套检查（签名、权限、路径可移植性），然后在落盘前停下。安装是另一次点击。</p>
 
       <div class="callout warn">
         <div class="callout-icon">⚠️</div>
         <div class="callout-body">
-          <p data-lang="en">Only install plugins from sources you trust. A plugin runs with the same file and process access as the application itself.</p>
-          <p data-lang="zh">请仅安装来自可信来源的插件。插件拥有与应用相同的文件与进程访问权限。</p>
+          <p data-lang="en">An index is the source's own claim. Its <code>sha256</code> and size are re-checked against the downloaded file, but a source that lies consistently is only caught by the signature — which is exactly why an unsigned package still asks for your confirmation.</p>
+          <p data-lang="zh">索引只是源自己的说法。里面的 <code>sha256</code> 与大小会用下载到的文件重新算一遍，但一个从头到尾都在说谎的源只有签名能戳穿——这也是为什么未签名的包仍然要你确认。</p>
         </div>
       </div>
 
       <h2>
-        <span data-lang="en">Creating a Track from a Plugin</span>
-        <span data-lang="zh">用插件创建轨道</span>
+        <span data-lang="en">Signing &amp; Trust</span>
+        <span data-lang="zh">签名与信任</span>
       </h2>
 
-      <p data-lang="en">Each track kind a plugin advertises appears as its own entry. Choosing one opens a dialog where you pick a voice, if the plugin provides any, and adjust the parameters the plugin has declared. Parameters are declared by the plugin, so what you see here varies from backend to backend. Once confirmed, the track is created and edited with the same fragment editor as a built-in track; a plugin that reuses the built-in editor can present only the panels it needs.</p>
-      <p data-lang="zh">插件声明的每个轨道种类都会作为独立入口出现。选择后会打开一个对话框：若插件提供音色则可选择，并调整插件自己声明的参数。参数由插件决定，因此不同后端显示的内容各不相同。确认后轨道即创建完成，并用与内置轨道相同的分片编辑器编辑；复用内置编辑器的插件可以只呈现它需要的面板。</p>
+      <p data-lang="en">The second tab lists the keys you trust and the policy switch. Trust is stored per <em>fingerprint</em>, not per publisher name: the name inside a package is a string the author typed, while the fingerprint is derived from the public key that actually signed it.</p>
+      <p data-lang="zh">第二个页签列出你信任的密钥和策略开关。信任按<em>指纹</em>记录，不按发布者名字：包里的名字是作者自己敲的字符串，指纹则由真正签名的那把公钥算出来。</p>
 
-      <p data-lang="en">Mixing plugin tracks and built-in tracks in one project is supported. Fragments are routed per track to whichever backend declares them, and the results are combined on a single timeline.</p>
-      <p data-lang="zh">同一工程中混用插件轨道与内置轨道是支持的。各分片会按各自声明的后端分别路由，结果合成到同一条时间轴上。</p>
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/plugin-manager-trust.en.webp" data-en="../images/webp/plugin-manager-trust.en.webp" data-zh="../images/webp/plugin-manager-trust.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/plugin-manager-trust.en.webp" data-en="../images/webp/plugin-manager-trust.en.webp" data-zh="../images/webp/plugin-manager-trust.zh.webp" alt="Signing and trust tab: a signature policy checkbox and one trusted key shown by fingerprint with a remove button" width="1600" height="992" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>Keys, not names.</strong> One trusted key, shown by fingerprint. The policy switch above only affects <em>future</em> installs: turning it on will not uninstall anything, and a package with a broken signature is refused whether or not the switch is on.</span>
+          <span data-lang="zh"><strong>认指纹，不认名字。</strong>一把已信任的密钥，以指纹呈现。上面的策略开关只影响<em>以后</em>的安装：打开它不会卸载任何东西；而签名本身无效的包，无论开关如何都会被拒。</span>
+        </figcaption>
+      </figure>
+
+      <p data-lang="en"><strong>Re-check</strong> on a card re-hashes the installed files and compares them with the checksums recorded at install time. Use it when you suspect a file was edited by hand — it reports which file differs, not just "failed".</p>
+      <p data-lang="zh">卡片上的<strong>「重新校验」</strong>会重新计算已安装文件的哈希，与安装时记录的清单对比。怀疑有人手工改过文件时用它——它会指出是哪个文件不一样，而不只是「失败」。</p>
 
       <h2>
-        <span data-lang="en">While a Plugin Works</span>
-        <span data-lang="zh">插件运行时</span>
+        <span data-lang="en">Enabling, Disabling, Removing</span>
+        <span data-lang="zh">启用、停用、卸载</span>
       </h2>
 
-      <p data-lang="en">A plugin that needs to prepare something before audio can start — loading a voice bank, for instance — shows an overlay with its own message and progress, optionally with a cancel button. Progress that does not require blocking playback is reported through the normal progress bar. Either way the application stays responsive.</p>
-      <p data-lang="zh">需要在音频开始前完成准备的插件（例如加载音色库），会显示带自身文案与进度的浮层，并可选择提供取消按钮；不需要阻塞播放的进度则走常规进度条。无论哪种情况，应用都保持可响应。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Action</span><span data-lang="zh">操作</span></th>
+            <th><span data-lang="en">Effect</span><span data-lang="zh">效果</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong><span data-lang="en">Disable</span><span data-lang="zh">停用</span></strong></td>
+            <td><span data-lang="en">The plugin stops running immediately; its menu items, panel and commands disappear. Files and settings are kept, so enabling it again restores everything.</span><span data-lang="zh">插件立刻停止运行，菜单项、面板与命令一起消失。文件与设置保留，重新启用即恢复。</span></td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Uninstall</span><span data-lang="zh">卸载</span></strong></td>
+            <td><span data-lang="en">Removes the plugin folder. You are asked whether to keep its data — settings, cached files, its own state. Keeping data means a reinstall finds its previous configuration.</span><span data-lang="zh">删除插件目录。会问你是否保留它的数据——设置、缓存文件、自己的状态。保留数据意味着重装后还能找回原来的配置。</span></td>
+          </tr>
+        </tbody>
+      </table>
 
-      <div class="callout note">
-        <div class="callout-icon">ℹ️</div>
+      <p data-lang="en">Tracks that were created with a backend you later removed stay in the project and keep their notes, but they cannot be synthesised until that backend is installed again. The error names the missing plugin rather than silently falling back to the built-in model.</p>
+      <p data-lang="zh">用某个后端建的轨道，在你卸载该后端后仍然留在工程里、音符也不会丢，但在重新装上之前无法合成。报错会指名缺哪个插件，不会静默回退到内置模型。</p>
+
+      <h2>
+        <span data-lang="en">Reading the Activity Log</span>
+        <span data-lang="zh">看活动日志</span>
+      </h2>
+
+      <p data-lang="en">Every load, call, refusal and crash is recorded with a machine-readable event name and a JSON detail. This is the first place to look when something "just doesn't work" — it usually says why in one line.</p>
+      <p data-lang="zh">每次加载、调用、拒绝与崩溃都会记录一条，带事件名与 JSON 详情。遇到「就是不行」的情况先看这里——通常一行就说清了原因。</p>
+
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/plugin-manager-log.en.webp" data-en="../images/webp/plugin-manager-log.en.webp" data-zh="../images/webp/plugin-manager-log.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/plugin-manager-log.en.webp" data-en="../images/webp/plugin-manager-log.en.webp" data-zh="../images/webp/plugin-manager-log.zh.webp" alt="Activity log listing install, reload, install-rejected, trust-add and shutdown events with JSON detail column" width="1600" height="949" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>Two rejected installs, then a successful one.</strong> The first two entries are the same package refused because its key was unknown (<code>unknown-key</code>); the entry after <em>trust key</em> shows <code>signature: verified</code>. Reading this sequence is usually faster than re-running the install.</span>
+          <span data-lang="zh"><strong>两次被拒，然后成功。</strong>前两条是同一个包，因为密钥未知被拒（<code>unknown-key</code>）；「信任密钥」之后那条显示 <code>signature: verified</code>。把这段顺序读一遍，通常比重装一次快。</span>
+        </figcaption>
+      </figure>
+
+      <h2>
+        <span data-lang="en">When Something Goes Wrong</span>
+        <span data-lang="zh">出问题时</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Symptom</span><span data-lang="zh">现象</span></th>
+            <th><span data-lang="en">Likely cause</span><span data-lang="zh">多半是</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">"Install rejected" and no card appears</span><span data-lang="zh">提示安装被拒，列表没有新卡片</span></td>
+            <td><span data-lang="en">Unknown key, broken signature, or a checksum mismatch. The log line names which one.</span><span data-lang="zh">密钥未知、签名损坏或校验和不符。日志那一行会说明是哪一种。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Card shows <em>Degraded</em></span><span data-lang="zh">卡片显示<em>降级</em></span></td>
+            <td><span data-lang="en">A service it depends on is missing or disabled. The card lists the dependency; enable the provider.</span><span data-lang="zh">它依赖的服务缺失或被停用。卡片上列出了依赖项，去启用提供方。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Card shows <em>Crashed</em> or <em>Quarantined</em></span><span data-lang="zh">卡片显示<em>已崩溃</em>或<em>已隔离</em></span></td>
+            <td><span data-lang="en">The plugin threw during load or a call. Quarantine is deliberate: it will not be started again automatically until you reload.</span><span data-lang="zh">插件在加载或调用时抛了异常。隔离是刻意的：在你手动重新加载之前，它不会被自动拉起。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Synthesis produces silence</span><span data-lang="zh">合成出来是静音</span></td>
+            <td><span data-lang="en">Usually a parameter or voice-bank problem rather than a crash. Check the plugin's own settings first.</span><span data-lang="zh">多半是参数或音色库问题，而不是崩溃。先看插件自己的设置。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">A command is missing from the menu</span><span data-lang="zh">菜单里少了某个命令</span></td>
+            <td><span data-lang="en">The plugin is disabled, or it only declares the command for automation (visible to MCP and the CLI, not to the menu).</span><span data-lang="zh">插件被停用了，或那条命令只声明给自动化用（MCP 与 CLI 看得见，菜单里没有）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Using MCP to Reach a Model</span>
+        <span data-lang="zh">用 MCP 接入模型</span>
+      </h2>
+
+      <p data-lang="en">Writing a plugin is one way to bring a model into your workflow. Often it is not the shortest: if what you want is "let my assistant drive the editor and call a model", the recommended route is <strong>MCP</strong>. You configure an endpoint once in Settings, and any MCP-capable client can then call it through the running application — no code, no package, no install.</p>
+      <p data-lang="zh">写插件是把模型接进工作流的一种办法，但常常不是最短的。如果你想要的是「让我常用的助手驱动编辑器、顺便调用模型」，推荐走 <strong>MCP</strong>：端点只在设置里配一次，之后任何支持 MCP 的客户端都能通过正在运行的应用调用它——不写代码、不打包、不安装。</p>
+
+      <h3>
+        <span data-lang="en">Step 1 — Add an endpoint</span>
+        <span data-lang="zh">第一步：添加端点</span>
+      </h3>
+
+      <p data-lang="en"><strong>Settings → Model → Model endpoints → Add endpoint</strong>. Paste an OpenAI-compatible base URL and the key. The key is write-only: once saved it is never shown again, only its presence is reported. Then, under <em>Task bindings</em>, choose which endpoint answers each task (<code>chat</code>, <code>tts</code>, <code>singing</code>, …). A task with no binding fails with a message telling you to bind one — the application never picks an endpoint for you.</p>
+      <p data-lang="zh"><strong>设置 → 模型 → 模型端点 → 添加端点</strong>。填 OpenAI 兼容的 Base URL 与密钥。密钥是只写的：保存后不再显示，只报告「是否已配置」。然后在<em>任务绑定</em>里为每个 task（<code>chat</code>、<code>tts</code>、<code>singing</code>…）指定端点。没有绑定的 task 会直接报错并提示去绑定——应用不会替你挑一个。</p>
+
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/settings-model-endpoints.en.webp" data-en="../images/webp/settings-model-endpoints.en.webp" data-zh="../images/webp/settings-model-endpoints.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/settings-model-endpoints.en.webp" data-en="../images/webp/settings-model-endpoints.en.webp" data-zh="../images/webp/settings-model-endpoints.zh.webp" alt="Settings page for model endpoints with Add endpoint button and an empty task bindings section" width="1600" height="1120" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>Endpoints live in one place.</strong> Both plugins and MCP callers use whatever is bound here — there is no second configuration to keep in sync. The empty state is normal on a fresh profile.</span>
+          <span data-lang="zh"><strong>端点只有这一处。</strong>插件与 MCP 调用方用的都是这里绑定的东西——没有第二份配置需要同步。全新配置下这个空状态是正常的。</span>
+        </figcaption>
+      </figure>
+
+      <h3>
+        <span data-lang="en">Step 2 — Connect a client</span>
+        <span data-lang="zh">第二步：接上客户端</span>
+      </h3>
+
+      <p data-lang="en">Add the stdio server to your MCP client's configuration. It reads the discovery file written by the running application, so no port or token needs to be copied:</p>
+      <p data-lang="zh">在 MCP 客户端的配置里加上这个 stdio 服务器。它自己读运行中的应用写下的发现文件，不需要你抄端口或 token：</p>
+
+      <pre><code>{
+  "mcpServers": {
+    "sxseditor": {
+      "command": "node",
+      "args": ["/path/to/SXSEditor/scripts/sxseditor-mcp.js"]
+    }
+  }
+}</code></pre>
+
+      <p data-lang="en">Start SXSEditor first. The client will then see 68 tools — one per automation method, plus aliases — covering the project, editing, playback, export, settings, windows and model calls.</p>
+      <p data-lang="zh">先启动 SXSEditor。客户端随后会看到 68 个工具——每个自动化方法一个，外加若干别名——覆盖工程、编辑、播放、导出、设置、窗口与模型调用。</p>
+
+      <h3>
+        <span data-lang="en">Step 3 — Ask for the work, not for the tool</span>
+        <span data-lang="zh">第三步：说要做的事，而不是说工具名</span>
+      </h3>
+
+      <p data-lang="en">With the server connected, a request like "把第二段歌词改成英文，然后导出 WAV" is enough: the client reads the schema, calls <code>project.get</code>, applies an edit through <code>project.apply</code>, then <code>audio.exportTo</code>. A model call goes through <code>model.invoke</code>, which uses the binding you set in step 1 and asks for your consent on the first use.</p>
+      <p data-lang="zh">接好之后，「把第二段歌词改成英文，然后导出 WAV」这样的请求就够了：客户端会读 schema，调 <code>project.get</code>，用 <code>project.apply</code> 改，再调 <code>audio.exportTo</code>。模型调用走 <code>model.invoke</code>，用第一步绑定的端点，并在第一次调用时向你确认。</p>
+
+      <h3>
+        <span data-lang="en">MCP or a plugin?</span>
+        <span data-lang="zh">MCP 还是写插件？</span>
+      </h3>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th><span data-lang="en">MCP</span><span data-lang="zh">MCP</span></th>
+            <th><span data-lang="en">Plugin</span><span data-lang="zh">插件</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Who it is for</span><span data-lang="zh">适合谁</span></td>
+            <td><span data-lang="en">You, driving the editor from an assistant or a script</span><span data-lang="zh">你自己，用助手或脚本驱动编辑器</span></td>
+            <td><span data-lang="en">You have something the editor should gain for everyone</span><span data-lang="zh">你有一样东西，应该让编辑器本身具备</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Interface</span><span data-lang="zh">界面</span></td>
+            <td><span data-lang="en">None — the client's chat is the interface</span><span data-lang="zh">没有——客户端的对话就是界面</span></td>
+            <td><span data-lang="en">Menu items, panels, toolbars, track kinds</span><span data-lang="zh">菜单、面板、工具栏、轨道种类</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Model access</span><span data-lang="zh">模型访问</span></td>
+            <td><span data-lang="en"><code>model.invoke</code> with the binding you configured</span><span data-lang="zh"><code>model.invoke</code>，用你配置的绑定</span></td>
+            <td><span data-lang="en"><code>ctx.models</code> — same endpoints, same consent</span><span data-lang="zh"><code>ctx.models</code>——同一批端点，同一套确认</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Cost to start</span><span data-lang="zh">上手成本</span></td>
+            <td><span data-lang="en">One config block</span><span data-lang="zh">一段配置</span></td>
+            <td><span data-lang="en">A manifest, code, packaging, and a signature if you distribute it</span><span data-lang="zh">manifest、代码、打包，要分发还得签名</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
         <div class="callout-body">
-          <p data-lang="en">A plugin that takes unreasonably long or produces silence is usually misconfigured rather than broken — check the parameters and the selected voice first. The application log under <code>%APPDATA%\SXSEditor\logs</code> records every plugin load, synthesis call, and failure reason.</p>
-          <p data-lang="zh">插件耗时过长或输出静音，通常是配置问题而非故障——请先检查参数与所选音色。日志位于 <code>%APPDATA%\SXSEditor\logs</code>，记录了每次插件加载、合成调用与失败原因。</p>
+          <p data-lang="en"><strong>Install plugins only from sources you trust.</strong> A plugin is code that runs on your machine with the application's own access; the permission list tells you what it declared, not what it is capable of in the abstract. If a card asks for permissions that make no sense for what it claims to do, do not install it.</p>
+          <p data-lang="zh"><strong>只安装来自可信来源的插件。</strong>插件是跑在你机器上的代码，拥有与应用同等的访问能力；权限列表告诉你它声明了什么，而不是它理论上能做到什么。如果一张卡片要的权限和它自称的功能对不上，就别装。</p>
         </div>
       </div>
 
-      <h2>
-        <span data-lang="en">Removing a Plugin</span>
-        <span data-lang="zh">卸载插件</span>
-      </h2>
-
-      <p data-lang="en">Close the dialog, delete the plugin folder from the plugins directory, then click <strong>Reload</strong>. Tracks already using that backend stay in the project but cannot be synthesised until such a plugin is installed again; a missing backend is reported explicitly rather than silently falling back to the built-in model.</p>
-      <p data-lang="zh">关闭对话框，删除插件目录中的插件文件夹，然后点<strong>「重新加载」</strong>。已使用该后端的轨道会保留在工程中，但在重新安装同类插件前无法合成；后端缺失会明确报错，不会静默回退到内置模型。</p>
-
-      <h2>
-        <span data-lang="en">For Plugin Authors</span>
-        <span data-lang="zh">插件作者</span>
-      </h2>
-
-      <p data-lang="en">The plugin contract, host guardrails, worker protocol, and a runnable template plugin are documented in the <a href="../dev/plugins.html">Developer Guide: Plugin Backends</a>.</p>
-      <p data-lang="zh">插件契约、宿主护栏、worker 协议与可运行的模板插件见<a href="../dev/plugins.html">开发者指南：插件后端</a>。</p>
+      <p data-lang="en">Building one yourself? Start with <a href="../dev/plugins-guide.html">Writing a Plugin</a> in the developer guide.</p>
+      <p data-lang="zh">想自己写一个？从开发者指南的<a href="../dev/plugins-guide.html">编写插件</a>开始。</p>
 
       <nav class="doc-pager">
         <a href="singer-market.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Singer Market</span><span data-lang="zh">歌手市场</span></div></div></a>

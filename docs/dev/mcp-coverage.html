@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCP Coverage — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.8 1.8 1.8.9 0 1.6-.6 1.9-1.2-2.5-.3-5.2-1.3-5.2-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 0 0 2.2-.3 4.6 1.3.9-1.4 2.2-1.9 3.4-1.9 1.2 0 2.6.5 3.4 1.9 2.5-1.7 4.6-1.3 4.6-1.3 2.3 1.8 1.2 2.8 1.2 3.1 0 4.6-2.6 5.5-5.2 5.8.4.4.8 1.1.8 2.2v3.3c0 .6.2.7.8.5 4.6-1.5 7.9-5.7 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">MCP Coverage</span><span data-lang="zh">MCP 覆盖边界</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">What MCP Covers — and What It Doesn't</span>
+        <span data-lang="zh">MCP 覆盖到哪，没覆盖到哪</span>
+      </h1>
+
+      <p data-lang="en">The automation surface is 49 methods, and the stdio server exposes all of them (68 tool names including aliases and multi-action convenience tools). "All methods are reachable" is not the same as "all workflows are reachable", so this page audits scenarios rather than functions — and names the four places where an agent still has to stop.</p>
+      <p data-lang="zh">自动化面一共 49 个方法，stdio 服务器把它们全部暴露出来（含别名与多动作便利工具共 68 个工具名）。「所有方法都能调」不等于「所有事情都能办」，所以这页按场景审，而不是按函数列——并且点明 agent 必须停下来的四个地方。</p>
+
+      <h2>
+        <span data-lang="en">Covered</span>
+        <span data-lang="zh">已覆盖</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Scenario</span><span data-lang="zh">场景</span></th>
+            <th><span data-lang="en">Methods</span><span data-lang="zh">方法</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Read, edit, validate, save a project</span><span data-lang="zh">读工程、改工程、校验、保存</span></td>
+            <td><code>project.get / apply / replace / validate / saveTo / loadFrom / save / saveAs / load</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Import MIDI, accompaniment, singer files</span><span data-lang="zh">导入 MIDI、伴奏、歌手文件</span></td>
+            <td><code>midi.importFile</code>, <code>accompaniment.import</code>, <code>singer.import</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Pitch curve and editor viewport</span><span data-lang="zh">音高曲线与编辑器视口</span></td>
+            <td><code>fragment.getPitchCurve / setPitchCurve / open / exportTo</code>, <code>editor.getView / setView</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Transport</span><span data-lang="zh">播放控制</span></td>
+            <td><code>playback.play / pause / stop / seek / get</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Export audio and lyrics</span><span data-lang="zh">导出音频与歌词</span></td>
+            <td><code>audio.export / exportTo</code>, <code>lrc.export / exportTo</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Audio to MIDI</span><span data-lang="zh">音频转 MIDI</span></td>
+            <td><code>audio.extractMidi</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Undo / redo</span><span data-lang="zh">撤销 / 重做</span></td>
+            <td><code>history.undo / redo</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Settings</span><span data-lang="zh">设置</span></td>
+            <td><code>settings.get / update</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Model calls through your endpoints</span><span data-lang="zh">通过你的端点调用模型</span></td>
+            <td><code>model.list / invoke / read</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Windows, screenshot, locale</span><span data-lang="zh">窗口、截图、语言</span></td>
+            <td><code>ui.windows / resize / reload / locale / screenshot / open</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Long tasks and cancellation</span><span data-lang="zh">长任务与取消</span></td>
+            <td><code>jobs.list / get / cancel</code> (<code>async: true</code> on the call)</td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Directory authorization</span><span data-lang="zh">目录授权</span></td>
+            <td><code>session.grantRoot / roots / revokeRoots</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Calling plugin-provided commands</span><span data-lang="zh">调用插件提供的命令</span></td>
+            <td><span data-lang="en">Whatever plugins declare under <code>contributes.automation</code>, discovered at runtime as <code>source: plugin:*</code></span><span data-lang="zh">插件在 <code>contributes.automation</code> 里声明的东西，运行期以 <code>source: plugin:*</code> 出现</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Not Covered</span>
+        <span data-lang="zh">未覆盖</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Scenario</span><span data-lang="zh">场景</span></th>
+            <th><span data-lang="en">Why it is out</span><span data-lang="zh">为什么不在里面</span></th>
+            <th><span data-lang="en">What to do instead</span><span data-lang="zh">替代做法</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong><span data-lang="en">Installing, enabling, trusting or removing plugins</span><span data-lang="zh">安装 / 启用 / 信任 / 卸载插件</span></strong></td>
+            <td><span data-lang="en">These are the decisions that grant code execution. Exposing them to a remote caller would mean an agent could widen its own permissions — the one thing the permission model exists to prevent.</span><span data-lang="zh">这几个动作的实质是「授权别人执行代码」。交给外部调用方，等于让 agent 自己给自己扩权——而权限模型存在的意义正是拦住这件事。</span></td>
+            <td><span data-lang="en">The manager window (<strong>Plugins → Manage Plugins…</strong>), or the CLI for the parts that do not install code: <code>plugin list</code>, <code>plugin verify</code>, <code>plugin trust</code>, <code>plugin policy</code>, <code>plugin market preview</code>.</span><span data-lang="zh">管理器窗口（<strong>插件 → 插件管理器…</strong>）；不涉及装代码的部分走 CLI：<code>plugin list</code>、<code>plugin verify</code>、<code>plugin trust</code>、<code>plugin policy</code>、<code>plugin market preview</code>。</span></td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Creating a singer from scratch</span><span data-lang="zh">从零创建歌手</span></strong></td>
+            <td><span data-lang="en">The wizard is a multi-step UI over a model run with human judgement in the middle (picking a take, adjusting a timbre). <code>singer.import</code> covers bringing in a finished singer, not producing one.</span><span data-lang="zh">这个向导是多步 UI，中间夹着模型推理与人的判断（挑一条、调音色）。<code>singer.import</code> 只解决「导入成品歌手」，不解决「生成一个」。</span></td>
+            <td><span data-lang="en">Run the wizard once, then automate against the resulting singer with <code>project.apply</code>.</span><span data-lang="zh">手动跑一次向导，之后用 <code>project.apply</code> 对生成出来的歌手做自动化。</span></td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Menu-level commands</span><span data-lang="zh">菜单级命令</span></strong></td>
+            <td><span data-lang="en">Recent files, "open logs folder", "check for updates" are shell actions with no project semantics. Anything that touches a file can be done with an explicit path instead.</span><span data-lang="zh">最近打开、打开日志目录、检查更新都属于外壳动作，没有工程语义。凡是涉及文件的，都能用显式路径完成。</span></td>
+            <td><span data-lang="en">Use <code>project.loadFrom</code> / <code>saveTo</code> with absolute paths after <code>session.grantRoot</code>.</span><span data-lang="zh">先用 <code>session.grantRoot</code> 授权目录，再用绝对路径走 <code>project.loadFrom</code> / <code>saveTo</code>。</span></td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Reading the plugin activity log</span><span data-lang="zh">读取插件活动日志</span></strong></td>
+            <td><span data-lang="en">The log is a UI surface for the person deciding whether to trust something. It is not a monitoring feed, and it contains package paths.</span><span data-lang="zh">这份日志面向的是「要不要信任它」的人，不是监控数据源，而且里面有包路径。</span></td>
+            <td><span data-lang="en">Open the manager's third tab, or read the log file under <code>&lt;userData&gt;/logs</code>.</span><span data-lang="zh">看管理器第三个页签，或直接读 <code>&lt;userData&gt;/logs</code> 下的文件。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The first gap is a design decision, not an unfinished feature. If it ever changes, it should change by adding a separate, explicitly-granted capability — not by quietly adding methods to the same token.</p>
+          <p data-lang="zh">第一条是设计决定，不是没做完。真要放开，也应该作为单独一项显式授权的能力，而不是悄悄往同一个 token 上加方法。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Two Details That Bite</span>
+        <span data-lang="zh">两个会咬人的细节</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">Discovery depends on userData</span>
+        <span data-lang="zh">端点发现依赖 userData</span>
+      </h3>
+
+      <p data-lang="en">The stdio server locates the running app by reading <code>mcp-endpoint.json</code> from the platform's standard userData path. If you start the app with <code>--user-data-dir=/tmp/something</code>, that file is written there instead and discovery silently fails with <code>ECONNREFUSED</code> against a stale port. Point the server at the right file:</p>
+      <p data-lang="zh">stdio 服务器通过在平台标准 userData 路径读 <code>mcp-endpoint.json</code> 来找到运行中的应用。如果你用 <code>--user-data-dir=/tmp/something</code> 启动，这个文件会写到那里，发现过程就会拿着旧端口报 <code>ECONNREFUSED</code>。把服务器指到正确的文件：</p>
+
+      <pre><code>SXSEDITOR_MCP_ENDPOINT=/tmp/something/mcp-endpoint.json node scripts/sxseditor-mcp.js</code></pre>
+
+      <h3>
+        <span data-lang="en">Model errors keep their classification</span>
+        <span data-lang="zh">模型错误保留原有分类</span>
+      </h3>
+
+      <p data-lang="en">Model-domain codes are translated into MCP codes, with the original kept in <code>details.modelCode</code>. "No endpoint bound for this task" arrives as <code>PRECONDITION_FAILED</code> — retrying it unchanged is pointless, and an agent can tell that apart from <code>INTERNAL</code>:</p>
+      <p data-lang="zh">模型域的错误码会翻成 MCP 码，原始码留在 <code>details.modelCode</code>。「这个 task 没有绑定端点」返回 <code>PRECONDITION_FAILED</code>——原样重试没有意义，而 agent 能把它与 <code>INTERNAL</code> 区分开：</p>
+
+      <pre><code>{
+  "ok": false,
+  "error": {
+    "code": "PRECONDITION_FAILED",
+    "message": "task=chat 没有默认端点",
+    "hint": "configure an endpoint for this task in Settings → Models",
+    "details": { "modelCode": "NEED_ENDPOINT", "retryable": false }
+  }
+}</code></pre>
+
+      <h2>
+        <span data-lang="en">Related</span>
+        <span data-lang="zh">相关</span>
+      </h2>
+
+      <ul>
+        <li><a href="mcp.html"><span data-lang="en">Automation API (MCP) — the full method reference</span><span data-lang="zh">自动化 API（MCP）——完整方法参考</span></a></li>
+        <li><a href="plugins-guide.html"><span data-lang="en">Writing a Plugin — exposing your own commands to MCP</span><span data-lang="zh">编写插件——把自己的命令暴露给 MCP</span></a></li>
+      </ul>
+
+      <nav class="doc-pager">
+        <a href="mcp.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Automation API (MCP)</span><span data-lang="zh">自动化 API（MCP）</span></div></div></a>
+        <a href="themes.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Themes &amp; UI</span><span data-lang="zh">主题与界面</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

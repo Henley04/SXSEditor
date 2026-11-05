@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Writing a Plugin — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.8 1.8 1.8.9 0 1.6-.6 1.9-1.2-2.5-.3-5.2-1.3-5.2-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 0 0 2.2-.3 4.6 1.3.9-1.4 2.2-1.9 3.4-1.9 1.2 0 2.6.5 3.4 1.9 2.5-1.7 4.6-1.3 4.6-1.3 2.3 1.8 1.2 2.8 1.2 3.1 0 4.6-2.6 5.5-5.2 5.8.4.4.8 1.1.8 2.2v3.3c0 .6.2.7.8.5 4.6-1.5 7.9-5.7 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Writing a Plugin</span><span data-lang="zh">编写插件</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Writing a Plugin: End to End</span>
+        <span data-lang="zh">编写插件：从零到发布</span>
+      </h1>
+
+      <p data-lang="en">This page is the practical path: what to decide before writing code, the seven steps from an empty folder to a signed package, and the mistakes that cost the most time. The normative contract for singing backends lives in <a href="plugins.html">Plugin Backends</a>; reference material for models, services, data access and secrets is listed at the end.</p>
+      <p data-lang="zh">这一页讲怎么落地：动手前先定什么、从空目录到签名包的七步流程，以及最容易耗时间的那几个坑。歌声后端的规范性契约在<a href="plugins.html">插件后端</a>；模型、服务、数据访问与密钥的参考文档列在文末。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Every command on this page was run against a real build. Paths and outputs are copied from the terminal, not reconstructed.</p>
+          <p data-lang="zh">本页所有命令都在真实构建上跑过，路径与输出是从终端抄下来的，不是事后补写的。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Design Goals</span>
+        <span data-lang="zh">设计目标</span>
+      </h2>
+
+      <p data-lang="en">Five constraints shaped this system. They are not preferences — each one rules out an implementation that would otherwise look simpler.</p>
+      <p data-lang="zh">整个系统是被五条约束推出来的，不是偏好。每一条都否掉了一种「看起来更简单」的做法。</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Goal</span><span data-lang="zh">目标</span></th>
+            <th><span data-lang="en">What it rules out</span><span data-lang="zh">它否掉了什么</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong><span data-lang="en">Capability first, code second</span><span data-lang="zh">先声明能力，再跑代码</span></strong></td>
+            <td>
+              <span data-lang="en">A plugin that can call <code>ctx.project.apply</code> must have declared <code>project: ["write"]</code>. If permissions were inferred from what the code happens to call, the install dialog could not tell the user anything true, and revoking a permission after the fact would be impossible.</span>
+              <span data-lang="zh">能调 <code>ctx.project.apply</code> 的插件必须声明过 <code>project: ["write"]</code>。如果权限靠「代码里碰巧调了什么」推断，安装对话框就没有一句真话可讲，事后想收回权限也无从下手。</span>
+            </td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Failure must be locatable</span><span data-lang="zh">失败必须可定位</span></strong></td>
+            <td>
+              <span data-lang="en">A hung plugin cannot be allowed to hang the editor, so plugins run off the main thread and are terminated at the deadline. Every install, call and refusal is written to the audit log with a machine-readable code.</span>
+              <span data-lang="zh">一个卡死的插件不能把编辑器一起拖死，所以插件跑在主线程之外，到点直接终止。每次安装、调用、拒绝都带机器可读的错误码写进审计日志。</span>
+            </td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Trust must be decidable</span><span data-lang="zh">信任必须可判定</span></strong></td>
+            <td>
+              <span data-lang="en">"Signed by Example Studio" is a claim inside the package. The manager shows a key fingerprint instead, and the signature covers a manifest of file hashes — so changing one byte invalidates the whole thing.</span>
+              <span data-lang="zh">「由 Example Studio 签名」是包自己说的话。管理器显示的是密钥指纹，签名覆盖的是文件哈希清单——改一个字节，整条链就断。</span>
+            </td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">Portable by construction</span><span data-lang="zh">天生可移植</span></strong></td>
+            <td>
+              <span data-lang="en">Zip entry names are just strings. <code>Main.js</code> and <code>main.js</code> are two files on Linux and one on NTFS, so the same package would install different content on different machines while both verify. Names are validated on read and write.</span>
+              <span data-lang="zh">zip 条目名只是字符串。<code>Main.js</code> 与 <code>main.js</code> 在 Linux 上是两个文件，在 NTFS 上是一个——同一个包在两台机器上装出不同内容，却都能验签通过。所以读写两侧都校验条目名。</span>
+            </td>
+          </tr>
+          <tr>
+            <td><strong><span data-lang="en">The user sees the price up front</span><span data-lang="zh">代价要提前可见</span></strong></td>
+            <td>
+              <span data-lang="en">Permissions, publisher fingerprint and signature state appear before install, not after. Network access for models is brokered by the host, so a plugin cannot quietly ship a hard-coded endpoint and its own key.</span>
+              <span data-lang="zh">权限、发布者指纹、签名状态都在安装前出现，不是装完再说。模型出网由宿主代发，插件没法偷偷内置一个端点和自己的密钥。</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Two Shapes of Plugin</span>
+        <span data-lang="zh">两种插件形态</span>
+      </h2>
+
+      <p data-lang="en">Pick the shape before writing the manifest — the two are not interchangeable, and the fields do not overlap.</p>
+      <p data-lang="zh">先定形态再写 manifest：两者不能互换，字段也不重叠。</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th><code>apiVersion: 1</code></th>
+            <th><code>apiVersion: 2</code></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></td>
+            <td><span data-lang="en">A singing backend that replaces the built-in synthesiser</span><span data-lang="zh">替换内置合成器的歌声后端</span></td>
+            <td><span data-lang="en">A capability pack: commands, panels, services, automation, model access</span><span data-lang="zh">能力包：命令、面板、服务、自动化、模型调用</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Key fields</span><span data-lang="zh">关键字段</span></td>
+            <td><code>trackKinds</code>, <code>capabilities</code>, <code>main</code></td>
+            <td><code>permissions</code>, <code>contributes</code>, <code>main</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Template</span><span data-lang="zh">模板</span></td>
+            <td><code>plugins/example-concat</code> — sine/triangle/pulse concatenation, no model</td>
+            <td><code>plugins/example-hello</code> — command + panel + toolbar + settings</td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Deep dive</span><span data-lang="zh">深入</span></td>
+            <td><a href="plugins.html">Plugin Backends (contract v1)</a></td>
+            <td><a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-services.md">Services</a>, <a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-data.md">Data</a>, <a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-models.md">Models</a>, <a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-automation.md">Automation</a></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">The Full Pipeline</span>
+        <span data-lang="zh">完整流程</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">0. Prerequisites</span>
+        <span data-lang="zh">0. 前置条件</span>
+      </h3>
+
+      <p data-lang="en">Node 20+, a checkout of the repository, and dependencies installed. The packaging script is plain Node — it does not need Electron running, which is what makes it usable in CI.</p>
+      <p data-lang="zh">Node 20+、一份仓库检出、依赖装好。打包脚本是纯 Node 的，不需要 Electron 在跑——所以它能直接放进 CI。</p>
+
+      <pre><code>git clone https://github.com/Henley04/SXSEditor
+cd SXSEditor
+npm ci</code></pre>
+
+      <h3>
+        <span data-lang="en">1. Start from a template, not from scratch</span>
+        <span data-lang="zh">1. 从模板起步，别从空白开始</span>
+      </h3>
+
+      <p data-lang="en">Copy a template out of <code>plugins/</code> and rename the folder. The folder name must equal the <code>id</code> in the manifest; the installer refuses anything else, because two plugins claiming one id would make "disable plugin X" ambiguous.</p>
+      <p data-lang="zh">把 <code>plugins/</code> 下的模板复制出来改名。目录名必须与 manifest 的 <code>id</code> 一致——安装器不接受别的，因为两个插件共用一个 id 会让「停用 X」这句话失去指向。</p>
+
+      <pre><code>cp -r plugins/example-hello plugins/my-plugin
+$EDITOR plugins/my-plugin/manifest.json</code></pre>
+
+      <h3>
+        <span data-lang="en">2. Write the manifest</span>
+        <span data-lang="zh">2. 写 manifest</span>
+      </h3>
+
+      <p data-lang="en">The smallest v2 manifest that can actually do something — one command, exposed to automation, nothing else:</p>
+      <p data-lang="zh">能真正干活的最小 v2 清单——一个命令、允许外部调用，别的都不要：</p>
+
+      <pre><code>{
+  "apiVersion": 2,
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "0.1.0",
+  "main": "main.js",
+  "engines": { "app": "&gt;=2.0.0" },
+  "permissions": { "automation": ["expose"] },
+  "contributes": {
+    "commands": [
+      { "id": "ping", "title": { "en": "Ping", "zh-CN": "打个招呼" } }
+    ],
+    "automation": { "methods": ["ping"] }
+  }
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">A command listed under <code>contributes.automation.methods</code> becomes callable from MCP and the CLI. That is a permission change, not a detail: an agent can then run it without you clicking anything. Leave it out until you actually need it.</p>
+          <p data-lang="zh">写进 <code>contributes.automation.methods</code> 的命令会被 MCP 与 CLI 调用，这等于改权限而不是改配置：外部 agent 可以在没人点按钮的情况下执行它。用不上就先别写。</p>
+        </div>
+      </div>
+
+      <h3>
+        <span data-lang="en">3. Implement the entry module</span>
+        <span data-lang="zh">3. 写入口模块</span>
+      </h3>
+
+      <p data-lang="en">A v2 entry exports <code>activate(ctx)</code> and optionally <code>deactivate()</code>. Every host capability is a method on <code>ctx</code>; anything not on <code>ctx</code> is not reachable, no matter what the code tries.</p>
+      <p data-lang="zh">v2 入口导出 <code>activate(ctx)</code>，可选 <code>deactivate()</code>。宿主能力都是 <code>ctx</code> 上的方法；不在 <code>ctx</code> 上的东西，代码怎么写也够不到。</p>
+
+      <pre><code>exports.activate = async (ctx) =&gt; {
+  ctx.commands.register('ping', async () =&gt; {
+    const project = await ctx.project.read();
+    ctx.ui.notify(`bpm=${project.bpm}`);
+    return { ok: true };
+  });
+};</code></pre>
+
+      <p data-lang="en">Return values matter: MCP clients receive exactly what the command returns, serialised to JSON. Throwing is how you fail — the host turns the error into a code the caller can branch on, and keeps the message for the log.</p>
+      <p data-lang="zh">返回值是有用的：MCP 客户端收到的就是命令返回的那个对象（序列化成 JSON）。失败靠抛异常——宿主把错误翻成调用方可以分支判断的错误码，同时把消息留在日志里。</p>
+
+      <h3>
+        <span data-lang="en">4. Run it for real</span>
+        <span data-lang="zh">4. 真机跑起来</span>
+      </h3>
+
+      <p data-lang="en">Two ways in, and they check different things. The manager shows what a user will see; the CLI shows what an agent will see.</p>
+      <p data-lang="zh">两条路，查的是不同的事。管理器呈现用户看到的东西；CLI 呈现 agent 看到的东西。</p>
+
+      <pre><code># 打包并安装到当前用户
+node scripts/package-plugin.js plugins/my-plugin -o dist-plugins
+
+# 或者直接用 CLI 看装了哪些、暴露了哪些方法
+npm run cli -- --cli plugin list
+npm run cli -- --cli plugin methods
+npm run cli -- --cli plugin call my-plugin.ping --json</code></pre>
+
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/plugin-manager-installed.en.webp" data-en="../images/webp/plugin-manager-installed.en.webp" data-zh="../images/webp/plugin-manager-installed.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/plugin-manager-installed.en.webp" data-en="../images/webp/plugin-manager-installed.en.webp" data-zh="../images/webp/plugin-manager-installed.zh.webp" alt="Plugin manager, Installed tab: three cards showing status badge, contributions, signature state, permissions, automation methods and cross-plugin services" width="1600" height="1376" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>What the manager tells you.</strong> Each card is the manifest rendered back: contributions, signature state, every permission, and — the part authors usually forget — which commands are externally callable. If a method is missing here, it is missing from <code>contributes.automation</code>, not from your code.</span>
+          <span data-lang="zh"><strong>管理器把清单摊开给你看。</strong>每张卡片就是 manifest 的回显：贡献点、签名状态、每一项权限，以及作者最容易忘的那部分——哪些命令能被外部调用。这里没有的方法，是 <code>contributes.automation</code> 里没写，不是代码写错了。</span>
+        </figcaption>
+      </figure>
+
+      <h3>
+        <span data-lang="en">5. Package</span>
+        <span data-lang="zh">5. 打包</span>
+      </h3>
+
+      <p data-lang="en">Do not zip by hand. The package contains a <code>checksums.json</code> that must match the files byte for byte; hand-maintained lists drift, and the installer will reject a drifted package with a message that looks like corruption.</p>
+      <p data-lang="zh">不要手工压缩。包里有一份 <code>checksums.json</code>，必须与文件逐字节对应；手工维护必然漂移，而安装器只会把它当成包损坏报出来。</p>
+
+      <pre><code>node scripts/package-plugin.js plugins/my-plugin -o dist-plugins
+# 已生成 dist-plugins/my-plugin-0.1.0.sxsp（4 个文件，2.6 KB）
+# 未签名：安装时会被标注为"未签名"</code></pre>
+
+      <h3>
+        <span data-lang="en">6. Sign</span>
+        <span data-lang="zh">6. 签名</span>
+      </h3>
+
+      <p data-lang="en">Generate a key pair once, keep the private key out of the repository, and sign every release. The signature covers the checksum manifest, and the manifest covers every file — changing one byte breaks the chain at the first link.</p>
+      <p data-lang="zh">密钥对只生成一次，私钥不要进仓库，每个版本都签。签名覆盖哈希清单，清单覆盖每个文件——改一个字节，链在第一节就断了。</p>
+
+      <pre><code>node scripts/package-plugin.js --gen-key keys/
+node scripts/package-plugin.js plugins/my-plugin -o dist-plugins \
+  --key keys/plugin-signing.key --publisher "Example Studio"
+
+# 已签名 keyId=ed25519-2e37e4d1a26007fb publisher=Example Studio</code></pre>
+
+      <p data-lang="en">Ship the public key (<code>*.pub</code>) alongside the package. Users who have not trusted it yet get one prompt showing the fingerprint; after that the key is remembered by fingerprint, not by publisher name.</p>
+      <p data-lang="zh">公钥（<code>*.pub</code>）随包一起发。还没信任它的用户会看到一次带指纹的确认；确认之后记住的是指纹，不是发布者名字。</p>
+
+      <h3>
+        <span data-lang="en">7. Publish to a market index</span>
+        <span data-lang="zh">7. 发到市场索引</span>
+      </h3>
+
+      <p data-lang="en">An index is a static JSON file. It lists packages with their <code>sha256</code> and size; the client re-checks both against the downloaded file, because the index is the source's claim, not evidence.</p>
+      <p data-lang="zh">索引就是一个静态 JSON。它列出包与 <code>sha256</code>、大小；客户端下载后会自己再算一遍——索引只是源的自述，不是证据。</p>
+
+      <pre><code>{
+  "schema": "sxs-plugin-index-v1",
+  "plugins": [
+    {
+      "id": "my-plugin",
+      "name": "My Plugin",
+      "version": "0.1.0",
+      "url": "https://example.com/plugins/my-plugin-0.1.0.sxsp",
+      "sha256": "e9936ca6a05cbcea…",
+      "size": 2710,
+      "publisher": "Example Studio"
+    }
+  ]
+}</code></pre>
+
+      <p data-lang="en">Then either add the index in the manager or from the terminal:</p>
+      <p data-lang="zh">然后在管理器里添加索引，或在终端里加：</p>
+
+      <pre><code>npm run cli -- --cli plugin market add https://example.com/plugins/index.json --name "My Source"
+npm run cli -- --cli plugin market search my-plugin
+npm run cli -- --cli plugin market preview my-plugin
+npm run cli -- --cli plugin market install my-plugin --yes</code></pre>
+
+      <p data-lang="en"><code>preview</code> downloads the whole package and runs the same inspection the installer uses — signature, permissions, portability — and stops before writing anything. <code>install</code> without <code>--yes</code> refuses; that flag is the difference between "show me" and "do it".</p>
+      <p data-lang="zh"><code>preview</code> 会下载整包、走与安装器同一套检查（签名、权限、可移植性），但在落盘前停下。<code>install</code> 不带 <code>--yes</code> 会被拒——这个开关就是「给我看看」与「动手」的分界。</p>
+
+      <h2>
+        <span data-lang="en">Best Practices</span>
+        <span data-lang="zh">最佳实践</span>
+      </h2>
+
+      <p data-lang="en">Each of these comes from a failure that actually happened during development, not from a style guide.</p>
+      <p data-lang="zh">下面每一条都来自开发中真实发生过的失败，不是风格指南抄来的。</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Do</span><span data-lang="zh">做法</span></th>
+            <th><span data-lang="en">Because</span><span data-lang="zh">原因</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Never busy-wait or run unbounded synchronous work</span><span data-lang="zh">不要忙等，不要在插件里跑无界的同步任务</span></td>
+            <td><span data-lang="en">In <code>inprocess</code> mode a 2-second synchronous loop survives a 300 ms timeout — the timer cannot fire because the loop owns the thread. In worker mode it is killed, which is better, but you still lose the call.</span><span data-lang="zh"><code>inprocess</code> 模式下 2 秒的同步忙等在 300ms 超时下照样跑完——定时器根本没机会触发。worker 模式下它会被杀掉，这更好，但这次调用还是废了。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Declare the narrowest permission set that works</span><span data-lang="zh">按最小可用声明权限</span></td>
+            <td><span data-lang="en">Permissions are shown before install and checked at every call. A plugin asking for <code>project: ["write"]</code> when it only reads will be noticed by users, and rightly so.</span><span data-lang="zh">权限在安装前展示、每次调用都校验。只读却要 <code>project: ["write"]</code> 的插件会被用户看出来，而且应该被看出来。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Keep secrets out of the package</span><span data-lang="zh">密钥不要进包</span></td>
+            <td><span data-lang="en">A <code>.sxsp</code> is a zip; anyone who downloads it can read every byte. Use <code>ctx.secrets</code>, which stores values encrypted per installation.</span><span data-lang="zh"><code>.sxsp</code> 就是 zip，下载者能读每一个字节。用 <code>ctx.secrets</code>，它按安装实例加密存储。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Report progress for anything over a second</span><span data-lang="zh">超过一秒的操作要报进度</span></td>
+            <td><span data-lang="en">The host can only cancel what it can observe. A silent long task looks like a hang, and users kill the app instead of waiting.</span><span data-lang="zh">宿主只能取消它看得见的东西。没有进度的长任务看起来就是卡死，用户会直接杀进程而不是等。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Fail with a sentence a user can act on</span><span data-lang="zh">失败时给用户一句能照做的话</span></td>
+            <td><span data-lang="en"><code>PERMISSION_DENIED</code> alone tells nobody what to do. "Enable file access for this folder in Settings → Plugins" does.</span><span data-lang="zh">只抛 <code>PERMISSION_DENIED</code> 没人知道该干嘛。「在 设置 → 插件 里为这个目录授权」才知道。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Treat <code>ctx.project.apply</code> as the only way to change the project</span><span data-lang="zh">改工程只走 <code>ctx.project.apply</code></span></td>
+            <td><span data-lang="en">Direct mutation bypasses validation and the undo stack; the change disappears on the next project load, which looks like data loss.</span><span data-lang="zh">直接改对象绕过校验和撤销栈；下次加载工程时改动消失，看起来就像丢数据。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Use <code>deactivate()</code> to release timers, watchers and child processes</span><span data-lang="zh">在 <code>deactivate()</code> 里释放定时器、监听与子进程</span></td>
+            <td><span data-lang="en">Disabling a plugin must actually stop it. A leaked interval keeps the process alive and keeps writing into the log after the user turned it off.</span><span data-lang="zh">停用必须真的停。漏掉的 interval 会让进程活着，并在用户关掉之后继续往日志里写。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Test with the packaged file, not the source folder</span><span data-lang="zh">用打好的包测，不要只测源码目录</span></td>
+            <td><span data-lang="en">Packaging adds <code>checksums.json</code> and normalises names. A plugin that works in-place can still fail to install — that is exactly what the packager is for.</span><span data-lang="zh">打包会加 <code>checksums.json</code> 并归一化文件名。源码能跑的插件照样可能装不上——打包器存在的意义就在这里。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Version the contract, not the vibe</span><span data-lang="zh">给契约定版本，别靠感觉</span></td>
+            <td><span data-lang="en"><code>engines.app</code> is checked at load. Bumping a major version without it means old builds try to load a manifest they cannot understand.</span><span data-lang="zh"><code>engines.app</code> 在加载时校验。改了主版本却不写它，旧构建就会去加载自己看不懂的清单。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Watch the activity log while developing</span><span data-lang="zh">开发时盯着活动日志</span></td>
+            <td><span data-lang="en">Every load, call, refusal and crash lands there with a code. It answers "did my command even run?" faster than any breakpoint.</span><span data-lang="zh">每次加载、调用、拒绝、崩溃都带码落在这里。回答「我的命令到底跑没跑」比断点快得多。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/plugin-manager-log.en.webp" data-en="../images/webp/plugin-manager-log.en.webp" data-zh="../images/webp/plugin-manager-log.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/plugin-manager-log.en.webp" data-en="../images/webp/plugin-manager-log.en.webp" data-zh="../images/webp/plugin-manager-log.zh.webp" alt="Activity log tab listing install, reload, install-rejected, trust-add and shutdown entries with JSON detail" width="1600" height="949" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>The activity log.</strong> A rejected install is recorded with the reason (<code>unknown-key</code>) and the package path; trusting the key and installing again produces a second entry with <code>signature: verified</code>. Nothing here is inferred after the fact — these are the decisions the host actually made.</span>
+          <span data-lang="zh"><strong>活动日志。</strong>被拒的安装会记下原因（<code>unknown-key</code>）与包路径；信任密钥后重装，会出现第二条带 <code>signature: verified</code> 的记录。这里没有事后推断，全是宿主当场做过的判断。</span>
+        </figcaption>
+      </figure>
+
+      <h2>
+        <span data-lang="en">Error Codes You Will Actually Hit</span>
+        <span data-lang="zh">你大概率会撞上的错误码</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Code</span><span data-lang="zh">错误码</span></th>
+            <th><span data-lang="en">Where</span><span data-lang="zh">出现位置</span></th>
+            <th><span data-lang="en">Usually means</span><span data-lang="zh">通常意味着</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>INVALID_MANIFEST</code></td>
+            <td><span data-lang="en">Install / load</span><span data-lang="zh">安装 / 加载</span></td>
+            <td><span data-lang="en">A required field is missing or a contribution points at a command that does not exist</span><span data-lang="zh">缺必填字段，或贡献点指向了不存在的命令</span></td>
+          </tr>
+          <tr>
+            <td><code>CHECKSUM_FAILED</code></td>
+            <td><span data-lang="en">Install from file</span><span data-lang="zh">从文件安装</span></td>
+            <td><span data-lang="en">Package files do not match <code>checksums.json</code> — usually edited after packaging</span><span data-lang="zh">包内文件与 <code>checksums.json</code> 不符——通常是打包后又改过文件</span></td>
+          </tr>
+          <tr>
+            <td><code>CHECKSUM_MISMATCH</code></td>
+            <td><span data-lang="en">Market download</span><span data-lang="zh">市场下载</span></td>
+            <td><span data-lang="en">The downloaded bytes do not match the index's <code>sha256</code> or size</span><span data-lang="zh">下载到的字节与索引里的 <code>sha256</code> 或大小不一致</span></td>
+          </tr>
+          <tr>
+            <td><code>SIGNATURE_UNKNOWN_KEY</code></td>
+            <td><span data-lang="en">Install</span><span data-lang="zh">安装</span></td>
+            <td><span data-lang="en">Signed correctly, but this key is not trusted yet — the manager offers to trust it</span><span data-lang="zh">签名是对的，但这把密钥还没被信任——管理器会给出信任入口</span></td>
+          </tr>
+          <tr>
+            <td><code>SIGNATURE_INVALID</code></td>
+            <td><span data-lang="en">Install</span><span data-lang="zh">安装</span></td>
+            <td><span data-lang="en">The signature does not verify against the manifest. Never downgraded to "unsigned"</span><span data-lang="zh">签名与清单对不上。绝不会降级成「未签名」</span></td>
+          </tr>
+          <tr>
+            <td><code>PLUGIN_TIMEOUT</code></td>
+            <td><span data-lang="en">Call</span><span data-lang="zh">调用</span></td>
+            <td><span data-lang="en">The call exceeded its deadline and the worker was terminated</span><span data-lang="zh">调用超时，worker 已被终止</span></td>
+          </tr>
+          <tr>
+            <td><code>PLUGIN_QUARANTINED</code></td>
+            <td><span data-lang="en">Call</span><span data-lang="zh">调用</span></td>
+            <td><span data-lang="en">An earlier crash quarantined the plugin; it needs a reload after the cause is fixed</span><span data-lang="zh">之前崩溃导致插件被隔离；修好原因后需要重新加载</span></td>
+          </tr>
+          <tr>
+            <td><code>SERVICE_GONE</code></td>
+            <td><span data-lang="en">Cross-plugin call</span><span data-lang="zh">跨插件调用</span></td>
+            <td><span data-lang="en">The provider was disabled or uninstalled — the consumer turns <code>degraded</code></span><span data-lang="zh">提供方被停用或卸载——消费方会变成 <code>degraded</code></span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Pre-release Checklist</span>
+        <span data-lang="zh">发布前检查清单</span>
+      </h2>
+
+      <ul>
+        <li><span data-lang="en">Folder name equals <code>id</code>; version bumped; <code>engines.app</code> reflects the API you actually use.</span><span data-lang="zh">目录名等于 <code>id</code>；版本号已升；<code>engines.app</code> 与实际用到的 API 对得上。</span></li>
+        <li><span data-lang="en">Every permission in the manifest is used, and nothing used is missing from it.</span><span data-lang="zh">清单里的权限都用得上，用到的东西也都写进了清单。</span></li>
+        <li><span data-lang="en">No absolute paths, no drive letters, no names differing only by case inside the package.</span><span data-lang="zh">包内没有绝对路径、盘符，也没有仅大小写不同的文件名。</span></li>
+        <li><span data-lang="en">Installed from the packaged <code>.sxsp</code> on a clean profile, not from the source folder.</span><span data-lang="zh">在干净的用户数据里用打好的 <code>.sxsp</code> 装过一次，而不是只在源码目录跑过。</span></li>
+        <li><span data-lang="en">Disable and uninstall both leave no stray process, timer or file handle.</span><span data-lang="zh">停用与卸载都不留下残留进程、定时器或文件句柄。</span></li>
+        <li><span data-lang="en">The activity log reads cleanly after a normal run — no unexplained rejections.</span><span data-lang="zh">正常跑一遍之后活动日志是干净的，没有解释不了的拒绝记录。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Further Reading</span>
+        <span data-lang="zh">延伸阅读</span>
+      </h2>
+
+      <ul>
+        <li><a href="plugins.html"><span data-lang="en">Plugin Backends — contract v1, execution model, guardrails</span><span data-lang="zh">插件后端——契约 v1、执行模型、护栏</span></a></li>
+        <li><a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-services.md"><span data-lang="en">Cross-plugin services</span><span data-lang="zh">跨插件服务</span></a></li>
+        <li><a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-data.md"><span data-lang="en">Data access and path authorization</span><span data-lang="zh">数据访问与路径授权</span></a></li>
+        <li><a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-models.md"><span data-lang="en">Model calls (endpoints, consent, locality)</span><span data-lang="zh">模型调用（端点、授权确认、locality）</span></a></li>
+        <li><a href="https://github.com/Henley04/SXSEditor/blob/main/docs/dev/plugins-automation.md"><span data-lang="en">Exposing commands to MCP and the CLI</span><span data-lang="zh">把命令暴露给 MCP 与 CLI</span></a></li>
+        <li><a href="mcp.html"><span data-lang="en">Automation API (MCP)</span><span data-lang="zh">自动化 API（MCP）</span></a></li>
+      </ul>
+
+      <nav class="doc-pager">
+        <a href="plugins.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Plugin Backends</span><span data-lang="zh">插件后端</span></div></div></a>
+        <a href="mcp.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Automation API (MCP)</span><span data-lang="zh">自动化 API（MCP）</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>
