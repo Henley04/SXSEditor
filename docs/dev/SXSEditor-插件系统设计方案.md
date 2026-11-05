@@ -20,7 +20,8 @@
 > 2026-11-05），**第 2 段是市场接口**（静态索引 `sxs-plugin-index-v1`、源管理、
 > 搜索、下载前预览签名与权限，§9.13，2026-11-05），**第 3 段是无障碍与主题对比度**
 > （管理器键盘模型、ARIA、焦点归还；把"填充色"与"文字色"拆成两组 token，四套主题
-> 95 组组合全部达到 AA，§9.14，2026-11-05）。
+> 95 组组合全部达到 AA，§9.14，2026-11-05），**第 4 段是三平台验证**
+> （包内条目名的便携性硬约束 + CI 三系统矩阵，§9.15，2026-11-05）。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -1220,6 +1221,58 @@ docs/dev/plugins-a11y.md              本文档面向实现者的展开版
 - **iframe 内由插件作者负责**：宿主只能给 frame 一个 `title`，插件面板自身的语义、
   键盘顺序无法代劳。
 - **`--fg-disabled` 只保 3:1**：WCAG 豁免禁用控件；占位符继承它，因此也停在这个下限。
+
+### 9.15 M6 第 4 段：三平台验证（2026-11-05）
+
+**这一段要回答的是**：一个在 Linux 上打出来的包，能不能在 Windows 上装出**同样的内容**。
+
+不是"能不能解开"——是"解开之后是不是同一批文件"。zip 规范里条目名就是字符串，
+没有路径分隔符的概念：`Compress-Archive` 写 `lib\a.js`，`zip` 写 `lib/a.js`；
+同一个包里可以同时有 `Main.js` 和 `main.js`，在 Linux 上是两个文件，
+在 NTFS/APFS 上是一个。于是最糟的情况成立：**同一个包在两台机器上装出不同内容，
+而签名两边都验得过**——因为签名验的是清单里的路径，路径的含义却变了。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | `assertPortableNames`：大小写唯一、Windows 保留名、非法字符、尾部空格/点、长度上限 | 这五条不是洁癖，是"同一包 → 不同内容"的具体成因 |
+| 2 | **读写两侧都查**（`readZip` 结束前、`createZip` 开始后） | 打包时拦住，问题出现在打包机上，而不是等用户在 Windows 上装到一半 |
+| 3 | 反斜杠归一成正斜杠，且视为同一路径 | 否则 POSIX 上会建出名叫 `lib\a.js` 的单个文件 |
+| 4 | 长度上限 180（不是 260） | `C:\Users\<名字>\AppData\Roaming\SXSEditor\plugins\<id>\` 已经吃掉 60+，用户目录名长度不可控 |
+| 5 | 文件内容**按字节**参与 sha256，绝不归一化换行 | 归一化 = "改了文件但摘要不变"，签名会失效 |
+| 6 | 签名规范文本硬编码 `\n`，不读 `os.EOL` | 否则 Windows 上生成的签名在 Linux 上验不过 |
+| 7 | CI 加 `plugin-cross-platform` 矩阵（ubuntu / windows / macos） | 纯 Node 跑文件层用例，不构建 Electron、不装原生桥，三份加起来两分钟 |
+| 8 | 矩阵里额外跑 `audit:contrast` 与 `lint:ipc` | 这两项在三个系统上的结论应当完全一致，不一致本身就是信号 |
+
+改动文件：
+
+```
+src/shared/pluginZip.js               assertPortableNames（读/写两侧调用）
+test/pluginPortability.test.js        14（归一化、四类非法名、打包拦截、换行符）
+.github/workflows/ci.yml              新增 plugin-cross-platform 作业（3 个 OS）
+docs/dev/plugins-cross-platform.md    规则表与取舍
+```
+
+#### 走查（Linux 真机；Windows/macOS 由 CI 矩阵覆盖）
+
+| 场景 | 结果 |
+|---|---|
+| 系统 `zip` 打出含 `con.js` 的包 → 管理器安装 | `安装包无效：zip 条目名是 Windows 保留设备名：con.js`（不落盘、不崩） |
+| 含 `Main.js` + `main.js` 的包 | `zip 含仅大小写不同的重名条目：Main.js / main.js（在 Windows/macOS 上会互相覆盖）` |
+| 正常包（`example-consumer`） | 安装成功，`id: example-consumer` |
+| `scripts/package-plugin.js` 打包两个示例 | 均成功（便携性检查不误伤） |
+| Linux 上跑矩阵用例（142 条） | 全绿 |
+| 单测 | `test/pluginPortability.test.js` 14 passing |
+
+#### 边界（写在明处）
+
+- **只在 Linux 上真机执行过**。Windows / macOS 的结论来自规则推导与 CI 矩阵定义，
+  这两台机器上**没有实际跑过**。矩阵第一次跑红时，先排查 `npm ci --ignore-scripts`
+  是否让某个用例缺依赖。
+- **只覆盖文件层**：解包、签名、索引、主题。插件运行时（utilityProcess）、菜单、
+  面板这些走 Electron 的部分不在矩阵里。
+- **不处理 Unicode 归一化**：`é` 的 NFD/NFC 两种编码在 macOS 上是同一个名字、
+  在 Linux 上是两个。比大小写更冷门，暂未拦。
+- **180 是经验值**：能覆盖绝大多数安装路径，但不是"保证不超 MAX_PATH"的证明。
 
 ## 10. 风险与取舍
 
