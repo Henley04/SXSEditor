@@ -112,15 +112,39 @@ function formatTime(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/**
+ * 审计事件名 → 界面文案。
+ *
+ * 这张表曾经只覆盖 M1 的 7 个事件，M6 新增的 `install-rejected` / `trust-add` /
+ * `market-*` 全部漏在外面：日志里一半中文一半英文码，而"安装被拒"恰恰是用户
+ * 最需要读懂的一条。没映射的名字仍然原样显示 —— 宁可露出原始码，也不要假装
+ * 认识它而显示成空白。
+ */
 function eventLabel(name) {
   const map = {
     install: 'plugins.logEventInstall',
+    'install-rejected': 'plugins.logEventInstallRejected',
+    uninstall: 'plugins.logEventUninstall',
     reload: 'plugins.logEventReload',
     shutdown: 'plugins.logEventShutdown',
     crash: 'plugins.logEventCrash',
     leak: 'plugins.logEventLeak',
-    uninstall: 'plugins.logEventUninstall',
     automation: 'plugins.logEventAutomation',
+    verify: 'plugins.logEventVerify',
+    'trust-add': 'plugins.logEventTrustAdd',
+    'trust-remove': 'plugins.logEventTrustRemove',
+    'trust-policy': 'plugins.logEventTrustPolicy',
+    'market-source-add': 'plugins.logEventMarketSourceAdd',
+    'market-source-remove': 'plugins.logEventMarketSourceRemove',
+    'market-download': 'plugins.logEventMarketDownload',
+    'market-preview': 'plugins.logEventMarketPreview',
+    'panel-open': 'plugins.logEventPanelOpen',
+    'file-open': 'plugins.logEventFileOpen',
+    'file-save': 'plugins.logEventFileSave',
+    'audio-export': 'plugins.logEventAudioExport',
+    'service-denied': 'plugins.logEventServiceDenied',
+    'service-conflict': 'plugins.logEventServiceConflict',
+    'service-cycle': 'plugins.logEventServiceCycle',
   };
   const key = map[name];
   return key ? t(key) : String(name || '-');
