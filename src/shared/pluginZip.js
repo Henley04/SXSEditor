@@ -46,6 +46,52 @@ function normalizeEntryPath(name) {
   return parts.filter((s) => s && s !== '.').join('/');
 }
 
+// Windows 的设备名。解到 `C:\Users\…\plugins\<id>\con.js` 时不是"建一个叫
+// con.js 的文件"，而是写到控制台设备上 —— 解包会失败，或者更糟，静默写空。
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+/**
+ * 打包与解包共用的"便携性"检查：**包是在哪台机器上打的，不该决定它能不能在另一台上解开**。
+ *
+ * 三条规则都不是洁癖：
+ * · 仅大小写不同的重名：macOS 默认大小写不敏感、Windows 也是。同一个包在 Linux 上
+ *   能装出两个文件，在另外两个平台上后写的会覆盖先写的 —— 于是"校验通过"的包
+ *   在两台机器上装出不同的内容。
+ * · Windows 非法字符 `<>:"|?*`：NTFS 上直接写失败（`:` 还会被当成数据流）。
+ * · 以空格或点结尾 / 保留设备名：Windows 会静默去掉尾部、或写到设备上。
+ *
+ * 长度上限取 180：安装目录在 Windows 上通常是
+ * `C:\Users\<user>\AppData\Roaming\SXSEditor\plugins\<id>\`，已经吃掉 60 多个字符，
+ * MAX_PATH 是 260。留出余量而不是卡在 260 上，因为用户目录名长度不可控。
+ */
+function assertPortableNames(entries) {
+  const seen = new Map();
+  for (const entry of entries) {
+    const p = entry.path;
+    const lower = p.toLowerCase();
+    const prev = seen.get(lower);
+    if (prev) {
+      throw new Error(`zip 含仅大小写不同的重名条目：${prev} / ${p}（在 Windows/macOS 上会互相覆盖）`);
+    }
+    seen.set(lower, p);
+
+    if (p.length > 180) {
+      throw new Error(`zip 条目路径过长（${p.length} > 180）：${p}`);
+    }
+    for (const seg of p.split('/')) {
+      if (/[<>:"|?*]/.test(seg)) {
+        throw new Error(`zip 条目名含 Windows 不可用字符：${p}`);
+      }
+      if (/[ .]$/.test(seg)) {
+        throw new Error(`zip 条目名以空格或点结尾：${p}`);
+      }
+      if (WINDOWS_RESERVED.test(seg)) {
+        throw new Error(`zip 条目名是 Windows 保留设备名：${p}`);
+      }
+    }
+  }
+}
+
 /**
  * 解析 zip。
  * @param {Buffer} buf
@@ -144,6 +190,7 @@ function readZip(buf, limits = {}) {
     pos += 46 + nameLen + extraLen + commentLen;
   }
 
+  assertPortableNames(entries);
   return { entries };
 }
 
@@ -157,9 +204,17 @@ function createZip(files) {
   const centrals = [];
   let offset = 0;
 
-  for (const file of files) {
-    const path = normalizeEntryPath(file.path);
-    if (!path) throw new Error(`非法条目路径：${file.path}`);
+  // 打的时候就查一遍：让"只能在 Linux 上装"的包在打包机上报错，
+  // 而不是等用户在 Windows 上装到一半失败。
+  const normalized = files.map((file) => {
+    const p = normalizeEntryPath(file.path);
+    if (!p) throw new Error(`非法条目路径：${file.path}`);
+    return { path: p, data: file.data };
+  });
+  assertPortableNames(normalized);
+
+  for (const file of normalized) {
+    const path = file.path;
     const data = Buffer.isBuffer(file.data) ? file.data : Buffer.from(String(file.data), 'utf8');
     const deflated = zlib.deflateRawSync(data, { level: 9 });
     const useDeflate = deflated.length < data.length;
@@ -220,4 +275,4 @@ function createZip(files) {
   return Buffer.concat([...locals, centralBuf, eocd]);
 }
 
-module.exports = { readZip, createZip, crc32, normalizeEntryPath };
+module.exports = { readZip, createZip, crc32, normalizeEntryPath, assertPortableNames };

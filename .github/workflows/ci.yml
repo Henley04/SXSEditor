@@ -50,6 +50,54 @@ env:
 # ---------------------------------------------------------------------------
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # 跨平台：插件系统的"文件"这一层（解包、签名、市场索引）不依赖 Electron，
+  # 因此可以在三个系统上用纯 Node 跑。Windows 那份仍是主测试；这里多出来的
+  # 价值是"同一份代码在 POSIX 与 NTFS 上都成立"——路径分隔符、大小写、
+  # 换行符、保留设备名，这四类问题在单平台上永远测不出来。
+  # ---------------------------------------------------------------------------
+  plugin-cross-platform:
+    name: Plugin portability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (no native build)
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+
+      - name: Plugin contract tests
+        run: >
+          npx mocha --require ./test/setup.js
+          test/pluginCore.test.js
+          test/pluginSignature.test.js
+          test/pluginMarket.test.js
+          test/pluginPortability.test.js
+          test/pluginLifecycle.test.js
+          test/pluginServices.test.js
+          test/pluginLongTasks.test.js
+          test/themeContrast.test.js
+          --timeout 30000 --reporter spec
+
+      - name: Theme contrast audit (fails on any < AA)
+        run: npm run audit:contrast
+
+      - name: IPC channel contract
+        run: npm run lint:ipc
+
+      - name: Package the example plugins (exercises the portable-name check)
+        run: node scripts/package-plugin.js plugins/example-clock -o build/plugins
+
   test:
     name: Test
     runs-on: windows-latest
