@@ -413,7 +413,12 @@ async function dispatchMain(method, params, ctx = {}) {
       if (!modelService) throw new McpError('UNAVAILABLE', 'Model service is not enabled');
       const resolved = modelService.resolveEndpoint(params.task, params.endpointId);
       if (!resolved.ok) {
-        throw new McpError(resolved.error, resolved.message || 'No endpoint', {
+        // 走 modelErrorToMcp，不要直接把模型域错误码塞进 McpError：
+        // McpError 只认自己那张表，NEED_ENDPOINT 这类会被塌成 INTERNAL/500，
+        // 调用方就分不清"去设置里绑端点"和"宿主炸了"。
+        throw modelErrorToMcp({
+          code: resolved.error,
+          message: resolved.message || 'No endpoint',
           hint: resolved.candidates && resolved.candidates.length
             ? `bind one of: ${resolved.candidates.join(', ')}`
             : 'configure an endpoint for this task in Settings → Models',
@@ -877,6 +882,6 @@ module.exports = {
   // exported for tests / diagnostics
   _internal: {
     dispatch, handle, tokens, modelsAvailable, modelScopeAllows, normalizeModelScopes,
-    publicSchema, pluginMethodDefs, resolveMethod, setPluginAutomation,
+    publicSchema, pluginMethodDefs, resolveMethod, setPluginAutomation, modelErrorToMcp,
   },
 };

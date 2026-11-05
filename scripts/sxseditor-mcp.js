@@ -208,6 +208,10 @@ function toolResult(v) {
 
 function toolError(e) {
   const payload = { code: e.code || 'ERROR', message: e.message, field: e.field, hint: e.hint };
+  // details 里装的是"外层码说不清"的东西：模型域原始码（details.modelCode）、
+  // 逐字段校验错误（details.errors）、是否可重试。丢掉它，调用方就只能看 message
+  // 猜；而这些字段本来就是给程序读的。
+  if (e.details !== undefined) payload.details = e.details;
   return {
     content: [{ type: 'text', text: `Error ${payload.code}: ${payload.message}${payload.field ? ` (field: ${payload.field})` : ''}${payload.hint ? `\nHint: ${payload.hint}` : ''}` }],
     structuredContent: { error: payload },
