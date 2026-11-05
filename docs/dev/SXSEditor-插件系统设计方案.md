@@ -12,8 +12,10 @@
 > 的方法进 MCP（§9.7），`--cli plugin list|methods|call|automation` —— 命令行默认
 > 转发现有实例的 `/automation`，与 agent 看到的能力表、权限门、审计完全一致（§9.8），
 > 以及**插件密钥** `permissions.secrets`（每插件隔离、读写分权、审计只记 key、
-> `encrypted` 如实报告，§9.9，2026-11-05）。M5 剩余（跨插件 service、方法的长任务
-> 形态）与 M6 未开始。
+> `encrypted` 如实报告，§9.9，2026-11-05）；第 4 段是**跨插件 service**
+> （`contributes.services` 的 provides/consumes、确定性冲突裁决、`SERVICE_GONE`，
+> §9.10），第 5 段是**长任务形态**（`long: true` → job、按请求 id 回报进度、
+> 协作式取消，§9.11）。**M5 五段全部落地**，M6 未开始。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -874,6 +876,124 @@ Windows（DPAPI）与 macOS（Keychain）下的密文路径由单测里的假 `s
   或从命令行查。用户级"清除这个插件的密钥"按钮属于 M6 的权限界面。
 - **示例插件把 token 回显在返回值里**，只为让命令行验证往返；真实插件不该这么做
   （文档里已用加粗写了这一条）。
+
+### 9.10 M5 第 4 段：跨插件 service（2026-11-05）
+
+**这一段要回答的是**：两个插件怎么在不互相信任、也随时可能被卸载的前提下互相调用。
+答案是「主进程中转 + 声明式依赖 + 确定性冲突裁决」，而不是让两个进程交换端口。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | `contributes.services.provides` 补 `methods`，新增 `consumes` | 没有方法的服务是"能解析、调用必 404"的陷阱，安装时就该报错；`consumes` 是安装弹窗要写给用户看的依赖清单 |
+| 2 | service id 必须是 `namespace.name` | 全局命名空间（与自动化方法的 `<pluginId>.<cmd>` 相反）：服务表达能力，消费方写代码时就该知道名字；裸词会被先装的插件抢注 |
+| 3 | 同名冲突按 **pluginId 字典序**裁决 | 宿主没有资格判断谁更"对"，但必须给出与安装顺序无关的答案，否则同一份插件集在两台机器上解析到不同实现 |
+| 4 | 依赖缺失 → `degraded`，不拒绝装载 | 装了但用不了要说出来；`optional: true` 是唯一的例外。`degraded` 的插件**仍然可跑**（代码没问题，只是前提不在），调用时由插件自己抛 `SERVICE_GONE` |
+| 5 | 循环依赖只报告、不拒绝 | A→B→A 只有真递归才致命；拒绝会让一组能工作的插件装不上。管理器与 `adminSnapshot.serviceCycles` 列出环 |
+| 6 | 运行期仍有 `MAX_CALL_DEPTH = 8` | 声明层面的环可以放过，运行期的无限递归不行 |
+| 7 | 调用走主进程，不交换端点 | 卸载服务提供方时主进程同步知道端点没了，能立刻给出 `SERVICE_GONE`；否则消费方持有的是一个随时失效的句柄 |
+| 8 | 服务校验在宿主侧做（声明/权限/方法名/深度） | 让"未声明就调"在跨进程之前被拒，比在对端报"未知方法"清楚，也少一次往返 |
+| 9 | 只统计数，不逐条审计成功调用 | 服务调用是插件间高频内部流量，写 jsonl 会把真正要看的事件冲掉；失败与拒绝仍写 `service-gone` / `service-denied` |
+| 10 | 卸载/停用后主动推 `service.changed` | 缓存了服务返回值的消费方，只有收到事件才知道该重算 |
+
+新增/改动文件：
+
+```
+src/shared/pluginServices.js       命名 / 版本范围 / 解析 / 环检测（纯函数）
+src/shared/pluginManifest.js       services.provides|consumes 校验 + permissions.services 门
+src/main/plugins/PluginRegistry.js 'service' 贡献表 + serviceView（解析结果）
+src/main/plugins/PluginService.js  注册/冲突裁决/依赖解析/callService/计数/卸载通知
+src/main/plugins/runtime/pluginRuntimeEntry.js  ctx.services.* + service.call 入口
+src/main/plugins/PluginRuntimeManager.js        （无改动，复用既有请求通道）
+plugins/example-clock/            提供方：example.clock（now / offsetMs）
+plugins/example-consumer/         消费方：依赖 example.clock
+test/pluginServices.test.js       24
+docs/dev/plugins-services.md      作者指南
+```
+
+#### 走查（xvfb + CDP + 真实 MCP HTTP）
+
+| 场景 | 结果 |
+|---|---|
+| 装好两个示例插件后启动 | `[plugins] loaded` 里 `service:1`；管理器两个卡片都出现"跨插件服务"块 |
+| `example-consumer.now`（MCP） | `{provider:"example-clock", version:"1.0.0", methods:["now","offsetMs"], uptimeMs:4}` —— 提供方进程是被这次调用拉起的 |
+| 管理器·提供方卡片 | `example.clock` → `serving v1.0.0`，下一行 `provides: now · offsetMs` |
+| 管理器·消费方卡片 | `example.clock ^1.0.0` → `example-clock v1.0.0`（右侧实时解析结果） |
+| 界面停用提供方 → 再调消费方 | `PRECONDITION_FAILED`，`details.pluginCode = SERVICE_GONE`，消息 `service 'example.clock' 当前不可用（SERVICE_NOT_FOUND）` |
+| 停用后**重载** | 消费方卡片徽标变 `Degraded`，正文 `缺少依赖服务：没有插件提供 service 'example.clock'`，服务块 `unavailable` |
+| 重新启用提供方（不重启应用） | 下一次调用成功；提供方 `uptimeMs` 从 0 重新计（`reloadAll` 重建了进程） |
+| 审计 | `service-gone` 一条（含 `pluginId` 与 `reason`），没有被成功调用刷屏 |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 提供方停用后，消费方调用返回 `INTERNAL` | `SERVICE_GONE` 不在 `PLUGIN_ERR_TO_MCP` 里，未知码统一塌成 `INTERNAL` —— agent 会一直重试一个不存在的端点 | 补 `SERVICE_GONE → PRECONDITION_FAILED`、`SERVICE_RECURSION → CONFLICT`、`PLUGIN_QUARANTINED / PLUGIN_UNLOADED → PRECONDITION_FAILED` |
+| 2 | `degraded` 插件的方法在 schema 里，一调就 `插件状态为 degraded`（再翻成 INTERNAL） | `_call` 把"非 loaded"一律当隔离处理 | degraded 允许启动运行时（缺什么由插件自己报）；quarantined / disabled 才拒 |
+| 3 | 管理器把 `degraded` 显示成"异常" | `statusLabel` 没有 degraded 分支 | 单独一档 `Degraded` / `缺依赖`，与"异常"区分开 |
+| 4 | 老 fixture 里 `services: []` 让管理器整页崩 | `serviceView` 假定 `services` 是对象 | 投影层对不认识的形状按"没声明"处理，不让一个字段拖垮整页 |
+
+#### 没做的部分
+
+- 服务方法的流式返回（一次往返一个结果）；
+- 提供方侧的配额（并发/频次由消费方自律）；
+- 依赖关系的**运行时热切换**：提供方恢复后消费方要等下一条命令才生效（不重建运行时）。
+
+### 9.11 M5 第 5 段：长任务形态（2026-11-05）
+
+**这一段要回答的是**："一个跑三分钟的命令"在自动化面上长什么样。答案是
+`long: true` + job + 进度 + 取消，而且**三件事都由同一个请求 id 串起来**。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | 命令新增 `long: true`；只有它允许 `async: true` 提交成 job | job 是给"等不起"的调用准备的。全都可异步会让 agent 习惯性异步提交，丢掉"这条到底慢不慢"的信号 |
+| 2 | 插件侧超时 `longCommand`（570s），桥接层 600s | 桥接层**必须更宽**：让插件先报"我超时了"（带自己的上下文），而不是被一条没有上下文的 TIMEOUT 抢先 |
+| 3 | 进度按请求 id 回到发起人 | `ctx.ui.progress` 不再广播：同一个插件进程里可能既有面板又有命令，广播只会让界面显示一个与当前操作无关的进度条 |
+| 4 | `jobs.progress` 只保留最后一条 | 进度是"现在到哪了"，不是审计日志；攒历史会让十分钟的任务在内存里堆几千条 |
+| 5 | 取消 = abort（发 `cancel` 给插件）+ **本地立刻结算** | 只发消息的话不配合的插件会拖到超时；只本地结算的话插件还在烧算力。两边都做，"取消立刻生效"与"配合的插件省下算力"同时成立 |
+| 6 | 请求级上下文（`Object.create(ctx)`）承载 signal / 进度归属 / 服务深度 | 挂在共享 ctx 上，并发时用户取消一次导出会连带 abort 另一条命令 |
+| 7 | 不检查 `ctx.signal` 也能跑完，但结果会被丢弃 | 协作式取消：宿主不杀进程（杀进程是卸载/隔离的事），但也不让调用方等 |
+
+新增/改动文件：
+
+```
+src/shared/pluginManifest.js     commands[].long
+src/shared/pluginAutomation.js   def.async = long；SERVICE_* 错误码映射
+src/shared/pluginApi.js          TIMEOUTS.longCommand / ERR.CANCELLED、SERVICE_GONE
+src/main/plugins/PluginService.js        runCommand(opts) / runAutomationMethod(options) / _call(options)
+src/main/plugins/PluginRuntimeManager.js call({onProgress, signal}) + cancel 消息 + 进度路由
+src/main/plugins/runtime/pluginRuntimeEntry.js requestCtx（signal/progress/深度）+ cancel 处理
+src/main/mcpJobs.js              progress() + 快照字段
+src/main/mcpBridge.js            async 门禁、job 进度、jobs.cancel → AbortController
+plugins/example-clock/           countdown 命令（100ms 步进 + 进度 + 取消）
+test/pluginLongTasks.test.js     11
+```
+
+#### 走查（真实 HTTP：202 + 轮询 /jobs/:id）
+
+| 场景 | 结果 |
+|---|---|
+| `/schema` 里的方法标记 | `example-clock.countdown` → `{async:true, long:true, target:"plugin"}`；其余插件方法 `async:false` |
+| 提交 `{ms:3000, async:true}` | `202 {jobId:"job_4ba8…", status:"queued"}` |
+| 轮询 | `running` + `progress{value:0.133…, text:"剩余 2600ms"}` → 0.30 → 0.47 → 0.60 → 0.77 → 0.93（每 450ms 一条，与 100ms 步进一致） |
+| 完成 | `automation-invoke` 审计 `{ok:true, ms:3017, long:true}` |
+| 提交 `{ms:8000}` 后 1.2s `jobs.cancel` | 取消返回 `{cancelled:true, interrupted:true}`；job 在 **1.2s** 结算为 `cancelled`（不是 8s），进度冻结在 0.15 |
+| 取消后的审计 | `{ok:false, code:"CANCELLED", ms:1234, long:true}` |
+| 非 long 方法带 `async:true` | `VALIDATION_ERROR`，hint 指向 `"long": true` |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `jobs.cancel` 的响应仍说"running jobs cannot be interrupted" | 那句话在没有 abort 通道时是真的；接上 abort 后就成了谎话 | 有控制器时改写 reason 并置 `cancelled:true` |
+| 2 | 测试里 `abort` 拿到的是 `PLUGIN_UNLOADED` | 多个用例共用同一个进程桩，上一个用例 `stop()` 的 exit 落到下一个会话 | 每个用例新建桩，并手工接 `_onMessage`（不依赖 `start()` 的 fork） |
+
+#### 边界（写在明处）
+
+- **取消不是强杀**：插件不检查 `ctx.signal` 就会继续跑完，只是结果被丢弃、审计里
+  多一条 `CANCELLED`。要真正停止只能卸载/重启插件进程。
+- 进度只有**最后一条**，没有历史曲线；`/events` 的 `job.progress` 也是即时的。
+- CLI 仍然同步等待（`plugin call` 不带 `--async`）：长命令在命令行里的表现是"等很久"，
+  这是刻意的 —— 脚本里要异步应当直接用 MCP 的 `async: true`。
 
 ## 10. 风险与取舍
 

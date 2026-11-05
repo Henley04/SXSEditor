@@ -125,11 +125,59 @@ SXSEditor --cli plugin call example-sv2.stats --json
 `--cli plugin automation <id> off` 只改磁盘上的用户开关：正在运行的实例需要重载插件
 或重启才生效，命令会明确提示这一点，不会假装已经挡住了调用。
 
-## 7. 还没做的部分
+## 7. 长任务：进度与取消
 
-- 长任务形态：`async: true` 提交成 job（桥接层支持，插件侧还没有进度/取消语义）；
-- 密钥的读写见 [`plugins-secrets.md`](plugins-secrets.md)（已落地，不在此列）；
-- 跨插件 service 调用（`contributes.services` 已校验，未接线）。
+命令声明 `"long": true` 之后，三件事一起生效：
+
+| 能力 | 表现 | 为什么只给 long |
+|---|---|---|
+| 异步提交 | `POST /automation {method, params, async: true}` → `202 {jobId}`，轮询 `GET /jobs/:id` | job 是给"等不起"的调用准备的。全都可异步会让 agent 习惯性异步提交，从而丢掉"这条到底慢不慢"的信号 |
+| 进度 | `ctx.ui.progress(value, text)` → `job.progress` + `/events` 的 `job.progress` | 短命令的进度只是一闪而过的噪声 |
+| 取消 | `jobs.cancel` → 宿主 abort 这次调用 → 插件收到 `ctx.signal` 的 abort | 没有 signal 的取消只是"调用方看不到结果"，机器还在烧 |
+
+```json
+{
+  "contributes": {
+    "commands": [
+      { "id": "render", "title": "Render", "long": true }
+    ],
+    "automation": { "methods": ["render"] }
+  }
+}
+```
+
+```js
+module.exports = {
+  commands: {
+    async render(ctx, args) {
+      const total = args.frames || 1000;
+      for (let i = 0; i < total; i++) {
+        if (ctx.signal.aborted) {
+          // 主动收工：抛 CANCELLED 比静默返回半个结果清楚
+          throw Object.assign(new Error('已取消'), { code: 'CANCELLED' });
+        }
+        await renderFrame(i);
+        // 进度按请求 id 回到发起人 —— 不会广播到所有窗口
+        ctx.ui.progress((i + 1) / total, `frame ${i + 1}/${total}`);
+      }
+      return { frames: total };
+    },
+  },
+};
+```
+
+几条边界：
+
+- **超时**：long 命令在插件侧用 `TIMEOUTS.longCommand`（570s），桥接层 600s。
+  桥接层永远更宽，是为了让插件先报"我超时了"（带它自己的上下文）。
+- **取消是协作式的**：宿主在 abort 的瞬间就把这次调用结算成 `CANCELLED`，不等你返回；
+  你不检查 `ctx.signal` 也能跑完，但结果没人要，算力白烧。
+- **进度只保留最后一条**：进度是"现在到哪了"，不是审计日志。
+- **非 long 命令带 `async: true` 会被拒**（`VALIDATION_ERROR`，`hint` 会告诉你要加
+  `"long": true`）。
+
+跨插件服务调用见 [`plugins-services.md`](plugins-services.md)，密钥见
+[`plugins-secrets.md`](plugins-secrets.md)。
 
 ## 8. 完整示例
 
