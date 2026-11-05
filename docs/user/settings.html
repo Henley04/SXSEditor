@@ -61,7 +61,7 @@
       </h1>
 
       <p data-lang="en">Open Settings from the menu bar: <strong>SXSEditor &gt; Settings</strong>. The Settings window uses a sidebar layout with categories: General, Inference, Audio, Model, Updates, and About. Most settings apply immediately on change (auto-saved with a 300ms debounce); language changes require an app restart.</p>
-      <p data-lang="zh">从菜单栏打开设置：<strong>SXSEditor &gt; Settings</strong>。设置窗口采用侧边栏布局，分类包括：通用、推理、音频、模型、更新和关于。大多数设置在更改后立即生效（300ms 防抖自动保存）；语言更改需要重启应用。</p>
+      <p data-lang="zh">从菜单栏打开设置：<strong>SXSEditor &gt; Settings</strong>。设置窗口采用侧边栏布局，分类包括：通用、推理、音频、模型、更新和关于。大多数设置在更改后立即生效；语言更改需要重启应用。</p>
 
       <h2>
         <span data-lang="en">General</span>
@@ -257,10 +257,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Why FP16 sounds different from the official FP16.</strong> Upstream's <code>--fp16</code> is CUDA mixed precision: <code>model.half()</code> followed by <code>model.mel.float()</code>, then <code>torch.autocast</code>, which keeps softmax / LayerNorm and similar sensitive ops in FP32. Here the ONNX models are TrueFP16 — weights and activations are both fp16, with no automatic promotion — and they run on DirectML / TensorRT-RTX rather than CUDA. Measured against FP32: diffusion step cos ≈ 0.99999 (SNR ≈ 48 dB), vocoder cos ≈ 0.9997 (SNR ≈ 32 dB). A faint hiss in very quiet passages is therefore expected at this precision. Full comparison and a like-for-like checklist: <a href="synthesis-export.html#precision">Synthesis &amp; Export &gt; Model precision</a>.</p>
-          <p data-lang="zh"><strong>为什么本应用的 FP16 与官方 FP16 听感不同。</strong>上游的 <code>--fp16</code> 是 CUDA 混合精度：先 <code>model.half()</code>，再 <code>model.mel.float()</code>，然后用 <code>torch.autocast</code> 把 softmax / LayerNorm 一类敏感算子留在 FP32。这里用的是 ONNX TrueFP16——权重与激活都是 fp16，没有自动提升——且跑在 DirectML / TensorRT-RTX 而非 CUDA。相对 FP32 实测：扩散步 cos ≈ 0.99999（SNR ≈ 48 dB），vocoder cos ≈ 0.9997（SNR ≈ 32 dB）。因此极安静段落出现轻微底噪是该精度的预期表现。完整对比与"对等比较"清单见<a href="synthesis-export.html#precision">合成与导出 &gt; 模型精度</a>。</p>
-          <p data-lang="en">After models load, the console prints one <code>[Precision]</code> line listing the precision actually in use for encoders / diffusion / vocoder / mel and whether Q-Drift is active. Use it to confirm a fallback did not happen (an FP16 <code>diff_step</code> that fails to load silently falls back to FP32 / W16A32).</p>
-          <p data-lang="zh">模型加载后，控制台会打印一行 <code>[Precision]</code>，列出编码器 / 扩散 / vocoder / mel 各自实际使用的精度以及 Q-Drift 状态。可用它确认没有发生静默回退（FP16 的 <code>diff_step</code> 加载失败会自动回退到 FP32 / W16A32）。</p>
+          <p data-lang="en">FP16 is a full half-precision build: weights and activations are both fp16. Compared with FP32, the only audible difference is a faint noise floor in near-silent passages; use FP32 for masters and releases.</p>
+          <p data-lang="zh">FP16 为全半精度构建，权重与激活均为 fp16。与 FP32 相比，唯一可闻的差异是极安静段落中的轻微底噪；母带与发布建议使用 FP32。</p>
         </div>
       </div>
 
@@ -531,12 +529,12 @@
           </tr>
           <tr>
             <td><span data-lang="en">Sample Rate</span><span data-lang="zh">采样率</span></td>
-            <td><span data-lang="en">22050, 24000 (native), 44100 (CD), 48000 (standard), 96000 (high), 192000 (studio) Hz. The default is now 48000 Hz (was 24000 Hz); the model still operates internally at 24 kHz and the output is resampled with a band-limited Kaiser-windowed sinc interpolator.</span><span data-lang="zh">22050、24000（原生）、44100（CD）、48000（标准）、96000（高）、192000（录音棚）Hz。默认现在为 48000 Hz（原为 24000 Hz）；模型仍以 24 kHz 内部运行，输出经 Kaiser 窗带限 sinc 插值重采样。</span></td>
+            <td><span data-lang="en">22050, 24000 (native), 44100 (CD), 48000 (standard), 96000 (high), 192000 (studio) Hz. The default is 48000 Hz.</span><span data-lang="zh">22050、24000（原生）、44100（CD）、48000（标准）、96000（高）、192000（录音棚）Hz。默认为 48000 Hz。模型输出由 24 kHz 自动重采样。</span></td>
             <td><span data-lang="en">48000 Hz</span><span data-lang="zh">48000 Hz</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Export Sample Rate</span><span data-lang="zh">导出采样率</span></td>
-            <td><span data-lang="en">24000, 44100, 48000, 96000 Hz. Selectable per export. Band-limited Kaiser-windowed sinc resampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000、96000 Hz。每次导出可选。从 24 kHz 模型率做 Kaiser 窗带限 sinc 重采样。</span></td>
+            <td><span data-lang="en">24000, 44100, 48000, 96000 Hz, selectable per export. Model output is resampled from 24 kHz automatically.</span><span data-lang="zh">24000、44100、48000、96000 Hz，每次导出可选。模型输出由 24 kHz 自动重采样。</span></td>
             <td><span data-lang="en">48000 Hz</span><span data-lang="zh">48000 Hz</span></td>
           </tr>
           <tr>

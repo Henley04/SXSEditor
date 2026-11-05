@@ -129,7 +129,7 @@
         <div class="callout-icon">⚠️</div>
         <div class="callout-body">
           <p data-lang="en"><strong>Why pure vocals matter:</strong> The model learns voice characteristics from this audio. Any non-vocal content (music, noise, effects) is treated as part of the voice and will cause artifacts in the synthesized output. If your source is a mixed song, use a vocal remover tool to isolate clean vocals first.</p>
-          <p data-lang="zh"><strong>为何必须纯人声：</strong>模型会从参考音频中学习声音特征。任何非人声内容（音乐、噪音、效果）都会被当作声音的一部分学习，导致合成输出出现伪影。如果源文件是混音歌曲，请先使用人声分离工具提取纯净人声。</p>
+          <p data-lang="zh"><strong>参考音频必须为纯人声：</strong>模型会从参考音频中学习声音特征。任何非人声内容（音乐、噪音、效果）都会被当作声音的一部分学习，导致合成输出出现伪影。如果源文件是混音歌曲，请先使用人声分离工具提取纯净人声。</p>
         </div>
       </div>
 
@@ -282,7 +282,7 @@
       </h3>
       <ol>
         <li><span data-lang="en">Click <strong>Save</strong> (💾). This requires at least F0 or MIDI data to be extracted.</span><span data-lang="zh">点击 <strong>Save</strong>（💾）。此操作要求至少提取了 F0 或 MIDI 数据。</span></li>
-        <li><span data-lang="en">All preprocessed data is sent back to the Singer Creator window via IPC.</span><span data-lang="zh">所有预处理数据通过 IPC 发送回歌手创建器窗口。</span></li>
+        <li><span data-lang="en">All preprocessed data is returned to the Singer Creator window.</span><span data-lang="zh">预处理完成后，数据返回歌手创建器窗口。</span></li>
         <li><span data-lang="en">The Singer Creator preview updates to show both "WAV ✓" and "Preprocess ✓" badges.</span><span data-lang="zh">歌手创建器预览会更新，显示 "WAV ✓" 和 "Preprocess ✓" 徽章。</span></li>
       </ol>
 

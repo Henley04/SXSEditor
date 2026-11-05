@@ -88,7 +88,7 @@
       </h3>
       <ul>
         <li><span data-lang="en"><strong>Windows</strong>: Primary target with pre-built installers. Windows 10/11 64-bit required.</span><span data-lang="zh"><strong>Windows</strong>：主要平台，提供预构建安装包。需要 Windows 10/11 64 位。</span></li>
-        <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source using Electron Forge (CPU inference only — no DirectML/Windows ML; not covered by CI, no official binaries). See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建（仅 CPU 推理，不含 DirectML/Windows ML；无 CI 覆盖、无官方二进制）。详见开发者指南。</span></li>
+        <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source with Electron Forge; CPU inference only, without DirectML or Windows ML. No official binaries are provided. See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建，仅支持 CPU 推理，不支持 DirectML / Windows ML，官方不提供预编译二进制。详见开发者指南。</span></li>
       </ul>
 
       <h3>
@@ -130,8 +130,8 @@
         <li><span data-lang="en">FP16: Medium (~1.5 GB)</span><span data-lang="zh">FP16：中等（约 1.5 GB）</span></li>
         <li><span data-lang="en">INT8: Smallest (~1 GB)</span><span data-lang="zh">INT8：最小（约 1 GB）</span></li>
       </ul>
-      <p data-lang="en">Multiple precisions can coexist — each has its own subdirectory.</p>
-      <p data-lang="zh">多种精度可共存——每种精度有独立子目录。</p>
+      <p data-lang="en">Multiple precisions can coexist, each in its own subdirectory.</p>
+      <p data-lang="zh">多种精度可共存，每种精度使用独立子目录。</p>
 
       <h3>
         <span data-lang="en">Which model precision should I choose?</span>
@@ -250,8 +250,8 @@
         <span data-lang="en">What is a slur note?</span>
         <span data-lang="zh">什么是连音音符？</span>
       </h3>
-      <p data-lang="en">A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash <code>-</code> as the note's lyric. The note continues the phoneme of the previous note. <strong>An empty lyric is not a slur</strong> — an empty lyric is a rest and always sings as silence, whether or not the note has a pitch. See <a href="fragment-editor.html#note-types-notetype">Note Types</a>.</p>
-      <p data-lang="zh">连音（延续）音符延续前一个音符的声音而不重新起音。创建方法是在该音符的歌词位置输入半角连字符 <code>-</code>，该音符会延续前一个音符的音素。<strong>空歌词不是连音</strong>——空歌词表示休止，无论音符有无音高都按静音处理。详见<a href="fragment-editor.html#note-types-notetype">音符类型</a>。</p>
+      <p data-lang="en">A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash <code>-</code> as the note's lyric. The note continues the phoneme of the previous note. <strong>An empty lyric is not a slur</strong> — an empty lyric is a rest and always sings as silence, whether or not the note has a pitch. See <a href="fragment-editor.html#lyrics-and-articulation">Lyrics and How They Are Sung</a>.</p>
+      <p data-lang="zh">连音（延续）音符延续前一个音符的声音而不重新起音。创建方法是在该音符的歌词位置输入半角连字符 <code>-</code>，该音符会延续前一个音符的音素。<strong>空歌词不是连音</strong>——空歌词表示休止，无论音符有无音高都按静音处理。详见<a href="fragment-editor.html#lyrics-and-articulation">歌词与发声方式</a>。</p>
 
       <h3>
         <span data-lang="en">How do I draw pitch curves?</span>
@@ -409,15 +409,15 @@
         <span data-lang="en">The extracted notes do not line up with the waveform</span>
         <span data-lang="zh">提取出来的音符和波形对不齐</span>
       </h3>
-      <p data-lang="en">Fixed in v2.0.4. Four things used to shift the time base: the waveform and playhead layer used a hard-coded 120 BPM while notes and the pitch curve used the project BPM; typing a new BPM in the extraction panel did not update the piano roll until the next extraction; the roll itself was created from the 120 constant after the audio decoded, so a window whose panel already showed a saved tempo drew on a 120 grid; and the detector-timeline correction extrapolated from a single frame step, so a jittery first frame could stretch the whole take. All four now share one BPM source, and the correction uses a median frame step clamped to a sane range. If you still see a shift, check that the BPM field matches the song — changing BPM after extraction changes note lengths in beats, not their musical positions.</p>
-      <p data-lang="zh">v2.0.4 已修复。此前有四处会让时间基准错开：波形与播放头层用了写死的 120 BPM，而音符与音高曲线用工程 BPM；在提取面板里改 BPM 不会立刻更新卷帘，要等下次提取；卷帘本身在音频解码后才按常量 120 创建，面板已经显示保存过的速度时网格仍按 120 画；检测器时间轴校正只取首两帧的步长外推，首帧抖动会把整段拉长或压缩。现在这四者共用同一个 BPM 来源，校正改用中位帧步长并夹在合理区间内。如果仍有偏移，请确认 BPM 输入框与歌曲一致——提取之后改 BPM 改变的是音符时值（拍），不是它在音乐里的位置。</p>
+      <p data-lang="en">Fixed in v2.0.4: the waveform, playhead, notes, pitch curve and grid now share one BPM, and a change applies immediately. Earlier builds used different time bases in these layers, which made notes drift away from the waveform.</p>
+      <p data-lang="zh">v2.0.4 起，波形、播放头、音符、音高曲线与网格共用同一 BPM，修改后立即生效。此前这四层使用不同的时间基准，会导致音符与波形错位；升级后打开旧工程即可恢复正常。</p>
 
       <h3>
         <span data-lang="en">The progress bar runs slightly ahead of the sound</span>
         <span data-lang="zh">进度条比声音快一点点</span>
       </h3>
       <p data-lang="en">Fixed in v2.0.4 for the audio-preprocessing window; the main window and the fragment editor already had this since v2.0.3. The playhead is a UI element and Web Audio's <code>currentTime</code> marks where the <em>renderer</em> is, not where the speaker is — the sound still has to travel through the output buffer, which costs 20–120 ms on Windows. A playhead driven by the raw render clock therefore leads the audio by exactly that much, and it looks like the picture is running away from the music. SXSEditor now subtracts <code>AudioContext.outputLatency</code> (falling back to <code>baseLatency</code>, then to no compensation) for anything that describes position — playhead, timecode, seek position — while sample scheduling keeps using the raw clock, because mixing the two would make the audio itself land off the timeline. If you use WASAPI exclusive output, the compensation is estimated from one device buffer, since no context latency is available on that path.</p>
-      <p data-lang="zh">v2.0.4 已修复音频预处理窗口；主窗口与分片编辑器自 v2.0.3 起就是这样。播放头是界面元素，而 Web Audio 的 <code>currentTime</code> 表示<strong>渲染线程</strong>走到哪里，不是喇叭已经放到哪里——声音还要过一遍输出缓冲，Windows 上是 20–120 ms。用渲染时钟直接驱动播放头，就正好会领先声音这么多，看起来就是"画面在甩开音乐"。现在凡描述位置的量（播放头、时间码、跳转位置）都扣除 <code>AudioContext.outputLatency</code>（没有则退到 <code>baseLatency</code>，再没有就不补偿），而采样调度仍用原始时钟——两者混用会让音频本身偏离时间轴。如果你用的是 WASAPI 独占输出，这条路径拿不到 context 的延迟值，补偿量按一个设备缓冲估算。</p>
+      <p data-lang="zh">v2.0.4 已修复音频预处理窗口；主窗口与分片编辑器自 v2.0.3 起就是这样。播放头是界面元素，而 Web Audio 的 <code>currentTime</code> 表示<strong>渲染线程</strong>的进度，并非扬声器实际输出的位置：声音还需经过输出缓冲，Windows 上为 20–120 ms。用渲染时钟直接驱动播放头，就正好会领先声音这么多，看起来就是"画面在甩开音乐"。现在凡描述位置的量（播放头、时间码、跳转位置）都扣除 <code>AudioContext.outputLatency</code>（没有则退到 <code>baseLatency</code>，再没有就不补偿），而采样调度仍用原始时钟——两者混用会让音频本身偏离时间轴。如果你用的是 WASAPI 独占输出，这条路径拿不到 context 的延迟值，补偿量按一个设备缓冲估算。</p>
 
 
       <h2>

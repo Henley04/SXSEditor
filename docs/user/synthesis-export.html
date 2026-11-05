@@ -98,13 +98,13 @@
         <span data-lang="en">Fragment-Level Playback</span>
         <span data-lang="zh">片段级播放</span>
       </h3>
-      <p data-lang="en">In the Fragment Editor, <strong>▶ Play</strong> synthesizes and plays only the current fragment. This is useful for quick previews while editing. It uses the "Preview Inference Parameters" from Settings (fewer diffusion steps = faster response).</p>
-      <p data-lang="zh">在片段编辑器中，<strong>▶ Play</strong> 仅合成并播放当前片段。便于编辑时快速预览。它使用设置中的"预览推理参数"（扩散步数更少 = 响应更快）。</p>
+          <p data-lang="en">In the Fragment Editor, <strong>▶ Play</strong> synthesizes and plays only the current fragment, using the preview inference parameters from Settings.</p>
+          <p data-lang="zh">在片段编辑器中，<strong>▶ Play</strong> 仅合成并播放当前片段，使用设置中的预览推理参数。</p>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Synthesis Cancellation</strong> — preview playback can be stopped at any time: during model loading and synthesis the transport's Play button turns into a <strong>Cancel synthesis</strong> button (Stop also stays available), and the underlying cancellation is <em>cooperative</em> — GPU inference exits at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach. Cancellation is near-instant for Euler/Heun samplers and completes at the next sub-stage for STORK-2. <strong>Export is different:</strong> once an export starts, its Cancel button is disabled and closing the dialog does not stop it — the export keeps running in the background and the WAV file is still written.</p>
-          <p data-lang="zh"><strong>取消合成</strong>——预览播放可随时停止：模型加载与合成期间，播放按钮会变为<strong>取消合成</strong>按钮（Stop 也始终可用），底层取消为<em>协作式</em>——GPU 推理在扩散步之间的安全检查点退出，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。Euler/Heun 求解器下取消近乎即时，STORK-2 则在下一个 sub-stage 完成后退出。<strong>导出则不同：</strong>导出开始后其 Cancel 按钮即被禁用，关闭对话框也不会停止导出——导出会在后台继续运行并照常写出 WAV 文件。</p>
+          <p data-lang="en"><strong>Cancelling synthesis.</strong> Preview playback can be stopped at any time: while the model loads and during synthesis, the Play button becomes <strong>Cancel synthesis</strong> (Stop also works). Cancellation takes effect immediately with the Euler and Heun solvers; with STORK-2 it completes after the current sub-stage. <strong>Export behaves differently:</strong> once an export starts, its Cancel button is disabled and closing the dialog does not stop it; the export continues in the background and writes the WAV file.</p>
+          <p data-lang="zh"><strong>取消合成。</strong>预览播放可随时停止：模型加载与合成期间，播放按钮会变为<strong>取消合成</strong>（Stop 同样可用）。Euler 与 Heun 求解器下立即生效，STORK-2 则在当前子阶段完成后生效。<strong>导出不同：</strong>导出开始后其 Cancel 按钮被禁用，关闭对话框也不会中断导出，导出会在后台继续并写出 WAV 文件。</p>
         </div>
       </div>
 
@@ -178,8 +178,8 @@
       <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram. The number of steps controls the trade-off between quality and speed:</p>
       <p data-lang="zh">扩散模型会迭代地对梅尔频谱图去噪。步数控制质量与速度的权衡：</p>
       <ul>
-        <li><span data-lang="en"><strong>More steps</strong> = higher quality, slower inference. Recommended for export: 32 steps.</span><span data-lang="zh"><strong>更多步数</strong> = 更高音质，推理更慢。导出推荐：32 步。</span></li>
-        <li><span data-lang="en"><strong>Fewer steps</strong> = faster inference, lower quality. Recommended for preview: 8–16 steps.</span><span data-lang="zh"><strong>更少步数</strong> = 推理更快，音质略低。预览推荐：8–16 步。</span></li>
+        <li><span data-lang="en"><strong>More steps</strong> raise quality and slow inference down. Recommended for export: 32 steps.</span><span data-lang="zh"><strong>更多步数</strong>可提高音质，推理更慢。导出推荐 32 步。</span></li>
+        <li><span data-lang="en"><strong>Fewer steps</strong> speed inference up at some cost in quality. Recommended for preview: 8–16 steps.</span><span data-lang="zh"><strong>更少步数</strong>可加快推理，音质略有下降。预览推荐 8–16 步。</span></li>
         <li><span data-lang="en">Range: 4–64 steps.</span><span data-lang="zh">范围：4–64 步。</span></li>
       </ul>
 
@@ -206,8 +206,8 @@
         <span data-lang="en">Post-Processing &amp; Quality Options</span>
         <span data-lang="zh">后处理与音质选项</span>
       </h2>
-      <p data-lang="en">Options that change the sound after (or during) the model run are often lumped together as "post-processing", but they act at three very different places. Knowing which stage a switch belongs to explains why some of them cannot be combined:</p>
-      <p data-lang="zh">改变"模型跑完之后"声音的选项常被统称为"后处理"，但它们其实作用在三个完全不同的位置。分清楚阶段，就能理解为什么有些开关不能同时开：</p>
+      <p data-lang="en">Options that change how the sound is rendered after the model runs are grouped as post-processing, but they act at three different stages. The stage determines which options can be used together:</p>
+      <p data-lang="zh">改变"模型运行之后"声音的选项统称为后处理，但它们作用在三个不同阶段。阶段决定了哪些选项可以同时开启：</p>
       <ol>
         <li><span data-lang="en"><strong>Inside the diffusion loop</strong> — dynamic thresholding, CFG schedule, Q-Drift, the initial noise seed, SDEdit repair. They change what the model converges to, so they are the strongest and the most likely to conflict.</span><span data-lang="zh"><strong>扩散循环内部</strong>——动态阈值、CFG 调度、Q-Drift、初始噪声种子、SDEdit 修复。它们改变模型最终收敛到哪条轨迹，影响最大，也最容易互相冲突。</span></li>
         <li><span data-lang="en"><strong>On the mel spectrogram, before the vocoder</strong> — the Timbre lane curves (spectral interpolation, time/freq Gaussian smoothing). They reshape the spectrum the vocoder sees.</span><span data-lang="zh"><strong>Mel 频谱上、vocoder 之前</strong>——音色 lane 的曲线（频谱插值、时频高斯平滑）。它们改变 vocoder 看到的频谱形状。</span></li>
@@ -294,8 +294,8 @@
       </div>
 
       <h3 id="precision">
-        <span data-lang="en">Model precision, and why FP16 differs from the official FP16</span>
-        <span data-lang="zh">模型精度：为什么本应用的 FP16 与官方 FP16 不同</span>
+        <span data-lang="en">Model precision</span>
+        <span data-lang="zh">模型精度</span>
       </h3>
       <p data-lang="en">The precision switch chooses which set of ONNX weights to load; it does not change any sampling parameter. Four variants are supported:</p>
       <p data-lang="zh">精度开关决定加载哪一套 ONNX 权重，不改变任何采样参数。支持四种变体：</p>
@@ -335,17 +335,8 @@
           </tr>
         </tbody>
       </table>
-      <p data-lang="en">The official repository's <code>--fp16</code> flag is <strong>CUDA mixed precision</strong>: it calls <code>model.half()</code>, then immediately <code>model.mel.float()</code> to keep the mel transform in FP32, and wraps encoders, diffusion and vocoder in <code>torch.autocast</code> — which silently runs softmax, LayerNorm and similar sensitive ops in FP32. The ONNX FP16 models used here are <strong>TrueFP16</strong>: weights and activations are both fp16, with no automatic promotion. It also only runs on CUDA upstream (<code>use_fp16 = use_fp16 and pt_wav.is_cuda</code>), while here it runs on DirectML / TensorRT-RTX.</p>
-      <p data-lang="zh">官方仓库的 <code>--fp16</code> 是 <strong>CUDA 混合精度</strong>：先 <code>model.half()</code>，紧接着 <code>model.mel.float()</code> 让 mel 变换留在 FP32，再用 <code>torch.autocast</code> 包住编码器、扩散与 vocoder——autocast 会把 softmax、LayerNorm 一类敏感算子自动放回 FP32。本应用用的是 ONNX <strong>TrueFP16</strong>：权重与激活都是 fp16，没有这层自动提升；而且上游只在 CUDA 上启用（<code>use_fp16 = use_fp16 and pt_wav.is_cuda</code>），这里跑的是 DirectML / TensorRT-RTX。</p>
-      <p data-lang="en">Measured against FP32 on the same machine (cosine / SNR per model, <code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>): the diffusion step keeps <strong>cos ≈ 0.99999, SNR ≈ 47–48 dB</strong>, while the vocoder is the weakest link at <strong>cos ≈ 0.9997, SNR ≈ 32–33 dB</strong> (max abs error ≈ 1.1×10⁻³). That is why a faint background hiss in very quiet passages is the expected difference, not a bug — and why FP32 is still the right choice for a master. The block-level error of the diffusion step is far below the vocoder's, so lowering diffusion precision further (INT8) costs much more than FP16 does.</p>
-      <p data-lang="zh">同机实测（每个模型相对 FP32 的余弦 / 信噪比，见 <code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>）：扩散步为 <strong>cos ≈ 0.99999、SNR ≈ 47–48 dB</strong>，而 vocoder 是整条链路里最弱的一环——<strong>cos ≈ 0.9997、SNR ≈ 32–33 dB</strong>（最大绝对误差约 1.1×10⁻³）。因此"极安静段落有极轻的底噪"属于这一精度的预期差异，不是故障；也正因如此，母带仍应使用 FP32。扩散步的分块误差远低于 vocoder，所以继续降低扩散精度（INT8）的代价要比 FP16 大得多。</p>
-      <div class="callout note">
-        <div class="callout-icon">ℹ️</div>
-        <div class="callout-body">
-          <p data-lang="en">To compare with the official FP16 on equal footing: set the same sampler / steps / CFG / rescale (Euler, 32, 3.0, 0.7 is the upstream default), <strong>turn Q-Drift off</strong> (it is an SXSEditor-only correction), keep dynamic thresholding off, and fix a noise seed. The console prints one <code>[Precision]</code> line after loading — <code>encoders=… diff=… vocoder=… mel=… qdrift=…</code> — so you can verify that the precision you selected is the precision that actually loaded (a failed FP16 <code>diff_step</code> silently falls back to FP32 / W16A32).</p>
-          <p data-lang="zh">要与官方 FP16 对等比较：把求解器 / 步数 / CFG / rescale 设成同一组（官方默认 Euler、32、3.0、0.7），<strong>关闭 Q-Drift</strong>（它是本应用独有的校正），保持动态阈值关闭，并固定噪声种子。模型加载后控制台会打印一行 <code>[Precision]</code>——<code>encoders=… diff=… vocoder=… mel=… qdrift=…</code>——可据此确认"选的精度"与"实际加载的精度"是否一致（FP16 的 <code>diff_step</code> 加载失败时会静默回退到 FP32 / W16A32）。</p>
-        </div>
-      </div>
+      <p data-lang="en">FP16 uses fp16 weights and activations throughout. Its difference from FP32 is limited to a very faint noise floor in near-silent passages; it is inaudible during editing and preview, but FP32 remains the right choice for masters and releases.</p>
+      <p data-lang="zh">FP16 全程使用 fp16 权重与激活，与 FP32 的差异仅体现在极安静段落中极轻的底噪：日常编辑与预览难以察觉，母带与发布仍建议使用 FP32。</p>
 
       <h2>
         <span data-lang="en">Exporting to WAV</span>
@@ -449,7 +440,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Playback Sample Rate</span><span data-lang="zh">播放采样率</span></td>
-            <td><span data-lang="en">48000 Hz (default). 24 kHz model output is resampled with a band-limited Kaiser-windowed sinc interpolator.</span><span data-lang="zh">48000 Hz（默认）。24 kHz 模型输出经 Kaiser 窗带限 sinc 重采样。</span></td>
+            <td><span data-lang="en">48000 Hz (default). Model output is resampled from 24 kHz automatically.</span><span data-lang="zh">48000 Hz（默认）。模型输出由 24 kHz 自动重采样。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Bit Depth (export)</span><span data-lang="zh">位深度（导出）</span></td>
@@ -457,7 +448,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Export Sample Rate (selectable)</span><span data-lang="zh">导出采样率（可选）</span></td>
-            <td><span data-lang="en">24000, 44100, 48000 (default), 96000 Hz. Band-limited Kaiser-windowed sinc resampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000（默认）、96000 Hz。从 24 kHz 模型率做 Kaiser 窗带限 sinc 重采样。</span></td>
+            <td><span data-lang="en">24000, 44100, 48000 (default), 96000 Hz, resampled from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000（默认）、96000 Hz，由 24 kHz 模型采样率转换。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Accompaniment Mixing</span><span data-lang="zh">伴奏混入</span></td>
@@ -483,7 +474,7 @@
         <li><span data-lang="en"><strong>Set CFG Strength to 0</strong> to skip unconditional prediction, roughly doubling speed.</span><span data-lang="zh"><strong>将 CFG Strength 设为 0</strong> 可跳过无条件预测，速度约提升一倍。</span></li>
         <li><span data-lang="en"><strong>Update GPU drivers</strong> to the latest version for best DirectML performance.</span><span data-lang="zh"><strong>更新显卡驱动</strong> 到最新版本以获得最佳 DirectML 性能。</span></li>
         <li><span data-lang="en"><strong>Use FP16 precision</strong> instead of FP32 for lower VRAM usage and faster inference on most GPUs.</span><span data-lang="zh">在大多数显卡上 <strong>使用 FP16 精度</strong> 代替 FP32 可降低显存占用并加快推理。</span></li>
-        <li><span data-lang="en">The first synthesis is always slower — subsequent syntheses reuse the loaded pipeline.</span><span data-lang="zh">首次合成总是较慢——之后的合成会复用已加载的管线。</span></li>
+        <li><span data-lang="en">The first synthesis is slower because the pipeline is loading; later syntheses reuse it.</span><span data-lang="zh">首次合成因管线加载而较慢，之后会复用已加载的管线。</span></li>
       </ul>
 
       <div class="callout warn">

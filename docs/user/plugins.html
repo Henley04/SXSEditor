@@ -60,8 +60,8 @@
         <span data-lang="zh">插件</span>
       </h1>
 
-      <p data-lang="en">A plugin adds something to SXSEditor that the built-in build does not have: another singing backend, extra commands, a side panel, a small on-screen overlay, or access to a model endpoint you configured yourself. All of it is managed from one window — <strong>Plugins → Manage Plugins…</strong> — where you can see what each plugin is allowed to do before you trust it.</p>
-      <p data-lang="zh">插件给 SXSEditor 增加内置版本没有的东西：另一种歌声后端、额外命令、侧边面板、屏幕上的小浮层，或者接上你自己配置的模型端点。这些都归一个窗口管——<strong>插件 → 插件管理器…</strong>——在信任它之前，你能先看清它能做什么。</p>
+      <p data-lang="en">Plugins add capabilities that the built-in application does not provide: an alternative singing backend, extra commands, side panels, overlays, or access to a model endpoint you configured. All of them are managed in one place, the <strong>Plugins → Plugin Manager…</strong> window, where you can review what a plugin does before trusting it.</p>
+      <p data-lang="zh">插件为 SXSEditor 增加内置功能之外的能力：另一种歌声后端、额外命令、侧边面板、浮层，或访问你配置的模型端点。这些能力统一由 <strong>插件 → 插件管理器…</strong> 管理，你可以在信任之前查看插件会做什么。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -120,8 +120,8 @@
           <img src="../images/webp/plugin-manager-installed.en.webp" data-en="../images/webp/plugin-manager-installed.en.webp" data-zh="../images/webp/plugin-manager-installed.zh.webp" alt="Plugin manager with three installed plugins: status badges, contribution counts, signature state, permission chips, externally exposed automation methods and cross-plugin services" width="1600" height="1376" loading="lazy" decoding="async" />
         </a>
         <figcaption>
-          <span data-lang="en"><strong>One card per plugin.</strong> The badge is this run's real state, not a stored preference: <em>Running</em>, <em>Disabled</em>, <em>Degraded</em> or <em>Crashed</em>. Below it, the manifest is read back to you — contributions, signature, every permission, and which methods outside programs may call. <em>Uninstall</em> is red on purpose; it is the only destructive action here.</span>
-          <span data-lang="zh"><strong>每个插件一张卡片。</strong>徽章表示这次运行的真实状态，而不是磁盘上的开关：<em>运行中</em>、<em>已停用</em>、<em>降级</em>、<em>已崩溃</em>。下面把 manifest 摊开给你看：贡献点、签名、每一项权限，以及哪些方法允许外部程序调用。<em>卸载</em>用红色是刻意的——这里只有它会造成破坏。</span>
+          <span data-lang="en"><strong>One card per plugin.</strong> The badge shows the state of the current run, not a switch on disk: <em>Running</em>, <em>Disabled</em>, <em>Degraded</em>, <em>Crashed</em>. The card lists the manifest in full: contributions, signature, each declared permission, and which methods external programs may call. <em>Uninstall</em> is red because it is the only destructive action here.</span>
+          <span data-lang="zh"><strong>每个插件一张卡片。</strong>徽章表示本次运行的状态，而非磁盘上的开关：<em>运行中</em>、<em>已停用</em>、<em>降级</em>、<em>已崩溃</em>。卡片列出 manifest 的全部内容：贡献点、签名、各项权限，以及允许外部程序调用的方法。<em>卸载</em>为红色，因为它是此页唯一具有破坏性的操作。</span>
         </figcaption>
       </figure>
 
@@ -156,8 +156,8 @@
       <div class="callout warn">
         <div class="callout-icon">⚠️</div>
         <div class="callout-body">
-          <p data-lang="en">An index is the source's own claim. Its <code>sha256</code> and size are re-checked against the downloaded file, but a source that lies consistently is only caught by the signature — which is exactly why an unsigned package still asks for your confirmation.</p>
-          <p data-lang="zh">索引只是源自己的说法。里面的 <code>sha256</code> 与大小会用下载到的文件重新算一遍，但一个从头到尾都在说谎的源只有签名能戳穿——这也是为什么未签名的包仍然要你确认。</p>
+      <p data-lang="en">The index is only the source's claim. The <code>sha256</code> and size in it are recomputed from the downloaded file, but a source that misreports consistently can only be caught by the signature; that is why unsigned packages still require your confirmation.</p>
+      <p data-lang="zh">索引只是源自身的声明。其中的 <code>sha256</code> 与大小会用下载到的文件重新计算，但一个始终虚报的源只能靠签名识别，因此未签名的包仍需你确认。</p>
         </div>
       </div>
 
@@ -214,16 +214,16 @@
         <span data-lang="zh">看活动日志</span>
       </h2>
 
-      <p data-lang="en">Every load, call, refusal and crash is recorded with a machine-readable event name and a JSON detail. This is the first place to look when something "just doesn't work" — it usually says why in one line.</p>
-      <p data-lang="zh">每次加载、调用、拒绝与崩溃都会记录一条，带事件名与 JSON 详情。遇到「就是不行」的情况先看这里——通常一行就说清了原因。</p>
+      <p data-lang="en">Every load, call, rejection and crash is recorded with an event name and JSON details. When an operation fails without a clear message, the log usually identifies the cause in a single line.</p>
+      <p data-lang="zh">每次加载、调用、拒绝与崩溃都会记录事件名与 JSON 详情。操作失败且界面未给出明确原因时，日志通常能用一行指出问题。</p>
 
       <figure class="doc-figure">
         <a class="fig-zoom" href="../images/webp/plugin-manager-log.en.webp" data-en="../images/webp/plugin-manager-log.en.webp" data-zh="../images/webp/plugin-manager-log.zh.webp" aria-label="Open full-size image">
           <img src="../images/webp/plugin-manager-log.en.webp" data-en="../images/webp/plugin-manager-log.en.webp" data-zh="../images/webp/plugin-manager-log.zh.webp" alt="Activity log listing install, reload, install-rejected, trust-add and shutdown events with JSON detail column" width="1600" height="949" loading="lazy" decoding="async" />
         </a>
         <figcaption>
-          <span data-lang="en"><strong>Two rejected installs, then a successful one.</strong> The first two entries are the same package refused because its key was unknown (<code>unknown-key</code>); the entry after <em>trust key</em> shows <code>signature: verified</code>. Reading this sequence is usually faster than re-running the install.</span>
-          <span data-lang="zh"><strong>两次被拒，然后成功。</strong>前两条是同一个包，因为密钥未知被拒（<code>unknown-key</code>）；「信任密钥」之后那条显示 <code>signature: verified</code>。把这段顺序读一遍，通常比重装一次快。</span>
+          <span data-lang="en"><strong>Rejected, then accepted.</strong> The first two entries are the same package, rejected because the key was unknown (<code>unknown-key</code>); after the key is trusted, the third entry reads <code>signature: verified</code>. Reading the sequence is usually faster than reinstalling.</span>
+          <span data-lang="zh"><strong>被拒后重新信任。</strong>前两条记录是同一个包，因密钥未知被拒（<code>unknown-key</code>）；信任该密钥后，第三条显示 <code>signature: verified</code>。按顺序阅读这组记录通常比重新安装更快定位问题。</span>
         </figcaption>
       </figure>
 
@@ -268,8 +268,8 @@
         <span data-lang="zh">用 MCP 接入模型</span>
       </h2>
 
-      <p data-lang="en">Writing a plugin is one way to bring a model into your workflow. Often it is not the shortest: if what you want is "let my assistant drive the editor and call a model", the recommended route is <strong>MCP</strong>. You configure an endpoint once in Settings, and any MCP-capable client can then call it through the running application — no code, no package, no install.</p>
-      <p data-lang="zh">写插件是把模型接进工作流的一种办法，但常常不是最短的。如果你想要的是「让我常用的助手驱动编辑器、顺便调用模型」，推荐走 <strong>MCP</strong>：端点只在设置里配一次，之后任何支持 MCP 的客户端都能通过正在运行的应用调用它——不写代码、不打包、不安装。</p>
+      <p data-lang="en">Writing a plugin is one way to bring a model into your workflow, but it is rarely the shortest. If the goal is to drive the editor from an assistant and call a model along the way, <strong>MCP</strong> is the recommended route: configure the endpoint once in Settings, and any MCP-capable client can then call it through the running application, with no code, packaging or installation.</p>
+      <p data-lang="zh">编写插件是把模型接入工作流的一种方式，但通常不是最短路径。如果目标是让常用助手驱动编辑器并调用模型，推荐使用 <strong>MCP</strong>：端点只需在设置中配置一次，之后任何支持 MCP 的客户端都能通过正在运行的应用调用它，无需编写代码、打包或安装。</p>
 
       <h3>
         <span data-lang="en">Step 1 — Add an endpoint</span>
@@ -306,16 +306,16 @@
   }
 }</code></pre>
 
-      <p data-lang="en">Start SXSEditor first. The client will then see 68 tools — one per automation method, plus aliases — covering the project, editing, playback, export, settings, windows and model calls.</p>
-      <p data-lang="zh">先启动 SXSEditor。客户端随后会看到 68 个工具——每个自动化方法一个，外加若干别名——覆盖工程、编辑、播放、导出、设置、窗口与模型调用。</p>
+      <p data-lang="en">Start SXSEditor first. The client then exposes one tool per automation method, plus aliases, covering projects, editing, playback, export, settings, windows and model calls.</p>
+      <p data-lang="zh">先启动 SXSEditor。客户端会为每个自动化方法提供一个工具（另含别名），覆盖工程、编辑、播放、导出、设置、窗口与模型调用。</p>
 
       <h3>
         <span data-lang="en">Step 3 — Ask for the work, not for the tool</span>
         <span data-lang="zh">第三步：说要做的事，而不是说工具名</span>
       </h3>
 
-      <p data-lang="en">With the server connected, a request like "把第二段歌词改成英文，然后导出 WAV" is enough: the client reads the schema, calls <code>project.get</code>, applies an edit through <code>project.apply</code>, then <code>audio.exportTo</code>. A model call goes through <code>model.invoke</code>, which uses the binding you set in step 1 and asks for your consent on the first use.</p>
-      <p data-lang="zh">接好之后，「把第二段歌词改成英文，然后导出 WAV」这样的请求就够了：客户端会读 schema，调 <code>project.get</code>，用 <code>project.apply</code> 改，再调 <code>audio.exportTo</code>。模型调用走 <code>model.invoke</code>，用第一步绑定的端点，并在第一次调用时向你确认。</p>
+      <p data-lang="en">Once connected, a request such as "change the lyrics of the second fragment to English, then export a WAV" is sufficient: the client reads the schema, calls <code>project.get</code>, modifies the project with <code>project.apply</code>, then calls <code>audio.exportTo</code>. Model calls go through <code>model.invoke</code>, using the endpoint bound in the first step, with a confirmation on first use.</p>
+      <p data-lang="zh">连接后，直接提出「把第二段歌词改成英文，然后导出 WAV」这类请求即可：客户端会读取 schema，调用 <code>project.get</code>，用 <code>project.apply</code> 修改工程，再调用 <code>audio.exportTo</code>。模型调用通过 <code>model.invoke</code> 使用第一步绑定的端点，并在首次调用时向你确认。</p>
 
       <h3>
         <span data-lang="en">MCP or a plugin?</span>
@@ -338,7 +338,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Interface</span><span data-lang="zh">界面</span></td>
-            <td><span data-lang="en">None — the client's chat is the interface</span><span data-lang="zh">没有——客户端的对话就是界面</span></td>
+            <td><span data-lang="en">None; the client's chat is the interface</span><span data-lang="zh">无独立界面，由客户端对话承载</span></td>
             <td><span data-lang="en">Menu items, panels, toolbars, track kinds</span><span data-lang="zh">菜单、面板、工具栏、轨道种类</span></td>
           </tr>
           <tr>

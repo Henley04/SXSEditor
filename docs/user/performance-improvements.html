@@ -62,7 +62,7 @@
       </h1>
 
       <p data-lang="en">Over the last few releases we reworked the SXSEditor inference stack to run faster on NVIDIA GPUs and to be more robust across hardware. This article summarizes what changed, with a focus on the <strong>WindowsML TensorRT-RTX</strong> execution provider and the ~<strong>4× FP16 inference speedup</strong> it delivers on an <strong>NVIDIA GeForce RTX 5060 Laptop</strong>.</p>
-      <p data-lang="zh">在最近几个版本中，我们重构了 SXSEditor 的推理栈，使其在 NVIDIA GPU 上运行更快、并在不同硬件上更加稳健。本文总结了这些改动，重点介绍 <strong>WindowsML TensorRT-RTX</strong> 执行提供器，以及它在 <strong>NVIDIA GeForce RTX 5060 Laptop</strong> 上带来的约 <strong>4 倍 FP16 推理加速</strong>。</p>
+      <p data-lang="zh">最近几个版本对 SXSEditor 的推理栈进行了重构，使其在 NVIDIA GPU 上运行更快、并在不同硬件上更加稳健。本文总结了这些改动，重点介绍 <strong>WindowsML TensorRT-RTX</strong> 执行提供器，以及它在 <strong>NVIDIA GeForce RTX 5060 Laptop</strong> 上带来的约 <strong>4 倍 FP16 推理加速</strong>。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -80,7 +80,7 @@
       <p data-lang="zh">SXSEditor 现在提供 FP16 ONNX 模型，可通过 <strong>Windows ML (WinML)</strong> 的 <code>NvTensorRTRTXExecutionProvider</code>（基于 MSIX WinML 运行时封装 TensorRT，ORT 1.27 + TensorRT-RTX）在 NVIDIA GPU 上运行。当 TensorRT-RTX 路径可用且模型文件存在时，<code>preflow</code>、<code>diff_step</code> 与 <code>vocoder</code> 会在 <code>[winml:NvTensor]</code> 后端加载，并自动以 <code>DML</code>（以及 <code>CPU</code>）作为回退。</p>
 
       <p data-lang="en">We measured both model-level p50 latency and end-to-end synthesis on an <strong>NVIDIA GeForce RTX 5060 Laptop (8 GB), Windows 11 24H2</strong>. The TensorRT-RTX FP16 path is roughly <strong>4–5× faster</strong> than the DML FP32 baseline on individual models, and approx. <strong>4× faster</strong> end-to-end for a single 16-step segment.</p>
-      <p data-lang="zh">我们在 <strong>NVIDIA GeForce RTX 5060 Laptop（8 GB）、Windows 11 24H2</strong> 上测得了模型级 p50 延迟与端到端合成时间。TensorRT-RTX 的 FP16 路径在单个模型上比 DML FP32 基线快约 <strong>4–5 倍</strong>，对于单个 16 步乐段，端到端约<strong>快 4 倍</strong>。</p>
+      <p data-lang="zh">以下数据在 <strong>NVIDIA GeForce RTX 5060 Laptop（8 GB）、Windows 11 24H2</strong> 上测得：模型级 p50 延迟与端到端合成时间。TensorRT-RTX 的 FP16 路径在单个模型上比 DML FP32 基线快约 <strong>4–5 倍</strong>，对于单个 16 步乐段，端到端约<strong>快 4 倍</strong>。</p>
 
       <table>
         <thead>
