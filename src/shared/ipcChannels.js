@@ -199,6 +199,13 @@ const IPC_CHANNELS = {
   // 插件声明的文件格式（对话框过滤器用）。投影里也有 fileTypes，但那份要按
   // 插件分组、还要算 UI 渲染状态；对话框只要一张扁平的"扩展名 → 显示名"。
   PLUGINHOST_FILE_FILTERS: 'plugin-host:file-filters',
+  // M6：签名与信任。安装器验签失败时会返回 pendingKey（含公钥与指纹），
+  // 管理器据此弹"信任并重试"——但信任这个动作必须由用户显式触发。
+  PLUGINHOST_TRUST_LIST: 'plugin-host:trust-list',
+  PLUGINHOST_TRUST_ADD: 'plugin-host:trust-add',
+  PLUGINHOST_TRUST_REMOVE: 'plugin-host:trust-remove',
+  PLUGINHOST_REQUIRE_SIGNATURE: 'plugin-host:require-signature',
+  PLUGINHOST_VERIFY_INSTALL: 'plugin-host:verify-install',
   // 主进程 → 渲染进程
   PLUGINHOST_SYNC: 'plugin-host:sync',
   PLUGINHOST_EVENT: 'plugin-host:event',

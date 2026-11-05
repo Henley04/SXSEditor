@@ -126,6 +126,12 @@ function getPluginState(registry, id) {
     settings: (entry && entry.settings && typeof entry.settings === 'object') ? { ...entry.settings } : {},
     // 快捷键默认关闭：安装插件就改变全局按键行为不可接受（见 PluginKeybindings）。
     keybindingsEnabled: !!(entry && entry.keybindingsEnabled),
+    // M6：安装那一刻的签名判定。这里是**历史事实**（当时验过/没签名），
+    // 不是"现在仍然有效"——磁盘上的文件可能后来被改过，要确认得走
+    // PluginInstaller.verifyInstalled。
+    signature: (entry && entry.signature && typeof entry.signature === 'object')
+      ? { ...entry.signature }
+      : null,
   };
 }
 

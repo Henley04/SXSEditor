@@ -622,6 +622,13 @@ const _fullElectronAPI = {
     install: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL),
     installFromPath: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL_PATH, filePath),
     uninstall: (id, keepData) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_UNINSTALL, id, !!keepData),
+    // ---- M6：签名与信任 ----
+    // 信任的是**公钥指纹**，不是包自称的发布者名。管理器把指纹显示给用户核对。
+    trustList: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_LIST),
+    trustAdd: (input) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_ADD, input || {}),
+    trustRemove: (keyId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE, keyId),
+    setRequireSignature: (enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE, !!enabled),
+    verifyInstall: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL, id),
     setEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_ENABLED, id, !!enabled),
     reload: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RELOAD),
     runCommand: (commandId, args) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RUN_COMMAND, commandId, args || {}),

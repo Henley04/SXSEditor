@@ -143,6 +143,30 @@ function registerPluginHostIpc(service, options = {}) {
   ));
   track(IPC_CHANNELS.PLUGINHOST_UNINSTALL);
 
+  // ---- M6：签名与信任 ----
+  safeHandle(IPC_CHANNELS.PLUGINHOST_TRUST_LIST, async () => service.listTrust());
+  track(IPC_CHANNELS.PLUGINHOST_TRUST_LIST);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_TRUST_ADD, async (_event, input) => (
+    service.trustKey(input || {})
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_TRUST_ADD);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE, async (_event, keyId) => (
+    service.forgetKey(String(keyId || ''))
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE, async (_event, enabled) => (
+    service.setRequireSignature(!!enabled)
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE);
+
+  safeHandle(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL, async (_event, id) => (
+    service.verifyInstalled(String(id || ''))
+  ));
+  track(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL);
+
   safeHandle(IPC_CHANNELS.PLUGINHOST_OPEN_DIR, async () => {
     const dir = service.getPluginsDir();
     shell.openPath(dir);

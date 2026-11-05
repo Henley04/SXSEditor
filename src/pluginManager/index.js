@@ -26,6 +26,7 @@ const dom = {
   openFolder: document.getElementById('pmOpenFolder'),
   tabs: Array.from(document.querySelectorAll('.pm-tab')),
   paneInstalled: document.getElementById('pmPaneInstalled'),
+  paneSecurity: document.getElementById('pmPaneSecurity'),
   paneLog: document.getElementById('pmPaneLog'),
   empty: document.getElementById('pmEmpty'),
   list: document.getElementById('pmList'),
@@ -35,6 +36,14 @@ const dom = {
   logCount: document.getElementById('pmLogCount'),
   logRefresh: document.getElementById('pmLogRefresh'),
   toast: document.getElementById('pmToast'),
+  // ---- M6：签名与信任 ----
+  requireSignature: document.getElementById('pmRequireSignature'),
+  keyList: document.getElementById('pmKeyList'),
+  trustBanner: document.getElementById('pmTrustBanner'),
+  trustBannerTitle: document.getElementById('pmTrustBannerTitle'),
+  trustBannerSub: document.getElementById('pmTrustBannerSub'),
+  trustAccept: document.getElementById('pmTrustAccept'),
+  trustCancel: document.getElementById('pmTrustCancel'),
 };
 
 const state = {
@@ -45,6 +54,12 @@ const state = {
   confirming: new Set(),
   focus: null,
   toastTimer: 0,
+  /**
+   * 待确认的"签名有效但密钥未知"的安装。
+   * 形如 `{ packagePath, pendingKey: { keyId, publicKey, publisher } }`。
+   * 不落盘：这是一个交互状态，用户不点就等于没发生。
+   */
+  pendingTrust: null,
 };
 
 // ---------------------------------------------------------------- 小工具
@@ -204,6 +219,51 @@ function renderKeybindings(plugin) {
   }
   box.appendChild(list);
   return box;
+}
+
+/**
+ * 签名行：这个包是谁签的、什么时候验的、还能不能重新核一遍。
+ *
+ * 只显示"安装时验过"而不是"现在是好的"：文件在磁盘上可能早被改过，
+ * 说成"已签名"会给人一个它没承诺过的保证。想确认就点"重新校验"。
+ */
+function renderSignature(plugin) {
+  const row = el('div', 'pm-row');
+  row.appendChild(el('span', 'pm-row-label', t('plugins.sectionSignature')));
+
+  const value = el('div', 'pm-row-value');
+  const sig = plugin.state?.signature || null;
+  const verified = sig && sig.status === 'verified';
+  const chip = el('span', `pm-chip pm-sig ${verified ? 'is-verified' : 'is-unsigned'}`,
+    verified
+      ? t('plugins.sigVerified', { who: sig.publisher || sig.keyId || '' })
+      : t('plugins.sigUnsigned'));
+  value.appendChild(chip);
+
+  if (verified && sig.keyId) {
+    const detail = el('span', 'pm-chip', sig.keyId);
+    detail.title = sig.keyId;
+    value.appendChild(detail);
+  }
+
+  // 文件夹安装没有清单可核对，按钮只会给一句"没有可比对的清单"，不出现在这里。
+  if (plugin.state?.source === 'package') {
+    const verify = el('button', 'pm-btn pm-btn-small', t('plugins.verifyInstall'));
+    verify.type = 'button';
+    verify.addEventListener('click', async () => {
+      verify.disabled = true;
+      const result = await safeCall(() => api.verifyInstall(plugin.id));
+      verify.disabled = false;
+      if (!result) return;
+      if (result.status === 'unrecorded') toast(result.message || '');
+      else if (result.ok) toast(t('plugins.verifyOk'));
+      else toast(t('plugins.verifyModified', { n: (result.mismatched?.length || 0) + (result.missing?.length || 0) }), true);
+    });
+    value.appendChild(verify);
+  }
+
+  row.appendChild(value);
+  return row;
 }
 
 /**
@@ -417,6 +477,8 @@ function renderCard(plugin) {
   contribRow.appendChild(renderContributions(plugin));
   body.appendChild(contribRow);
 
+  body.appendChild(renderSignature(plugin));
+
   const permRow = el('div', 'pm-row');
   permRow.appendChild(el('span', 'pm-row-label', t('plugins.sectionPermissions')));
   permRow.appendChild(renderPermissionChips(plugin.permissions));
@@ -474,6 +536,113 @@ function renderInstalled() {
   renderCount();
 }
 
+/**
+ * 安全页：策略 + 信任的密钥。
+ *
+ * 这一页存在的理由：安装失败时用户看到的是"密钥不在信任列表里"，
+ * 如果没有一个地方能看见/删除信任列表，那条错误就只是一堵墙。
+ */
+function renderSecurity() {
+  const trust = state.admin?.trust || { requireSignature: false, keys: [] };
+  dom.requireSignature.checked = !!trust.requireSignature;
+  dom.keyList.textContent = '';
+
+  if (!trust.keys.length) {
+    const empty = el('li', 'pm-key-empty', t('plugins.trustedKeysEmpty'));
+    dom.keyList.appendChild(empty);
+    return;
+  }
+
+  for (const key of trust.keys) {
+    const li = el('li', 'pm-key');
+    const info = el('div', 'pm-key-info');
+    info.appendChild(el('span', 'pm-key-name', key.name || t('plugins.keyUnnamed')));
+    // 指纹单独一行：用户核对的就是它，不能和名字混在一行被跳过
+    const fp = el('span', 'pm-key-fp', key.fingerprint || key.keyId);
+    fp.title = key.keyId;
+    info.appendChild(fp);
+    li.appendChild(info);
+
+    const remove = el('button', 'pm-btn pm-btn-small pm-btn-danger', t('plugins.keyRemove'));
+    remove.type = 'button';
+    remove.addEventListener('click', async () => {
+      remove.disabled = true;
+      const result = await safeCall(() => api.trustRemove(key.keyId));
+      remove.disabled = false;
+      if (result && result.ok) toast(t('plugins.keyRemoved'));
+      else toast(t('plugins.actionFailed', { error: (result && result.error) || '' }), true);
+      await refresh();
+    });
+    li.appendChild(remove);
+    dom.keyList.appendChild(li);
+  }
+}
+
+function renderTrustBanner() {
+  const pending = state.pendingTrust;
+  if (!pending) {
+    dom.trustBanner.hidden = true;
+    return;
+  }
+  const who = pending.pendingKey.publisher || t('plugins.keyUnnamed');
+  dom.trustBannerTitle.textContent = t('plugins.trustBannerTitle', { who });
+  dom.trustBannerSub.textContent = t('plugins.trustBannerSub', {
+    keyId: pending.pendingKey.keyId,
+    file: pending.packagePath.split(/[\\/]/).pop() || pending.packagePath,
+  });
+  dom.trustBanner.hidden = false;
+}
+
+async function acceptPendingTrust() {
+  const pending = state.pendingTrust;
+  if (!pending) return;
+  dom.trustAccept.disabled = true;
+  const added = await safeCall(() => api.trustAdd({
+    publicKey: pending.pendingKey.publicKey,
+    name: pending.pendingKey.publisher || '',
+  }));
+  if (added && added.ok) {
+    const retry = await safeCall(() => api.installFromPath(pending.packagePath));
+    if (retry && retry.ok) {
+      state.pendingTrust = null;
+      renderTrustBanner();
+      toast(t('plugins.installDone', { name: retry.id || '' }));
+    } else {
+      // 信任成功但安装仍失败：多半是包本身有问题（签名损坏/清单不一致），
+      // 这时不该把 banner 留在"信任并安装"上，会让用户反复点。
+      state.pendingTrust = null;
+      renderTrustBanner();
+      toast(t('plugins.installFailed', { error: (retry && retry.error) || '' }), true);
+    }
+  } else {
+    toast(t('plugins.trustFailed', { error: (added && added.error) || '' }), true);
+  }
+  dom.trustAccept.disabled = false;
+  await refresh();
+}
+
+/**
+ * 安装结果的统一出口。
+ *
+ * "签名有效但密钥未知"不是失败，是一次待决定：留在 banner 里让用户看着指纹选，
+ * 而不是把包丢掉再让他重新找一遍文件。
+ */
+async function handleInstallResult(result) {
+  if (!result || result.canceled) return;
+  if (result.ok) {
+    toast(t('plugins.installDone', { name: result.id || '' }));
+    await refresh();
+    return;
+  }
+  if (result.pendingKey && result.packagePath) {
+    state.pendingTrust = { packagePath: result.packagePath, pendingKey: result.pendingKey };
+    renderTrustBanner();
+    return;
+  }
+  toast(t('plugins.installFailed', { error: result.error || '' }), true);
+  await refresh();
+}
+
 function renderLog() {
   const rows = state.log || [];
   dom.logBody.textContent = '';
@@ -496,6 +665,7 @@ function renderLog() {
 
 function render() {
   dom.paneInstalled.classList.toggle('pm-pane-hidden', state.tab !== 'installed');
+  dom.paneSecurity.classList.toggle('pm-pane-hidden', state.tab !== 'security');
   dom.paneLog.classList.toggle('pm-pane-hidden', state.tab !== 'log');
   for (const tab of dom.tabs) {
     const active = tab.dataset.tab === state.tab;
@@ -503,6 +673,7 @@ function render() {
     tab.setAttribute('aria-selected', active ? 'true' : 'false');
   }
   if (state.tab === 'installed') renderInstalled();
+  else if (state.tab === 'security') renderSecurity();
   else renderLog();
 }
 
@@ -540,7 +711,7 @@ async function refreshLog() {
 }
 
 function setTab(tab) {
-  state.tab = tab === 'log' ? 'log' : 'installed';
+  state.tab = tab === 'log' || tab === 'security' ? tab : 'installed';
   render();
   if (state.tab === 'log') refreshLog();
 }
@@ -552,11 +723,7 @@ function installHandlers() {
     dom.install.disabled = true;
     const result = await safeCall(() => api.install());
     dom.install.disabled = false;
-    if (!result) return;
-    if (result.canceled) return;
-    if (result.ok) toast(t('plugins.installDone', { name: result.id || '' }));
-    else toast(t('plugins.installFailed', { error: result.error || '' }), true);
-    await refresh();
+    await handleInstallResult(result);
   });
 
   dom.reload.addEventListener('click', async () => {
@@ -571,6 +738,23 @@ function installHandlers() {
   dom.openFolder.addEventListener('click', () => { safeCall(() => api.openPluginsFolder()); });
 
   dom.logRefresh.addEventListener('click', () => { refreshLog(); });
+
+  dom.requireSignature.addEventListener('change', async () => {
+    dom.requireSignature.disabled = true;
+    const result = await safeCall(() => api.setRequireSignature(dom.requireSignature.checked));
+    dom.requireSignature.disabled = false;
+    if (result && result.ok) toast(t('plugins.requireSignatureSaved'));
+    else {
+      dom.requireSignature.checked = !dom.requireSignature.checked;
+      toast(t('plugins.actionFailed', { error: (result && result.error) || '' }), true);
+    }
+  });
+
+  dom.trustAccept.addEventListener('click', () => { acceptPendingTrust(); });
+  dom.trustCancel.addEventListener('click', () => {
+    state.pendingTrust = null;
+    renderTrustBanner();
+  });
 
   for (const tab of dom.tabs) {
     tab.addEventListener('click', () => setTab(tab.dataset.tab));
@@ -640,7 +824,7 @@ async function boot() {
 
   const params = readHashParams();
   if (params.focus) state.focus = params.focus;
-  state.tab = params.tab === 'log' ? 'log' : 'installed';
+  state.tab = ['log', 'security'].includes(params.tab) ? params.tab : 'installed';
 
   await refresh();
   if (state.tab === 'log') await refreshLog();

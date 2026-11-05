@@ -85,6 +85,13 @@ Commands:
                                         invoke one method (defaults to the running app)
                   plugin automation <id> on|off
                                         allow/block external calls (after reload)
+                  plugin trust [list|add <pem>|remove <keyId>]
+                                        manage signing keys (--name for a label)
+                  plugin policy [require|allow]
+                                        require packages to be signed
+                  plugin verify <pluginId>
+                                        re-check an installed plugin against its
+                                        recorded checksums
                   Add --local to use a temporary instance instead of the running app.
   qdrift-conds    Export calibration conditions (prompt mel + cond) from one or
                   more .sxsproj projects for Q-Drift recalibration.
@@ -930,6 +937,7 @@ function parseArgs(argv) {
     if (a === '--params') { opts.params = rest[++i]; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--local') { opts.local = true; continue; }
+    if (a === '--name') { opts.name = rest[++i]; continue; }
     if (a === '--out') { opts.out = rest[++i]; continue; }
     if (a === '--out-f32') { opts.outF32 = rest[++i]; continue; }
     if (a === '--steps') { opts.steps = parseInt(rest[++i], 10); continue; }

@@ -22,8 +22,22 @@
 
   <nav class="pm-tabs" role="tablist">
     <button type="button" class="pm-tab is-active" role="tab" aria-selected="true" data-tab="installed" data-i18n="plugins.tabInstalled">已安装</button>
+    <button type="button" class="pm-tab" role="tab" aria-selected="false" data-tab="security" data-i18n="plugins.tabSecurity">签名与信任</button>
     <button type="button" class="pm-tab" role="tab" aria-selected="false" data-tab="log" data-i18n="plugins.tabLog">活动日志</button>
   </nav>
+
+  <!-- 安装了一个"签名有效但密钥不在此机器上"的包时出现。
+       不自动信任：信任一把密钥等于放行一类安装包，必须由用户看着指纹决定。 -->
+  <div class="pm-trust-banner" id="pmTrustBanner" hidden>
+    <div class="pm-trust-banner-text">
+      <p class="pm-trust-banner-title" id="pmTrustBannerTitle"></p>
+      <p class="pm-trust-banner-sub" id="pmTrustBannerSub"></p>
+    </div>
+    <div class="pm-actions">
+      <button type="button" class="pm-btn pm-btn-primary" id="pmTrustAccept" data-i18n="plugins.trustAndInstall">信任并安装</button>
+      <button type="button" class="pm-btn" id="pmTrustCancel" data-i18n="common.cancel">取消</button>
+    </div>
+  </div>
 
   <main class="pm-body">
     <section class="pm-pane" id="pmPaneInstalled" role="tabpanel">
@@ -32,6 +46,20 @@
         <p class="pm-empty-hint" data-i18n="plugins.emptyHint">插件包以 .sxsp 结尾。安装后会在菜单栏「插件」下出现入口。</p>
       </div>
       <ul class="pm-list" id="pmList"></ul>
+    </section>
+
+    <section class="pm-pane pm-pane-hidden" id="pmPaneSecurity" role="tabpanel">
+      <div class="pm-security">
+        <label class="pm-toggle">
+          <input type="checkbox" id="pmRequireSignature">
+          <span data-i18n="plugins.requireSignature">只允许安装已签名的插件</span>
+        </label>
+        <p class="pm-note" data-i18n="plugins.requireSignatureNote">开启后，没有签名的包会在安装时被拒绝；签名无效的包无论开关如何都会被拒绝。已安装的插件不受影响。</p>
+
+        <h2 class="pm-section-title" data-i18n="plugins.trustedKeys">信任的签名密钥</h2>
+        <ul class="pm-key-list" id="pmKeyList"></ul>
+        <p class="pm-note" data-i18n="plugins.trustedKeysNote">信任的是密钥指纹，不是包里自称的发布者名字。移除一把密钥只影响以后的安装，不会卸载已装的插件。</p>
+      </div>
     </section>
 
     <section class="pm-pane pm-pane-hidden" id="pmPaneLog" role="tabpanel">

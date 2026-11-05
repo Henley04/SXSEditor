@@ -100,7 +100,10 @@ body {
 .pm-btn-danger {
   background: var(--bg-button-danger);
   border-color: var(--border-default);
-  color: var(--danger);
+  /* 原来写的是 var(--danger)，而 --bg-button-danger 与 --danger 是同一个色值 ——
+     文字和背景完全同色，按钮看上去是个空红色方块。危险按钮是实心背景，
+     必须用「实心底上的前景色」。 */
+  color: var(--fg-on-danger, var(--fg-on-accent, #ffffff));
 }
 
 .pm-btn-danger:hover:not(:disabled) {
@@ -427,8 +430,10 @@ body {
 }
 
 .pm-toast.is-error {
+  /* 同 .pm-btn-danger：--bg-button-danger 与 --danger 是同一个色值，
+     用 --danger 当文字色 = 一片纯红方块，错误信息一个字也看不见。 */
   background: var(--bg-button-danger);
-  color: var(--danger);
+  color: var(--fg-on-danger, var(--fg-on-accent, #ffffff));
   border: 1px solid var(--danger);
 }
 
@@ -538,4 +543,124 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.7;
+}
+
+/* ------------------------------------------------------------ 签名与信任 */
+.pm-sig.is-verified {
+  color: var(--success, var(--accent));
+  border-color: var(--success-line, var(--border-subtle));
+}
+
+.pm-sig.is-unsigned {
+  color: var(--warning);
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+}
+
+/* 安装了一个"签名有效、密钥未知"的包时横在列表上方。
+   它是**待决定**状态，不是错误提示：配色用 accent 而不是 danger。 */
+.pm-trust-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 18px 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-line, var(--border-default));
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-elevated);
+  flex: 0 0 auto;
+}
+
+.pm-trust-banner[hidden] {
+  display: none;
+}
+
+.pm-trust-banner-text {
+  min-width: 0;
+}
+
+.pm-trust-banner-title {
+  margin: 0 0 4px;
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-primary);
+}
+
+.pm-trust-banner-sub {
+  margin: 0;
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  /* 指纹与文件名都要能完整读到：换行比省略号强 */
+  overflow-wrap: anywhere;
+}
+
+.pm-security {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+
+.pm-security .pm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.pm-section-title {
+  margin: 12px 0 0;
+  font-size: var(--font-sm, 12px);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: none;
+}
+
+.pm-key-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pm-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-panel);
+}
+
+.pm-key-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pm-key-name {
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-primary);
+}
+
+.pm-key-fp {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+}
+
+.pm-key-empty {
+  padding: 10px 12px;
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md, 6px);
 }

@@ -16,6 +16,8 @@ const crypto = require('node:crypto');
 const { PACKAGE } = require('../../shared/pluginApi.js');
 const { readZip } = require('../../shared/pluginZip.js');
 const { validateManifest, isLegacyManifest } = require('../../shared/pluginManifest.js');
+const signature = require('../../shared/pluginSignature.js');
+const trustStore = require('./PluginTrustStore.js');
 const store = require('./PluginStateStore.js');
 
 function safeDirName(name) {
@@ -72,32 +74,33 @@ function scanPlugins() {
   return out;
 }
 
-function sha256(buf) {
-  return crypto.createHash('sha256').update(buf).digest('hex');
-}
-
-/** 校验包内 checksums.json（可选）。缺失即跳过，管理器里标注"未签名/未校验"。 */
+/**
+ * 校验包内 checksums.json（可选）。
+ *
+ * 清单存在时是**双向**约束：列出来的文件必须存在且哈希一致，包内每个会被落盘
+ * 的文件也必须被列出来。只做前一半的话，往包里塞一个没被列出的 `main.js`
+ * 照样能装进去 —— 清单对，内容已经不是清单描述的那份内容。
+ */
 function verifyChecksums(entries) {
   const file = entries.find((e) => e.path === PACKAGE.checksums);
-  if (!file) return { ok: true, skipped: true };
+  if (!file) return { ok: true, skipped: true, files: null };
   let manifest;
   try {
     manifest = JSON.parse(file.data.toString('utf8'));
   } catch (_) {
     return { ok: false, error: `${PACKAGE.checksums} 不是合法 JSON` };
   }
-  const files = manifest && manifest.files;
-  if (!files || typeof files !== 'object') return { ok: true, skipped: true };
-  const byPath = new Map(entries.map((e) => [e.path, e]));
-  for (const [p, expected] of Object.entries(files)) {
-    const entry = byPath.get(p);
-    if (!entry) return { ok: false, error: `校验清单引用了不存在的文件：${p}` };
-    const actual = sha256(entry.data);
-    if (String(expected).toLowerCase() !== actual) {
-      return { ok: false, error: `文件校验失败：${p}` };
-    }
+  let files;
+  try {
+    files = signature.filesOf(manifest);
+  } catch (err) {
+    return { ok: false, error: `${PACKAGE.checksums} 格式不正确：${err.message}` };
   }
-  return { ok: true, skipped: false };
+  const coverage = signature.checkCoverage(entries, files);
+  if (coverage.missing.length) return { ok: false, error: `校验清单引用了不存在的文件：${coverage.missing[0]}` };
+  if (coverage.extra.length) return { ok: false, error: `包内有未列入校验清单的文件：${coverage.extra[0]}` };
+  if (coverage.mismatched.length) return { ok: false, error: `文件校验失败：${coverage.mismatched[0]}` };
+  return { ok: true, skipped: false, files };
 }
 
 function writeEntries(targetDir, entries) {
@@ -161,9 +164,20 @@ function installFromDirectory(sourceDir, options = {}) {
     installedAt: Date.now(),
     updatedAt: Date.now(),
     permissionsHash: checked.value.permissionsHash,
+    // 文件夹安装没有签名可验，如实记为 unsigned/文件夹来源；从包安装时
+    // options.signature 带着安装那一刻的判定结果（见 installFromPackage）。
+    signature: options.signature || {
+      status: signature.SIGNATURE_STATUS.UNSIGNED,
+      origin: options.source || 'folder',
+      verifiedAt: Date.now(),
+    },
   });
   store.writeRegistry(registry);
-  store.audit('install', checked.value.id, { version: checked.value.version, source: options.source || 'folder' });
+  store.audit('install', checked.value.id, {
+    version: checked.value.version,
+    source: options.source || 'folder',
+    signature: (options.signature && options.signature.status) || 'unsigned',
+  });
   return { ok: true, id: checked.value.id, version: checked.value.version, manifest: checked.value, dir: target };
 }
 
@@ -210,7 +224,36 @@ function installFromPackage(filePath, options = {}) {
   if (!checked.ok) return { ok: false, error: checked.error };
 
   const checks = verifyChecksums(entries);
-  if (!checks.ok) return { ok: false, error: checks.error };
+  if (!checks.ok) return { ok: false, error: checks.error, code: 'CHECKSUM_FAILED' };
+
+  // 签名在解包**之前**验：先决定"要不要装"，再决定"往哪写"。
+  // 顺序反过来会留下一个中间态——文件已经落盘、策略却拒了。
+  const policy = trustStore.read();
+  const sig = signature.verifyPackage(entries, {
+    keys: trustStore.keyMap(),
+    requireSignature: policy.requireSignature,
+  });
+  if (!sig.ok) {
+    store.audit('install-rejected', checked.value.id, {
+      version: checked.value.version,
+      signature: sig.status,
+      keyId: sig.keyId || null,
+      package: path.basename(filePath),
+    });
+    return {
+      ok: false,
+      error: sig.message,
+      code: `SIGNATURE_${String(sig.status).toUpperCase().replace(/-/g, '_')}`,
+      signature: {
+        status: sig.status,
+        keyId: sig.keyId || '',
+        publisher: sig.publisher || '',
+      },
+      // 管理器据此弹"信任这把密钥并重试"；CLI 据此提示 `plugin trust add`。
+      pendingKey: sig.pendingKey || null,
+      packagePath: filePath,
+    };
+  }
 
   const p = store.ensureDirs();
   const staging = path.join(p.staging, `${checked.value.id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
@@ -227,6 +270,15 @@ function installFromPackage(filePath, options = {}) {
     appVersion: options.appVersion,
     source: 'package',
     dirName: checked.value.id,
+    signature: {
+      status: sig.status,
+      keyId: sig.keyId || '',
+      publisher: sig.publisher || '',
+      signedAt: sig.signedAt || '',
+      digest: sig.digest || '',
+      verifiedAt: Date.now(),
+      origin: 'package',
+    },
   });
   if (!installed.ok) {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -234,7 +286,89 @@ function installFromPackage(filePath, options = {}) {
   }
   // installFromDirectory 已经 rename 走，staging 目录可能已不存在
   try { fs.rmSync(staging, { recursive: true, force: true }); } catch (_) { /* ignore */ }
-  return { ...installed, checksumVerified: !checks.skipped };
+
+  // 记下"安装那一刻的文件清单 + 签名"，用于之后的按需重验（verifyInstalled）。
+  // 落在 plugins-state/packages/ 而不是插件目录里：插件目录是插件的只读语义领地，
+  // 宿主自己的账本不该混进去。
+  writePackageRecord(checked.value.id, {
+    id: checked.value.id,
+    version: checked.value.version,
+    installedAt: Date.now(),
+    files: sig.files || checks.files || null,
+    signature: {
+      status: sig.status,
+      keyId: sig.keyId || '',
+      publisher: sig.publisher || '',
+      signedAt: sig.signedAt || '',
+      digest: sig.digest || '',
+    },
+  });
+
+  return {
+    ...installed,
+    checksumVerified: !checks.skipped,
+    signature: sig.status,
+    signatureKeyId: sig.keyId || '',
+    signaturePublisher: sig.publisher || '',
+  };
+}
+
+function packageRecordFile(id) {
+  return path.join(store.paths().state, 'packages', `${id}.json`);
+}
+
+function writePackageRecord(id, record) {
+  try {
+    store.writeJsonAtomic(packageRecordFile(id), record);
+  } catch (err) {
+    console.warn(`[plugins] 写入 ${id} 的包记录失败:`, err && err.message);
+  }
+}
+
+function readPackageRecord(id) {
+  return store.readJson(packageRecordFile(id), null);
+}
+
+/**
+ * 重验一个已装插件：把目录里的文件重新算一遍哈希，与安装时记录的清单比对。
+ *
+ * 不做成启动时自动：插件可能带几百 MB 模型，每次冷启动全量哈希会让启动明显变慢，
+ * 而收益有限——能改这个目录的人，也能改信任库本身。它是"按需核查"，
+ * 不是"每开机自检"。
+ */
+function verifyInstalled(id) {
+  const record = readPackageRecord(id);
+  if (!record || !record.files) {
+    return { ok: true, status: 'unrecorded', message: '这个插件不是通过安装包安装的，没有可比对的清单' };
+  }
+  const dir = path.join(store.paths().plugins, id);
+  const dirFiles = {};
+  const walk = (root, rel) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) { walk(root, relPath); continue; }
+      if (!entry.isFile()) continue;
+      try {
+        dirFiles[relPath] = fs.readFileSync(path.join(root, relPath));
+      } catch (_) { /* 读不到的按缺失处理 */ }
+    }
+  };
+  walk(dir, '');
+  const result = signature.verifyInstalledFiles(dirFiles, record);
+  store.audit('verify', id, {
+    ok: result.ok,
+    missing: result.missing.length,
+    mismatched: result.mismatched.length,
+    extra: result.extra.length,
+  });
+  return { ...result, status: result.ok ? 'ok' : 'modified' };
 }
 
 /**
@@ -270,6 +404,10 @@ function uninstall(id, options = {}) {
     }
   }
 
+  // 包记录是这个插件的安装快照，跟着插件一起走；留着会让"重新安装同 id"
+  // 的重验读到上一份清单。
+  try { fs.rmSync(packageRecordFile(id), { force: true }); } catch (_) { /* ignore */ }
+
   const registry = store.readRegistry();
   store.removePluginState(registry, id);
   store.writeRegistry(registry);
@@ -299,5 +437,7 @@ module.exports = {
   uninstall,
   ensureDataDir,
   verifyChecksums,
+  verifyInstalled,
+  readPackageRecord,
   _internal: { writeEntries, moveDir, safeDirName },
 };

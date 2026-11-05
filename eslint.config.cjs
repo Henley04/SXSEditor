@@ -94,6 +94,8 @@ module.exports = [
             'src/shared/pluginManifest.js',
             // 跨插件服务的命名/版本/依赖图规则（纯函数，CJS，主进程与单测共用）
             'src/shared/pluginServices.js',
+            // .sxsp 的签名与完整性（纯函数，CJS，主进程 / 打包脚本 / 单测共用）
+            'src/shared/pluginSignature.js',
             'src/shared/pluginZip.js',
             // 快捷键字符串的规范化（主进程仲裁与渲染层匹配共用，CJS）
             'src/shared/pluginKeys.js',

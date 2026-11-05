@@ -215,6 +215,8 @@ function scanInstalled() {
       name: pickName(m.name, m.id),
       version: m.version,
       status,
+      // 安装那一刻的签名判定（历史事实，不是"现在仍有效"）。
+      signature: (state.signature && state.signature.status) || 'unsigned',
       // 用户开关是"事后说不"；作品声明是"事前说可以"。两者都开才算暴露。
       automation: declared.length === 0
         ? null
@@ -256,6 +258,7 @@ function printTable(rows, liveMethods) {
       `v${(r.version || '-').padEnd(verW)}`,
       r.status.padEnd(stW),
       `automation:${r.automation || '--'}`.padEnd(19),
+      `sign:${r.signature || '--'}`.padEnd(14),
       live ? `live:${live.length ? ` ${live.join(' ')}` : ' (none)'}` : 'live: ?',
     ];
     process.stdout.write(`  ${parts.join('  ')}${r.error ? `\n    ! ${r.error}` : ''}\n`);
@@ -451,6 +454,133 @@ async function cmdAutomation(opts) {
   return 0;
 }
 
+// ---------------------------------------------------------------- 签名与信任
+
+async function cmdTrust(opts) {
+  const [action, argument] = opts._;
+  const trust = require('./plugins/PluginTrustStore.js');
+
+  if (!action || action === 'list' || action === 'ls') {
+    const view = trust.list();
+    if (opts.json) {
+      printJson(view);
+      return 0;
+    }
+    if (!view.keys.length) {
+      process.stdout.write('信任列表为空。未签名的包仍可安装（除非开启了"只允许已签名"）。\n');
+      process.stdout.write(`只允许已签名：${view.requireSignature ? '是' : '否'}\n`);
+      return 0;
+    }
+    process.stdout.write(`只允许已签名：${view.requireSignature ? '是' : '否'}\n`);
+    for (const key of view.keys) {
+      process.stdout.write(`${key.keyId}  ${key.name || '(未命名)'}  ${key.publicKey.includes('BEGIN') ? 'PEM' : ''}\n`);
+    }
+    return 0;
+  }
+
+  if (action === 'add') {
+    if (!argument) {
+      process.stderr.write('[ARG ERROR] 用法：plugin trust add <公钥.pem> [--name \"发布者\"]\n');
+      return 2;
+    }
+    let pem;
+    try {
+      pem = fs.readFileSync(argument, 'utf8');
+    } catch (err) {
+      process.stderr.write(`[ERROR] 读不到 ${argument}：${err.message}\n`);
+      return 1;
+    }
+    const result = trust.addKey({ publicKey: pem, name: opts.name || '', source: 'cli' });
+    if (!result.ok) {
+      process.stderr.write(`[ERROR] ${result.error}\n`);
+      return 1;
+    }
+    if (opts.json) {
+      printJson(result);
+    } else {
+      process.stdout.write(`${result.replaced ? '已更新' : '已信任'} ${result.key.keyId}${result.key.name ? `（${result.key.name}）` : ''}\n`);
+      process.stdout.write('运行中的实例需要重载插件后才会用上新信任列表。\n');
+    }
+    return 0;
+  }
+
+  if (action === 'remove' || action === 'rm') {
+    if (!argument) {
+      process.stderr.write('[ARG ERROR] 用法：plugin trust remove <keyId>\n');
+      return 2;
+    }
+    const result = trust.removeKey(argument);
+    if (!result.ok) {
+      process.stderr.write(`[ERROR] ${result.error}\n`);
+      return 1;
+    }
+    process.stdout.write(`已移除 ${argument}（已安装的插件不受影响；只影响以后的安装）\n`);
+    return 0;
+  }
+
+  process.stderr.write('[ARG ERROR] 用法：plugin trust <list|add|remove>\n');
+  return 2;
+}
+
+async function cmdPolicy(opts) {
+  const [action] = opts._;
+  const trust = require('./plugins/PluginTrustStore.js');
+  if (!action) {
+    const view = trust.list();
+    if (opts.json) {
+      printJson({ requireSignature: view.requireSignature, keys: view.keys.length });
+    } else {
+      process.stdout.write(`只允许已签名插件：${view.requireSignature ? '是' : '否'}（信任 ${view.keys.length} 把密钥）\n`);
+    }
+    return 0;
+  }
+  if (!['require', 'allow'].includes(action)) {
+    process.stderr.write('[ARG ERROR] 用法：plugin policy [require|allow]\n');
+    return 2;
+  }
+  const result = trust.setRequireSignature(action === 'require');
+  if (opts.json) {
+    printJson(result);
+  } else {
+    process.stdout.write(`只允许已签名插件：${result.requireSignature ? '是' : '否'}\n`);
+    process.stdout.write('运行中的实例需要重载插件或重启后生效。\n');
+  }
+  return 0;
+}
+
+/**
+ * 重验安装目录。
+ *
+ * 这不是"启动自检"，是**按需核查**：能改这个目录的人也能改信任库，真正的价值在于
+ * 回答"这个插件还是我装的那一份吗"——同步盘、备份还原、手工改文件之后会用得上。
+ */
+async function cmdVerify(opts) {
+  const [pluginId] = opts._;
+  if (!pluginId) {
+    process.stderr.write('[ARG ERROR] 用法：plugin verify <pluginId>\n');
+    return 2;
+  }
+  const installer = require('./plugins/PluginInstaller.js');
+  const result = installer.verifyInstalled(pluginId);
+  if (opts.json) {
+    printJson(result);
+    return result.ok ? 0 : 1;
+  }
+  if (result.status === 'unrecorded') {
+    process.stdout.write(`${pluginId}: ${result.message}\n`);
+    return 0;
+  }
+  if (result.ok) {
+    process.stdout.write(`${pluginId}: 与安装时的清单一致\n`);
+    return 0;
+  }
+  process.stdout.write(`${pluginId}: 安装目录已被改动\n`);
+  if (result.missing.length) process.stdout.write(`  缺失：${result.missing.slice(0, 5).join(', ')}\n`);
+  if (result.mismatched.length) process.stdout.write(`  内容不同：${result.mismatched.slice(0, 5).join(', ')}\n`);
+  if (result.extra.length) process.stdout.write(`  多出：${result.extra.slice(0, 5).join(', ')}\n`);
+  return 1;
+}
+
 // ---------------------------------------------------------------- 分发
 
 /**
@@ -468,9 +598,12 @@ async function runPluginCommand(rest, opts) {
       case 'methods': case 'method': return await cmdMethods(merged);
       case 'call': case 'invoke': return await cmdCall(merged);
       case 'automation': return await cmdAutomation(merged);
+      case 'trust': return await cmdTrust(merged);
+      case 'policy': return await cmdPolicy(merged);
+      case 'verify': return await cmdVerify(merged);
       default:
         process.stderr.write(`Unknown plugin subcommand: ${sub}\n`);
-        process.stderr.write('Usage: --cli plugin <list|methods|call|automation> [options]\n');
+        process.stderr.write('Usage: --cli plugin <list|methods|call|automation|trust|policy|verify> [options]\n');
         return 2;
     }
   } catch (err) {

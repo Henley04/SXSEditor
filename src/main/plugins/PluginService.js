@@ -25,6 +25,7 @@ const { PluginRuntimeManager } = require('./PluginRuntimeManager.js');
 const { PluginLeakProbe } = require('./PluginLeakProbe.js');
 const { evaluateKeybindings, collectMenuChords } = require('./PluginKeybindings.js');
 const installer = require('./PluginInstaller.js');
+const trustStore = require('./PluginTrustStore.js');
 const store = require('./PluginStateStore.js');
 const ipcFacade = require('./PluginIpcV2.js');
 const { buildPluginsMenu, pickTitle } = require('./PluginMenu.js');
@@ -673,6 +674,9 @@ class PluginService {
       // 计数只在内存里，用来回答"谁在调谁、慢不慢"。
       serviceCycles: this._serviceCycles,
       serviceStats: this.serviceStats(),
+      // M6：签名策略与信任的密钥。管理器要能解释"为什么装不上"，
+      // 也要让用户看见自己信任了谁。
+      trust: trustStore.list(),
     };
   }
 
@@ -861,6 +865,44 @@ class PluginService {
     if (!result.ok) return result;
     await this.reloadAll({ reason: 'install' });
     return result;
+  }
+
+  // ------------------------------------------------------------ 签名与信任
+  /**
+   * 信任库视图。管理器要能回答"为什么这个包装不上"，所以连策略一起给。
+   */
+  listTrust() {
+    return trustStore.list();
+  }
+
+  /**
+   * 信任一把公钥。
+   *
+   * 这里刻意不接受"信任全部"或"信任发布者名字"：名字是包自称的，
+   * 能核对的是密钥指纹。管理器展示指纹，用户核对后决定。
+   */
+  trustKey(input) {
+    const result = trustStore.addKey(input || {});
+    if (result.ok) ipcFacade.broadcastSnapshot(this);
+    return result;
+  }
+
+  forgetKey(keyId) {
+    const result = trustStore.removeKey(keyId);
+    if (result.ok) ipcFacade.broadcastSnapshot(this);
+    return result;
+  }
+
+  setRequireSignature(enabled) {
+    const result = trustStore.setRequireSignature(!!enabled);
+    ipcFacade.broadcastSnapshot(this);
+    return result;
+  }
+
+  /** 按需重验：核对安装目录是否还是安装时那份内容。 */
+  verifyInstalled(id) {
+    if (!this.registry.getPlugin(id)) return { ok: false, error: `未安装：${id}` };
+    return installer.verifyInstalled(id);
   }
 
   /**
