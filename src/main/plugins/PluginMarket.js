@@ -23,6 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const https = require('node:https');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 
 const market = require('../../shared/pluginMarket.js');
 const { PACKAGE } = require('../../shared/pluginApi.js');
@@ -84,25 +85,52 @@ function listSources() {
  * 哪些插件"，它值得一张证书；在 2026 年让索引走明文，等于把"装哪个包"交给同网段。
  */
 function addSource(input = {}) {
-  const url = String(input.url || '').trim();
-  if (!url) return { ok: false, code: 'INVALID_SOURCE', error: '缺少索引地址' };
-  const isFile = url.startsWith('file://');
-  if (!/^https:\/\//i.test(url) && !isFile) {
-    return { ok: false, code: 'INVALID_SOURCE', error: '索引地址必须是 https://（离线源需显式开启 file://）' };
-  }
-  if (isFile && !allowFileSources()) {
-    return {
-      ok: false,
-      code: 'INVALID_SOURCE',
-      error: '默认不接受 file:// 源。离线镜像请设置 SXSEDITOR_ALLOW_FILE_SOURCES=1 后重启',
-    };
-  }
-  if (isFile) {
-    const p = filePathOf(url);
-    if (!p || !path.isAbsolute(p)) {
+  const raw = String(input.url || '').trim();
+  if (!raw) return { ok: false, code: 'INVALID_SOURCE', error: '缺少索引地址' };
+
+  // 判断"这是路径还是 URL"。盘符要单独认：`D:\mirror` 会被 URL 规则读成
+  // scheme = "d"，于是合法的 Windows 路径在开启离线源后被当成未知协议拒掉。
+  const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(raw);
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) && !isWindowsPath;
+
+  let url = raw;
+  if (!hasScheme) {
+    // 离线源：允许直接给绝对路径（比让用户手拼 `file:///D:/...` 现实）。
+    if (!allowFileSources()) {
+      return {
+        ok: false,
+        code: 'INVALID_SOURCE',
+        error: '索引地址必须是 https://（离线源需显式设置 SXSEDITOR_ALLOW_FILE_SOURCES=1 后重启）',
+      };
+    }
+    if (!path.isAbsolute(raw)) {
       return { ok: false, code: 'INVALID_SOURCE', error: 'file:// 源必须是绝对路径' };
     }
+    url = pathToFileURL(path.resolve(raw)).href;
+  } else if (/^file:/i.test(raw)) {
+    if (!allowFileSources()) {
+      return {
+        ok: false,
+        code: 'INVALID_SOURCE',
+        error: '默认不接受 file:// 源。离线镜像请设置 SXSEDITOR_ALLOW_FILE_SOURCES=1 后重启',
+      };
+    }
+    // 统一走 fileURLToPath 再回写规范形式。`file://D:\a\b.json` 这种手写形态
+    // 在 WHATWG 里 host 会变成盘符，pathname 只剩 `\a\b.json`，直接拿去 stat
+    // 会读不到文件（Windows 上表现为"源加成功、搜索结果永远为空"）。
+    const asPath = filePathOf(raw);
+    if (!asPath || !path.isAbsolute(asPath)) {
+      return {
+        ok: false,
+        code: 'INVALID_SOURCE',
+        error: 'file:// 源必须是绝对路径，形如 file:///C:/mirror/index.json',
+      };
+    }
+    url = pathToFileURL(path.resolve(asPath)).href;
+  } else if (!/^https:\/\//i.test(raw)) {
+    return { ok: false, code: 'INVALID_SOURCE', error: '索引地址必须是 https://（离线源需显式开启 file://）' };
   }
+
   let parsed;
   try {
     parsed = new URL(url);
@@ -159,7 +187,10 @@ function filePathOf(fileUrl) {
   try {
     const u = new URL(fileUrl);
     if (u.protocol !== 'file:') return '';
-    return decodeURIComponent(u.pathname);
+    // 不用 decodeURIComponent(u.pathname)：Windows 上 pathname 是 `/D:/a/b`，
+    // 少了个盘符前的分隔符就是另一条路径，而且非空 host（`file://host/share`）
+    // 会被静默当成相对路径。fileURLToPath 两个问题都处理，并且会拒掉非本地 host。
+    return fileURLToPath(u);
   } catch (_) {
     return '';
   }

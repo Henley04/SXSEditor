@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const market = require('../src/shared/pluginMarket.js');
 const signature = require('../src/shared/pluginSignature.js');
@@ -312,7 +313,7 @@ describe('plugin market — 客户端（file:// 源，真实全链路）', funct
   it('文件源默认关闭：不设环境变量时拒绝添加', function () {
     const { indexPath } = publish({ version: '0.9.0' });
     delete process.env.SXSEDITOR_ALLOW_FILE_SOURCES;
-    const r = client.addSource({ url: `file://${indexPath}`, name: 'Off' });
+    const r = client.addSource({ url: pathToFileURL(indexPath).href, name: 'Off' });
     expect(r.ok).to.equal(false);
     expect(r.code).to.equal('INVALID_SOURCE');
     process.env.SXSEDITOR_ALLOW_FILE_SOURCES = '1';
@@ -324,9 +325,44 @@ describe('plugin market — 客户端（file:// 源，真实全链路）', funct
     expect(r.error).to.match(/https/);
   });
 
+  it('绝对路径直接当离线源（不用手拼 file:///D:/...）', async function () {
+    const { indexPath } = publish({ version: '0.8.0' });
+    const added = client.addSource({ url: indexPath, name: 'ByPath' });
+    expect(added.ok, added.error).to.equal(true);
+    expect(added.source.kind).to.equal('file');
+    expect(added.source.url).to.equal(pathToFileURL(indexPath).href);
+    const found = await client.search('market', { sourceId: added.source.id });
+    expect(found.results).to.have.length(1);
+    client.removeSource(added.source.id);
+  });
+
+  it('同一份索引的两种写法归一成同一个源', function () {
+    const { indexPath } = publish({ version: '0.7.0' });
+    const a = client.addSource({ url: pathToFileURL(indexPath).href, name: 'A' });
+    const b = client.addSource({ url: indexPath, name: 'B' });
+    expect(a.ok, a.error).to.equal(true);
+    expect(b.existed, '应命中已存在的源而不是新增').to.equal(true);
+    expect(b.source.id).to.equal(a.source.id);
+    client.removeSource(a.source.id);
+  });
+
+  it('盘符路径按路径处理，不会被当成未知协议', function () {
+    // `D:\mirror\index.json` 用 URL 规则读会得到 scheme = "d"。开启离线源之后
+    // 必须走路径分支，否则一律落到"必须是 https"这条，用户会以为不支持离线源。
+    const r = client.addSource({ url: 'D:\\mirror\\index.json' });
+    if (process.platform === 'win32') {
+      expect(r.ok, r.error).to.equal(true);
+      expect(r.source.kind).to.equal('file');
+      client.removeSource(r.source.id);
+    } else {
+      expect(r.ok).to.equal(false);
+      expect(r.error).to.match(/绝对路径/);
+    }
+  });
+
   it('添加源 → 搜索命中', async function () {
     const { indexPath } = publish();
-    const added = client.addSource({ url: `file://${indexPath}`, name: 'Local' });
+    const added = client.addSource({ url: pathToFileURL(indexPath).href, name: 'Local' });
     expect(added.ok, added.error).to.equal(true);
     sourceId = added.source.id;
 
@@ -349,7 +385,7 @@ describe('plugin market — 客户端（file:// 源，真实全链路）', funct
 
   it('索引摘要对不上 → 拒绝预览（不是"装完再说"）', async function () {
     const { indexPath } = publish({ version: '1.1.0', tamperIndexDigest: true });
-    const added = client.addSource({ url: `file://${indexPath}`, name: 'Broken' });
+    const added = client.addSource({ url: pathToFileURL(indexPath).href, name: 'Broken' });
     expect(added.ok, added.error).to.equal(true);
     const r = await client.preview(added.source.id, TEST_ID, { appVersion: '2.0.0' });
     expect(r.ok).to.equal(false);
@@ -371,7 +407,7 @@ describe('plugin market — 客户端（file:// 源，真实全链路）', funct
       sig: { keyId: signature.keyIdFor(keyPair.publicKey), publisher: 'Fixture Studio' },
     })), null, 2));
 
-    const added = client.addSource({ url: `file://${indexPath}`, name: 'Claimed' });
+    const added = client.addSource({ url: pathToFileURL(indexPath).href, name: 'Claimed' });
     const r = await client.preview(added.source.id, TEST_ID, { appVersion: '2.0.0' });
     expect(r.ok, r.error).to.equal(true);
     expect(r.preview.signature.status).to.equal('unsigned');
@@ -382,12 +418,12 @@ describe('plugin market — 客户端（file:// 源，真实全链路）', funct
 
   it('已装 1.0.1 时市场给 1.0.0 → 标 DOWNGRADE', async function () {
     const { indexPath } = publish({ version: VERSION });
-    const added = client.addSource({ url: `file://${indexPath}`, name: 'Main' });
+    const added = client.addSource({ url: pathToFileURL(indexPath).href, name: 'Main' });
     const installed = installer.installFromPackage(path.join(marketRoot, `${TEST_ID}-${VERSION}.sxsp`), { appVersion: '2.0.0' });
     expect(installed.ok, installed.error).to.equal(true);
 
     const oldPkg = publish({ version: '1.0.0' });
-    const oldSource = client.addSource({ url: `file://${oldPkg.indexPath}`, name: 'Main' });
+    const oldSource = client.addSource({ url: pathToFileURL(oldPkg.indexPath).href, name: 'Main' });
     const r = await client.preview(oldSource.source.id, TEST_ID, { appVersion: '2.0.0' });
     expect(r.ok, r.error).to.equal(true);
     expect(r.relation).to.equal('downgrade');
