@@ -199,6 +199,13 @@ function validateCommands(list, pluginId) {
       description: typeof cmd.description === 'string' ? cmd.description.slice(0, 500) : '',
       /** true = 允许在无界面（MCP/CLI）下调用，默认跟随 automation 权限 */
       headless: cmd.headless !== false,
+      /**
+       * true = 长任务：允许经 MCP 以 `async: true` 提交成 job，宿主的超时放宽到
+       * `TIMEOUTS.longCommand`，插件可以用 `ctx.ui.progress()` 回报进度、
+       * 用 `ctx.signal` 响应取消。默认 false —— 把每条命令都说成长任务等于
+       * 把所有调用都变成"没有上限"，反而让真正的长任务失去信号。
+       */
+      long: cmd.long === true,
     });
   }
   // 重复 id 会让菜单出现两个同名项且卸载只删掉一个
@@ -750,15 +757,88 @@ function validateAutomation(raw, pluginId, commandIds) {
 }
 
 function validateServices(raw) {
-  if (raw === undefined) return { ok: true, value: [] };
-  const provides = Array.isArray(raw && raw.provides) ? raw.provides : [];
-  const out = [];
-  for (const svc of provides) {
-    if (!svc || typeof svc !== 'object') return fail('services.provides 的每一项必须是对象');
-    if (!COMMAND_ID_RE.test(svc.id || '')) return fail(`service.id 非法：${JSON.stringify(svc.id)}`);
-    out.push({ id: svc.id, version: VERSION_RE.test(svc.version || '') ? svc.version : '1.0.0' });
+  if (raw === undefined) return { ok: true, value: { provides: [], consumes: [] } };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fail('contributes.services 必须是对象');
+  for (const key of Object.keys(raw)) {
+    if (key !== 'provides' && key !== 'consumes') {
+      return fail(`未知的 contributes.services.${key}（只支持 provides / consumes）`);
+    }
   }
-  return { ok: true, value: out };
+
+  const {
+    isServiceId, isServiceMethod, isVersionRange,
+  } = require('./pluginServices.js');
+
+  // ---- provides ----
+  //
+  // `methods` 强制非空：一个没有方法的服务在消费方看来就是一个"能调但什么都不能调"
+  // 的端点。允许它存在只会制造一类最难查的问题 —— 装好了、能解析、每次调用都
+  // NOT_FOUND。作者想占位就写一个 `version()`。
+  const providesRaw = raw.provides === undefined ? [] : raw.provides;
+  if (!Array.isArray(providesRaw)) return fail('services.provides 必须是数组');
+  if (providesRaw.length > LIMITS.services) return fail(`services.provides 最多 ${LIMITS.services} 项`);
+  const provides = [];
+  const providedIds = new Set();
+  for (const svc of providesRaw) {
+    if (!svc || typeof svc !== 'object' || Array.isArray(svc)) {
+      return fail('services.provides 的每一项必须是对象');
+    }
+    if (!isServiceId(svc.id)) {
+      return fail(`service.id 非法：${JSON.stringify(svc.id)}（必须形如 'namespace.name'）`);
+    }
+    if (providedIds.has(svc.id)) return fail(`services.provides 重复声明：${svc.id}`);
+    providedIds.add(svc.id);
+    if (svc.version !== undefined && !VERSION_RE.test(svc.version || '')) {
+      return fail(`service '${svc.id}' 的 version 非法：${JSON.stringify(svc.version)}`);
+    }
+    const methodsRaw = svc.methods === undefined ? [] : svc.methods;
+    if (!Array.isArray(methodsRaw) || !methodsRaw.length) {
+      return fail(`service '${svc.id}' 必须声明 methods（至少一个方法）`);
+    }
+    if (methodsRaw.length > 64) return fail(`service '${svc.id}' 的 methods 最多 64 项`);
+    const methods = [];
+    for (const m of methodsRaw) {
+      if (!isServiceMethod(m)) return fail(`service '${svc.id}' 含非法方法名：${JSON.stringify(m)}`);
+      if (methods.includes(m)) return fail(`service '${svc.id}' 的 methods 重复：${m}`);
+      methods.push(m);
+    }
+    provides.push({
+      id: svc.id,
+      version: svc.version || '1.0.0',
+      methods,
+      description: typeof svc.description === 'string' ? svc.description.slice(0, 300) : '',
+    });
+  }
+
+  // ---- consumes ----
+  const consumesRaw = raw.consumes === undefined ? [] : raw.consumes;
+  if (!Array.isArray(consumesRaw)) return fail('services.consumes 必须是数组');
+  if (consumesRaw.length > LIMITS.services) return fail(`services.consumes 最多 ${LIMITS.services} 项`);
+  const consumes = [];
+  const consumedIds = new Set();
+  for (const dep of consumesRaw) {
+    if (!dep || typeof dep !== 'object' || Array.isArray(dep)) {
+      return fail('services.consumes 的每一项必须是对象');
+    }
+    if (!isServiceId(dep.id)) {
+      return fail(`services.consumes 的 id 非法：${JSON.stringify(dep.id)}（必须形如 'namespace.name'）`);
+    }
+    if (consumedIds.has(dep.id)) return fail(`services.consumes 重复声明：${dep.id}`);
+    consumedIds.add(dep.id);
+    const range = dep.range === undefined ? '*' : dep.range;
+    if (typeof range !== 'string' || !isVersionRange(range)) {
+      return fail(`services.consumes['${dep.id}'].range 非法：${JSON.stringify(dep.range)}`);
+    }
+    consumes.push({
+      id: dep.id,
+      range,
+      // optional 的语义只有一个：提供方不在时不算错。非 optional 的缺失会让插件
+      // 显示为 degraded —— 装了但用不了，比"看起来装好了、一用就炸"诚实。
+      optional: dep.optional === true,
+    });
+  }
+
+  return { ok: true, value: { provides, consumes } };
 }
 
 /**
@@ -975,9 +1055,19 @@ function validateManifest(manifest, ctx = {}) {
     return fail("声明了 contributes.automation.methods，但 permissions.automation 里没有 'expose'");
   }
 
+  // 跨插件服务同样是"知情同意"的一部分：provide 意味着别的插件能跑你的代码，
+  // consume 意味着你会去调别人的代码（对方崩了你也跟着慢）。
+  const svcPerms = perms.value.services || [];
+  if (services.value.provides.length && !svcPerms.includes('provide')) {
+    return fail("声明了 contributes.services.provides，但 permissions.services 里没有 'provide'");
+  }
+  if (services.value.consumes.length && !svcPerms.includes('consume')) {
+    return fail("声明了 contributes.services.consumes，但 permissions.services 里没有 'consume'");
+  }
+
   // 尚未落地的贡献点：接受但不生效，管理器里会标注"未实现"
   const pending = [];
-  for (const key of ['services', 'intents', 'synthesis']) {
+  for (const key of ['intents', 'synthesis']) {
     if (contributes[key] !== undefined) pending.push(key);
   }
 

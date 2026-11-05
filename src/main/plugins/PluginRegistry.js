@@ -27,6 +27,9 @@ class PluginRegistry {
       // M5：暴露给 MCP / CLI 的命令。与 command 表分开存：命令存在 ≠ 允许
       // 无界面调用，两张表分开，卸载/停用时也能一起扫干净。
       'automation',
+      // M5：跨插件 service。键是 service id（全局命名空间），一个 id 只能有
+      // 一个提供方 —— 冲突在 PluginService 里按插件 id 字典序裁决，结果仍落在这张表。
+      'service',
       'toolbar', 'statusBar', 'contextMenu', 'overlay', 'keybinding',
     ]) {
       this._contrib.set(type, new Map());
@@ -154,6 +157,49 @@ class PluginRegistry {
       .sort((a, b) => (a.order - b.order) || a.pluginId.localeCompare(b.pluginId));
   }
 
+  /**
+   * 单个插件视角的服务视图：我提供什么、我依赖谁、依赖现在满不满足。
+   *
+   * 解析放在这里而不是 PluginService：管理器与渲染层拿到的投影必须同源，
+   * 否则会出现"管理器说可用、插件调用说 SERVICE_GONE"这种自相矛盾的界面。
+   */
+  serviceView(pluginId) {
+    const declared = (this.getPlugin(pluginId) || { manifest: {} }).manifest.contributes || {};
+    const raw = declared.services;
+    // 老 fixture / 手写注册表里 `services` 可能是数组（M5 之前只校验 provides）。
+    // 投影不是校验器：形状不认识就当没声明，别让管理器整页崩掉。
+    const decl = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const provides = Array.isArray(decl.provides) ? decl.provides : [];
+    const consumes = Array.isArray(decl.consumes) ? decl.consumes : [];
+    const providers = this.list('service');
+    const { resolveService } = require('../../shared/pluginServices.js');
+    const activeIds = new Set(providers.map((s) => s.id));
+    return {
+      provides: provides.map((p) => ({
+        id: p.id, version: p.version, methods: p.methods,
+        // 被别人抢注（或自己被停用）时 isActive 为 false，管理器要能看出
+        // "我声明了但没生效"，而不是只看到一个空的提供列表。
+        active: activeIds.has(p.id) && (this.get('service', p.id) || {}).pluginId === pluginId,
+        spokenFor: activeIds.has(p.id) && (this.get('service', p.id) || {}).pluginId !== pluginId
+          ? (this.get('service', p.id) || {}).pluginId
+          : null,
+      })),
+      consumes: consumes.map((c) => {
+        const r = resolveService({ providers, id: c.id, range: c.range });
+        return {
+          id: c.id,
+          range: c.range,
+          optional: c.optional,
+          available: r.ok,
+          provider: r.ok ? r.provider.pluginId : null,
+          version: r.ok ? r.provider.version : null,
+          reason: r.ok ? null : r.reason,
+          message: r.ok ? null : r.message,
+        };
+      }),
+    };
+  }
+
   // -------------------------------------------------------------- 投影
   /**
    * 渲染进程需要的投影。只含可用（enabled 且非 quarantine）的插件贡献。
@@ -226,6 +272,9 @@ class PluginRegistry {
         automation: rows('automation', record.id).map((a) => ({
           id: a.id, method: a.method, title: a.title,
         })),
+        // 跨插件服务：管理器要能回答"这个插件依赖谁、现在满不满足"。
+        // 依赖缺失时插件本身会是 degraded，但光看状态说明不了缺的是哪一个。
+        services: this.serviceView(record.id),
         toolbar: rows('toolbar', record.id).map((t) => ({
           id: t.id, localId: t.localId, command: t.command, title: t.title,
           icon: t.icon, group: t.group, when: t.when,
@@ -279,6 +328,8 @@ class PluginRegistry {
         // 插件把哪些命令交给了自动化面。管理器直接列出来：这是"别人能替你
         // 操作工程"的入口，用户有权在装完后就看见，而不是等 agent 调通了才知道。
         automationMethods: r.manifest.contributes.automation.methods,
+        // 跨插件服务的完整视图（含解析结果与缺失原因）。
+        services: this.serviceView(r.id),
         // M2：界面贡献点的条目数与管理器要展示的快捷键状态。
         // 只给数量而不是内容 —— 管理器不渲染工具栏按钮，给内容只会多一份要维护的形状。
         uiContributions: {

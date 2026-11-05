@@ -73,6 +73,9 @@ const PERMISSION_GROUPS = Object.freeze({
   project: ['read', 'write'],
   ui: ['panel', 'menu', 'toolbar', 'settings', 'statusBar', 'overlay', 'contextMenu'],
   automation: ['expose'],
+  // 跨插件服务：provide = 允许别人调你的代码；consume = 允许你调别人的代码。
+  // 两项分开，是因为"我能被调"和"我能调人"在安装弹窗里是两句话。
+  services: ['provide', 'consume'],
   secrets: ['read', 'write'],
   clipboard: ['read', 'write'],
   notification: ['show'],
@@ -120,6 +123,10 @@ const ERR = Object.freeze({
   UNSUPPORTED: 'UNSUPPORTED',
   NOT_FOUND: 'NOT_FOUND',
   INTERNAL: 'INTERNAL',
+  /** 长任务被调用方取消（MCP job 的 cancel、CLI 的 Ctrl+C）。 */
+  CANCELLED: 'CANCELLED',
+  /** 服务提供方已卸载/停用：这是"端点没了"，不是"你调错了"。 */
+  SERVICE_GONE: 'SERVICE_GONE',
 });
 
 /** 超时（毫秒）。插件是第三方代码，任何一次调用都必须有上限。 */
@@ -128,6 +135,15 @@ const TIMEOUTS = Object.freeze({
   init: 30000,
   /** 普通命令。 */
   command: 60000,
+  /**
+   * 声明了 `long: true` 的命令。
+   *
+   * 与 MCP 桥接层 LONG_TIMEOUT_MS（600s）同量级，但**必须更短**：让插件先报
+   * "我超时了"，桥接层才不会抢在它前面把调用变成一个没有上下文的 TIMEOUT。
+   */
+  longCommand: 570000,
+  /** 跨插件服务调用。提供方是别人写的代码，消费方不该被它无限期拖住。 */
+  service: 30000,
   /** panel RPC 默认值，可在 manifest 的 panel.timeoutMs 覆盖。 */
   panelRpc: 30000,
   /** 卸载时等待进程退出的宽限期，超过即强杀。 */

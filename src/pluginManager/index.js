@@ -70,6 +70,9 @@ function statusLabel(status) {
     case 'loaded': return t('plugins.statusLoaded');
     case 'disabled': return t('plugins.statusDisabled');
     case 'quarantined': return t('plugins.statusQuarantined');
+    // degraded = 装了、启用了，但缺依赖服务。它不等于"异常"：插件本身没坏，
+    // 只是它的前提不在了。用"异常"会让用户去查插件日志，方向完全错。
+    case 'degraded': return t('plugins.statusDegraded');
     default: return t('plugins.statusError') || status;
   }
 }
@@ -256,6 +259,55 @@ function renderAutomation(plugin) {
   return box;
 }
 
+/**
+ * 跨插件服务块：我提供什么、我依赖谁、依赖现在满不满足。
+ *
+ * 依赖状态必须是**实时解析结果**而不是 manifest 里的字面量：用户卸载提供方
+ * 之后，这里要立刻变成"不可用"，否则管理器会承诺一个已经不存在的端点。
+ */
+function renderServices(plugin) {
+  const svc = plugin.services;
+  if (!svc || (!(svc.provides || []).length && !(svc.consumes || []).length)) return null;
+
+  const box = el('div', 'pm-kb');
+  const head = el('div', 'pm-kb-head');
+  head.appendChild(el('span', 'pm-row-label', t('plugins.servicesLabel')));
+  box.appendChild(head);
+
+  for (const p of svc.provides || []) {
+    const row = el('div', 'pm-auto-row');
+    row.appendChild(el('code', 'pm-auto-method', p.id));
+    row.appendChild(el(
+      'span',
+      `pm-auto-status ${p.active ? 'is-on' : 'is-off'}`,
+      p.active
+        ? t('plugins.serviceProviding', { version: p.version })
+        : t('plugins.serviceConflict', { plugin: p.spokenFor || '?' }),
+    ));
+    box.appendChild(row);
+    if ((p.methods || []).length) {
+      box.appendChild(el('p', 'pm-note', `${t('plugins.servicesProvides')}: ${p.methods.join(' · ')}`));
+    }
+  }
+
+  for (const c of svc.consumes || []) {
+    const row = el('div', 'pm-auto-row');
+    row.appendChild(el('code', 'pm-auto-method', `${c.id} ${c.range}`));
+    row.appendChild(el(
+      'span',
+      `pm-auto-status ${c.available ? 'is-on' : 'is-off'}`,
+      c.available
+        ? t('plugins.serviceConsumed', { plugin: c.provider, version: c.version })
+        : t('plugins.serviceMissing', { reason: c.message || c.reason || '' }),
+    ));
+    box.appendChild(row);
+    if (c.optional) box.appendChild(el('p', 'pm-note', t('plugins.serviceOptional')));
+  }
+
+  box.appendChild(el('p', 'pm-note', t('plugins.servicesNote')));
+  return box;
+}
+
 function renderCard(plugin) {
   const card = el('li', 'pm-card');
   card.dataset.pluginId = plugin.id;
@@ -393,6 +445,9 @@ function renderCard(plugin) {
   if (plugin.commands?.length) {
     body.appendChild(renderAutomation(plugin));
   }
+
+  const serviceBox = renderServices(plugin);
+  if (serviceBox) body.appendChild(serviceBox);
 
   card.appendChild(body);
   return card;

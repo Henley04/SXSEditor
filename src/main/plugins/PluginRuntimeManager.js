@@ -185,6 +185,7 @@ class PluginRuntimeManager {
       if (!pending) return;
       session.pending.delete(data.id);
       clearTimeout(pending.timer);
+      if (pending.onDone) pending.onDone();
       if (data.ok) pending.resolve(data.result);
       else {
         pending.reject(new PluginError(
@@ -208,6 +209,20 @@ class PluginRuntimeManager {
       return;
     }
     if (data.kind === 'evt') {
+      // 进度事件带 reqId：只送给"发起这次调用的人"，不进广播。
+      // 不进广播的理由：插件可能在同一个进程里既跑面板又跑命令，把某次命令的
+      // 进度推到所有窗口只会让界面显示一个与当前操作无关的进度条。
+      const payload = data.payload || {};
+      if (data.event === 'progress' && payload.reqId) {
+        const pending = session.pending.get(payload.reqId);
+        if (pending && typeof pending.onProgress === 'function') {
+          try {
+            pending.onProgress(payload);
+          } catch (err) {
+            this.logger.warn(`[plugin:${session.id}] progress handler failed:`, err && err.message);
+          }
+        }
+      }
       if (session.onEvent) {
         try {
           session.onEvent(session.id, data.event, data.payload);
@@ -223,6 +238,7 @@ class PluginRuntimeManager {
     session.exited = true;
     for (const [id, pending] of session.pending) {
       clearTimeout(pending.timer);
+      if (pending.onDone) pending.onDone();
       pending.reject(new PluginError(ERR.PLUGIN_UNLOADED, '插件进程已退出'));
       session.pending.delete(id);
     }
@@ -248,11 +264,44 @@ class PluginRuntimeManager {
     const timeoutMs = options.timeoutMs || TIMEOUTS.command;
     const reqId = `r${++session.seq}`;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const settle = () => {
         session.pending.delete(reqId);
+        clearTimeout(timer);
+        if (options.signal && onAbort) options.signal.removeEventListener('abort', onAbort);
+      };
+      const timer = setTimeout(() => {
+        settle();
         reject(new PluginError(ERR.PLUGIN_TIMEOUT, `插件调用超时（${method}, ${timeoutMs}ms）`));
       }, timeoutMs);
-      session.pending.set(reqId, { resolve, reject, timer });
+
+      /**
+       * 取消：先告诉插件"别干了"（它会 abort 对应的 ctx.signal），再在本地结算。
+       *
+       * 两边都做是刻意的。只发消息的话，一个不检查 signal 的插件会把调用方
+       * 拖到超时；只在本地结算的话，插件的活儿还在跑（算力白烧，还可能继续
+       * 往磁盘写）。本地结算保证"取消立刻生效"，消息则给配合的插件省下算力。
+       */
+      let onAbort = null;
+      if (options.signal) {
+        if (options.signal.aborted) {
+          clearTimeout(timer);
+          reject(new PluginError(ERR.CANCELLED, '调用已取消'));
+          return;
+        }
+        onAbort = () => {
+          try {
+            session.child.postMessage({ kind: 'cancel', id: reqId });
+          } catch (_) { /* 进程已退出，下面照样结算 */ }
+          session.pending.delete(reqId);
+          clearTimeout(timer);
+          reject(new PluginError(ERR.CANCELLED, '调用已取消'));
+        };
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      session.pending.set(reqId, {
+        resolve, reject, timer, onProgress: options.onProgress, onDone: settle,
+      });
       session.child.postMessage({ kind: 'req', id: reqId, method, params });
     });
   }

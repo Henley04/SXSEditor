@@ -1459,6 +1459,7 @@ export default {
     statusDisabled: 'Disabled',
     statusQuarantined: 'Quarantined',
     statusError: 'Error',
+    statusDegraded: 'Degraded',
 
     enable: 'Enable',
     disable: 'Disable',
@@ -1488,6 +1489,16 @@ export default {
     automationStatusOn: 'exposed',
     automationStatusOff: 'blocked',
     automationNoneDeclared: 'This plugin declares no automation methods; its commands are only reachable from the UI.',
+
+    servicesLabel: 'Cross-plugin services',
+    servicesNote: 'A service runs in the provider plugin process. Disabling or uninstalling it makes dependents receive SERVICE_GONE on their next call.',
+    servicesProvides: 'provides',
+    servicesConsumes: 'consumes',
+    serviceProviding: 'serving v{version}',
+    serviceConflict: 'taken by {plugin}',
+    serviceConsumed: '{plugin} v{version}',
+    serviceMissing: 'unavailable: {reason}',
+    serviceOptional: 'optional',
 
     logEmpty: 'No activity yet',
     logTime: 'Time',

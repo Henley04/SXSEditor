@@ -37,6 +37,15 @@ const MIDI_MAX_BYTES = 64 * 1024 * 1024;
 const RATE_LIMIT = { windowMs: 10 * 1000, max: 120 };
 
 const pending = new Map();
+
+/**
+ * 在途 job 的取消开关。job → AbortController。
+ *
+ * `jobs.cancel` 只改状态是不够的：一个跑十分钟的插件任务必须真的被叫停，
+ * 否则"取消"只是让调用方看不到结果，机器还在烧。控制器往 dispatch 里传，
+ * 插件侧会收到 abort（见 PluginRuntimeManager.call）。
+ */
+const activeAborts = new Map();
 const sseClients = new Set();
 const rateBuckets = new Map();
 // token -> { id, name, models }
@@ -375,6 +384,19 @@ async function dispatchMain(method, params, ctx = {}) {
     case 'jobs.cancel': {
       const r = jobs.cancel(params.jobId);
       if (!r) throw new McpError('NOT_FOUND', `Unknown job ${params.jobId}`);
+      // 正在跑的任务：先 abort（真实停止），再把"已经开始停了"告诉调用方。
+      // jobs.cancel() 只改状态，返回的 reason 是"跑着的任务停不下来" —— 那是
+      // 没有 abort 通道时的老实话。现在真的能停了，就不能把这句话再回给调用方。
+      const ac = activeAborts.get(params.jobId);
+      if (ac) {
+        try { ac.abort(); } catch (_) { /* ignore */ }
+        return {
+          ...r,
+          cancelled: true,
+          interrupted: true,
+          reason: 'cancellation delivered; the job will settle as cancelled',
+        };
+      }
       return r;
     }
     case 'midi.importFile':
@@ -537,7 +559,11 @@ async function dispatch(method, params, ctx = {}) {
         hint: 'plugin automation methods come from installed plugins; start the app with plugins enabled',
       });
     }
-    const r = await withTimeout(pluginAutomation.run(method, checked.value), timeoutMs, method);
+    const r = await withTimeout(pluginAutomation.run(method, checked.value, {
+      // 进度与取消只在长任务上有实际效果；短命令忽略这两个字段即可。
+      signal: ctx.signal,
+      onProgress: ctx.onProgress,
+    }), timeoutMs, method);
     if (!r || r.ok !== true) {
       const info = (r && r.error) || {};
       throw new McpError(mapPluginErrorCode(info.code), info.message || `Plugin method ${method} failed`, {
@@ -556,9 +582,20 @@ async function dispatch(method, params, ctx = {}) {
 
 function runJob(job, method, params, ctx = {}) {
   if (job.cancelRequested) return;
+  const ac = new AbortController();
+  activeAborts.set(job.id, ac);
   jobs.start(job.id);
   emit('job.started', { jobId: job.id, method });
-  dispatch(method, params, ctx)
+  dispatch(method, params, {
+    ...ctx,
+    signal: ac.signal,
+    // 进度直接进 job 快照，同时通过 /events 广播：轮询与订阅两种客户端
+    // 都该看到同一条进度，而不是只有订阅者能看见。
+    onProgress: (p) => {
+      const saved = jobs.progress(job.id, p);
+      if (saved) emit('job.progress', { jobId: job.id, method, progress: saved });
+    },
+  })
     .then(({ result, warnings }) => {
       const done = jobs.finish(job.id, { result: warnings && warnings.length ? { result, warnings } : result });
       if (done) emit('job.completed', { jobId: job.id, method, status: done.status });
@@ -567,7 +604,8 @@ function runJob(job, method, params, ctx = {}) {
       const e = normalizeError(err);
       const done = jobs.finish(job.id, { error: e.toJSON() });
       if (done) emit('job.failed', { jobId: job.id, method, status: done.status, error: e.toJSON() });
-    });
+    })
+    .finally(() => activeAborts.delete(job.id));
 }
 
 // ------------------------------------------------------------------- http
@@ -715,6 +753,15 @@ async function handle(req, res) {
           throw new McpError('VALIDATION_ERROR', `${first.field}: ${first.message}`, { field: first.field, details: { errors: checked.errors.slice(0, 20) } });
         }
         checkPreconditions(def);
+        // 插件方法只在作者声明 `long: true` 时可异步提交。这条限制不是出于
+        // 安全考虑，而是"job 是给等不起的调用用的"：一旦所有方法都可异步，
+        // agent 会习惯于全部 async 提交，从而丢掉"这条到底慢不慢"的信号。
+        if (def.target === 'plugin' && def.async !== true) {
+          throw new McpError('VALIDATION_ERROR', `${methodName} cannot be submitted as a job`, {
+            field: 'async',
+            hint: 'the plugin command must declare "long": true to be submitted with async:true',
+          });
+        }
         const job = jobs.create(methodName);
         sendJson(res, 202, { ok: true, result: { jobId: job.id, status: job.status, poll: `/jobs/${job.id}` }, requestId });
         runJob(job, methodName, checked.value, { tokenInfo, subject: `mcp:${tokenInfo.id}` });

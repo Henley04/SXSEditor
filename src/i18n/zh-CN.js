@@ -1466,6 +1466,7 @@ export default {
     statusDisabled: '已停用',
     statusQuarantined: '已隔离',
     statusError: '异常',
+    statusDegraded: '缺依赖',
 
     enable: '启用',
     disable: '停用',
@@ -1495,6 +1496,16 @@ export default {
     automationStatusOn: '已暴露',
     automationStatusOff: '已拦住',
     automationNoneDeclared: '这个插件没有声明任何自动化方法，它的命令只能从界面调用。',
+
+    servicesLabel: '跨插件服务',
+    servicesNote: '服务提供方在别的插件进程里跑；卸载或停用它，依赖它的插件会在下一次调用时收到 SERVICE_GONE。',
+    servicesProvides: '提供',
+    servicesConsumes: '依赖',
+    serviceProviding: '提供中 v{version}',
+    serviceConflict: '被 {plugin} 占用',
+    serviceConsumed: '{plugin} v{version}',
+    serviceMissing: '不可用：{reason}',
+    serviceOptional: '可选',
 
     logEmpty: '暂无活动记录',
     logTime: '时间',

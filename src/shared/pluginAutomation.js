@@ -36,6 +36,17 @@ const PLUGIN_ERR_TO_MCP = Object.freeze({
   INVALID_REQUEST: 'VALIDATION_ERROR',
   RESULT_TOO_LARGE: 'VALIDATION_ERROR',
   CONFLICT: 'CONFLICT',
+  // 跨插件服务：提供方不在/被停用时，调用方的正确反应是"重查能力表"，
+  // 而不是"重试"或"以为插件炸了"。422 正好表达"前提不成立"。
+  // 不映射的话它会塌成 INTERNAL —— agent 会一直重试一个已经不存在的端点。
+  SERVICE_GONE: 'PRECONDITION_FAILED',
+  // 插件被隔离/停用时同理：前提不成立，重试没有意义。
+  PLUGIN_QUARANTINED: 'PRECONDITION_FAILED',
+  PLUGIN_UNLOADED: 'PRECONDITION_FAILED',
+  PLUGIN_CRASHED: 'INTERNAL',
+  SERVICE_NOT_FOUND: 'NOT_FOUND',
+  SERVICE_VERSION_MISMATCH: 'CONFLICT',
+  SERVICE_RECURSION: 'CONFLICT',
 });
 
 function mapPluginErrorCode(code) {
@@ -88,7 +99,7 @@ function conflictsWithBuiltin(name) {
  * 校验，硬编一个 schema 只会让插件升级参数时被旧宿主挡住。
  */
 function buildAutomationDef(entry) {
-  const { pluginId, localId, title, description, pluginName, pluginVersion } = entry;
+  const { pluginId, localId, title, description, pluginName, pluginVersion, long } = entry;
   const name = buildMethodName(pluginId, localId);
   const def = {
     summary: pickTitle(title) || localId,
@@ -96,9 +107,20 @@ function buildAutomationDef(entry) {
       + `${pluginVersion ? ` v${pluginVersion}` : ''}. `
       + 'Parameters are defined by the plugin and are not validated by the host; '
       + 'the return value is whatever the plugin command returned.'
+      + (long ? ' Long-running: submit with async:true to get a job id; progress and cancellation are supported.' : '')
       + (description ? ` ${description}` : ''),
     target: 'plugin',
+    // 桥接层的超时永远宽于插件自己的命令超时：让插件先报"我超时了"（带它自己的
+    // 上下文），比桥接层抢先返回一条没有上下文的 TIMEOUT 有用得多。
     long: true,
+    /**
+     * 能不能 `async: true` 提交成 job。
+     *
+     * 只有声明 `long: true` 的命令可以。理由：job 是为"客户端等不起"准备的，
+     * 一个 200ms 的命令提交成 job 只会让调用方多轮询一次；更糟的是，一旦所有
+     * 方法都可异步，agent 会倾向于全部异步提交，而丢失了"这条到底慢不慢"的信号。
+     */
+    async: long === true,
     mutates: true,
     requires: [],
     aliases: {},

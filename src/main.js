@@ -797,7 +797,9 @@ app.whenReady().then(() => {
       try {
         require('./main/mcpBridge').setPluginAutomation({
           list: () => pluginService.listAutomationMethods(),
-          run: (name, params) => pluginService.runAutomationMethod(name, params),
+          // options 里带 job 的 signal / onProgress：长任务的取消与进度从桥接层
+          // 一路传到插件进程，中间不换形状。
+          run: (name, params, options) => pluginService.runAutomationMethod(name, params, options),
         });
       } catch (err) {
         console.warn('[plugins] 自动化方法接线失败:', err && err.message);

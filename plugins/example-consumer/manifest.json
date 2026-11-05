@@ -1,0 +1,55 @@
+{
+  "apiVersion": 2,
+  "id": "example-consumer",
+  "name": "Example: Service Consumer",
+  "version": "1.0.0",
+  "description": "服务消费方示例：声明依赖 example.clock，通过 ctx.services 调用它；提供方可选缺失时插件显示为 degraded。",
+  "author": "SXSEditor Dev",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {
+    "services": [
+      "consume"
+    ],
+    "ui": [
+      "menu"
+    ],
+    "automation": [
+      "expose"
+    ]
+  },
+  "contributes": {
+    "services": {
+      "consumes": [
+        {
+          "id": "example.clock",
+          "range": "^1.0.0",
+          "optional": false
+        }
+      ]
+    },
+    "commands": [
+      {
+        "id": "now",
+        "title": {
+          "en": "Read clock from another plugin",
+          "zh-CN": "从另一个插件读时钟"
+        },
+        "description": "调用 example.clock 的 now()，返回提供方、版本与它自己的启动时长。"
+      }
+    ],
+    "menus": [
+      {
+        "path": "plugins/example",
+        "command": "now"
+      }
+    ],
+    "automation": {
+      "methods": [
+        "now"
+      ]
+    }
+  }
+}

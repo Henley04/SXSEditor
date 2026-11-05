@@ -40,6 +40,18 @@ const pendingHost = new Map();
 let hostSeq = 0;
 
 /**
+ * 在途请求的取消开关：reqId → AbortController。
+ *
+ * 为什么每个请求一个 controller 而不是插件一个：取消是"这一条命令别干了"，
+ * 不是"整个插件停摆"。共用一个的话，用户取消一次导出会连带取消面板正在跑的
+ * 合成请求，而插件没办法区分。
+ */
+const requestControllers = new Map();
+
+/** 宿主侧 service.call 的超时（30s），这里多留 10s 让宿主的错误先到。 */
+const SERVICE_CALL_TIMEOUT = 40000;
+
+/**
  * 在途的模型调用。key 是插件自己生成的 streamKey。
  *
  * 为什么不用 handleId 做 key：主进程的 start 事件可能比 hostCall 的返回值更早到，
@@ -75,6 +87,43 @@ function createContext(init) {
   // 用户设置的可变快照：`settings.changed` 到达时就地替换（插件不必自己缓存）。
   let settings = { ...(init.settings || {}) };
   const settingsListeners = [];
+
+  /**
+   * 依赖的服务：id → { available, version, provider, methods, optional, range }。
+   * 启动快照来自宿主 init，之后只由 `service.changed` 事件更新。
+   */
+  const serviceState = new Map(
+    (((capabilities || {}).services || {}).consumes || []).map((c) => [c.id, c]),
+  );
+  const serviceListeners = [];
+
+  /**
+   * 构造服务句柄。
+   *
+   * `scope` 是**发起调用的那个请求上下文**：它的 `serviceDepth` 会随调用链递增，
+   * 宿主据此截断 A→B→A 这种循环。不用模块级变量，是因为同一个插件可能有两条
+   * 并发调用链，用全局深度会互相污染。
+   */
+  const makeServiceHandle = (scope, id) => {
+    const entry = serviceState.get(id);
+    const depth = (scope && scope.serviceDepth) || 0;
+    if (!entry || !entry.available) {
+      const detail = entry && entry.reason ? `（${entry.reason}）` : '';
+      throw Object.assign(new Error(`service '${id}' 当前不可用${detail}`), { code: 'SERVICE_GONE' });
+    }
+    const handle = {
+      id,
+      version: entry.version,
+      provider: entry.provider,
+      methods: entry.methods.slice(),
+    };
+    for (const method of entry.methods) {
+      handle[method] = (args) => hostCall('service.call', {
+        service: id, method, args, depth,
+      }, SERVICE_CALL_TIMEOUT);
+    }
+    return handle;
+  };
 
   const log = (level) => (message, detail) => {
     post({
@@ -199,6 +248,51 @@ function createContext(init) {
       delete: (key) => hostCall('secrets.delete', { key: String(key || '') }),
       keys: () => hostCall('secrets.keys', {}),
     },
+    /**
+     * 跨插件服务（`contributes.services`）。
+     *
+     *   // 提供方：module.exports.services = { 'audio.vad': { detect: async (ctx, args, meta) => ... } }
+     *   // 消费方：
+     *   const svc = ctx.services.get('audio.vad');   // 不可用则抛 SERVICE_GONE
+     *   const out = await svc.detect({ pcm, sampleRate: 44100 });
+     *
+     * 与 `models.*` 的区别：模型面是"宿主替你调端点"，服务面是"另一个插件在跑
+     * 你的请求"。所以服务调用能被对方的能力与配额约束，也能在对方卸载时消失。
+     *
+     * 只能调 `contributes.services.consumes` 里声明过的服务：安装弹窗要能把
+     * "这个插件会去调别人"写给用户看，没声明的调用在宿主侧直接拒绝。
+     */
+    services: {
+      /** 拿一个服务句柄（带方法）。未声明/不可用/版本不满足都会抛 SERVICE_GONE。 */
+      get: (id) => makeServiceHandle(ctx, id),
+      /** 同 get，但不可用时返回 null（给 optional 依赖用）。 */
+      tryGet: (id) => {
+        const entry = serviceState.get(id);
+        return entry && entry.available ? makeServiceHandle(ctx, id) : null;
+      },
+      /** 不关心句柄时直接调用。 */
+      call: (id, method, args) => hostCall('service.call', {
+        service: id, method, args, depth: 0,
+      }, SERVICE_CALL_TIMEOUT),
+      has: (id) => {
+        const entry = serviceState.get(id);
+        return !!(entry && entry.available);
+      },
+      list: () => [...serviceState.values()].map((s) => ({
+        id: s.id, available: s.available, version: s.version,
+        provider: s.provider, optional: s.optional,
+      })),
+      /** 提供方消失/出现时通知（`{ id, available }`）。 */
+      onDidChange: (fn) => {
+        if (typeof fn === 'function') serviceListeners.push(fn);
+      },
+      // 内部：请求级上下文要用"自己的 depth"重建同一个句柄，见 makeRequestCtx。
+      __handle: (scope, id) => makeServiceHandle(scope, id),
+      __tryHandle: (scope, id) => {
+        const entry = serviceState.get(id);
+        return entry && entry.available ? makeServiceHandle(scope, id) : null;
+      },
+    },
     /** 用户设置（settings 分区里填的值）。只读快照 + 变更事件。 */
     settings: {
       get: (key) => settings[key],
@@ -222,7 +316,26 @@ function createContext(init) {
     }
   };
 
-  ctx.__cleanup = async () => {    cancelModelStreams();
+  /**
+   * 宿主推来服务变化时调用（`service.changed`）。
+   *
+   * 只更新已有条目的 available：**不动态新增**消费关系。一个没在 manifest 里
+   * 声明过的服务，即便现在有了提供方，这个插件也调不到（宿主会拒），让它在本地
+   * 看起来"可用"只会把错误推迟到调用那一刻。
+   */
+  ctx.__serviceChanged = (payload) => {
+    const id = payload && payload.id;
+    const entry = serviceState.get(id);
+    if (!entry) return;
+    entry.available = payload.available !== false;
+    const info = { id, available: entry.available, version: entry.version, provider: entry.provider };
+    for (const fn of serviceListeners) {
+      try { fn(info); } catch (err) { ctx.log.warn(`service listener failed: ${err && err.message}`); }
+    }
+  };
+
+  ctx.__cleanup = async () => {
+    cancelModelStreams();
     for (const fn of cleanups.splice(0).reverse()) {
       try {
         await fn();
@@ -237,13 +350,48 @@ function createContext(init) {
 }
 
 /**
+ * 请求级上下文。
+ *
+ * 为什么需要它：`ctx.signal`（取消）、`ctx.ui.progress`（进度归属）、
+ * `ctx.services.*` 的调用深度，三件事都只对"这一次调用"成立。挂在共享 ctx 上
+ * 会在并发调用时互相覆写 —— 用户取消一次导出，把另一条正在跑的命令也 abort 掉。
+ *
+ * 用 `Object.create(base)` 而不是深拷贝：插件可能给 ctx 挂自己的东西，
+ * 那些东西该被继承；这里只覆盖有请求语义的三个键。
+ */
+function makeRequestCtx(base, reqId, depth, controller) {
+  if (!base) return base;
+  const scope = Object.create(base);
+  scope.requestId = reqId;
+  scope.signal = controller ? controller.signal : new AbortController().signal;
+  scope.serviceDepth = typeof depth === 'number' && depth >= 0 ? depth : 0;
+  scope.ui = Object.assign({}, base.ui, {
+    progress: (value, text) => post({
+      kind: 'evt',
+      event: 'progress',
+      // reqId 是进度能回到"发起人"的唯一凭据：没有它，宿主只能广播，
+      // 界面就会显示一个与当前操作无关的进度条。
+      payload: { value, text, reqId },
+    }),
+  });
+  scope.services = Object.assign({}, base.services, {
+    get: (id) => base.services.__handle(scope, id),
+    tryGet: (id) => base.services.__tryHandle(scope, id),
+    call: (id, method, args) => hostCall('service.call', {
+      service: id, method, args, depth: scope.serviceDepth,
+    }, SERVICE_CALL_TIMEOUT),
+  });
+  return scope;
+}
+
+/**
  * 返回值必须原样透传的方法（不能过 `safe()` 的裁剪）。
  *
  * `safe()` 是给日志/事件用的：它把 TypedArray 摊成数组、数组截到 1000 项、
  * 对象深度封顶 6 层。这些限制对"看一眼的日志"是对的，对"整段波形"和
  * "整个工程文档"就是静默数据损坏。
  */
-const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read', 'codec.write', 'exporter.export']);
+const NO_SAFE_METHODS = new Set(['pipeline.hook', 'codec.read', 'codec.write', 'exporter.export', 'service.call']);
 
 function safe(value, depth = 0) {
   if (depth > 6) return null;
@@ -265,19 +413,19 @@ function safe(value, depth = 0) {
 }
 
 // ---------------------------------------------------------------- 生命周期
-let ctx = null;
+let globalCtx = null;
 let moduleExports = null;
 let disposed = false;
 
 async function handleInit(msg) {
   const { plugin, entry } = msg;
-  ctx = createContext(msg);
+  globalCtx = createContext(msg);
 
   // 必须在 require 插件入口之前装好：插件完全可能在模块顶层就 require('https')
   // 发一个"初始化"请求，那时候再拦已经晚了。
   installNetworkGuard({
     pluginId: plugin.id,
-    log: (level, message) => ctx.log[level] ? ctx.log[level](message) : undefined,
+    log: (level, message) => globalCtx.log[level] ? globalCtx.log[level](message) : undefined,
   });
 
   const entryPath = path.resolve(plugin.dir, entry);
@@ -289,7 +437,7 @@ async function handleInit(msg) {
   // 那是最容易漏掉闭包引用的一步，重建进程反而是最干净的方案。
   moduleExports = require(entryPath);
   if (moduleExports && typeof moduleExports.initialize === 'function') {
-    await moduleExports.initialize(ctx);
+    await moduleExports.initialize(globalCtx);
   }
   post({ kind: 'ready', pluginId: plugin.id });
 }
@@ -299,6 +447,11 @@ async function handleRequest(msg) {
     post({ kind: 'res', id: msg.id, ok: false, error: { code: 'PLUGIN_UNLOADED', message: '插件已卸载' } });
     return;
   }
+  // 请求级上下文：取消开关、进度归属、服务调用深度都只对这一次调用成立。
+  // 用 `const ctx = ...` 遮蔽模块级的 ctx，函数体其余部分不用改。
+  const controller = new AbortController();
+  requestControllers.set(msg.id, controller);
+  const ctx = makeRequestCtx(globalCtx, msg.id, msg.params && msg.params.depth, controller);
   try {
     const { method, params } = msg;
     let result;
@@ -406,6 +559,32 @@ async function handleRequest(msg) {
         }
         break;
       }
+      /**
+       * 被别的插件调用（跨插件 service）。
+       *
+       * 入口形状与 codecs / exporters 一致：`module.exports.services[serviceId]`
+       * 是一个"方法名 → 函数"的字典。宿主已经校验过 service 与 method 都在
+       * manifest 里声明过，这里再校验一次函数本身存在 —— 声明了没实现是最常见
+       * 的作者错误，报在这里比报成"未知方法"清楚。
+       */
+      case 'service.call': {
+        const services = (moduleExports && moduleExports.services) || {};
+        const svc = services[params.service];
+        const fn = svc && svc[params.method];
+        if (typeof fn !== 'function') {
+          throw Object.assign(
+            new Error(`插件没有实现 service '${params.service}.${params.method}'`),
+            { code: 'NOT_FOUND' },
+          );
+        }
+        result = await fn(ctx, params.args == null ? {} : params.args, {
+          // 调用方信息只是"信息"：真正的闸门在宿主（未声明 consume 到不了这里）。
+          caller: params.caller || null,
+          service: params.service,
+          method: params.method,
+        });
+        break;
+      }
       case 'dispose':
         result = await dispose();
         break;
@@ -425,19 +604,30 @@ async function handleRequest(msg) {
       ok: false,
       error: { code: (err && err.code) || 'INTERNAL', message: String((err && err.message) || err).slice(0, 2000) },
     });
+  } finally {
+    // 请求结束就撤掉取消开关：留着会让下一个复用同一个 id 的请求继承一个
+    // 已经 abort 过的 controller（宿主 reqId 单调递增，理论上不会复用，
+    // 但这层保险几乎不要钱）。
+    requestControllers.delete(msg.id);
   }
 }
 
 async function dispose() {
   if (disposed) return { ok: true };
   disposed = true;
+  // 卸载时把所有在途请求置为"已取消"：插件可能在 dispose 里等一个服务调用，
+  // 而那个服务的提供方此刻也正在被卸载 —— 让它立刻返回比等超时好。
+  for (const controller of requestControllers.values()) {
+    try { controller.abort(); } catch (_) { /* ignore */ }
+  }
+  requestControllers.clear();
   try {
-    if (moduleExports && typeof moduleExports.dispose === 'function') await moduleExports.dispose(ctx);
+    if (moduleExports && typeof moduleExports.dispose === 'function') await moduleExports.dispose(globalCtx);
   } catch (err) {
-    ctx.log.warn(`dispose failed: ${err && err.message}`);
+    globalCtx.log.warn(`dispose failed: ${err && err.message}`);
   }
   try {
-    if (ctx) await ctx.__cleanup();
+    if (globalCtx) await globalCtx.__cleanup();
   } catch (_) { /* ignore */ }
   return { ok: true };
 }
@@ -542,7 +732,7 @@ function handleModelEvent(evt) {
       entry.rejectDone(err);
     }
   } catch (err) {
-    ctx && ctx.log && ctx.log.warn(`models handler failed: ${err && err.message}`);
+    globalCtx && globalCtx.log && globalCtx.log.warn(`models handler failed: ${err && err.message}`);
   }
 }
 
@@ -570,6 +760,13 @@ function onMessage(raw) {
     case 'req':
       handleRequest(msg);
       break;
+    case 'cancel': {
+      // 宿主说"这条别干了"。插件检查 ctx.signal 就能提前收工；不检查也不会
+      // 拖住调用方（宿主已经本地结算），只是白烧算力。
+      const controller = requestControllers.get(msg.id);
+      if (controller) controller.abort();
+      break;
+    }
     case 'host-res': {
       const pending = pendingHost.get(msg.id);
       if (!pending) return;
@@ -583,19 +780,23 @@ function onMessage(raw) {
     }
     case 'event':
       try {
-        if (msg.event === 'settings.changed' && ctx) {
-          ctx.__setSettings((msg.payload && msg.payload.values) || {});
+        if (msg.event === 'settings.changed' && globalCtx) {
+          globalCtx.__setSettings((msg.payload && msg.payload.values) || {});
           return;
         }
         if (msg.event === 'models.event') {
           handleModelEvent(msg.payload || {});
           return;
         }
+        if (msg.event === 'service.changed') {
+          if (globalCtx) globalCtx.__serviceChanged(msg.payload || {});
+          return;
+        }
         if (moduleExports && typeof moduleExports.onHostEvent === 'function') {
-          moduleExports.onHostEvent(ctx, msg.event, msg.payload);
+          moduleExports.onHostEvent(globalCtx, msg.event, msg.payload);
         }
       } catch (err) {
-        ctx && ctx.log.warn(`onHostEvent failed: ${err && err.message}`);
+        globalCtx && globalCtx.log.warn(`onHostEvent failed: ${err && err.message}`);
       }
       break;
     default:

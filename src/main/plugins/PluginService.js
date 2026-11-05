@@ -33,6 +33,7 @@ const { PipelineHooks } = require('./PipelineHooks.js');
 const { PluginDataPlane } = require('./PluginDataPlane.js');
 const { PluginSecrets } = require('./PluginSecrets.js');
 const { buildAutomationDef } = require('../../shared/pluginAutomation.js');
+const { resolveService, findCycles, MAX_CALL_DEPTH, SERVICE_ERR } = require('../../shared/pluginServices.js');
 
 class PluginService {
   constructor() {
@@ -58,6 +59,19 @@ class PluginService {
      * 不落盘：状态栏表达的是"这次运行时的进展"，重启后应回到 manifest 里声明的静态文案。
      */
     this._statusText = new Map();
+    /**
+     * 跨插件服务的调用计数（不落盘）。
+     *
+     * 为什么不像自动化方法那样每次调用都写审计：服务调用是插件之间的内部流量，
+     * 可能一秒几十次（每一帧都比一次），写进 jsonl 只会把真正要看的事件冲掉。
+     * 失败与拒绝仍然写审计 —— 那些是低频且必须留痕的。这份计数给管理器看
+     * "谁在调谁、调了多少次、慢不慢"，够用。
+     */
+    this._serviceStats = new Map();
+    /** 依赖缺失导致的 degraded（重算时要能撤回，不能把别人的 degraded 覆盖掉）。 */
+    this._serviceDegraded = new Set();
+    /** 依赖环（只报告，不拒绝加载，见 pluginServices.js 的说明）。 */
+    this._serviceCycles = [];
 
     this.runtimes.onEvent = (pluginId, event, payload) => {
       ipcFacade.broadcastEvent(pluginId, event, payload);
@@ -280,6 +294,9 @@ class PluginService {
   loadAll() {
     const records = installer.scanPlugins();
     const registry = store.readRegistry();
+    // 重载时旧的一轮降级/环必须作废，否则"上一次缺依赖"会一直挂在界面上。
+    this._serviceDegraded.clear();
+    this._serviceCycles = [];
 
     for (const item of records) {
       if (!item.manifest) {
@@ -317,6 +334,9 @@ class PluginService {
 
       this._registerContributions(record);
     }
+
+    // 所有插件都进表之后再解析依赖：边注册边解析会让先加载的消费方全部误判。
+    this._resolveServiceDependencies();
 
     store.writeRegistry(registry);
     return this.registry.stats();
@@ -363,6 +383,9 @@ class PluginService {
       }
     }
 
+    // ---- M5：跨插件 service ----
+    this._registerServices(record);
+
     // ---- M2 界面贡献点 ----
     // 每类单独一张表，键都用全局 id；卸载时 removeContributions 按 pluginId 一扫而空，
     // 插件即使不配合也留不下东西。
@@ -381,6 +404,239 @@ class PluginService {
     for (const item of c.keybindings) {
       this.registry.register('keybinding', item.id, { ...item, pluginId: record.id });
     }
+  }
+
+  /**
+   * 注册插件声明的服务端点。
+   *
+   * **冲突裁决按插件 id 字典序，而不是装得晚的赢。**
+   * 宿主无法判断两个 `sv2.codec` 谁更"正确"，但必须给出一个与安装顺序无关的
+   * 答案：否则同一份插件集在两台机器上（扫描顺序不同）会解析到不同的实现，
+   * 而作者与用户看到的现象完全对不上。字典序没有语义，但它**确定**；
+   * 输的一方标 degraded 并写明原因，用户能看见冲突而不是默默用着别人的实现。
+   */
+  _registerServices(record) {
+    const decl = record.manifest.contributes.services;
+    const provides = decl && Array.isArray(decl.provides) ? decl.provides : [];
+    if (!provides.length) return;
+
+    for (const svc of provides) {
+      const existing = this.registry.get('service', svc.id);
+      if (existing && existing.pluginId !== record.id) {
+        const winnerId = existing.pluginId < record.id ? existing.pluginId : record.id;
+        const loserId = winnerId === record.id ? existing.pluginId : record.id;
+        store.audit('service-conflict', record.id, {
+          service: svc.id, existing: existing.pluginId, winner: winnerId,
+        });
+        if (loserId === record.id) {
+          // 自己输：服务照常由对方提供，但这个插件要能被用户看见"我声明了却没生效"
+          this._degrade(record.id, `service '${svc.id}' 已由插件 ${existing.pluginId} 提供（同名冲突）`);
+          continue;
+        }
+        // 自己赢：对方的条目撤掉，换成自己的
+        this.registry.unregister('service', svc.id);
+        this._degrade(loserId, `service '${svc.id}' 已由插件 ${record.id} 提供（同名冲突）`);
+      }
+      this.registry.register('service', svc.id, {
+        id: svc.id,
+        version: svc.version,
+        methods: svc.methods,
+        description: svc.description,
+        pluginId: record.id,
+      });
+    }
+  }
+
+  /** 标记为 degraded（保留原状态语义：quarantined / disabled 不被覆盖）。 */
+  _degrade(pluginId, message) {
+    const rec = this.registry.getPlugin(pluginId);
+    if (!rec) return;
+    if (rec.status === 'quarantined' || rec.status === 'disabled') return;
+    this._serviceDegraded.add(pluginId);
+    this.registry.updatePlugin(pluginId, { status: 'degraded', error: message });
+  }
+
+  /**
+   * 加载完成后统一解析依赖：缺必需服务 → degraded；有环 → 记录并审计。
+   *
+   * 为什么不在 `_registerContributions` 里边注册边解析：那时后面的插件还没
+   * 进注册表，先加载的消费方会全部误判为"依赖缺失"。
+   */
+  _resolveServiceDependencies() {
+    const plugins = this.registry.listPlugins().filter((r) => r.status !== 'quarantined' && r.status !== 'disabled');
+    const providers = this.registry.list('service');
+    const edges = new Map();
+    const missing = new Map();
+
+    for (const rec of plugins) {
+      const decl = rec.manifest.contributes.services;
+      const consumes = decl && Array.isArray(decl.consumes) ? decl.consumes : [];
+      if (!consumes.length) continue;
+      const deps = [];
+      const gaps = [];
+      for (const dep of consumes) {
+        const r = resolveService({ providers, id: dep.id, range: dep.range });
+        if (r.ok) {
+          // 只把"装着且启用的插件"算进依赖图：指向一个被停用的插件的边，
+          // 不是环，而是另一个问题（缺依赖），混在一起报会误导用户。
+          if (this.registry.getPlugin(r.provider.pluginId)) deps.push(r.provider.pluginId);
+        } else if (!dep.optional) {
+          gaps.push(r.message);
+        }
+      }
+      if (deps.length) edges.set(rec.id, deps);
+      if (gaps.length) missing.set(rec.id, gaps);
+    }
+
+    this._serviceCycles = findCycles(edges);
+    if (this._serviceCycles.length) {
+      store.audit('service-cycle', null, { cycles: this._serviceCycles });
+    }
+
+    for (const rec of plugins) {
+      const gaps = missing.get(rec.id);
+      if (gaps && gaps.length) {
+        this._degrade(rec.id, `缺少依赖服务：${gaps.join('；')}`);
+        continue;
+      }
+      // 之前因为缺依赖被降级的，现在补齐了要能回到 loaded —— 否则用户装上
+      // 提供方之后必须重启，而界面上还写着"缺少依赖"。
+      if (this._serviceDegraded.has(rec.id)) {
+        this._serviceDegraded.delete(rec.id);
+        this.registry.updatePlugin(rec.id, { status: 'loaded', error: '' });
+      }
+    }
+  }
+
+  /** service id → 当前提供方（含版本匹配）。解析结果每次现算，不做缓存。 */
+  resolveService(id, range) {
+    return resolveService({ providers: this.registry.list('service'), id, range });
+  }
+
+  /**
+   * 消费方发起的跨插件调用。主进程在这里做完全部判定，再转发给提供方进程。
+   *
+   * 不直接让两个插件进程互相发消息：那需要它们先交换对方的 pid/端口，
+   * 于是"卸载一个插件"就变成了"另一个插件持有一个可能随时失效的句柄"。
+   * 走主进程中转，卸载时这里同步就知道端点没了，可以立刻给出 SERVICE_GONE。
+   */
+  async callService(callerId, req) {
+    const { service, method, args, depth } = req || {};
+    const caller = this.registry.getPlugin(callerId);
+    if (!caller) throw Object.assign(new Error('调用方插件未加载'), { code: ERR.NOT_FOUND });
+
+    const decl = (caller.manifest.contributes.services || {});
+    const consumes = Array.isArray(decl.consumes) ? decl.consumes : [];
+    const declared = consumes.find((c) => c.id === service);
+    if (!declared) {
+      store.audit('service-denied', callerId, { service, method, reason: 'undeclared' });
+      throw Object.assign(new Error(`未在 contributes.services.consumes 里声明 '${service}'`), {
+        code: ERR.PERMISSION_DENIED,
+      });
+    }
+    if (!(caller.manifest.permissions.services || []).includes('consume')) {
+      store.audit('service-denied', callerId, { service, method, reason: 'no-permission' });
+      throw Object.assign(new Error('缺少权限 services:consume'), { code: ERR.PERMISSION_DENIED });
+    }
+    if ((depth || 0) >= MAX_CALL_DEPTH) {
+      store.audit('service-denied', callerId, { service, method, reason: 'recursion', depth });
+      throw Object.assign(new Error(`服务调用链过深（> ${MAX_CALL_DEPTH}），疑似循环调用`), {
+        code: SERVICE_ERR.RECURSION,
+      });
+    }
+
+    const resolved = this.resolveService(service, declared.range);
+    if (!resolved.ok) {
+      // 提供方可能只是被停用了；对消费方来说和"没装"是同一件事：端点不在。
+      store.audit('service-gone', callerId, { service, method, reason: resolved.reason });
+      throw Object.assign(new Error(resolved.message), { code: ERR.SERVICE_GONE });
+    }
+    const provider = this.registry.getPlugin(resolved.provider.pluginId);
+    if (!provider || (provider.status !== 'loaded' && provider.status !== 'degraded')) {
+      store.audit('service-gone', callerId, {
+        service, method, provider: resolved.provider.pluginId, status: provider ? provider.status : 'missing',
+      });
+      throw Object.assign(new Error(`service '${service}' 的提供方当前不可用`), { code: ERR.SERVICE_GONE });
+    }
+    if (!resolved.provider.methods.includes(method)) {
+      throw Object.assign(new Error(`service '${service}' 没有声明方法 '${method}'`), { code: ERR.NOT_FOUND });
+    }
+
+    const key = `${service}.${method}`;
+    const stat = this._serviceStats.get(key) || { calls: 0, errors: 0, totalMs: 0, lastMs: 0, lastAt: 0 };
+    const started = Date.now();
+    try {
+      const result = await this._call(provider.id, 'service.call', {
+        service,
+        method,
+        args: args === undefined ? null : args,
+        // 调用方信息交给提供方：提供方可以据此做审计或白名单，但它只是"信息"，
+        // 真正的闸门在主进程（未声明的 consume 到不了这里）。
+        caller: { id: callerId, version: caller.manifest.version },
+        depth: (depth || 0) + 1,
+      }, TIMEOUTS.service);
+      stat.calls++;
+      stat.lastMs = Date.now() - started;
+      stat.totalMs += stat.lastMs;
+      stat.lastAt = Date.now();
+      this._serviceStats.set(key, stat);
+      return result;
+    } catch (err) {
+      stat.calls++;
+      stat.errors++;
+      stat.lastMs = Date.now() - started;
+      stat.totalMs += stat.lastMs;
+      stat.lastAt = Date.now();
+      this._serviceStats.set(key, stat);
+      // 提供方进程退出/被停用 → 对消费方来说是端点消失，而不是"我调错了"。
+      // 这个区分决定了消费方该重试还是该降级。
+      if (err.code === ERR.PLUGIN_UNLOADED || err.code === ERR.PLUGIN_TIMEOUT) {
+        store.audit('service-gone', callerId, { service, method, provider: provider.id, code: err.code });
+        throw Object.assign(new Error(`service '${service}' 调用失败：${err.message}`), {
+          code: ERR.SERVICE_GONE,
+        });
+      }
+      throw err;
+    }
+  }
+
+  /** 管理器/诊断用：谁在调谁、调了多少次、平均多慢。 */
+  serviceStats() {
+    return [...this._serviceStats.entries()].map(([key, s]) => ({
+      key,
+      calls: s.calls,
+      errors: s.errors,
+      avgMs: s.calls ? Math.round(s.totalMs / s.calls) : 0,
+      lastMs: s.lastMs,
+      lastAt: s.lastAt,
+    })).sort((a, b) => b.calls - a.calls);
+  }
+
+  /**
+   * 某插件消失（卸载/停用/重载）后，通知依赖它的消费方。
+   *
+   * 不做的话消费方只会在下一次调用时才发现 —— 而它可能已经缓存了服务返回的
+   * 句柄或路径。事件是"现在就不能用了"，比等下一次调用失败更早、更准。
+   */
+  _broadcastServiceGone(pluginId, serviceIds) {
+    const ids = new Set(serviceIds || []);
+    if (!ids.size) return;
+    for (const rec of this.registry.listPlugins()) {
+      if (rec.id === pluginId) continue;
+      const decl = rec.manifest.contributes.services;
+      const consumes = decl && Array.isArray(decl.consumes) ? decl.consumes : [];
+      for (const c of consumes) {
+        if (!ids.has(c.id)) continue;
+        this.runtimes.sendEvent(rec.id, 'service.changed', { id: c.id, available: false });
+      }
+    }
+  }
+
+  /** 卸载/停用前先把"我提供了哪些服务"记下来，撤表之后就查不到了。 */
+  _providedServiceIds(record) {
+    const decl = (record && record.manifest && record.manifest.contributes.services) || {};
+    const provides = Array.isArray(decl.provides) ? decl.provides : [];
+    return provides.map((p) => p.id);
   }
 
   // ------------------------------------------------------------ 查询
@@ -413,6 +669,10 @@ class PluginService {
       // 管线后处理 hook：管理器要能看到"谁挂了、熔断没有"，
       // 否则一个失败的 hook 只表现为"合成结果听起来不对"。
       pipelineHooks: this.pipelineHooks ? this.pipelineHooks.snapshot() : [],
+      // 跨插件服务的依赖环与调用计数：环只报告（见 pluginServices.js），
+      // 计数只在内存里，用来回答"谁在调谁、慢不慢"。
+      serviceCycles: this._serviceCycles,
+      serviceStats: this.serviceStats(),
     };
   }
 
@@ -613,9 +873,13 @@ class PluginService {
     const before = await this.probe.snapshot(id);
 
     // 1. 撤 UI 与菜单：registry.removePlugin 会触发 _notify → renderer 重新投影 + 菜单重建
+    const provided = this._providedServiceIds(record);
     const removedContribs = this.registry.removePlugin(id);
     this._pluginDirs.delete(id);
     this._clearStatusText(id);
+    // 端点没了要主动告诉消费方：它们的下一次调用会失败，但缓存了返回值的人
+    // 只有收到事件才知道该重算。
+    this._broadcastServiceGone(id, provided);
 
     // 2. 停运行时
     await this.runtimes.stop(id);
@@ -663,9 +927,11 @@ class PluginService {
     store.writeRegistry(registry);
 
     if (!enabled) {
+      const provided = this._providedServiceIds(record);
       await this.runtimes.stop(id);
       // 停用只撤贡献、保留记录 —— 记录一删，管理器里就没这条了，用户无法再启用。
       this.registry.removeContributions(id);
+      this._broadcastServiceGone(id, provided);
       this._clearStatusText(id);
       this.registry.updatePlugin(id, {
         status: 'disabled',
@@ -700,14 +966,17 @@ class PluginService {
   }
 
   // ------------------------------------------------------------ 命令与面板
-  async runCommand(commandId, args) {
+  async runCommand(commandId, args, opts = {}) {
     const cmd = this.registry.findCommand(commandId);
     if (!cmd) return { ok: false, error: { code: ERR.NOT_FOUND, message: `未知命令：${commandId}` } };
+    // 超时按命令自己的声明选：长任务在插件侧就该有更宽的预算，而不是让
+    // 桥接层（600s）和插件（60s）赛跑，最后返回一条谁都不知道发生了什么的 TIMEOUT。
+    const timeoutMs = opts.timeoutMs || (cmd.long ? TIMEOUTS.longCommand : TIMEOUTS.command);
     try {
       const result = await this._call(cmd.pluginId, 'command.run', {
         commandId: cmd.localId,
         args: args || {},
-      }, TIMEOUTS.command);
+      }, timeoutMs, { onProgress: opts.onProgress, signal: opts.signal });
       return { ok: true, result };
     } catch (err) {
       return { ok: false, error: { code: err.code || ERR.INTERNAL, message: err.message } };
@@ -741,6 +1010,7 @@ class PluginService {
         description: cmd.description,
         pluginName: record.manifest.name,
         pluginVersion: record.manifest.version,
+        long: cmd.long === true,
       });
       defs[built.name] = built.def;
     }
@@ -757,7 +1027,7 @@ class PluginService {
    * 每次调用都写审计：自动化面是"别人替用户点按钮"，出了事必须能回答
    * "谁在什么时候调了哪个插件的哪个方法"。
    */
-  async runAutomationMethod(name, params) {
+  async runAutomationMethod(name, params, options = {}) {
     const entry = this.registry.get('automation', name);
     if (!entry) {
       return { ok: false, error: { code: ERR.NOT_FOUND, message: `未暴露的自动化方法：${name}` } };
@@ -786,12 +1056,18 @@ class PluginService {
       };
     }
     const started = Date.now();
-    const r = await this.runCommand(name, params || {});
+    // 取消与进度只在长任务上有意义：短命令的 onProgress 永远不会被调用，
+    // signal 也来不及被别人 abort，传下去不增加任何风险。
+    const r = await this.runCommand(name, params || {}, {
+      onProgress: options.onProgress,
+      signal: options.signal,
+    });
     store.audit('automation-invoke', entry.pluginId, {
       method: name,
       ok: r.ok,
       code: r.ok ? null : (r.error && r.error.code) || null,
       ms: Date.now() - started,
+      ...(cmd.long ? { long: true } : {}),
     });
     return r;
   }
@@ -906,13 +1182,18 @@ class PluginService {
     return this.dataPlane.exportAudio(filePath, ref, audio);
   }
 
-  async _call(pluginId, method, params, timeoutMs) {    const record = this.registry.getPlugin(pluginId);
+  async _call(pluginId, method, params, timeoutMs, options = {}) {    const record = this.registry.getPlugin(pluginId);
     if (!record) throw Object.assign(new Error(`插件未加载：${pluginId}`), { code: ERR.NOT_FOUND });
-    if (record.status !== 'loaded') {
-      throw Object.assign(new Error(`插件状态为 ${record.status}`), { code: ERR.PLUGIN_QUARANTINED });
+    // degraded 是"装了、启用了，但缺依赖服务"——它的代码照样能跑，缺什么由它
+    // 自己在调用时报（`ctx.services.get` 抛 SERVICE_GONE）。在这里一刀切拒绝，
+    // 用户只会看到一句"插件状态为 degraded"，既不知道缺什么，也没法降级处理。
+    // quarantined / disabled 才是真的不能跑。
+    if (record.status !== 'loaded' && record.status !== 'degraded') {
+      const code = record.status === 'quarantined' ? ERR.PLUGIN_QUARANTINED : ERR.PLUGIN_UNLOADED;
+      throw Object.assign(new Error(`插件状态为 ${record.status}`), { code });
     }
     await this._ensureRuntime(pluginId);
-    return this.runtimes.call(pluginId, method, params, { timeoutMs });
+    return this.runtimes.call(pluginId, method, params, { timeoutMs, ...options });
   }
 
   async _ensureRuntime(pluginId) {
@@ -943,10 +1224,42 @@ class PluginService {
       capabilities: {
         deviceId: undefined,
         hardware: this._hardwareSnapshot(),
+        // 服务清单在 init 时给一份快照：`ctx.services.get()` 必须能同步返回
+        // 一个带方法名的代理，而"问宿主有哪些方法"是异步的 —— 那会让每个
+        // 插件在启动时多一次往返，还会在服务晚到时产生两套写法。
+        // 之后的变化通过 `service.changed` 事件推（见 _broadcastServiceGone）。
+        services: this._serviceSnapshotFor(pluginId),
       },
     });
     this.registry.updatePlugin(pluginId, { runtimeAlive: true });
     this._notify();
+  }
+
+  /** 给插件进程的启动快照：它提供了什么、依赖谁、依赖当前是否可用。 */
+  _serviceSnapshotFor(pluginId) {
+    const rec = this.registry.getPlugin(pluginId);
+    const raw = rec && rec.manifest.contributes.services;
+    const decl = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const provides = Array.isArray(decl.provides) ? decl.provides : [];
+    const consumes = Array.isArray(decl.consumes) ? decl.consumes : [];
+    if (!provides.length && !consumes.length) return { provides: [], consumes: [] };
+    const providers = this.registry.list('service');
+    return {
+      provides: provides.map((p) => ({ id: p.id, version: p.version, methods: p.methods })),
+      consumes: consumes.map((c) => {
+        const r = resolveService({ providers, id: c.id, range: c.range });
+        return {
+          id: c.id,
+          range: c.range,
+          optional: c.optional,
+          available: r.ok,
+          version: r.ok ? r.provider.version : null,
+          provider: r.ok ? r.provider.pluginId : null,
+          methods: r.ok ? r.provider.methods : [],
+          reason: r.ok ? null : r.reason,
+        };
+      }),
+    };
   }
 
   _hardwareSnapshot() {
@@ -1108,6 +1421,14 @@ class PluginService {
         const r = this.secrets.keys(pluginId);
         return { keys: r.keys, encrypted: r.encrypted };
       }
+      // ---- M5：跨插件服务 ----
+      case 'service.call':
+        return this.callService(pluginId, {
+          service: params && params.service,
+          method: params && params.method,
+          args: params && params.args,
+          depth: params && params.depth,
+        });
       default:
         throw Object.assign(new Error(`未实现宿主能力：${method}`), { code: ERR.UNSUPPORTED });
     }
