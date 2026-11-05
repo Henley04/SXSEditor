@@ -25,7 +25,9 @@ body {
   gap: 16px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border-default);
-  background: linear-gradient(180deg, var(--bg-header-start), var(--bg-header-end));
+  /* 和其它 8 个窗口一样用纯色头部。原先写的是 start→end 的渐变，但所有内置主题
+     这两个 token 是同一个值，渐变等价于纯色，只是多留了一个"以后会变"的假接口。 */
+  background: var(--bg-header-start);
   flex: 0 0 auto;
 }
 
@@ -135,6 +137,10 @@ body {
   font-size: var(--font-sm, 12px);
   font-family: inherit;
   cursor: pointer;
+  /* common.css 给所有 button 设了 --radius-lg。这里必须显式归零：
+     圆角会让 2px 下边框在两端向上弯，选中态看起来是一段翘起来的弧形，
+     和"一条直的下划线"完全是两种语气。扁平风格下 tab 是矩阵里的一格，不该有弧。 */
+  border-radius: 0;
   transition: color var(--motion-fast, 120ms) var(--ease-standard, ease);
 }
 
