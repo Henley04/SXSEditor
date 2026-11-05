@@ -15,7 +15,9 @@
 > `encrypted` 如实报告，§9.9，2026-11-05）；第 4 段是**跨插件 service**
 > （`contributes.services` 的 provides/consumes、确定性冲突裁决、`SERVICE_GONE`，
 > §9.10），第 5 段是**长任务形态**（`long: true` → job、按请求 id 回报进度、
-> 协作式取消，§9.11）。**M5 五段全部落地**，M6 未开始。
+> 协作式取消，§9.11）。**M5 五段全部落地**；**M6（硬化）第 1 段是签名与信任**
+> （Ed25519 签名包、双向清单校验、逐密钥信任、安装期判定 + 按需重验，§9.12，
+> 2026-11-05）。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -995,6 +997,76 @@ test/pluginLongTasks.test.js     11
 - CLI 仍然同步等待（`plugin call` 不带 `--async`）：长命令在命令行里的表现是"等很久"，
   这是刻意的 —— 脚本里要异步应当直接用 MCP 的 `async: true`。
 
+### 9.12 M6 第 1 段：签名与信任（2026-11-05）
+
+**这一段要回答的是**：用户拿到一个 `.sxsp`，怎么知道它是不是作者发出来的那一份，
+以及"我不认识这个签名者"时该发生什么。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | 签名覆盖的是**由 checksums 重建的规范文本**，不是文件本身 | 规范文本只有「路径排序 + 小写哈希 + 两空格 + 换行」三条规则，任何语言十行就能复现。直接序列化 JSON 会把空白/键序变成隐式协议，换个实现就算不出同一个签名 |
+| 2 | 只有 `signature.json` **没有** `checksums.json` → INVALID | 签名覆盖清单，清单覆盖文件。缺清单时签名没有覆盖任何东西，放过去等于挂个空签名就算签了 |
+| 3 | 清单必须是**双向**覆盖：列出的都在、在的都被列出 | 原实现只查前一半 —— 往包里塞一个没被列出的 `main.js` 照样能装，签名对，内容已不是签名时的内容 |
+| 4 | `keyId` 由公钥派生，验签前重算比对 | 否则可以把 keyId 改成已信任的名字、签名用自己的私钥，"信任列表里有这个 keyId"就成了空话 |
+| 5 | 信任的是**密钥指纹**，不是 `publisher` | `publisher` 是包自称的。管理器把 16 位指纹显示得比名字更显眼，正是因为这个 |
+| 6 | 签名里带 `publicKey` | 为了让"未知密钥"这条路能闭环：用户不必再去找作者要 PEM，看到指纹就能决定 |
+| 7 | 未知密钥 → 拒绝 + `pendingKey`，管理器弹"信任并安装" | 不是自动信任，也不是让用户重新选一次文件。这是一个**待决定**状态，不是错误 |
+| 8 | 无效签名**永不**降级成"未签名" | 否则攻击者只要随便塞个 signature.json，就能把篡改过的包塞进"未签名也能装"的宽松通道 |
+| 9 | 策略只有"是否要求签名"一档，默认不要求 | 默认强制会让所有现有插件装不上；但"有签名却验不过"无论开关如何都拒 |
+| 10 | 启动时**不**重验，改为按需 | 插件可能带几百 MB 模型；而且能改安装目录的人通常也能改信任库。它的价值是发现同步盘/备份还原造成的漂移，不是挡本地攻击者 |
+| 11 | 安装快照存 `plugins-state/packages/<id>.json` | 插件目录是插件的只读领地，宿主的账本不该混进去；卸载时一起删 |
+| 12 | 私钥只存在于打包脚本里 | 主进程、信任库、IPC 全程只碰公钥。这样"运行时被攻破"也拿不到发布凭据 |
+
+新增/改动文件：
+
+```
+src/shared/pluginSignature.js        规范文本 / keyId / 签名 / 验签 / 覆盖率 / 重验（纯函数）
+src/main/plugins/PluginTrustStore.js 信任库 + 策略（plugins-state/trust.json）
+src/main/plugins/PluginInstaller.js  先验签再解包；双向清单校验；包快照；按需重验
+src/main/plugins/PluginStateStore.js state.signature（安装期判定）
+src/main/plugins/PluginService.js    listTrust/trustKey/forgetKey/setRequireSignature/verifyInstalled
+src/main/plugins/PluginIpcV2.js      5 条 IPC（list/add/remove/policy/verify）
+src/shared/ipcChannels.js / windowCapabilities.js / preload.js
+src/pluginManager.html + index.js + css   签名行、「签名与信任」页、信任横幅
+src/main/cliPlugin.js + cli.js       plugin trust / policy / verify
+scripts/package-plugin.js            --gen-key / --key / --publisher
+test/pluginSignature.test.js         20
+docs/dev/plugins-signing.md          作者指南
+```
+
+#### 走查（xvfb + CDP + 真实 MCP/CLI + 真实密钥）
+
+| 场景 | 结果 |
+|---|---|
+| `--gen-key` 生成密钥对 | 私钥 `0600`、公钥 `0644`；keyId `ed25519-609b519f690e7f02` |
+| 签名打包 | `已签名 keyId=… publisher=Example Studio digest=d3d3037f…` |
+| 装未信任的签名包 | 拒绝，返回 `SIGNATURE_UNKNOWN_KEY` + `pendingKey`（含公钥/指纹/发布者）；管理器出现横幅「Example Studio signed this plugin…」 |
+| 点「信任并安装」 | 信任写入 → 自动重试安装 → 成功；卡片 `Signature: Verified at install · Example Studio` + 指纹 + Re-check |
+| 篡改清单哈希后重装 | `Install failed: 签名校验失败：包内容与签名不一致`；磁盘无半装目录 |
+| 开启"只允许已签名"后装未签名包 | `Install failed: 当前设置只允许安装已签名的插件，而这个包没有签名` |
+| 手工改安装目录里的 `main.js` → `plugin verify` | `安装目录已被改动 / 内容不同：main.js`；恢复后 `与安装时的清单一致` |
+| CLI `plugin trust remove` 后 `plugin verify` | 仍然一致 —— 移除密钥不影响已装插件的完整性判定 |
+| `plugin list` | 新增 `sign:` 列：`verified` / `unsigned` 逐插件可见 |
+| 冷启动 | 签名状态与信任库都从磁盘恢复；不触发全量哈希 |
+| 审计 | `install-rejected`（`invalid` / `required`）、`trust-add/remove/policy`、`verify`（`ok:true/false`）齐全 |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | "Uninstall" 是一个**没有文字的红方块** | `.pm-btn-danger` 用 `color: var(--danger)`，而 `--bg-button-danger` 与 `--danger` 是同一个色值 `#d96a6a` | 改用实心底上的前景色 `--fg-on-danger / --fg-on-accent`；顺带扫了全项目，其它 6 处都写对了，只有管理器这两处漏了 |
+| 2 | 错误提示条同样看不见字 | `.pm-toast.is-error` 同上：红底红字 | 同上。这条比第 1 条更糟——**出错时用户什么都看不到** |
+| 3 | `verifyChecksums` 只校验"清单里列的"，不校验"包里多的" | 单向覆盖 | 改为双向；签名路径与非签名路径共用 `checkCoverage` |
+| 4 | `publicKeyPem()` 只接受私钥 | 作者习惯直接传私钥文件，信任库只想存公钥 | 两条路都接受，解析收敛在一个函数里 |
+
+#### 边界（写在明处）
+
+- **签名不等于安全**：它只说明"谁做的"，不说明"它不会干坏事"。权限清单与安装确认仍是主防线。
+- **不防本地攻击者**：能改安装目录的人通常也能改信任库；签名挡的是分发链路被替换。
+- **不防重放**：旧版本的合法签名包仍可安装，版本降级检测属于市场层。
+- **私钥泄露只能靠撤销**：没有时间戳/透明日志，撤销靠用户手动 `trust remove` 与通告。
+- **安装前不预览签名**：目前"谁签的"在装成功后显示在卡片上；下载/预览确认随 marketplace 一起做。
+
 ## 10. 风险与取舍
 
 | 风险 | 缓解 |
@@ -1006,10 +1078,10 @@ test/pluginLongTasks.test.js     11
 | hook 顺序冲突 | `order` 数值 + 同值按 pluginId 稳定排序；每 stage 总超时 + 熔断 |
 | `plugin://` 与 CSP | standard+secure、nonce、路径 jail、`connect-src 'none'`、禁 popup/导航；宿主 CSP 只开 `frame-src plugin:` |
 | 测试负担 | `test/fixtures/plugins/{good,leaky,crasher}` + `test/pluginLifecycle.test.js` 统一断言；CI 增加 smoke |
-| 权限非沙箱 | 安装弹窗与文档明示；审计 + kill switch；签名留接口 |
+| 权限非沙箱 | 安装弹窗与文档明示；审计 + kill switch；签名与信任库（§9.12） |
 
-**明确不做**：插件商店后端、强制签名、插件热更新（只做 reload）、每插件独立渲染
-进程、跨大版本二进制兼容。
+**明确不做**：插件商店后端、**默认强制签名**（是策略开关，默认关）、插件热更新
+（只做 reload）、每插件独立渲染进程、跨大版本二进制兼容。
 
 ## 11. 已定决策与剩余待确认
 
@@ -1022,7 +1094,7 @@ test/pluginLongTasks.test.js     11
    MCP schema 里标注 `source: plugin:<id>`，便于 agent 与用户辨认。
 3. UI 隔离用 **iframe + postMessage**（`plugin://` 协议，`sandbox="allow-scripts"`，
    无 `allow-same-origin`），计算隔离用**每插件独立 utilityProcess**，
-   分发用**本地安装 + 预留市场**（`.sxsp` zip，签名留占位）。
+   分发用**本地安装 + 预留市场**（`.sxsp` zip；Ed25519 签名与逐密钥信任已落地，§9.12）。
 4. **M2 快捷键冲突策略（原 §11 待定项，已于 M2 决定）**：三方仲裁，任一不过就不绑：
    1. **默认关闭**。快捷键是全局副作用，装插件不应该改变用户的按键行为。管理器逐插件
       提供"启用本插件快捷键"开关，默认 off；关着的时候投影里 `status` 全是 `disabled`，
