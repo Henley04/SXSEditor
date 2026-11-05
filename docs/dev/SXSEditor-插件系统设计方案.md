@@ -18,7 +18,9 @@
 > 协作式取消，§9.11）。**M5 五段全部落地**；**M6（硬化）第 1 段是签名与信任**
 > （Ed25519 签名包、双向清单校验、逐密钥信任、安装期判定 + 按需重验，§9.12，
 > 2026-11-05），**第 2 段是市场接口**（静态索引 `sxs-plugin-index-v1`、源管理、
-> 搜索、下载前预览签名与权限，§9.13，2026-11-05）。
+> 搜索、下载前预览签名与权限，§9.13，2026-11-05），**第 3 段是无障碍与主题对比度**
+> （管理器键盘模型、ARIA、焦点归还；把"填充色"与"文字色"拆成两组 token，四套主题
+> 95 组组合全部达到 AA，§9.14，2026-11-05）。
 > **定位**：这是一份**设计决策记录**，不是使用说明。面向插件作者的用户文档见
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
@@ -1135,6 +1137,89 @@ docs/dev/plugins-market.md           索引格式与自建源指南
 - **源能骗展示、骗不了安装**：见决策 4/5。
 - **管理器暂无市场页**：接口与链路已通（CLI + IPC），UI 属于后续工作。
 - **`file://` 源默认关闭**：只给离线/内网镜像，需环境变量显式开启。
+
+### 9.14 M6 第 3 段：无障碍与主题对比度（2026-11-05）
+
+**这一段要回答的是**：插件管理器能不能只用键盘走完，读屏能不能知道"现在在哪一页、
+发生了什么"，以及"看得见"这件事在四套主题上是不是真的成立。
+
+对比度不是审美问题，是**可测量的硬指标**。这一段先写判据（审计脚本），再按判据改色。
+顺序反过来就会变成"挑几个喜欢的颜色，然后想办法让它合格"。
+
+| # | 做了什么 | 关键决策 |
+|---|---|---|
+| 1 | 审计脚本 `scripts/audit-contrast.js`（19 组 × 5 套主题 = 95 组） | 判据用 WCAG 2.1 公式；禁用态在 WCAG 里豁免，但仍以 3:1 为"最低可辨识"下限 —— "禁用"不等于"看不见" |
+| 2 | 审计进 CI（`npm run audit:contrast --strict`）+ `test/themeContrast.test.js` | 谁调色踩线就红，而不是等用户抱怨。测试同时检查"每套主题审的组合数一致"，防止某个主题被漏审 |
+| 3 | 把"填充色"与"文字色"拆成两组 token：`--accent/--success/--warning/--danger` 与 `--accent-fg/--success-fg/--warning-fg/--danger-fg` | 同一个绿画圆点好看，写 11px 文字只有 1.9:1。语义相同、用途不同，就必须是两个 token |
+| 4 | ACG 的 `--fg-on-accent` 改成深墨 `#12262b`（不是把青色调深） | 青是这套主题的身份。亮底配深字 6.66:1，比"为了白字把品牌色压成墨绿"更诚实 |
+| 5 | 补上一直缺失的 `--fg-on-danger` | 原代码 `var(--fg-on-danger, var(--fg-on-accent, #fff))` 三层兜底里前两个都没定义，纯靠运气拿到白色 |
+| 6 | 选项卡按 WAI-ARIA tabs 实现：roving tabindex + ←/→/Home/End + 自动激活 | 三个面板都是本地即时视图，切换无副作用；多一次回车只让键盘用户更累 |
+| 7 | 列表整段重建时**保留焦点**（渲染前记 `data-act`，渲染后放回） | 管理器每次 `sync` 都重建列表。不保焦，键盘用户每收一次推送就掉回页面开头 |
+| 8 | 破坏性确认聚焦"最不危险"的按钮；卸载成功后焦点落到列表首项 | 默认聚焦"卸载"等于让人一路回车删干净 |
+| 9 | 信任横幅 `role="alert"`，出现时聚焦横幅本身（不聚焦"信任并安装"） | 焦点落在按钮上，用户一按回车就放行了一把陌生密钥 |
+| 10 | 插件面板只做"焦点归还"，不做焦点陷阱 | iframe 是 `sandbox="allow-scripts"` 无 same-origin，宿主读不到插件文档的可聚焦元素，拦 Tab 是假动作 |
+| 11 | 停用卡片不再整块 `opacity: .72` | 透明度会把正文一起压到 4.5 以下，而"这是哪个插件"正是用户此刻要读的信息 |
+| 12 | 补上从未存在的 `.pm-card.is-focused` 样式 | 安装/深链会把列表滚到目标卡片，但那个类是空的 —— "滚过去了，没告诉你是哪一张" |
+
+新增/改动文件：
+
+```
+scripts/audit-contrast.js             对比度审计（解析 hex/rgba、var() 展开、alpha 合成、WCAG 公式）
+test/themeContrast.test.js            14（含"任何主题低于 AA 即失败"的总闸）
+test/themeTokens.test.js              更新 --accent 断言（填充色须能承载自己的前景色）
+src/themes/builtins/*.theme.json      accent-fg / success-fg / warning-fg / danger-fg / fg-on-danger
+src/themes/themeFallback.css          首帧兜底同步
+src/themes/themeBootstrap.js          首帧兜底同步
+src/themes/tokenCatalog.js            新增 4 个 token 的目录项与默认值
+src/pluginManager.html                tablist/tab/tabpanel 的 ARIA 关系、toast aria-live、横幅 role=alert
+src/pluginManager/index.js            方向键、焦点快照与归还、横幅焦点、data-act
+src/pluginManager/pluginManager.css   焦点框、停用态、is-focused、reduced-motion、危险色文字
+src/renderer/plugins/pluginPanelHost.js  面板焦点归还 + 加载后交接键盘
+docs/dev/plugins-a11y.md              本文档面向实现者的展开版
+```
+
+#### 走查（xvfb + CDP 真实键盘事件 + 真实 DOM 对比度扫描）
+
+| 场景 | 结果 |
+|---|---|
+| `ArrowRight` / `Home` / `End` | 焦点 `pmTabInstalled → pmTabSecurity → pmTabLog`，`aria-selected` 与 `tabindex` 同步位移 |
+| 点"卸载"展开确认条 | `document.activeElement` = 取消按钮（`data-act=cancel`） |
+| 点"取消" | 焦点回到该卡的"卸载"按钮（`data-act=remove`） |
+| 未信任包安装 → 横幅 | `role=alert`，焦点落在 `#pmTrustBanner` 本身 |
+| 点"信任并安装" → 成功 | 焦点落在新卡片 `example-consumer` 的"停用"按钮上（`data-act=toggle`） |
+| 计算样式 | `.pm-tab` `border-radius: 0px`、`background-image: none`；`--fg-on-danger` = `#ffffff` |
+| 真实 DOM 扫描（light） | 100 个文本节点，0 个低于 AA |
+| 真实 DOM 扫描（Aurora dark，逐 token 注入） | 0 个低于 AA |
+| 审计脚本 | 95 组：fail 0，warn 0 |
+| 单测 | `test/themeContrast.test.js` 14 passing；全量 2571 passing / 7 failing（仍为既有 Windows DLL / NPU 用例） |
+
+#### 这一轮抓到并修掉的问题
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 浅色主题里成功徽标几乎读不出（2.27:1） | 徽标文字直接用 `--success`（给圆点设计的亮绿） | 新增 `--success-fg` 等文字变体；全项目 44 处 `color: var(--success|warning|danger)` 同步切换 |
+| 2 | 警告黄文字 1.58:1 | 同上，黄在浅底上比绿更糟 | `--warning-fg: #7a5a00`（6.0:1） |
+| 3 | 危险按钮文字 3.38:1 | 珊瑚红底 + 白字，底色本身太亮 | 底色压深到 `#b84a4a`（5.1:1），并把缺失的 `--fg-on-danger` 补成真 token |
+| 4 | 青色主按钮白字 2.36:1 | 亮青只适合当填充，不适合当"承载白字的实心按钮" | `--fg-on-accent` 改深墨；同色仍用于下划线/软底 |
+| 5 | 卸载确认展开后焦点掉到 `body` | 被点的按钮在 `render()` 里被替换掉了 | 记录 `restoreFocus`，重建后放回；确认态默认聚焦"取消" |
+| 6 | 每收一次 `sync` 焦点就丢 | `renderInstalled` 整段重建列表 | 渲染前快照 `{pluginId, data-act}`，渲染后还原 |
+| 7 | 信任横幅关闭后焦点掉到 `body` | 横幅 `hidden` 时其内部按钮一起消失 | 关闭前判断焦点是否在横幅内，是则交给"安装插件…"或新卡片 |
+| 8 | 安装成功"滚到了但看不出是哪张" | `.pm-card.is-focused` 类在 CSS 里根本不存在 | 补 `outline: 2px solid var(--accent)` |
+| 9 | 停用卡片正文对比度被压到 4.5 以下 | 整卡 `opacity: .72` | 改凹陷底色 + 虚线边，文字色不动 |
+| 10 | 错误 toast 的边框与背景同色（等于没边框） | `border: 1px solid var(--danger)` 而背景是 `--bg-button-danger`，同色值 | 改用 `--border-default` |
+| 11 | 灰阶倒置：`--color-gray-600` 比 700 还深 | 上一段批量替换 `--fg-muted` 时连带改了 gray-600 | 恢复 `#8a93a2`，`--fg-muted` 单独使用 `#5f6773` |
+
+#### 边界（写在明处）
+
+- **没有真机读屏验证**：沙箱无 NVDA / VoiceOver / Orca。本轮做到"属性正确、键盘可用、
+  焦点不丢"，实际朗读效果仍需在有读屏的机器上复核。
+- **只覆盖管理器与面板宿主**：其它窗口的键盘可达性未审；但 token 是全局的，
+  对比度改进九个窗口都受益（也因此这一段的改动面比"插件"更大）。
+- **强调色下划线不满足非文本 3:1**：ACG 的 `--accent` 在面板上 2.2:1。刻意不加深
+  （那是整个应用的品牌色），改用"文字色 + 字重 + 下划线"三通道表达选中。
+- **iframe 内由插件作者负责**：宿主只能给 frame 一个 `title`，插件面板自身的语义、
+  键盘顺序无法代劳。
+- **`--fg-disabled` 只保 3:1**：WCAG 豁免禁用控件；占位符继承它，因此也停在这个下限。
 
 ## 10. 风险与取舍
 
