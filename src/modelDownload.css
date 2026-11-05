@@ -178,7 +178,7 @@ body {
 
 .group-badge-main {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-fg);
   border: 1px solid var(--accent-line);
 }
 
@@ -489,9 +489,9 @@ body {
 }
 
 .file-icon.pending { color: var(--fg-disabled); }
-.file-icon.downloading { color: var(--accent); }
-.file-icon.complete { color: var(--success); }
-.file-icon.error { color: var(--danger); }
+.file-icon.downloading { color: var(--accent-fg); }
+.file-icon.complete { color: var(--success-fg); }
+.file-icon.error { color: var(--danger-fg); }
 
 .file-name {
   flex: 1;
@@ -510,8 +510,8 @@ body {
   text-align: right;
 }
 
-.file-status.complete { color: var(--success); }
-.file-status.error { color: var(--danger); }
+.file-status.complete { color: var(--success-fg); }
+.file-status.error { color: var(--danger-fg); }
 .file-status.downloading { color: var(--accent-hover); }
 
 /* ==================== Speed Info ==================== */
@@ -526,7 +526,7 @@ body {
 
 /* ==================== Error Message ==================== */
 .error-message {
-  color: var(--danger);
+  color: var(--danger-fg);
   font-size: var(--font-base);
   text-align: center;
   margin-bottom: var(--space-4);
@@ -679,7 +679,7 @@ body {
 
 .model-card-badge.optional {
   border-color: var(--accent-line);
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 .model-card-actions {
@@ -727,7 +727,7 @@ body {
 
 .btn-card.btn-unload:hover:not(:disabled) {
   background: var(--bg-button-hover);
-  color: var(--danger);
+  color: var(--danger-fg);
   border-color: var(--danger);
 }
 

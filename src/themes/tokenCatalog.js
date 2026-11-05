@@ -156,6 +156,10 @@ export const TOKEN_CATALOG = {
     '--fg-muted':     { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-gray-300)', label: '弱前景' },
     '--fg-disabled':  { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-gray-600)', label: '禁用前景' },
     '--fg-on-accent': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-white)', label: '强调色文字' },
+    // 危险底上的文字。之前 CSS 一直写 `var(--fg-on-danger, var(--fg-on-accent, #fff))`，
+    // 但这三个 token 里前两个都没定义 —— 兜到 #fff 只是运气。补成真 token：浅色主题
+    // 的珊瑚红上白字只有 3.4:1，必须让主题能分别指定。
+    '--fg-on-danger': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-white)', label: '危险色文字' },
     '--fg-on-success': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-ink-900)', label: '成功色文字' },
     '--fg-on-warning': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-ink-900)', label: '警告色文字' },
     '--fg-toolbar-hover': { layer: 'alias', group: 'fg', type: 'color', default: '#f0f0ff', label: '工具栏悬停文字' },
@@ -201,6 +205,11 @@ export const TOKEN_CATALOG = {
 
     // ==================== Alias: status ====================
     '--success': { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-green-400)', label: '成功' },
+    // 语义色的文字形态。--success/--warning/--danger 是"填充色"，直接拿来写
+    // 文字时在浅色主题上只有 1.5~2.5:1（警告黄尤其不可读），所以文字另有一套。
+    '--success-fg': { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-green-600)', label: '成功文字' },
+    '--warning-fg': { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-amber-500)', label: '警告文字' },
+    '--danger-fg':  { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-red-600)', label: '危险文字' },
     '--warning': { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-amber-300)', label: '警告' },
     '--danger':  { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-red-400)', label: '危险' },
     '--info':    { layer: 'alias', group: 'status', type: 'color', default: 'var(--color-blue-500)', label: '信息' },
@@ -276,6 +285,7 @@ export const REQUIRED_TOKENS_FOR_BUILTIN = [
     '--overlay-scrim', '--panel-line', '--ink-soft',
     '--border-subtle', '--border-default', '--border-strong', '--border-accent',
     '--success', '--warning', '--danger', '--info',
+    '--success-fg', '--warning-fg', '--danger-fg',
     '--scrollbar-thumb', '--scrollbar-thumb-hover', '--scrollbar-track',
     '--selection-bg', '--focus-ring',
     // Component

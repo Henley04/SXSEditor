@@ -15,6 +15,7 @@
     "publish": "electron-forge publish",
     "lint": "eslint src test scripts *.config.js --ext .js",
     "lint:ipc": "node scripts/check-ipc-channels.js",
+    "audit:contrast": "node scripts/audit-contrast.js --strict",
     "check:version": "node scripts/check-version.js",
     "check:assets": "node scripts/verify-build-assets.js",
     "prestart": "node scripts/generate-build-info.js",

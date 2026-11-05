@@ -363,7 +363,7 @@
 }
 
 .error-state .empty-icon {
-  color: var(--warning, #e6a23c);
+  color: var(--warning-fg, #e6a23c);
   opacity: 0.8;
 }
 
@@ -401,7 +401,7 @@
 
 .error-retry:hover {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 /* 列表加载态：骨架卡占位。
@@ -918,7 +918,7 @@
 }
 
 .disclaimer-text a:hover {
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 /* ==================== Toast ==================== */

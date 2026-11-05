@@ -196,7 +196,7 @@
 }
 
 .singer-item-empty:hover .singer-avatar-placeholder {
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 .singer-info-empty {
@@ -326,7 +326,7 @@
 
 .singer-file-missing-warning {
   font-size: var(--font-xs);
-  color: var(--danger);
+  color: var(--danger-fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -515,7 +515,7 @@
 }
 
 .fragment-ctx-danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .fragment-ctx-danger:hover {
@@ -850,7 +850,7 @@
    禁用态的 0.35 透明度会把"正在播放"这个状态也一起压暗，这里单独恢复。 */
 #toolbar .transport-btn.is-active {
   opacity: 1;
-  color: var(--accent);
+  color: var(--accent-fg);
   border-color: var(--accent);
   background: var(--accent-softer);
 }

@@ -212,6 +212,16 @@ export function installPluginPanelHost() {
 
   // ------------------------------------------------------------ 打开 / 关闭
 
+  /**
+   * 打开面板时被夺走焦点的元素。
+   *
+   * 这里不做"焦点陷阱"：iframe 是 `sandbox="allow-scripts"` 且没有
+   * allow-same-origin，宿主读不到插件文档里的可聚焦元素，也没法拦截 Tab。
+   * 能做且该做的是**归还**：键盘用户从工具栏/菜单打开面板，关掉之后焦点必须
+   * 回到原处，否则会掉到 body 上，下一次 Tab 从页面开头重新数。
+   */
+  let focusBeforeOpen = null;
+
   function closePanel(options = {}) {
     teardownFrame();
     current = null;
@@ -226,6 +236,12 @@ export function installPluginPanelHost() {
       titleEl = null;
       bodyEl = null;
     }
+    // 卸载路径不还焦点：触发卸载的控件本身可能已经不在了，而且那时用户
+    // 的注意力在别处（菜单/管理器），突然跳焦点更突兀。
+    if (!options.destroy && focusBeforeOpen && focusBeforeOpen.isConnected) {
+      try { focusBeforeOpen.focus(); } catch (_) { /* 元素已不可聚焦 */ }
+    }
+    focusBeforeOpen = null;
   }
 
   function openPanel(payload) {
@@ -239,6 +255,12 @@ export function installPluginPanelHost() {
       if (dock) dock.hidden = false;
       return;
     }
+
+    // 记录"谁把面板叫出来的"。只记文档里真实存在的元素：body 没有意义，
+    // dock 内部的元素是上一个面板自己的控件，关掉后也不该再获得焦点。
+    const active = document.activeElement;
+    focusBeforeOpen = active && active !== document.body
+      && !(dock && dock.contains(active)) ? active : null;
 
     ensureDom();
     teardownFrame();
@@ -255,6 +277,14 @@ export function installPluginPanelHost() {
     const width = Math.max(280, Math.min(900, Number(payload.width) || 420));
     if (dock) dock.style.setProperty('--plugin-panel-width', `${width}px`);
     iframe.src = payload.url;
+
+    // 加载完成再把焦点交给面板：iframe 在文档就绪前 focus() 可能被浏览器忽略，
+    // 结果是"面板开了、键盘还在原地"。`once` + current 校验避免用户已经关掉
+    // 或切到别的面板时，把焦点抢到一个已经不存在的 frame 上。
+    iframe.addEventListener('load', () => {
+      if (frame !== iframe) return;
+      try { iframe.focus(); } catch (_) { /* 平台不支持 */ }
+    }, { once: true });
 
     bodyEl.appendChild(iframe);
     frame = iframe;

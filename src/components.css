@@ -347,12 +347,12 @@
 
 .toast-success {
   border-color: var(--success);
-  color: var(--success);
+  color: var(--success-fg);
 }
 
 .toast-error {
   border-color: var(--danger);
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .toast-info {
@@ -425,7 +425,7 @@
 }
 .info-box--success::before { background-color: var(--success); }
 .info-box--success strong,
-.info-box--success .info-box__title { color: var(--success); }
+.info-box--success .info-box__title { color: var(--success-fg); }
 
 .info-box--warning {
   --info-box-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");
@@ -434,7 +434,7 @@
 }
 .info-box--warning::before { background-color: var(--warning); }
 .info-box--warning strong,
-.info-box--warning .info-box__title { color: var(--warning); }
+.info-box--warning .info-box__title { color: var(--warning-fg); }
 
 .info-box--danger {
   --info-box-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
@@ -443,7 +443,7 @@
 }
 .info-box--danger::before { background-color: var(--danger); }
 .info-box--danger strong,
-.info-box--danger .info-box__title { color: var(--danger); }
+.info-box--danger .info-box__title { color: var(--danger-fg); }
 
 /* ==================== 6. Section Title (panel headers) ==================== */
 
@@ -774,19 +774,19 @@ input[type="checkbox"].switch:disabled {
 }
 
 .chip--success {
-  color: var(--success);
+  color: var(--success-fg);
   background: var(--success-soft);
   border-color: transparent;
 }
 
 .chip--warning {
-  color: var(--warning);
+  color: var(--warning-fg);
   background: var(--warning-soft);
   border-color: var(--warning-line);
 }
 
 .chip--danger {
-  color: var(--danger);
+  color: var(--danger-fg);
   background: var(--danger-soft);
   border-color: transparent;
 }

@@ -105,7 +105,7 @@ body {
   /* 原来写的是 var(--danger)，而 --bg-button-danger 与 --danger 是同一个色值 ——
      文字和背景完全同色，按钮看上去是个空红色方块。危险按钮是实心背景，
      必须用「实心底上的前景色」。 */
-  color: var(--fg-on-danger, var(--fg-on-accent, #ffffff));
+  color: var(--fg-on-danger);
 }
 
 .pm-btn-danger:hover:not(:disabled) {
@@ -149,8 +149,24 @@ body {
 }
 
 .pm-tab.is-active {
-  color: var(--accent);
+  color: var(--accent-fg);
   border-bottom-color: var(--accent);
+}
+
+/* 键盘焦点：用内嵌 outline 而不是外扩阴影 —— tab 紧贴 tablist 上沿，
+   外扩的环会被上方元素压掉一半，看起来像"只有下半截亮"。
+   只在 :focus-visible 出现，鼠标点击不会留下框。 */
+.pm-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  color: var(--fg-primary);
+}
+
+/* 面板本身可聚焦（tabindex=0），是为了让键盘用户能直接滚动内容并让读屏
+   把注意力切到面板；同样只在键盘聚焦时画框。 */
+.pm-pane:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ------------------------------------------------------------ 内容区 */
@@ -221,8 +237,20 @@ body {
   border-color: var(--border-strong);
 }
 
+/* 停用的插件：不整块降透明度。opacity 会把正文（--fg-primary）与弱化文字
+   （--fg-muted）一起压向背景，"这是哪个插件"恰恰是用户此刻要读的信息。
+   改成凹陷底色 + 虚线边：同样是"不可用"的读法，但文字对比度不变。 */
 .pm-card.is-disabled {
-  opacity: 0.72;
+  background: var(--bg-app);
+  border-style: dashed;
+}
+
+/* 安装/信任成功后滚动到的卡片。之前只 scrollIntoView + 加一个没有样式的类，
+   等于"滚过去了但没告诉你是哪一张"。用 outline 而不是 box-shadow：
+   扁平、不参与布局，也不会像阴影那样在深色主题上糊成一团。 */
+.pm-card.is-focused {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .pm-card-head {
@@ -258,7 +286,7 @@ body {
 }
 
 .pm-badge.is-loaded {
-  color: var(--success);
+  color: var(--success-fg);
   border-color: var(--success-soft);
   background: var(--success-soft);
 }
@@ -269,7 +297,7 @@ body {
 
 .pm-badge.is-quarantined,
 .pm-badge.is-error {
-  color: var(--danger);
+  color: var(--danger-fg);
   border-color: var(--danger-soft);
   background: var(--danger-soft);
 }
@@ -333,7 +361,7 @@ body {
 }
 
 .pm-chip.is-warn {
-  color: var(--warning);
+  color: var(--warning-fg);
   border-color: var(--warning-line);
   background: var(--warning-soft);
 }
@@ -350,7 +378,7 @@ body {
 }
 
 .pm-note-error {
-  color: var(--danger);
+  color: var(--danger-fg);
   border-color: var(--danger-soft);
 }
 
@@ -439,8 +467,10 @@ body {
   /* 同 .pm-btn-danger：--bg-button-danger 与 --danger 是同一个色值，
      用 --danger 当文字色 = 一片纯红方块，错误信息一个字也看不见。 */
   background: var(--bg-button-danger);
-  color: var(--fg-on-danger, var(--fg-on-accent, #ffffff));
-  border: 1px solid var(--danger);
+  color: var(--fg-on-danger);
+  /* 边框原来用 --danger，与背景同一个红，等于没画；换成普通描边，
+     浮在列表上时才有边界。 */
+  border: 1px solid var(--border-default);
 }
 
 /* ---------------- 快捷键（M2） ---------------- */
@@ -531,16 +561,16 @@ body {
 }
 
 .pm-auto-status { flex: 0 0 auto; font-size: 11px; }
-.pm-auto-status.is-on { color: var(--success, var(--accent)); }
+.pm-auto-status.is-on { color: var(--success-fg, var(--accent-fg)); }
 .pm-auto-status.is-off { color: var(--fg-muted); }
 
 .pm-kb-status {
   flex: 0 0 auto;
 }
 
-.pm-kb-status.is-active { color: var(--success, var(--accent)); }
+.pm-kb-status.is-active { color: var(--success-fg, var(--accent-fg)); }
 .pm-kb-status.is-off { color: var(--fg-muted); }
-.pm-kb-status.is-conflict { color: var(--warning); }
+.pm-kb-status.is-conflict { color: var(--warning-fg); }
 
 .pm-kb-command {
   flex: 1 1 auto;
@@ -553,12 +583,12 @@ body {
 
 /* ------------------------------------------------------------ 签名与信任 */
 .pm-sig.is-verified {
-  color: var(--success, var(--accent));
+  color: var(--success-fg, var(--accent-fg));
   border-color: var(--success-line, var(--border-subtle));
 }
 
 .pm-sig.is-unsigned {
-  color: var(--warning);
+  color: var(--warning-fg);
   border-color: var(--warning-line);
   background: var(--warning-soft);
 }
@@ -669,4 +699,16 @@ body {
   color: var(--fg-muted);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-md, 6px);
+}
+
+/* ------------------------------------------------------------ 动效偏好 */
+/* 三个过渡都是颜色渐变、没有位移，但 prefers-reduced-motion 覆盖的不只是
+   "不要动" —— 部分用户对颜色闪烁/渐变同样不适，所以一并关掉。
+   这些规则与上面同特异性、位置更靠后，直接覆盖即可，不必 !important。 */
+@media (prefers-reduced-motion: reduce) {
+  .pm-tab,
+  .pm-btn,
+  .pm-card {
+    transition: none;
+  }
 }

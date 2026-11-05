@@ -120,7 +120,7 @@
   border-radius: var(--radius-xl);
   font-size: var(--font-base);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 .export-dialog-field-hint {
@@ -503,7 +503,7 @@
 .export-dialog-progress-percent {
   font-size: var(--font-2xl);
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-fg);
   font-variant-numeric: tabular-nums;
 }
 
@@ -541,7 +541,7 @@
   justify-content: center;
   font-size: 24px;
   background: var(--accent-softer);
-  color: var(--accent);
+  color: var(--accent-fg);
   border: 2px solid var(--accent);
 }
 

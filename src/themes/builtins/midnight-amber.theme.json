@@ -130,9 +130,10 @@
 
     "--fg-primary":       "#e4d8c4",
     "--fg-secondary":     "#d0c4b0",
-    "--fg-muted":         "#8a7e6e",
-    "--fg-disabled":      "#5a5045",
+    "--fg-muted":         "#958876",
+    "--fg-disabled":      "#7f7466",
     "--fg-on-accent":     "#1a1208",
+    "--fg-on-danger":     "#1a1208",
     "--fg-on-success":    "#12100c",
     "--fg-on-warning":    "#12100c",
     "--fg-toolbar-hover": "#f0e8d8",
@@ -149,6 +150,9 @@
     "--accent-glow-strong":  "rgba(245, 166, 35, 0.16)",
     "--accent-line":         "rgba(245, 166, 35, 0.2)",
     "--accent-line-strong":  "rgba(245, 166, 35, 0.3)",
+    "--success-fg":  "#40d070",
+    "--warning-fg":  "#f5a623",
+    "--danger-fg":   "#f07068",
     "--accent-fg":           "#f5a623",
 
     "--success-soft":   "rgba(64, 208, 112, 0.12)",

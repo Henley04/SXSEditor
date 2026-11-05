@@ -87,7 +87,7 @@ body {
 
 .sidebar-item.active {
     background: var(--accent-softer);
-    color: var(--accent);
+    color: var(--accent-fg);
     border-left-color: var(--accent);
     font-weight: 600;
 }
@@ -256,7 +256,7 @@ body {
 
 /* 警告类提示：用于"开启后可能大幅影响性能/增加发热"等高代价选项 */
 .hint-warning {
-    color: var(--warning);
+    color: var(--warning-fg);
     border-left-color: var(--warning);
 }
 
@@ -314,7 +314,7 @@ body {
     border-radius: var(--radius-xl);
     font-size: var(--font-base);
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 /* 数值徽章可点击改成精确值：不必为了 0.68 去拖一根 1px 精度的滑杆。 */
@@ -370,7 +370,7 @@ body {
     cursor: pointer;
     list-style: none;
     font-size: var(--font-sm);
-    color: var(--accent);
+    color: var(--accent-fg);
     user-select: none;
     padding: 2px 0;
 }
@@ -480,7 +480,7 @@ body {
     cursor: pointer;
     list-style: none;
     font-size: var(--font-sm);
-    color: var(--accent);
+    color: var(--accent-fg);
     user-select: none;
     padding: 3px 0;
 }
@@ -798,7 +798,7 @@ body {
 
 .model-status-download:hover {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 /* ==================== Hardware Info ==================== */
@@ -933,7 +933,7 @@ body {
 
 .hardware-retry-btn:hover {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 /* 状态文字同样走 --status-* 语义：检测中=蓝、可用=绿、不可用=灰，
@@ -1031,7 +1031,7 @@ body {
     border: 1px solid var(--accent);
     border-radius: var(--radius-lg);
     background: var(--accent-softer);
-    color: var(--accent);
+    color: var(--accent-fg);
     cursor: pointer;
     transition: background var(--motion-base) var(--ease-standard),
                 border-color var(--motion-base) var(--ease-standard),
@@ -1105,13 +1105,13 @@ body {
 
 .btn-theme-action.btn-theme-danger {
     border-color: var(--danger-soft);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 .btn-theme-action.btn-theme-danger:hover {
     background: var(--danger-soft);
     border-color: var(--danger-glow);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 /* ==================== Utility ==================== */
@@ -1277,7 +1277,7 @@ body {
     margin: 0 0 var(--space-4) 0;
     font-size: var(--font-md);
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-fg);
     border-bottom: 1px solid var(--border-subtle);
     padding-bottom: var(--space-3);
 }
@@ -1384,7 +1384,7 @@ body {
 
 .theme-token-reset:hover {
     background: var(--accent-softer);
-    color: var(--accent);
+    color: var(--accent-fg);
     border-color: var(--accent-glow);
     transform: scale(1.08);
 }
@@ -1423,7 +1423,7 @@ body {
 }
 
 #themeSaveAsIdError {
-    color: var(--danger);
+    color: var(--danger-fg);
     border-left: 2px solid var(--danger);
     padding-left: var(--space-3);
     font-size: var(--font-sm);
@@ -1455,12 +1455,12 @@ body {
 
 .theme-toast-success {
     border-color: var(--success);
-    color: var(--success);
+    color: var(--success-fg);
 }
 
 .theme-toast-error {
     border-color: var(--danger);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 .theme-toast-info {
@@ -1540,7 +1540,7 @@ body {
     font-weight: 600;
     border-radius: var(--radius-sm);
     background: var(--danger-soft, rgba(220, 50, 47, 0.15));
-    color: var(--danger);
+    color: var(--danger-fg);
     border: 1px solid var(--danger);
     margin-right: var(--space-4);
     text-transform: uppercase;
@@ -1721,10 +1721,10 @@ body {
 .about-app-meta { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-sm); }
 .about-links { margin-top: 8px; font-size: var(--font-sm); }
 
-#section-about a { color: var(--accent); text-decoration: none; }
+#section-about a { color: var(--accent-fg); text-decoration: none; }
 #section-about a:hover { text-decoration: underline; }
 
-details > summary { cursor: pointer; color: var(--accent); font-size: var(--font-sm); user-select: none; }
+details > summary { cursor: pointer; color: var(--accent-fg); font-size: var(--font-sm); user-select: none; }
 .about-license-text {
     margin-top: 10px;
     padding: 12px 14px;
@@ -1766,7 +1766,7 @@ details > summary { cursor: pointer; color: var(--accent); font-size: var(--font
 .about-table tr.about-group-row td {
     padding-top: 12px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-fg);
     border-bottom: 1px solid var(--border-subtle);
 }
 

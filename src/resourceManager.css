@@ -91,17 +91,17 @@ body {
 
 .gpu-badge.discrete {
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 .gpu-badge.integrated {
     background: var(--warning-soft);
-    color: var(--warning);
+    color: var(--warning-fg);
 }
 
 .gpu-badge.vendor {
     background: var(--success-soft);
-    color: var(--success);
+    color: var(--success-fg);
 }
 
 .vram-bar-container {
@@ -117,7 +117,7 @@ body {
 }
 
 .vram-label .vram-used {
-    color: var(--success);
+    color: var(--success-fg);
     font-weight: 600;
 }
 
@@ -178,7 +178,7 @@ body {
 
 .rm-retry-btn:hover {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 /* ===== Model Groups ===== */
@@ -241,13 +241,13 @@ body {
     padding: var(--space-1) var(--space-4);
     border-radius: var(--radius-xl);
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-fg);
     flex-shrink: 0;
 }
 
 .group-loaded-badge.all-loaded {
     background: var(--success-soft);
-    color: var(--success);
+    color: var(--success-fg);
 }
 
 .group-loaded-badge.none-loaded {
@@ -274,7 +274,7 @@ body {
 
 .group-action-btn.load-all {
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 .group-action-btn.load-all:hover {
@@ -283,7 +283,7 @@ body {
 
 .group-action-btn.unload-all {
     background: var(--danger-soft);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 .group-action-btn.unload-all:hover {
@@ -374,12 +374,12 @@ body {
 
 .ep-badge.dml {
     background: var(--success-soft);
-    color: var(--success);
+    color: var(--success-fg);
 }
 
 .ep-badge.cpu {
     background: var(--warning-soft);
-    color: var(--warning);
+    color: var(--warning-fg);
 }
 
 .ep-badge.tfjs {
@@ -405,7 +405,7 @@ body {
 
 .model-btn.load {
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 .model-btn.load:hover {
@@ -414,7 +414,7 @@ body {
 
 .model-btn.unload {
     background: var(--danger-soft);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 .model-btn.unload:hover {
@@ -434,7 +434,7 @@ body {
 
 .model-missing {
     font-size: var(--font-xs);
-    color: var(--danger);
+    color: var(--danger-fg);
     padding: var(--space-1) 7px;
     background: var(--danger-soft);
     border-radius: var(--radius-md);
@@ -470,11 +470,11 @@ body {
 }
 
 .summary-value.accent {
-    color: var(--accent);
+    color: var(--accent-fg);
 }
 
 .summary-value.green {
-    color: var(--success);
+    color: var(--success-fg);
 }
 
 /* ===== Actions ===== */

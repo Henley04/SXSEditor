@@ -53,6 +53,18 @@ const state = {
   /** pluginId → true，表示该卡片的"卸载确认条"正在展开 */
   confirming: new Set(),
   focus: null,
+  /**
+   * 渲染后要把键盘焦点放回哪里。
+   *
+   * 列表每次刷新都是整段重建（textContent = '' 再 appendChild），点掉的按钮
+   * 已经不在文档里，焦点会掉到 body —— 键盘用户的下一 Tab 从页面开头重数。
+   * 形如 `{ pluginId, action, wait? }`，action 指的是"重建后应该落在哪个按钮上"：
+   * · 'cancel'  展开确认条 → 进确认条，落在最不危险的那个按钮；
+   * · 'remove'  取消确认 / 卸载失败 → 回该卡的卸载按钮；
+   * · 'toggle'  信任并安装成功 → 落在新卡片的停用按钮（wait 等卡片出现）；
+   * · 'install' 没有卡片可落 → 回"安装插件…"。
+   */
+  restoreFocus: null,
   toastTimer: 0,
   /**
    * 待确认的"签名有效但密钥未知"的安装。
@@ -402,6 +414,7 @@ function renderCard(plugin) {
 
   const toggle = el('button', 'pm-btn', enabled ? t('plugins.disable') : t('plugins.enable'));
   toggle.type = 'button';
+  toggle.dataset.act = 'toggle';
   toggle.addEventListener('click', async () => {
     toggle.disabled = true;
     const result = await safeCall(() => api.setEnabled(plugin.id, !enabled));
@@ -413,8 +426,12 @@ function renderCard(plugin) {
 
   const remove = el('button', 'pm-btn pm-btn-danger', t('plugins.uninstall'));
   remove.type = 'button';
+  remove.dataset.act = 'remove';
   remove.addEventListener('click', () => {
     state.confirming.add(plugin.id);
+    // 展开确认条之后，"卸载"按钮被替换掉了；焦点必须主动挪进确认条，
+    // 否则它落在 body 上，键盘用户要靠 Tab 从头找。
+    state.restoreFocus = { pluginId: plugin.id, action: 'cancel' };
     render();
   });
   actions.appendChild(remove);
@@ -434,31 +451,39 @@ function renderCard(plugin) {
     // 两个按钮语义不同：默认删数据，`keep` 保留数据目录
     const confirm = el('button', 'pm-btn pm-btn-danger', t('plugins.uninstall'));
     confirm.type = 'button';
+    confirm.dataset.act = 'confirm';
     confirm.addEventListener('click', async () => {
       confirm.disabled = true;
       const name = plugin.name || plugin.id;
       const result = await safeCall(() => api.uninstall(plugin.id, false));
       state.confirming.delete(plugin.id);
+      // 成功时卡片会消失，由 renderInstalled 的兜底把焦点收到列表里；
+      // 失败时卡片还在，回到那一条的卸载按钮上。
+      state.restoreFocus = { pluginId: plugin.id, action: 'remove' };
       if (result && result.ok) toast(t('plugins.uninstalled', { name }));
       else toast(t('plugins.uninstallFailed', { error: (result && result.error) || '' }), true);
       await refresh();
     });
     const keep = el('button', 'pm-btn', t('plugins.uninstallKeepData'));
     keep.type = 'button';
+    keep.dataset.act = 'keep';
     keep.title = t('plugins.uninstallConfirmKeep');
     keep.addEventListener('click', async () => {
       keep.disabled = true;
       const name = plugin.name || plugin.id;
       const result = await safeCall(() => api.uninstall(plugin.id, true));
       state.confirming.delete(plugin.id);
+      state.restoreFocus = { pluginId: plugin.id, action: 'remove' };
       if (result && result.ok) toast(t('plugins.uninstalled', { name }));
       else toast(t('plugins.uninstallFailed', { error: (result && result.error) || '' }), true);
       await refresh();
     });
     const cancel = el('button', 'pm-btn', t('common.cancel'));
     cancel.type = 'button';
+    cancel.dataset.act = 'cancel';
     cancel.addEventListener('click', () => {
       state.confirming.delete(plugin.id);
+      state.restoreFocus = { pluginId: plugin.id, action: 'remove' };
       render();
     });
     row.appendChild(confirm);
@@ -517,12 +542,19 @@ function renderCard(plugin) {
 
 function renderInstalled() {
   const plugins = state.admin?.plugins || [];
+  // 列表是整段重建的：每次 refresh（主进程一推 sync 就一次）都会把卡片节点
+  // 全部换掉，正在聚焦的那个按钮随之消失，焦点掉到 body。
+  // 所以在清空之前先记下"焦点在哪个卡的哪个按钮上"，重建完再放回去。
+  // 显式设置的 state.restoreFocus 优先（它可能是刚装好、还没渲染出来的卡）。
+  const keepFocus = state.restoreFocus ? null : snapshotCardFocus();
   dom.list.textContent = '';
   dom.empty.hidden = plugins.length > 0;
 
   for (const plugin of plugins) {
     dom.list.appendChild(renderCard(plugin));
   }
+  if (keepFocus) state.restoreFocus = keepFocus;
+  applyRestoreFocus();
 
   if (state.focus) {
     const target = dom.list.querySelector(`[data-plugin-id="${CSS.escape(state.focus)}"]`);
@@ -534,6 +566,63 @@ function renderInstalled() {
     state.focus = null;
   }
   renderCount();
+}
+
+/**
+ * 读当前焦点落在哪张卡的哪个按钮上（`data-act`）。
+ * 不在列表里、或不是卡片按钮 → null，不做任何"归还"。
+ */
+function snapshotCardFocus() {
+  const active = document.activeElement;
+  if (!active || !dom.list.contains(active) || !active.dataset || !active.dataset.act) return null;
+  const card = active.closest('.pm-card');
+  return { pluginId: (card && card.dataset.pluginId) || '', action: active.dataset.act, wait: true };
+}
+
+/**
+ * 把键盘焦点还给"重建前它该在的地方"。
+ *
+ * 三种来源：两段式卸载确认的转折点、信任横幅关闭、列表重建前的快照
+ * （见 build 前的 snapshotCardFocus）。目标卡片不存在时退而求其次落到列表首项，
+ * 列表空了则落到空态上 —— 目的只有一个：焦点不落在 body，下一 Tab 不从页面开头数。
+ */
+function applyRestoreFocus() {
+  const want = state.restoreFocus;
+  if (!want) return;
+
+  if (want.action === 'install') {
+    state.restoreFocus = null;
+    if (dom.install) dom.install.focus();
+    return;
+  }
+
+  const card = dom.list.querySelector(`[data-plugin-id="${CSS.escape(want.pluginId)}"]`);
+  const target = card && card.querySelector(`[data-act="${want.action}"]`);
+  if (target) {
+    state.restoreFocus = null;
+    target.focus();
+    return;
+  }
+
+  // `wait` 用于"卡片还没渲染出来"：安装是异步的，中途会有几次 sync 触发的
+  // 重绘，早于新卡片出现的 render 不应该把意图吃掉 —— 否则等到卡片真的出现，
+  // 已经没有东西可聚焦了。给 5 次机会就够（实测 1~2 次），到点仍找不到就
+  // 当卡片不存在，按兜底走，避免一个坏 id 让标志位永远挂着。
+  if (want.wait) {
+    want.tries = (want.tries || 0) + 1;
+    if (want.tries < 5) return;
+  }
+  state.restoreFocus = null;
+
+  const first = dom.list.querySelector('[data-act="toggle"]');
+  if (first) {
+    first.focus();
+    return;
+  }
+  if (dom.empty && !dom.empty.hidden) {
+    dom.empty.tabIndex = -1;
+    dom.empty.focus();
+  }
 }
 
 /**
@@ -590,7 +679,16 @@ function renderTrustBanner() {
     keyId: pending.pendingKey.keyId,
     file: pending.packagePath.split(/[\\/]/).pop() || pending.packagePath,
   });
+  // 只在"从隐藏到出现"这一下抢焦点。renderTrustBanner 每次刷新都会调，
+  // 每次都 focus 会把用户正在读列表的焦点反复拽回来。
+  const wasHidden = dom.trustBanner.hidden;
   dom.trustBanner.hidden = false;
+  if (wasHidden) {
+    // 焦点落在横幅本身（tabindex=-1），读屏会把标题与指纹一起念出来，
+    // 然后用户按 Tab 进到"信任并安装/取消"。不默认聚焦按钮：
+    // 这会诱导用户直接按回车放行一把陌生密钥。
+    try { dom.trustBanner.focus(); } catch (_) { /* 已隐藏 */ }
+  }
 }
 
 async function acceptPendingTrust() {
@@ -605,12 +703,17 @@ async function acceptPendingTrust() {
     const retry = await safeCall(() => api.installFromPath(pending.packagePath));
     if (retry && retry.ok) {
       state.pendingTrust = null;
+      // 横幅一藏，焦点就落在 body 上（按钮跟着一起藏了）。把焦点交给刚装好的
+      // 那张卡，同时让它闪一下 —— 用户既知道装成了，也知道装到哪去了。
+      state.focus = retry.id || null;
+      state.restoreFocus = { pluginId: retry.id || '', action: 'toggle', wait: true };
       renderTrustBanner();
       toast(t('plugins.installDone', { name: retry.id || '' }));
     } else {
       // 信任成功但安装仍失败：多半是包本身有问题（签名损坏/清单不一致），
       // 这时不该把 banner 留在"信任并安装"上，会让用户反复点。
       state.pendingTrust = null;
+      state.restoreFocus = { pluginId: '', action: 'install' };
       renderTrustBanner();
       toast(t('plugins.installFailed', { error: (retry && retry.error) || '' }), true);
     }
@@ -671,6 +774,8 @@ function render() {
     const active = tab.dataset.tab === state.tab;
     tab.classList.toggle('is-active', active);
     tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    // roving tabindex：整组只占一个 Tab 位，组内靠方向键移动。
+    tab.tabIndex = active ? 0 : -1;
   }
   if (state.tab === 'installed') renderInstalled();
   else if (state.tab === 'security') renderSecurity();
@@ -716,6 +821,35 @@ function setTab(tab) {
   if (state.tab === 'log') refreshLog();
 }
 
+/**
+ * tablist 的键盘语义（WAI-ARIA tabs，自动激活）。
+ *
+ * ←/→ 在组内移动并**立刻**切换，Home/End 跳到首尾。为什么用自动激活而不是
+ * "先移动、回车再切"：这三个面板都是本地即时视图，切换没有副作用（不发请求、
+ * 不丢草稿），多一次回车只会让键盘用户更累。
+ */
+function onTabKeydown(event) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+  if (!keys.includes(event.key)) return;
+  const tabs = dom.tabs;
+  const current = tabs.indexOf(event.currentTarget);
+  if (current === -1) return;
+  event.preventDefault();
+
+  let next = current;
+  if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+  else if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else next = tabs.length - 1;
+
+  const target = tabs[next];
+  if (!target) return;
+  setTab(target.dataset.tab);
+  // 焦点跟着选中项走：否则 roving tabindex 把 tabindex 挪到新项之后，
+  // 焦点留在一个 tabindex=-1 的旧项上，下一次 Tab 会从奇怪的位置继续。
+  target.focus();
+}
+
 // ---------------------------------------------------------------- 接线
 
 function installHandlers() {
@@ -753,11 +887,16 @@ function installHandlers() {
   dom.trustAccept.addEventListener('click', () => { acceptPendingTrust(); });
   dom.trustCancel.addEventListener('click', () => {
     state.pendingTrust = null;
+    // 取消之后不会重新渲染，焦点必须在藏起横幅之前先交出去，
+    // 否则它跟着按钮一起消失，落到 body 上。
+    const hadFocus = dom.trustBanner.contains(document.activeElement);
     renderTrustBanner();
+    if (hadFocus) dom.install.focus();
   });
 
   for (const tab of dom.tabs) {
     tab.addEventListener('click', () => setTab(tab.dataset.tab));
+    tab.addEventListener('keydown', onTabKeydown);
   }
 
   // 主进程每次投影变化都会推一次 sync；管理器只需重新拉一遍 admin（含状态细节）
