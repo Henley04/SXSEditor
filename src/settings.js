@@ -3617,10 +3617,13 @@ async function installModelSettings() {
             }
             for (const r of rows) {
                 const line = el('div', 'model-audit-row');
-                const when = new Date(r.ts).toLocaleTimeString();
+                const when = new Date(r.ts).toLocaleTimeString(getLocale());
+                const outcomeText = r.outcome === 'done'
+                    ? t('models.outcomeDone')
+                    : r.outcome === 'error' ? t('models.outcomeError') : (r.outcome || '');
                 const outcome = r.kind === 'consent'
                     ? t('models.auditConsent', { outcome: t(`models.consentOutcome.${r.outcome}`) })
-                    : `${t(`models.taskName.${r.task}`) || r.task || ''} ${r.outcome || ''}${r.code ? ` (${r.code})` : ''}`;
+                    : `${t(`models.taskName.${r.task}`) || r.task || ''} ${outcomeText}${r.code ? ` (${r.code})` : ''}`;
                 line.appendChild(el('span', 'model-audit-time', when));
                 line.appendChild(el('span', 'model-audit-subject', r.subject || ''));
                 line.appendChild(el('span', 'model-audit-endpoint', r.endpointId || ''));
