@@ -391,7 +391,9 @@ export async function ensurePipelineInitialized() {
     if (!sawLoadProgress) setTransportProgress(t('main.loadingModels'), NaN);
   }, 1500);
 
-  state.pipelineInitPromise = window.electronAPI.initSVSPipeline();
+  // 显式声明这一步确实需要内置模型：playAll / runExportJob 与 MCP 导出已经
+  // 在调用前判定过后端，能走到这里的都至少有一条内置轨道。
+  state.pipelineInitPromise = window.electronAPI.initSVSPipeline({ needsBuiltin: true });
   try {
     await state.pipelineInitPromise;
     state.pipelineInitialized = true;

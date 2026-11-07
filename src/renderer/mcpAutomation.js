@@ -6,6 +6,7 @@ import { openFragmentEditor } from './fragmentOperations.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 // F2/F3：MCP 导出与主窗口播放走同一套音符集合真源
 import { computeActiveClippedNotes } from '../shared/activeNotes.js';
+import { needsBuiltinForFragment } from '../shared/pipelineDecision.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import {
   normalizeAutoConfig, computeManualCoverage, paramsForPreset,
@@ -71,7 +72,7 @@ function emit(type, data) {
 
 function snapshot() {
   return {
-    schemaVersion: '2.0',
+    schemaVersion: '2.1',
     project: clone(state.project),
     singers: clone(trackManager.getSingers().map(s => {
       const x = { ...s };
@@ -455,7 +456,11 @@ async function exportFragmentTo(p) {
   if (!f) throw notFound('fragment', p.fragmentId, trackManager.getFragments().map(x => x.id));
   const singer = trackManager.getSinger(f.singerId);
   if (!singer) throw notFound('singer', f.singerId);
-  await ensurePipelineInitialized();
+  // 插件后端的分片导出不依赖内置 ONNX 模型，跳过整套模型加载；singer 缺失或
+  // backend 未声明时 needsBuiltinForFragment 保守返回 true，内置工程照旧加载。
+  if (needsBuiltinForFragment(f, singer && singer.backend)) {
+    await ensurePipelineInitialized();
+  }
   await loadAudioSettings();
   const o = { ...getExportInferenceOptions(), ...(p.options || {}) };
   const clippedNotes = computeActiveClippedNotes(f, f.notes);
@@ -508,7 +513,7 @@ async function execute(m, p = {}) {
     case 'capabilities': {
       const settings = await window.electronAPI.getSettings().catch(() => null);
       return {
-        schemaVersion: '2.0',
+        schemaVersion: '2.1',
         methods: [
           'project.get', 'project.validate', 'project.apply', 'project.replace',
           'project.saveTo', 'project.loadFrom', 'project.save',

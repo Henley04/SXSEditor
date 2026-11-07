@@ -270,10 +270,18 @@ function truncateExternalText(text, max) {
  * 内置后端在这条路上第一行就 return，除一次 60ms 的轮询外零开销，
  * 也不会阻塞窗口首帧（全程 await，不占渲染）。
  */
+/**
+ * 等待分片数据里的 backend 到达，供形态裁剪与推理管线初始化共用同一次等待语义。
+ * 返回 null 表示超时未拿到，调用方应按"内置轨道"保守处理，避免误伤内置工程。
+ */
+export async function waitForTrackBackend() {
+  const { getTrackBackend } = await import('./state.js');
+  return waitForBackend(getTrackBackend);
+}
+
 export async function applyPluginEditorLayout() {
   try {
-    const { getTrackBackend } = await import('./state.js');
-    const backend = await waitForBackend(getTrackBackend);
+    const backend = await waitForTrackBackend();
     if (isBuiltinBackend(backend?.type)) return; // 内置轨道：保持原样
 
     const { ensurePluginCatalog, findTrackKind } = await import('../renderer/pluginBackend.js');

@@ -3,7 +3,9 @@ import {
   getPipelineInitialized, setPipelineInitialized,
   getPipelineInitPromise, setPipelineInitPromise,
   getFragmentAudioSettings,
+  getCurrentFragment, getTrackBackend,
 } from './state.js';
+import { needsBuiltinForFragment } from '../shared/pipelineDecision.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
@@ -125,6 +127,13 @@ async function notifyModelMissing() {
 export function initPipeline() {
   if (getPipelineInitialized()) return Promise.resolve();
   if (getPipelineInitPromise()) return getPipelineInitPromise();
+
+  // 插件后端轨道不需要内置 ONNX 模型。短路必须早于加载遮罩与
+  // getFragmentSVSSampleRate()，否则会连带推"加载模型"进度条、甚至因缺模型
+  // 弹下载框。编辑器内三处"未初始化就 initPipeline()"的调用点因此自动不加载。
+  if (!needsBuiltinForFragment(getCurrentFragment(), getTrackBackend())) {
+    return Promise.resolve();
+  }
 
   const overlay = document.getElementById('model-loading-overlay');
   if (overlay) {

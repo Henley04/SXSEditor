@@ -162,7 +162,7 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.LOAD_PREPROCESS_DATA, handler);
   },
   getModelDir: () => ipcRenderer.invoke(IPC_CHANNELS.GET_MODEL_DIR),
-  initSVSPipeline: () => invokeHeavy('svs:init'),
+  initSVSPipeline: (options) => invokeHeavy('svs:init', options),
   synthesizeSVS: (data) => invokeHeavy('svs:synthesize', data),
   synthesizeMultiStreaming: (data) => invokeHeavy('svs:synthesizeMultiStreaming', data),
   cancelSVSSynthesis: () => invokeHeavy('svs:cancel'),
@@ -189,7 +189,7 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.SVS_MODEL_INCOMPATIBLE, handler);
   },
   getFragmentSVSSampleRate: () => invokeHeavy('fragment-svs:getSampleRate'),
-  initFragmentSVSPipeline: () => invokeHeavy('fragment-svs:init'),
+  initFragmentSVSPipeline: (options) => invokeHeavy('fragment-svs:init', options),
   synthesizeFragmentSVS: async (data) => {
     const result = await invokeHeavy('fragment-svs:synthesize', data);
     if (result.error) {

@@ -4,13 +4,14 @@ import { initI18n, applyLocale, getLocale, t } from '../i18n/index.js';
 import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initPipeline } from './pipeline.js';
+import { isPluginBackend } from '../shared/pipelineDecision.js';
 import { registerEditorMcpAutomation } from './mcpAutomation.js';
 import { resizeCanvases } from './canvasRenderer.js';
 import { setupEventListeners, _invalidateCanvasRect, setupPitchBatchTools } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
 import { setupUiControls, refreshPostprocessLabels } from './uiControls.js';
 import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
-import { applyPluginEditorLayout } from './pluginEditorMode.js';
+import { applyPluginEditorLayout, waitForTrackBackend } from './pluginEditorMode.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
 import { installPopoverMenus } from '../utils/popoverMenu.js';
 import {
@@ -29,11 +30,15 @@ import {
 // 异步部分（向主进程要 locale）由下面的 i18nReady.then 兜底刷新。
 const i18nReady = initI18n();
 
-// Initialize pipeline
+// 推理管线不再开窗口就无条件加载。先等分片数据里的 backend 到达：只有内置
+// 轨道才需要 9 个 ONNX 模型，插件轨道由插件后端自己负责。backend 迟迟未到时
+// isPluginBackend(null) 为 false，按内置处理，宁可多加载也不误伤内置工程。
 // 失败已经在 initPipeline() 里记日志并按需弹"打开模型下载"对话框了；这里只
 // 负责不让它变成 unhandled rejection —— 那会触发 webpack dev server 的全屏
 // "Uncaught runtime errors" 覆盖层，把整个编辑器遮住，看起来像程序崩了。
-initPipeline().catch(() => {});
+waitForTrackBackend()
+  .then((backend) => (isPluginBackend(backend) ? Promise.resolve() : initPipeline()))
+  .catch(() => {});
 
 // Apply saved theme
 initWindowTheme(getIpcCleanups());

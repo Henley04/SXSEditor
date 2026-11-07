@@ -202,6 +202,20 @@ function resetSvsPipeline() {
 }
 
 /**
+ * MCP pipeline.status 用：只读地披露管线运行态，不触发任何加载。
+ * pendingReset 为 true 表示合成仍在进行、reset 已排队但尚未执行 —— 调用方
+ * 据此决定是稍后重查还是继续等待，不能把"已排队"当成"已卸载"。
+ */
+function getPipelineRuntimeState() {
+  const inst = svsPipelineLazy.getInstance();
+  return {
+    initialized: !!(inst && inst.initialized),
+    pendingReset: _pendingPipelineReset,
+    language: currentLanguage,
+  };
+}
+
+/**
  * Ensure the pipeline is initialized with the correct language.
  * Uses incremental model swap when possible (only reloads note_text_encoder + preflow).
  */
@@ -517,7 +531,14 @@ function registerSvsIpc() {
     return !!(pipeline && pipeline.diffStepLegacyInt8Incompatible === true);
   }
 
-  safeHandle(IPC_CHANNELS.SVS_INIT, async (event) => {
+  safeHandle(IPC_CHANNELS.SVS_INIT, async (event, options) => {
+    // 纯插件工程没有任何由内置模型支持的轨道，渲染层显式传 needsBuiltin:false。
+    // 必须在 _withLoadProgress 之前短路：一旦进去就会 svsPipelineLazy.get()
+    // 把 9 个 ONNX 模型读进显存，并推"加载模型"进度条。未传或传 true 时
+    // 保持原逻辑逐字不变，内置与混合工程的行为不受影响。
+    if (options && options.needsBuiltin === false) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
     await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
@@ -728,7 +749,12 @@ function registerSvsIpc() {
     return getSampleRate();
   });
 
-  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event, options) => {
+    // 与 svs:init 同一套短路：分片编辑器显示插件后端轨道时，不应为了在编辑器
+    // 里按一次播放就把整套内置 ONNX 模型读进显存。未传或传 true 时原逻辑不变。
+    if (options && options.needsBuiltin === false) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
     await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
@@ -858,6 +884,7 @@ function registerSvsIpc() {
 module.exports = {
   registerSvsIpc,
   getSvsPipeline,
+  getPipelineRuntimeState,
   resetSvsPipeline,
   svsPipelineLazy,
   // 重新导出纯函数供测试（来自 languageDetection 模块）
