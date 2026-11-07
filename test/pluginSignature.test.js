@@ -369,3 +369,87 @@ describe('plugin signature — 安装链路', function () {
     expect(result.error).to.include('未列入校验清单');
   });
 });
+
+describe('plugin signature — 内置官方密钥默认受信任', function () {
+  this.timeout(20000);
+
+  const official = require('../src/shared/officialKeys.js');
+
+  it('内置公钥能被解析，且 keyId 稳定', function () {
+    const keys = official.officialKeys();
+    expect(keys).to.have.length.greaterThan(0);
+    for (const key of keys) {
+      expect(key.keyId).to.match(/^ed25519-[0-9a-f]{16}$/);
+      expect(key.publicKey).to.include('BEGIN PUBLIC KEY');
+      expect(key.official).to.equal(true);
+    }
+  });
+
+  it('信任库视图：官方密钥在列且标记官方，不落盘', function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sxsp-official-'));
+    store._setRootForTests(root);
+    try {
+      store.ensureDirs();
+      const view = trust.list();
+      const officialIds = official.officialKeys().map((k) => k.keyId);
+      for (const id of officialIds) {
+        const entry = view.keys.find((k) => k.keyId === id);
+        expect(entry, id).to.be.ok;
+        expect(entry.official).to.equal(true);
+        expect(entry.source).to.equal('builtin');
+      }
+      // 只是在视图里出现，不代表写进了用户信任库
+      const state = trust.read();
+      for (const id of officialIds) expect(state.keys[id]).to.equal(undefined);
+      // 不可移除
+      expect(trust.removeKey(officialIds[0]).ok).to.equal(false);
+    } finally {
+      store._setRootForTests(null);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keyMap 含官方指纹 → 官方签名的包无需用户确认', function () {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sxsp-official-map-'));
+    store._setRootForTests(root);
+    try {
+      store.ensureDirs();
+      const map = trust.keyMap();
+      for (const key of official.officialKeys()) {
+        expect(map[key.keyId]).to.be.ok;
+        expect(map[key.keyId].official).to.equal(true);
+      }
+    } finally {
+      store._setRootForTests(null);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('冒充官方：改 keyId 或换公钥都会被拒，内置公钥不等于信任任意包', function () {
+    const attacker = crypto.generateKeyPairSync('ed25519');
+    const officialId = official.officialKeys()[0].keyId;
+    const files = baseFiles();
+    const checksums = checksumsFor(files);
+    const sig = signature.signChecksums({ checksums, privateKey: attacker.privateKey, publisher: official.OFFICIAL_PUBLISHER });
+
+    // (1) 只把 keyId 改成官方指纹 —— 与包里公钥不匹配
+    const forgedId = { ...sig, keyId: officialId };
+    const r1 = signature.verifyPackage(
+      [...files, { path: 'checksums.json', data: Buffer.from(JSON.stringify(checksums)) },
+        { path: 'signature.json', data: Buffer.from(JSON.stringify(forgedId)) }],
+      { keys: trust.keyMap() },
+    );
+    expect(r1.ok).to.equal(false);
+    expect(r1.status).to.equal(signature.SIGNATURE_STATUS.INVALID);
+
+    // (2) 同时把公钥换成官方公钥 —— 签名是攻击者私钥做的，验不过
+    const forgedAll = { ...sig, keyId: officialId, publicKey: official.officialKeys()[0].publicKey };
+    const r2 = signature.verifyPackage(
+      [...files, { path: 'checksums.json', data: Buffer.from(JSON.stringify(checksums)) },
+        { path: 'signature.json', data: Buffer.from(JSON.stringify(forgedAll)) }],
+      { keys: trust.keyMap() },
+    );
+    expect(r2.ok).to.equal(false);
+    expect(r2.status).to.equal(signature.SIGNATURE_STATUS.INVALID);
+  });
+});

@@ -1601,6 +1601,8 @@ export default {
     trustedKeysEmpty: '还没有信任任何密钥。安装签名包时，会在这里请求你确认。',
     trustedKeysNote: '信任的是密钥指纹，不是包里自称的发布者名字。移除一把密钥只影响以后的安装，不会卸载已装的插件。',
     keyUnnamed: '未命名密钥',
+    keyOfficial: '官方内置',
+    keyOfficialNote: '这把公钥编译在应用里，默认受信任，不能移除。',
     keyRemove: '移除',
     keyRemoved: '已移除',
     trustAndInstall: '信任并安装',

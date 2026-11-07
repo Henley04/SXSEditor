@@ -1,0 +1,43 @@
+{
+  "version": 200,
+  "time": {
+    "meter": [
+      { "index": 0, "numerator": 4, "denominator": 4 },
+      { "index": 4, "numerator": 3, "denominator": 4 }
+    ],
+    "tempo": [
+      { "position": 0, "bpm": 100 },
+      { "position": 2116800000, "bpm": 120 }
+    ]
+  },
+  "library": [],
+  "tracks": [
+    {
+      "name": "主唱",
+      "dispColor": "0xFF3366CC",
+      "dispOrder": 0,
+      "renderEnabled": true,
+      "mainRef": {
+        "groupID": "group-1",
+        "blickOffset": 705600000,
+        "pitchOffset": 0,
+        "isInstrumental": false
+      },
+      "mainGroup": {
+        "name": "main",
+        "uuid": "group-1",
+        "parameters": {
+          "pitchDelta": {
+            "mode": "cubic",
+            "points": [0, 0, 352800000, 50]
+          }
+        },
+        "notes": [
+          { "onset": 0, "duration": 705600000, "pitch": 60, "lyrics": "啊" },
+          { "onset": 705600000, "duration": 705600000, "pitch": 62, "lyrics": "呀" }
+        ]
+      },
+      "groups": []
+    }
+  ]
+}

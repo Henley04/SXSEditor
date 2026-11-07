@@ -18,6 +18,7 @@
  */
 const { sha256hex } = require('../../shared/pluginSignature.js');
 const { keyIdFor, publicKeyPem } = require('../../shared/pluginSignature.js');
+const { officialKeys, officialKeyMap } = require('../../shared/officialKeys.js');
 const store = require('./PluginStateStore.js');
 
 const FILE_VERSION = 1;
@@ -53,7 +54,10 @@ function write(state) {
 /** 信任库视图（给 UI/CLI 用）。不含任何私钥信息，本来也不会有。 */
 function list() {
   const state = read();
+  const official = officialKeys();
+  const officialIds = new Set(official.map((k) => k.keyId));
   const keys = Object.keys(state.keys)
+    .filter((id) => !officialIds.has(id)) // 同一把官方密钥不在列表里出现两次
     .map((id) => {
       const k = state.keys[id];
       return {
@@ -67,7 +71,11 @@ function list() {
       };
     })
     .sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
-  return { requireSignature: state.requireSignature, keys };
+  // 官方密钥排在最前：它们是"默认受信任"，不是用户添加的。
+  return {
+    requireSignature: state.requireSignature,
+    keys: [...official.map((k) => ({ ...k })), ...keys],
+  };
 }
 
 /**
@@ -84,6 +92,10 @@ function addKey(input = {}) {
     return { ok: false, error: `无法解析公钥：${err.message}` };
   }
   const keyId = keyIdFor(pem);
+  // 官方密钥本来就默认受信任，不必也不需要写进用户信任库。
+  if (officialKeyMap()[keyId]) {
+    return { ok: true, official: true, key: { keyId, name: officialKeyMap()[keyId].name } };
+  }
   const state = read();
   const existing = state.keys[keyId];
   state.keys[keyId] = {
@@ -101,6 +113,9 @@ function addKey(input = {}) {
 }
 
 function removeKey(keyId) {
+  if (officialKeyMap()[keyId]) {
+    return { ok: false, error: '内置的官方签名密钥不可移除' };
+  }
   const state = read();
   if (!state.keys[keyId]) return { ok: false, error: `信任列表里没有 ${keyId}` };
   const name = state.keys[keyId].name || '';
@@ -119,11 +134,14 @@ function setRequireSignature(enabled) {
   return { ok: true, requireSignature: state.requireSignature };
 }
 
-/** 给签名校验用的 keyId → { publicKey } 映射。 */
+/** 给签名校验用的 keyId → { publicKey } 映射。内置官方密钥始终在内。 */
 function keyMap() {
   const state = read();
   const out = {};
   for (const [id, k] of Object.entries(state.keys)) out[id] = { publicKey: k.publicKey, name: k.name };
+  for (const [id, k] of Object.entries(officialKeyMap())) {
+    out[id] = { publicKey: k.publicKey, name: k.name, official: true };
+  }
   return out;
 }
 

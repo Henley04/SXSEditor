@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vsq4 xmlns="http://www.yamaha.co.jp/vocaloid/schema/vsq4/">
+  <vender>Yamaha corporation</vender>
+  <version>4.0.0.3</version>
+  <masterTrack>
+    <seqName>Import fixture</seqName>
+    <preMeasure>1</preMeasure>
+    <timeSig>
+      <m>0</m>
+      <nu>3</nu>
+      <de>4</de>
+    </timeSig>
+    <tempo>
+      <t>0</t>
+      <v>9000</v>
+    </tempo>
+    <tempo>
+      <t>1920</t>
+      <v>12000</v>
+    </tempo>
+  </masterTrack>
+  <vsTrack>
+    <tNo>0</tNo>
+    <name>Lead</name>
+    <vsPart>
+      <t>1920</t>
+      <playTime>1920</playTime>
+      <name>Verse</name>
+      <note>
+        <t>0</t>
+        <dur>480</dur>
+        <n>60</n>
+        <y>la</y>
+        <p>a</p>
+      </note>
+      <note>
+        <t>480</t>
+        <dur>480</dur>
+        <n>64</n>
+        <y>li</y>
+        <p>i</p>
+      </note>
+      <note>
+        <t>960</t>
+        <dur>960</dur>
+        <n>67</n>
+        <y>lu</y>
+        <p>u</p>
+      </note>
+      <cc>
+        <t>0</t>
+        <v id="P">0</v>
+      </cc>
+      <cc>
+        <t>480</t>
+        <v id="P">4096</v>
+      </cc>
+      <cc>
+        <t>0</t>
+        <v id="S">2</v>
+      </cc>
+    </vsPart>
+  </vsTrack>
+</vsq4>

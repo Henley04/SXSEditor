@@ -1595,6 +1595,8 @@ export default {
     trustedKeysEmpty: 'No trusted keys yet. Installing a signed package will ask you to confirm its key here.',
     trustedKeysNote: 'Trust is bound to the key fingerprint, not to the publisher name the package claims. Removing a key only affects future installs; installed plugins stay.',
     keyUnnamed: 'Unnamed key',
+    keyOfficial: 'Built in',
+    keyOfficialNote: 'This public key ships with the app. It is trusted by default and cannot be removed.',
     keyRemove: 'Remove',
     keyRemoved: 'Removed',
     trustAndInstall: 'Trust and install',

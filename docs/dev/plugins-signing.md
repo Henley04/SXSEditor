@@ -102,7 +102,47 @@ sxseditor --cli plugin trust remove ed25519-609b519f690e7f02
 
 移除密钥**不会**卸载已装的插件：安装时的校验是历史事实。它只影响"以后还能不能装用它签的包"。
 
-## 5. 策略：只允许已签名的包
+## 5. 官方内置密钥
+
+SXSEditor 随应用内置一把署名 `SXSEditor Official` 的 Ed25519 公钥，
+定义在 `src/shared/officialKeys.js`：
+
+| 项 | 值 |
+|---|---|
+| keyId | `ed25519-a9e0599774865c81` |
+| 发布者（展示用） | `SXSEditor Official` |
+| 来源标记 | `source: "builtin"`、`official: true` |
+| 私钥位置 | 仓库之外：`D:\Document\electron\SXSEditor-official-keys\plugin-signing.key`（**不提交**） |
+
+```bash
+node scripts/package-plugin.js plugins/official-project-import \
+  -o dist-plugins \
+  --key "D:\Document\electron\SXSEditor-official-keys\plugin-signing.key" \
+  --publisher "SXSEditor Official"
+```
+
+信任库的行为：
+
+- `PluginTrustStore.list()` 把官方密钥排在最前，管理器显示「官方内置」，没有移除按钮；
+- `PluginTrustStore.addKey()` 对官方 keyId 直接返回 `official: true`，不写用户信任库；
+- `PluginTrustStore.removeKey()` 拒绝移除内置密钥；
+- `PluginTrustStore.keyMap()` 永远把官方公钥并进验签映射，所以官方包**默认受信任**，
+  安装时直接得到 `verified`，不会出现 `unknown-key` 的信任横幅。
+
+**内置公钥不等于"信任任意插件"。** 验签仍然要求两件事同时成立：
+
+1. 包里 `signature.json` 的 `publicKey` 重新算出的 keyId 与它自称的 `keyId` 一致；
+2. 用该公钥验签通过，且这个 keyId 在信任映射里。
+
+因此攻击者可以照抄 `keyId` 或照抄官方公钥，但只要签名不是用官方私钥做的，
+验签就会失败并落到 `invalid`；用陌生人自己的密钥签名则得到 `unknown-key`，
+需要用户显式确认。这一点在 `test/pluginSignature.test.js` 里有对应用例。
+
+**轮换**：生成新密钥后，把新公钥追加进 `src/shared/officialKeys.js` 的 `PUBLIC_KEYS`
+（数组可以同时保留旧公钥，已发布的旧包仍可验证）；确认旧签名包都已重签后再删除旧项。
+私钥丢失只能换钥重签，无法“找回”。
+
+## 6. 策略：只允许已签名的包
 
 管理器「签名与信任」页的勾选框，或：
 
@@ -116,7 +156,7 @@ sxseditor --cli plugin policy allow     # 默认：允许未签名，但标注
 把"签名坏了"降级成"未签名"是最常见的错误做法——那样攻击者只要随便塞一个 `signature.json`，
 就能让一个被篡改过的包落进"未签名也能装"的宽松通道。所以只有"完全没有签名"才受策略影响。
 
-## 6. 安装器会怎么判定
+## 7. 安装器会怎么判定
 
 | 状态 | 含义 | 能装吗 |
 |---|---|---|
@@ -129,7 +169,7 @@ sxseditor --cli plugin policy allow     # 默认：允许未签名，但标注
 `unknown-key` 与 `invalid` 的区别很重要：前者是"我不认识你"，后者是"你说的和做的不一致"。
 前者可以靠一次人工确认解决，后者只能重做包。
 
-## 7. 装完之后：按需重验
+## 8. 装完之后：按需重验
 
 安装时会把文件清单与签名记到 `plugins-state/packages/<id>.json`。之后可以随时核对：
 
@@ -147,17 +187,17 @@ sxseditor --cli plugin verify my-plugin
 2. 能改这个目录的人，通常也能改信任库本身——启动自检挡不住这类攻击者，
    它真正的价值是发现"同步盘/备份还原/手工改文件"造成的漂移。
 
-## 8. 签名保证不了什么
+## 9. 签名保证不了什么
 
 | 不保证 | 说明 |
 |---|---|
 | 插件不含恶意代码 | 签名只说明"是谁做的"，不说明"它是安全的"。权限清单与安装弹窗仍然是主要防线 |
 | 发布者身份可信 | 指纹只能证明一致性，不能证明这是你以为的那个组织。首次信任时要真的核对 |
-| 安装后的完整性 | 见第 7 节。装了之后有人改文件，只有主动重验才发现 |
+| 安装后的完整性 | 见第 8 节。装了之后有人改文件，只有主动重验才发现 |
 | 密钥不被盗 | 私钥泄露后，攻击者可以用同一把密钥发布新包。届时只能靠 `trust remove` + 通告 |
 | 回滚保护 | 签名包可以重放旧版本（旧版本也是合法签名的）。版本降级检测属于市场层的事 |
 
-## 9. 面向 CI
+## 10. 面向 CI
 
 签名可以在 CI 里做，把私钥放进 secret、写成临时文件再删：
 

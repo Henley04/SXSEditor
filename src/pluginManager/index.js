@@ -682,6 +682,15 @@ function renderSecurity() {
     info.appendChild(fp);
     li.appendChild(info);
 
+    if (key.official) {
+      // 内置密钥不可移除：它在代码里，不在这台机器的信任库里。
+      const badge = el('span', 'pm-key-fp', t('plugins.keyOfficial'));
+      badge.title = t('plugins.keyOfficialNote');
+      li.appendChild(badge);
+      dom.keyList.appendChild(li);
+      continue;
+    }
+
     const remove = el('button', 'pm-btn pm-btn-small pm-btn-danger', t('plugins.keyRemove'));
     remove.type = 'button';
     remove.addEventListener('click', async () => {

@@ -1,0 +1,74 @@
+{
+  "apiVersion": 2,
+  "id": "official-project-import",
+  "name": "Official Project Import (VOCALOID / Synthesizer V)",
+  "version": "1.0.0",
+  "description": "官方插件：把 VOCALOID3/4 的 .vsqx、VOCALOID5/6 的 .vpr、Synthesizer V / SV2 的 .svp 导入为可编辑工程（音符、歌词、音高曲线、速度、拍号、轨道与分片）。格式结构参考 Apache-2.0 的开源实现 UtaFormatix，解析代码为独立重写。",
+  "author": "SXSEditor Official",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {
+    "fs": [
+      "userPicked:read"
+    ],
+    "project": [
+      "read"
+    ],
+    "ui": [
+      "statusBar"
+    ]
+  },
+  "contributes": {
+    "fileTypes": [
+      {
+        "ext": ".vsqx",
+        "role": "open",
+        "label": {
+          "en": "VOCALOID3/4 Sequence (VSQX)",
+          "zh-CN": "VOCALOID3/4 工程 (VSQX)"
+        },
+        "filters": [
+          "VOCALOID VSQX"
+        ]
+      },
+      {
+        "ext": ".vpr",
+        "role": "open",
+        "label": {
+          "en": "VOCALOID5/6 Project (VPR)",
+          "zh-CN": "VOCALOID5/6 工程 (VPR)"
+        },
+        "filters": [
+          "VOCALOID VPR"
+        ]
+      },
+      {
+        "ext": ".svp",
+        "role": "open",
+        "label": {
+          "en": "Synthesizer V Project (SVP)",
+          "zh-CN": "Synthesizer V 工程 (SVP)"
+        },
+        "filters": [
+          "Synthesizer V SVP"
+        ]
+      }
+    ],
+    "statusBar": [
+      {
+        "id": "state",
+        "text": {
+          "en": "Import: ready",
+          "zh-CN": "导入：就绪"
+        },
+        "tooltip": {
+          "en": "VOCALOID / Synthesizer V project import",
+          "zh-CN": "VOCALOID / Synthesizer V 工程导入"
+        },
+        "alignment": "right"
+      }
+    ]
+  }
+}
