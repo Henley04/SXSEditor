@@ -1637,6 +1637,12 @@ export default {
     logEventServiceDenied: '服务被拒',
     logEventServiceConflict: '服务冲突',
     logEventServiceCycle: '服务成环',
+    logEventServiceGone: '服务提供方消失',
+    logEventMarketInstall: '市场安装',
+    logEventTrustUpdate: '更新密钥',
+    logEventPluginInstall: '插件发起安装',
+    logEventPluginSelfUpdate: '插件自更新',
+    logEventPluginCycle: '插件依赖成环',
 
     installDone: '已安装 {name}',
     installCanceled: '已取消安装',

@@ -520,6 +520,44 @@ async function preview(sourceId, pluginId, options = {}) {
   return { ok: false, code: 'ENTRY_NOT_FOUND', error: `没有找到插件：${pluginId}` };
 }
 
+/**
+ * 从 https 直链下载一个 .sxsp 包到市场缓存，供插件发起的 URL 安装使用。
+ *
+ * 与市场索引包的区别：直链没有索引里的 sha256 / size 背书，所以这里只能做
+ * 传输层校验（https、大小上限、完整落盘），真正的完整性与签名仍由
+ * PluginInstaller.previewPackage() 在预览阶段验。确认框里会标注「非市场来源」，
+ * 让用户知道这一层背书不存在。
+ *
+ * 缓存键用 URL 的 sha256，而不是文件名：不同地址的同名包不能互相覆盖。
+ */
+async function downloadPackageUrl(url) {
+  if (!market._internal.isHttpsUrl(url)) {
+    return { ok: false, code: 'INVALID_URL', error: '只允许 https 包地址' };
+  }
+  const dest = path.join(
+    marketDir(),
+    `url-${crypto.createHash('sha256').update(url).digest('hex').slice(0, 24)}.sxsp`,
+  );
+  const res = await httpsGetBuffer(url, {
+    maxBytes: PACKAGE.maxTotalBytes,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+  });
+  if (!res.ok) return { ok: false, code: 'DOWNLOAD_FAILED', error: res.error };
+  const buf = res.buffer;
+  if (!buf || !buf.length) return { ok: false, code: 'DOWNLOAD_FAILED', error: '下载内容为空' };
+  if (buf.length > PACKAGE.maxTotalBytes) {
+    return { ok: false, code: 'PACKAGE_TOO_LARGE', error: '包体超过宿主允许的上限' };
+  }
+  try {
+    const tmp = `${dest}.part`;
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    return { ok: false, code: 'DOWNLOAD_FAILED', error: `写入缓存失败：${err.message}` };
+  }
+  return { ok: true, path: dest, cached: false };
+}
+
 function installedVersionOf(id) {
   // registry 里记的是"启停/隔离"等运行时状态，不含版本号（版本在 manifest 与
   // 包记录里）。市场判断升级/降级需要的是"装的是哪一版"，所以读包记录。
@@ -548,6 +586,7 @@ module.exports = {
   removeSource,
   search,
   preview,
+  downloadPackageUrl,
   clearCache,
   fetchIndex,
   _internal: { httpsGetBuffer, sourceIdFor, allowFileSources, cacheFileFor },

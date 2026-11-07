@@ -1631,6 +1631,12 @@ export default {
     logEventServiceDenied: 'Service denied',
     logEventServiceConflict: 'Service conflict',
     logEventServiceCycle: 'Service cycle',
+    logEventServiceGone: 'Service provider gone',
+    logEventMarketInstall: 'Market install',
+    logEventTrustUpdate: 'Trust key updated',
+    logEventPluginInstall: 'Plugin-requested install',
+    logEventPluginSelfUpdate: 'Plugin self-update',
+    logEventPluginCycle: 'Plugin dependency cycle',
 
     installDone: 'Installed {name}',
     installCanceled: 'Installation canceled',

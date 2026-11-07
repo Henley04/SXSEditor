@@ -436,4 +436,17 @@ describe('plugin market — 客户端（file:// 源，真实全链路）', funct
     expect(removed.ok, removed.error).to.equal(true);
     expect(client.listSources().some((s) => s.id === sourceId)).to.equal(false);
   });
+
+  it('downloadPackageUrl 拒绝 http / file / 相对地址（不发起任何请求）', async function () {
+    for (const url of [
+      'http://example.com/dep.sxsp',
+      'file:///tmp/dep.sxsp',
+      'ftp://example.com/dep.sxsp',
+      './dep.sxsp',
+    ]) {
+      const r = await client.downloadPackageUrl(url);
+      expect(r.ok, url).to.equal(false);
+      expect(r.code, url).to.equal('INVALID_URL');
+    }
+  });
 });
