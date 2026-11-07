@@ -18,7 +18,7 @@
 const { app, dialog, BrowserWindow, Menu } = require('electron');
 const { getLocale } = require('../locale');
 
-const { TIMEOUTS, ERR, RUNTIME_LIMITS } = require('../../shared/pluginApi.js');
+const { TIMEOUTS, ERR, RUNTIME_LIMITS, HOST_CALL_METHODS } = require('../../shared/pluginApi.js');
 const { validateManifest, isLegacyManifest } = require('../../shared/pluginManifest.js');
 const { PluginRegistry } = require('./PluginRegistry.js');
 const { PluginRuntimeManager } = require('./PluginRuntimeManager.js');
@@ -36,6 +36,11 @@ const { PluginDataPlane } = require('./PluginDataPlane.js');
 const { PluginSecrets } = require('./PluginSecrets.js');
 const { buildAutomationDef } = require('../../shared/pluginAutomation.js');
 const { resolveService, findCycles, MAX_CALL_DEPTH, SERVICE_ERR } = require('../../shared/pluginServices.js');
+const {
+  resolvePluginDependencies, buildPluginEdges, hasInstallPermission,
+} = require('../../shared/pluginDependencies.js');
+const sourcePolicy = require('./PluginSourcePolicy.js');
+const { confirmInstallBatch } = require('./PluginInstallConsent.js');
 
 class PluginService {
   constructor() {
@@ -74,6 +79,8 @@ class PluginService {
     this._serviceDegraded = new Set();
     /** 依赖环（只报告，不拒绝加载，见 pluginServices.js 的说明）。 */
     this._serviceCycles = [];
+    /** 插件级依赖环（manifest.dependencies，只报告不拒绝）。 */
+    this._pluginCycles = [];
 
     this.runtimes.onEvent = (pluginId, event, payload) => {
       ipcFacade.broadcastEvent(pluginId, event, payload);
@@ -299,6 +306,7 @@ class PluginService {
     // 重载时旧的一轮降级/环必须作废，否则"上一次缺依赖"会一直挂在界面上。
     this._serviceDegraded.clear();
     this._serviceCycles = [];
+    this._pluginCycles = [];
 
     for (const item of records) {
       if (!item.manifest) {
@@ -339,6 +347,7 @@ class PluginService {
 
     // 所有插件都进表之后再解析依赖：边注册边解析会让先加载的消费方全部误判。
     this._resolveServiceDependencies();
+    this._resolvePluginDependencyCycles();
 
     store.writeRegistry(registry);
     return this.registry.stats();
@@ -508,6 +517,52 @@ class PluginService {
         this.registry.updatePlugin(rec.id, { status: 'loaded', error: '' });
       }
     }
+  }
+
+  /**
+   * 插件级依赖环检测（manifest.dependencies）。
+   *
+   * 与 services 的环分开报：services 环影响的是"能不能调到"，插件依赖环影响的
+   * 是"该按什么顺序装"，二者在管理器里是两类提示。同样只报告不拒绝加载 ——
+   * 依赖声明不参与运行期派发，环不会让应用崩，但它说明作者的依赖设计有问题。
+   */
+  _resolvePluginDependencyCycles() {
+    const installed = this.registry.listPlugins().map((r) => ({
+      id: r.id,
+      dependencies: r.manifest.dependencies || [],
+    }));
+    this._pluginCycles = findCycles(buildPluginEdges(installed));
+    if (this._pluginCycles.length) {
+      store.audit('plugin-cycle', null, { cycles: this._pluginCycles });
+    }
+  }
+
+  /** 已安装插件的只读视图，供 ctx.plugins.list() 使用。 */
+  listInstalledPlugins() {
+    return this.registry.listPlugins().map((r) => ({
+      id: r.id,
+      name: r.manifest.name,
+      version: r.manifest.version,
+      status: r.status,
+      enabled: r.status === 'loaded',
+      dependencies: (r.manifest.dependencies || []).map((d) => ({ ...d })),
+    }));
+  }
+
+  /**
+   * 解析某个插件的 manifest.dependencies 是否已满足。
+   * 纯查询，不安装、不落盘 —— 安装由插件显式发起且必须经用户确认。
+   */
+  resolvePluginDependencies(pluginId) {
+    const record = this.registry.getPlugin(pluginId);
+    if (!record) throw Object.assign(new Error('插件未加载'), { code: ERR.NOT_FOUND });
+    const installed = this.registry.listPlugins().map((r) => ({
+      id: r.id, version: r.manifest.version,
+    }));
+    return {
+      ...resolvePluginDependencies(record.manifest, installed),
+      cycles: this._pluginCycles,
+    };
   }
 
   /** service id → 当前提供方（含版本匹配）。解析结果每次现算，不做缓存。 */
@@ -973,6 +1028,220 @@ class PluginService {
     return this.installFromPackage(preview.packagePath);
   }
 
+  // ------------------------------------------------------------ 插件发起的安装
+  /**
+   * 预览一个目标，产出确认对话框要显示的全部事实。
+   *
+   * 三种来源最后都收敛到 installer.previewPackage()：市场包多了索引里的
+   * sha256/size 背书，URL 与本地包没有，但包的完整性/签名校验是同一套。
+   * 串行调用（调用方 for-await），避免多个目标同时写同一份下载缓存。
+   */
+  async _prepareInstallTarget(target) {
+    const appVersion = app.getVersion();
+    let packagePath;
+    let marketInfo = null;
+
+    if (target.kind === 'market') {
+      const preview = await pluginMarket.preview(target.sourceId || null, target.pluginId, { appVersion });
+      if (!preview.ok) return { ok: false, code: preview.code, error: preview.error };
+      // 指定了版本就必须完全一致：确认框里写的是这个版本，装进去的却换成
+      // 市场当前的另一版，等于让用户确认了一件事、执行了另一件事。
+      if (target.version && preview.entry.version !== target.version) {
+        return {
+          ok: false, code: 'VERSION_MISMATCH',
+          error: `市场当前是 ${preview.entry.version}，与请求的 ${target.version} 不一致`,
+        };
+      }
+      packagePath = preview.packagePath;
+      marketInfo = {
+        source: preview.source.id,
+        entryVersion: preview.entry.version,
+        warnings: preview.warnings || [],
+      };
+    } else if (target.kind === 'url') {
+      const downloaded = await pluginMarket.downloadPackageUrl(target.url);
+      if (!downloaded.ok) return { ok: false, code: downloaded.code, error: downloaded.error };
+      packagePath = downloaded.path;
+    } else {
+      packagePath = target.path;
+    }
+
+    const inspected = installer.previewPackage(packagePath, { appVersion });
+    if (!inspected.ok) return { ok: false, code: 'PACKAGE_INVALID', error: inspected.error };
+    const p = inspected.preview;
+    if (!p.installable) {
+      return {
+        ok: false,
+        code: p.blockCode || 'PACKAGE_INVALID',
+        error: p.blockMessage,
+        pendingKey: p.pendingKey || null,
+        signature: p.signature,
+      };
+    }
+    // 请求里写了版本，包里就必须是这一版。否则确认框展示的是请求版本，
+    // 落盘的却是包里另一版 —— 用户确认了一件事、执行了另一件事。
+    if (target.version && p.version !== target.version) {
+      return {
+        ok: false, code: 'VERSION_MISMATCH',
+        error: `包里是 ${p.version}，与请求的 ${target.version} 不一致`,
+      };
+    }
+
+    const installed = this.registry.getPlugin(p.id);
+    const installedVersion = installed ? installed.manifest.version : '';
+    const version = p.version || (marketInfo && marketInfo.entryVersion) || '';
+    const relation = sourcePolicy.relationTo({ version }, installedVersion);
+    const permissionsChanged = !!installed
+      && installed.manifest.permissionsHash !== p.permissionsHash;
+
+    return {
+      ok: true,
+      prepared: {
+        ...target,
+        // 包里的 id 才是最终依据：URL / 本地包在预览前根本不知道自己装的是谁。
+        pluginId: p.id,
+        version,
+        name: p.name,
+        signature: p.signature,
+        permissions: p.permissions,
+        permissionsChanged,
+        relation,
+        installedVersion,
+        selfUpdate: p.id === target.callerId,
+        packagePath,
+        marketInfo,
+      },
+    };
+  }
+
+  /**
+   * 插件发起安装（批量）。
+   *
+   * 全链路唯一的落盘入口，且**必须**经过主进程一次用户确认：
+   *   归一化+权限 → 串行预览 → 跳过已满足 → 自更新降级拦截 → 一次确认 →
+   *   逐个安装 → 一次 reloadAll → 审计。
+   *
+   * 插件进程拿不到 installFromPackage，也拿不到 IPC 通道；它只能通过
+   * hostCall 调到这里。因此"确认"无法被插件绕过。
+   *
+   * @param {string} callerId 发起安装的插件 id
+   * @param {Array<object>} specs
+   */
+  async installMany(callerId, specs) {
+    const record = this.registry.getPlugin(callerId);
+    if (!record) throw Object.assign(new Error('发起安装的插件未加载'), { code: ERR.NOT_FOUND });
+    const perms = record.manifest.permissions;
+
+    const normalized = sourcePolicy.normalizeInstallBatch(specs, perms, callerId);
+    if (!normalized.ok) {
+      throw Object.assign(new Error(normalized.error), { code: normalized.code });
+    }
+
+    const prepared = [];
+    const skipped = [];
+    for (const target of normalized.targets) {
+      target.callerId = callerId;
+      const r = await this._prepareInstallTarget(target);
+      if (!r.ok) {
+        store.audit('install-rejected', target.pluginId || null, {
+          callerId, code: r.code, error: r.error, reason: 'preview-failed',
+        });
+        return { ok: false, code: r.code, error: r.error, pendingKey: r.pendingKey || null };
+      }
+      const t = r.prepared;
+
+      // 自更新必须是显式版本且不允许降级。没有版本就无法判断新旧，也就无法
+      // 阻止"把旧包重放一遍"这种版本回退；宁可拒绝，也不猜。
+      if (t.selfUpdate) {
+        if (!hasInstallPermission(perms, 'selfUpdate')) {
+          throw Object.assign(new Error('缺少权限 plugins:selfUpdate'), { code: ERR.PERMISSION_DENIED });
+        }
+        if (!target.version) {
+          store.audit('install-rejected', t.pluginId, { callerId, reason: 'self-update-needs-version' });
+          return { ok: false, code: 'INVALID_REQUEST', error: '自更新必须指定版本号' };
+        }
+        if (t.relation === 'downgrade') {
+          store.audit('install-rejected', t.pluginId, {
+            callerId, reason: 'self-downgrade', from: t.installedVersion, to: t.version,
+          });
+          return {
+            ok: false, code: 'SELF_DOWNGRADE',
+            error: `不允许自更新降级（已装 ${t.installedVersion}，请求 ${t.version}）`,
+          };
+        }
+      }
+
+      // 已装且满足就跳过：这正是"共享一份运行时"的落点。伴奏插件和 MIDI
+      // 插件都声明依赖 audio.cpp 时，第二个不会把同一个运行时再装一遍。
+      const satisfied = t.installedVersion
+        && (t.relation === 'same' || (!target.version && t.relation !== 'downgrade'));
+      if (satisfied) {
+        skipped.push({ pluginId: t.pluginId, version: t.installedVersion, reason: 'already-installed' });
+        continue;
+      }
+      prepared.push(t);
+    }
+
+    if (!prepared.length) {
+      return { ok: true, installed: [], skipped, declined: false };
+    }
+
+    const decision = await confirmInstallBatch({
+      callerId,
+      targets: prepared,
+      getWindow: () => this.mainWindowGetter(),
+    });
+    if (!decision.confirmed) {
+      for (const t of prepared) {
+        store.audit('install-rejected', t.pluginId, {
+          callerId, version: t.version, source: t.sourceLabel,
+          signature: t.signature && t.signature.status, reason: 'user-declined',
+        });
+      }
+      return { ok: false, code: 'USER_DECLINED', error: '用户拒绝了安装请求', skipped };
+    }
+
+    const installed = [];
+    const errors = [];
+    for (const t of prepared) {
+      if (t.marketInfo) {
+        store.audit('market-install', t.pluginId, {
+          callerId, source: t.marketInfo.source, version: t.version,
+          signature: t.signature.status, via: 'plugin',
+        });
+      }
+      const result = installer.installFromPackage(t.packagePath, { appVersion: app.getVersion() });
+      if (!result.ok) {
+        errors.push({ pluginId: t.pluginId, code: result.code || 'INSTALL_FAILED', error: result.error });
+        store.audit('install-rejected', t.pluginId, {
+          callerId, version: t.version, code: result.code, error: result.error, reason: 'install-failed',
+        });
+        continue;
+      }
+      installed.push({ pluginId: t.pluginId, version: t.version, selfUpdate: t.selfUpdate });
+      store.audit(t.selfUpdate ? 'plugin-self-update' : 'plugin-install', t.pluginId, {
+        callerId, version: t.version, source: t.sourceLabel,
+        signature: t.signature.status, nonMarket: t.nonMarket,
+      });
+    }
+
+    // 一批只重载一次：每个目标都 reloadAll 会让中途的插件看到半装好的世界。
+    if (installed.length) await this.reloadAll({ reason: 'install' });
+
+    return {
+      ok: errors.length === 0,
+      installed,
+      skipped,
+      errors,
+      declined: false,
+    };
+  }
+
+  /** 单独安装就是长度为 1 的批量，共用同一套确认与审计。 */
+  installOne(callerId, spec) {
+    return this.installMany(callerId, [spec]);
+  }
+
   /**
    * 卸载：先拆运行时与 UI，再删文件。任一步失败都不回滚删除（文件是最后一步）。
    */
@@ -1397,6 +1666,11 @@ class PluginService {
    * runtime 反向调用宿主。返回前必须完成权限判定 —— 这是 project:write 的唯一闸门。
    */
   async _handleHostCall(pluginId, method, params) {
+    // 第二道白名单：runtime 侧已拦过一次，这里再拦是因为 pluginRuntimeEntry
+    // 本身也是被拷贝进运行时的代码，不能把宿主安全边界全押在一个子进程上。
+    if (!HOST_CALL_METHODS.includes(method)) {
+      throw Object.assign(new Error(`未实现宿主能力：${method}`), { code: ERR.UNSUPPORTED });
+    }
     const record = this.registry.getPlugin(pluginId);
     if (!record) throw Object.assign(new Error('插件未加载'), { code: ERR.NOT_FOUND });
     const perms = record.manifest.permissions;
@@ -1539,6 +1813,29 @@ class PluginService {
           args: params && params.args,
           depth: params && params.depth,
         });
+      // ---- 插件自举依赖（只读） ----
+      // 安装动作在下面两个 case；这里的只读查询只需要 plugins:inspect。
+      // 把「查」和「装」分成两个权限，是因为一个只展示依赖状态的面板不该
+      // 顺带获得往用户机器上装东西的能力。
+      case 'plugins.list': {
+        if (!hasInstallPermission(perms, 'inspect')) {
+          throw Object.assign(new Error('缺少权限 plugins:inspect'), { code: ERR.PERMISSION_DENIED });
+        }
+        return { plugins: this.listInstalledPlugins() };
+      }
+      case 'plugins.resolveDependencies': {
+        if (!hasInstallPermission(perms, 'inspect')) {
+          throw Object.assign(new Error('缺少权限 plugins:inspect'), { code: ERR.PERMISSION_DENIED });
+        }
+        return this.resolvePluginDependencies(pluginId);
+      }
+      // ---- 插件自举依赖（写入） ----
+      // 权限与来源校验在 installMany 里再做一遍：hostCall 是唯一入口，两处都
+      // 拦是有意的，不能因为这里放行就跳过下游判定。
+      case 'plugins.installOne':
+        return this.installOne(pluginId, params && params.spec);
+      case 'plugins.installMany':
+        return this.installMany(pluginId, params && params.specs);
       default:
         throw Object.assign(new Error(`未实现宿主能力：${method}`), { code: ERR.UNSUPPORTED });
     }

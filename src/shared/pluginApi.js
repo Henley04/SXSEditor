@@ -81,7 +81,43 @@ const PERMISSION_GROUPS = Object.freeze({
   notification: ['show'],
   // consume = 调用他人端点；provide = 注册自己的端点（出站仍由宿主代发）
   models: ['consume', 'provide'],
+  // 插件自举依赖：inspect 只读，三种来源分开授权（非市场来源风险不同，安装弹窗里
+  // 是三句不同的话），selfUpdate 单独一项是因为"改自己"和"装别人"不是一回事。
+  // 声明依赖本身不需要权限；只有真正发起安装才需要对应项。
+  plugins: ['inspect', 'installMarket', 'installUrl', 'installPath', 'selfUpdate'],
 });
+
+/**
+ * 插件级依赖上限。与 LIMITS 分开：LIMITS 管的是贡献项（会进宿主渲染路径），
+ * dependencies 只是清单元数据，不进渲染，但仍需封顶防止一个坏 manifest 撑爆
+ * 依赖解析与循环检测。
+ */
+const DEPENDENCY_LIMITS = Object.freeze({
+  max: 32,
+  idMaxLength: 64,
+  rangeMaxLength: 128,
+});
+
+/**
+ * 插件 runtime 可调用的宿主方法白名单（runtime → 主进程方向）。
+ *
+ * 这里是**唯一真源**：PluginRuntimeManager 在转发前用它做第一道拦截，
+ * PluginService._handleHostCall 再做第二道（含权限校验）。两处都拦，是因为
+ * runtime 是第三方进程，不能假设它只会发白名单内的方法。
+ */
+const HOST_CALL_METHODS = Object.freeze([
+  // 既有能力（改动此列表前先确认 pluginRuntimeEntry.js 里对应的 hostCall）
+  'project.read', 'project.apply',
+  'ui.notify', 'ui.status',
+  'models.list', 'models.invoke', 'models.cancel', 'models.ack', 'models.read',
+  'secrets.get', 'secrets.set', 'secrets.delete', 'secrets.keys',
+  'service.call',
+  // 插件自举依赖
+  'plugins.list',
+  'plugins.resolveDependencies',
+  'plugins.installOne',
+  'plugins.installMany',
+]);
 
 /** 面板可以申请的能力（iframe 内可见的 RPC 方法白名单）。 */
 const PANEL_SCOPES = Object.freeze([
@@ -201,6 +237,8 @@ module.exports = {
   OVERLAY_ANCHORS,
   WHEN_CLAUSES,
   LIMITS,
+  DEPENDENCY_LIMITS,
+  HOST_CALL_METHODS,
   PERMISSION_GROUPS,
   PANEL_SCOPES,
   HOOK_STAGES,

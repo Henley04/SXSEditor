@@ -13,7 +13,7 @@
  */
 const path = require('node:path');
 const { utilityProcess } = require('electron');
-const { RUNTIME_LIMITS, TIMEOUTS, ERR } = require('../../shared/pluginApi.js');
+const { RUNTIME_LIMITS, TIMEOUTS, ERR, HOST_CALL_METHODS } = require('../../shared/pluginApi.js');
 const { PluginError } = require('../../shared/pluginProtocol.js');
 
 function resolveRuntimeEntry() {
@@ -196,7 +196,19 @@ class PluginRuntimeManager {
       return;
     }
     if (data.kind === 'host') {
-      // 插件反向索要宿主能力（project.apply / ui.notify）
+      // 插件反向索要宿主能力（project.apply / ui.notify）。
+      // 第一道闸门：runtime 是第三方进程，不能假设它只会发白名单内的方法。
+      // 第二道在 PluginService._handleHostCall（那里还做权限校验），两处都拦是
+      // 有意的 —— 新增宿主能力时必须同时登记，漏一处会被另一处挡住而不是静默放行。
+      if (!HOST_CALL_METHODS.includes(data.method)) {
+        session.child.postMessage({
+          kind: 'host-res',
+          id: data.id,
+          ok: false,
+          error: { code: ERR.UNSUPPORTED, message: `未实现宿主能力：${data.method}` },
+        });
+        return;
+      }
       Promise.resolve()
         .then(() => session.hostHandler(session.id, data.method, data.params))
         .then((result) => session.child.postMessage({ kind: 'host-res', id: data.id, ok: true, result }))

@@ -293,6 +293,23 @@ function createContext(init) {
         return entry && entry.available ? makeServiceHandle(scope, id) : null;
       },
     },
+    /**
+     * 插件自举依赖。
+     *
+     * `list` / `resolveDependencies` 是只读的，需要 plugins:inspect；
+     * `installOne` / `installMany` 会触发主进程的用户确认对话框，按来源分别需要
+     * plugins:installMarket / installUrl / installPath，自更新另需 selfUpdate。
+     * 声明依赖本身不需要权限，也不会自动安装 —— 安装永远是插件的显式动作。
+     *
+     * 安装可能要下载包、验签、等用户点确认，所以超时给到 120000，而不是
+     * hostCall 默认的 30000。
+     */
+    plugins: {
+      list: () => hostCall('plugins.list', {}, 30000),
+      resolveDependencies: () => hostCall('plugins.resolveDependencies', {}, 30000),
+      installOne: (spec) => hostCall('plugins.installOne', { spec }, 120000),
+      installMany: (specs) => hostCall('plugins.installMany', { specs }, 120000),
+    },
     /** 用户设置（settings 分区里填的值）。只读快照 + 变更事件。 */
     settings: {
       get: (key) => settings[key],

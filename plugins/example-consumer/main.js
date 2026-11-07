@@ -24,6 +24,19 @@ async function now(ctx) {
   };
 }
 
+/**
+ * 查询部署依赖：只读，不安装。
+ *
+ * manifest.dependencies 声明了「需要先装上 example-clock」。要真正安装时必须
+ * 显式调用 ctx.plugins.installMany([...])，主进程会弹出用户确认对话框 ——
+ * 声明依赖本身永远不会自动往用户机器上装东西。
+ */
+async function deps(ctx) {
+  const resolved = await ctx.plugins.resolveDependencies();
+  const installed = await ctx.plugins.list();
+  return { deps: resolved.deps, cycles: resolved.cycles, installed: installed.plugins };
+}
+
 async function optionalProbe(ctx) {
   // optional 依赖用 tryGet：拿不到就自己降级，不算错误。
   // 这个命令没有出现在 manifest 的 commands 里，仅作作者参考；宿主不会调用它。
@@ -31,7 +44,7 @@ async function optionalProbe(ctx) {
   return { available: !!clock, services: ctx.services.list() };
 }
 
-const commands = { now, optionalProbe };
+const commands = { now, optionalProbe, deps };
 function initialize(ctx) {
   // 提供方在运行期消失/恢复时能被感知：缓存了它返回值的插件可以据此重算。
   ctx.services.onDidChange((info) => {

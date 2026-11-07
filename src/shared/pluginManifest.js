@@ -18,6 +18,7 @@ const {
 } = require('./pluginApi.js');
 const { normalizeChord } = require('./pluginKeys.js');
 const { TASKS, parseEndpointId } = require('./modelContract.js');
+const { validateDependencies } = require('./pluginDependencies.js');
 
 const ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
@@ -937,6 +938,12 @@ function validateManifest(manifest, ctx = {}) {
   const perms = validatePermissions(manifest.permissions);
   if (!perms.ok) return perms;
 
+  // 插件级依赖是 manifest 顶层字段，不属于 contributes（贡献点白名单只管
+  // 会进宿主渲染/运行路径的东西）。校验只做语法与自依赖/重复检查，绝不在这里
+  // 解析或安装 —— 声明依赖不等于授权安装。
+  const deps = validateDependencies(manifest.dependencies, id);
+  if (!deps.ok) return deps;
+
   const raw = manifest.contributes;
   if (raw !== undefined && (typeof raw !== 'object' || Array.isArray(raw))) {
     return fail('contributes 必须是对象');
@@ -1085,6 +1092,7 @@ function validateManifest(manifest, ctx = {}) {
       engines: { app: typeof engines.app === 'string' ? engines.app : '*' },
       permissions: perms.value,
       permissionsHash: permissionsHash(perms.value),
+      dependencies: deps.value,
       contributes: {
         commands: commands.value,
         menus: menus.value,

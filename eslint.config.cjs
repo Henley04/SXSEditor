@@ -92,6 +92,10 @@ module.exports = [
             'src/shared/pluginDisposable.js',
             'src/shared/pluginProtocol.js',
             'src/shared/pluginManifest.js',
+            // 插件级部署依赖（manifest.dependencies）的校验与解析（CJS 纯函数）
+            'src/shared/pluginDependencies.js',
+            // 内置推理管线是否需要初始化的唯一真源（CJS 纯函数，主进程与两个渲染层共用）
+            'src/shared/pipelineDecision.js',
             // 跨插件服务的命名/版本/依赖图规则（纯函数，CJS，主进程与单测共用）
             'src/shared/pluginServices.js',
             // .sxsp 的签名与完整性（纯函数，CJS，主进程 / 打包脚本 / 单测共用）

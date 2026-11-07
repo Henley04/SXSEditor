@@ -321,6 +321,8 @@ class PluginRegistry {
         runtimeAlive: r.runtimeAlive,
         permissions: r.manifest.permissions,
         permissionsHash: r.manifest.permissionsHash,
+        // 插件级部署依赖（不是 services）：管理器要能显示"它还需要谁"。
+        dependencies: r.manifest.dependencies || [],
         apiVersion: r.manifest.apiVersion,
         commands: r.manifest.contributes.commands.map((c) => c.localId),
         panels: r.manifest.contributes.panels.map((p) => p.localId),
