@@ -64,8 +64,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Schema version <strong>2.0</strong> — this page is generated from <code>src/shared/mcpSchema.js</code> by <code>npm run mcp:docs</code>, together with the raw Markdown reference <code>docs/MCP.md</code>. Do not edit by hand. Source files: <code>src/main/mcpBridge.js</code> (HTTP bridge), <code>src/main/mcpErrors.js</code> (error codes), <code>src/main/mcpJobs.js</code> (background jobs), <code>src/main/mcpValidate.js</code> (schema validation), <code>src/main/mcpWindowOps.js</code> (window operations), <code>scripts/sxseditor-mcp.js</code> (stdio server).</p>
-          <p data-lang="zh">架构版本 <strong>2.0</strong>——本页由 <code>npm run mcp:docs</code> 从 <code>src/shared/mcpSchema.js</code> 生成，同时产出原始 Markdown 参考 <code>docs/MCP.md</code>。请勿手工编辑。相关源文件：<code>src/main/mcpBridge.js</code>（HTTP 桥）、<code>src/main/mcpErrors.js</code>（错误码）、<code>src/main/mcpJobs.js</code>（后台任务）、<code>src/main/mcpValidate.js</code>（架构校验）、<code>src/main/mcpWindowOps.js</code>（窗口操作）、<code>scripts/sxseditor-mcp.js</code>（stdio 服务器）。</p>
+          <p data-lang="en">Schema version <strong>2.1</strong> — this page is generated from <code>src/shared/mcpSchema.js</code> by <code>npm run mcp:docs</code>, together with the raw Markdown reference <code>docs/MCP.md</code>. Do not edit by hand. Source files: <code>src/main/mcpBridge.js</code> (HTTP bridge), <code>src/main/mcpErrors.js</code> (error codes), <code>src/main/mcpJobs.js</code> (background jobs), <code>src/main/mcpValidate.js</code> (schema validation), <code>src/main/mcpWindowOps.js</code> (window operations), <code>scripts/sxseditor-mcp.js</code> (stdio server).</p>
+          <p data-lang="zh">架构版本 <strong>2.1</strong>——本页由 <code>npm run mcp:docs</code> 从 <code>src/shared/mcpSchema.js</code> 生成，同时产出原始 Markdown 参考 <code>docs/MCP.md</code>。请勿手工编辑。相关源文件：<code>src/main/mcpBridge.js</code>（HTTP 桥）、<code>src/main/mcpErrors.js</code>（错误码）、<code>src/main/mcpJobs.js</code>（后台任务）、<code>src/main/mcpValidate.js</code>（架构校验）、<code>src/main/mcpWindowOps.js</code>（窗口操作）、<code>scripts/sxseditor-mcp.js</code>（stdio 服务器）。</p>
         </div>
       </div>
 
@@ -216,8 +216,8 @@ curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
         <span data-lang="en">Method Reference</span>
         <span data-lang="zh">方法参考</span>
       </h2>
-<p data-lang="en">All 49 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
-      <p data-lang="zh">全部 49 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
+<p data-lang="en">All 52 methods, grouped by area. Parameters are flat: the document for <code>project.replace</code> goes directly under <code>params.project</code>.</p>
+      <p data-lang="zh">全部 52 个方法，按领域分组。参数是扁平的：<code>project.replace</code> 的文档直接放在 <code>params.project</code> 下。</p>
       <h3>
         <span data-lang="en">Schema &amp; Capabilities</span>
         <span data-lang="zh">架构与能力</span>
@@ -330,6 +330,87 @@ curl -s localhost:$EP/automation -H "Authorization: Bearer $TOKEN" \
   "params": {
     "handle": {},
     "saveAs": "${saveAs}"
+  }
+}</code></pre>
+
+      <h4><code>pipeline.status</code></h4>
+      <p data-lang="en">Report local ONNX pipeline state and per-model load status.</p>
+      <p data-lang="zh">Report local ONNX pipeline state and per-model load status.</p>
+      <p><em><span data-lang="en">target: <code>main</code></span><span data-lang="zh">目标：<code>main</code></span></em></p>
+      <p data-lang="en"><em>No parameters.</em></p>
+      <p data-lang="zh"><em>无参数。</em></p>
+      <pre><code>{
+  "method": "pipeline.status",
+  "params": {}
+}</code></pre>
+
+      <h4><code>pipeline.load</code></h4>
+      <p data-lang="en">Load local ONNX models into the pipeline.</p>
+      <p data-lang="zh">Load local ONNX models into the pipeline.</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>main</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>group</code></td>
+            <td><span data-lang="en">string · optional · Group id from pipeline.status (svs / rmvpe / basicPitch / rosvot / fcpe / …)</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>model</code></td>
+            <td><span data-lang="en">string · optional · Model id from pipeline.status (e.g. diffStep / vocoder)</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>all</code></td>
+            <td><span data-lang="en">boolean · optional · Initialize every local model in the pipeline</span><span data-lang="zh">boolean · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "pipeline.load",
+  "params": {
+    "group": "${group}",
+    "model": "${model}",
+    "all": true
+  }
+}</code></pre>
+
+      <h4><code>pipeline.unload</code></h4>
+      <p data-lang="en">Unload local ONNX models from the pipeline.</p>
+      <p data-lang="zh">Unload local ONNX models from the pipeline.</p>
+      <p><em><span data-lang="en">target: <code>main</code> · mutates project · long-running (job-able)</span><span data-lang="zh">目标：<code>main</code> · 修改项目 · 长时运行（可异步）</span></em></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Type / notes</span><span data-lang="zh">类型 / 说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>group</code></td>
+            <td><span data-lang="en">string · optional · Group id from pipeline.status</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>model</code></td>
+            <td><span data-lang="en">string · optional · Model id from pipeline.status</span><span data-lang="zh">string · 可选</span></td>
+          </tr>
+          <tr>
+            <td><code>all</code></td>
+            <td><span data-lang="en">boolean · optional · Dispose all local models and reset the pipeline</span><span data-lang="zh">boolean · 可选</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>{
+  "method": "pipeline.unload",
+  "params": {
+    "group": "${group}",
+    "model": "${model}",
+    "all": true
   }
 }</code></pre>
 

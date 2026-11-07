@@ -383,6 +383,44 @@ const METHODS = {
       saveAs: str('Absolute path to write the bytes to; base64 is omitted when given'),
     }, ['handle']),
   },
+  // ----------------------------------------------------------- pipeline
+  // 与 model.* 严格区分：model.* 是"远程推理端点"（HTTP / SDK 调用，受 token
+  // 作用域限制）；pipeline.* 是"本机 ONNX 推理管线里的模型"，管的是某个
+  // session 有没有被加载进显存。两者连注册表都不是同一张，调用方不要混用。
+  // 刻意不给 requires:['models']：纯插件工程不装内置模型，也应能查 status。
+  'pipeline.status': {
+    summary: 'Report local ONNX pipeline state and per-model load status.',
+    description: 'Local on-device ONNX models only — this is NOT the remote model '
+      + 'endpoint registry behind model.* (model.list / model.invoke). Enumerates '
+      + 'every group in the model registry (svs / rmvpe / basicPitch / rosvot / '
+      + 'fcpe / …) so a pure plugin project can still inspect what is loaded.',
+    target: 'main',
+    params: obj({}),
+  },
+  'pipeline.load': {
+    summary: 'Load local ONNX models into the pipeline.',
+    description: 'Local on-device ONNX models, distinct from model.* remote endpoints. '
+      + 'Pass group + model for one model, or all:true to initialize the full pipeline. '
+      + 'Ids must come from pipeline.status.',
+    target: 'main', mutates: true, long: true,
+    params: obj({
+      group: str('Group id from pipeline.status (svs / rmvpe / basicPitch / rosvot / fcpe / …)'),
+      model: str('Model id from pipeline.status (e.g. diffStep / vocoder)'),
+      all: bool('Initialize every local model in the pipeline'),
+    }),
+  },
+  'pipeline.unload': {
+    summary: 'Unload local ONNX models from the pipeline.',
+    description: 'Local on-device ONNX models, distinct from model.* remote endpoints. '
+      + 'Pass group + model for one model, or all:true to dispose the whole pipeline. '
+      + 'Switching projects never unloads models automatically; this is the explicit way.',
+    target: 'main', mutates: true, long: true,
+    params: obj({
+      group: str('Group id from pipeline.status'),
+      model: str('Model id from pipeline.status'),
+      all: bool('Dispose all local models and reset the pipeline'),
+    }),
+  },
   'ui.open': {
     summary: 'Open a secondary window (singer creator, market, model download…).',
     target: 'renderer', mutates: true,
@@ -394,7 +432,7 @@ const METHODS = {
   },
 };
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 
 function methodNames() { return Object.keys(METHODS); }
 

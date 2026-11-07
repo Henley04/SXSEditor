@@ -1,6 +1,6 @@
 # Automation API (MCP)
 
-Schema version **2.0** — generated from `src/shared/mcpSchema.js` by `npm run mcp:docs`. Do not edit by hand.
+Schema version **2.1** — generated from `src/shared/mcpSchema.js` by `npm run mcp:docs`. Do not edit by hand.
 
 SXSEditor exposes a loopback HTTP bridge so agents and scripts can drive the editor.
 The stdio MCP server (`npm run mcp`) wraps the same API; both share one schema.
@@ -1024,6 +1024,73 @@ _target: `main`_
   "params": {
     "handle": {},
     "saveAs": "${saveAs}"
+  }
+}
+```
+
+### `pipeline.status`
+
+Report local ONNX pipeline state and per-model load status.
+
+Local on-device ONNX models only — this is NOT the remote model endpoint registry behind model.* (model.list / model.invoke). Enumerates every group in the model registry (svs / rmvpe / basicPitch / rosvot / fcpe / …) so a pure plugin project can still inspect what is loaded.
+
+_target: `main`_
+
+_No parameters._
+
+```json
+{
+  "method": "pipeline.status",
+  "params": {}
+}
+```
+
+### `pipeline.load`
+
+Load local ONNX models into the pipeline.
+
+Local on-device ONNX models, distinct from model.* remote endpoints. Pass group + model for one model, or all:true to initialize the full pipeline. Ids must come from pipeline.status.
+
+_target: `main` · mutates project · long-running (job-able)_
+
+| Parameter | Type / notes |
+|---|---|
+| `group` | string · optional · Group id from pipeline.status (svs / rmvpe / basicPitch / rosvot / fcpe / …) |
+| `model` | string · optional · Model id from pipeline.status (e.g. diffStep / vocoder) |
+| `all` | boolean · optional · Initialize every local model in the pipeline |
+
+```json
+{
+  "method": "pipeline.load",
+  "params": {
+    "group": "${group}",
+    "model": "${model}",
+    "all": true
+  }
+}
+```
+
+### `pipeline.unload`
+
+Unload local ONNX models from the pipeline.
+
+Local on-device ONNX models, distinct from model.* remote endpoints. Pass group + model for one model, or all:true to dispose the whole pipeline. Switching projects never unloads models automatically; this is the explicit way.
+
+_target: `main` · mutates project · long-running (job-able)_
+
+| Parameter | Type / notes |
+|---|---|
+| `group` | string · optional · Group id from pipeline.status |
+| `model` | string · optional · Model id from pipeline.status |
+| `all` | boolean · optional · Dispose all local models and reset the pipeline |
+
+```json
+{
+  "method": "pipeline.unload",
+  "params": {
+    "group": "${group}",
+    "model": "${model}",
+    "all": true
   }
 }
 ```

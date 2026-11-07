@@ -5,7 +5,9 @@ const { getModelGroups } = require('../modelRegistry');
 const { getModelDir } = require('./modelDir');
 const { ensureGPUInfo, queryGPUVRAMUsage, detectNPUCached } = require('./gpuInfo');
 const { enumerateDMLDevices } = require('../inference/pipeline');
-const { getSvsPipeline } = require('./svsIpc');
+const {
+  getSvsPipeline, getPipelineRuntimeState, svsPipelineLazy, resetSvsPipeline,
+} = require('./svsIpc');
 const { getRmvpeDetector, getBasicPitchDetector, getRosvotDetector, getFcpeDetector, rmvpeLazy, basicPitchLazy, rosvotLazy, fcpeLazy } = require('./pitchMidiIpc');
 const { openResourceManagerWindow } = require('./windowManager');
 const { getCachedDMLDevices, setCachedDMLDevices } = require('./settingsIpc');
@@ -327,10 +329,78 @@ function registerResourceManagerIpc() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// MCP pipeline.* 的数据面。三个入口复用上面现有的加载/卸载辅助函数，不另起
+// 一套实现，避免资源管理器 UI 与 MCP 看到两份不同的"已加载"状态。
+//
+// svs / sifigan-vocoder / svs-jp 三组共用同一条 SVS 管线：初始化一次就带起全部
+// session，逐模型再 loadModel 只会重复加载，因此 all 路径把它们整体处理。
+// ---------------------------------------------------------------------------
+const SVS_PIPELINE_GROUPS = new Set(['svs', 'sifigan-vocoder', 'svs-jp']);
+
+/** pipeline.status：枚举注册表全部模型组，如实报告每个模型是否已加载。只读。 */
+function getPipelineStatus() {
+  const runtime = getPipelineRuntimeState();
+  const pipeline = getSvsPipeline();
+  const svsSessions = (pipeline && pipeline.sessions) || {};
+  const lazyByGroup = {
+    rmvpe: rmvpeLazy, basicPitch: basicPitchLazy, rosvot: rosvotLazy, fcpe: fcpeLazy,
+  };
+  const groups = getModelGroups().map((group) => ({
+    id: group.id,
+    models: group.models.map((model) => ({
+      id: model.id,
+      sessionKey: model.sessionKey,
+      loaded: lazyByGroup[group.id]
+        ? !!lazyByGroup[group.id].getInstance()
+        : !!svsSessions[model.sessionKey],
+    })),
+  }));
+  return {
+    initialized: runtime.initialized,
+    pendingReset: runtime.pendingReset,
+    language: runtime.language,
+    groups,
+  };
+}
+
+/** pipeline.load {all:true}：初始化整条 SVS 管线，再补齐音高各组。 */
+async function loadAllPipelineModels() {
+  await svsPipelineLazy.get();
+  const errors = [];
+  for (const group of getModelGroups()) {
+    if (SVS_PIPELINE_GROUPS.has(group.id)) continue;
+    for (const model of group.models) {
+      const r = await loadSingleModel(group.id, model.id);
+      if (r && r.success === false) errors.push(`${group.id}/${model.id}: ${r.error}`);
+    }
+  }
+  return { success: errors.length === 0, errors };
+}
+
+/** pipeline.unload {all:true}：dispose 整条管线，并释放各音高提取器。 */
+async function unloadAllPipelineModels() {
+  // 合成忙时 resetSvsPipeline 内部会排队延迟 dispose，不打断正在出声的工程；
+  // getPipelineStatus() 的 pendingReset 会如实反映这一点。
+  resetSvsPipeline();
+  const errors = [];
+  for (const group of getModelGroups()) {
+    if (SVS_PIPELINE_GROUPS.has(group.id)) continue;
+    for (const model of group.models) {
+      const r = await unloadSingleModel(group.id, model.id);
+      if (r && r.success === false) errors.push(`${group.id}/${model.id}: ${r.error}`);
+    }
+  }
+  return { success: errors.length === 0, errors };
+}
+
 module.exports = {
   registerResourceManagerIpc,
   invalidateModelFilesCache,
   loadSingleModel,
   unloadSingleModel,
   cleanupOnLoadFailure,
+  getPipelineStatus,
+  loadAllPipelineModels,
+  unloadAllPipelineModels,
 };

@@ -456,6 +456,58 @@ async function dispatchMain(method, params, ctx = {}) {
       }
       return { size: r.size, mime: r.mime, base64: r.base64 };
     }
+
+    // pipeline.* 管的是本机 ONNX 管线里的模型（显存里有没有加载某个 session），
+    // 与 model.* 的远程推理端点完全是两回事。这里复用资源管理器的加载/卸载
+    // 辅助函数，不另起一套实现；注册表校验放在主进程，非法 id 直接拒绝。
+    case 'pipeline.status': {
+      const { getPipelineStatus } = require('./resourceManagerIpc');
+      return getPipelineStatus();
+    }
+
+    case 'pipeline.load':
+    case 'pipeline.unload': {
+      const isLoad = method === 'pipeline.load';
+      const p = params || {};
+      const { getModelGroups, getModelDef } = require('../modelRegistry');
+      let targets = null; // null 表示 all:true
+      if (p.all !== true) {
+        if (!p.group || !p.model) {
+          throw new McpError('VALIDATION_ERROR',
+            'group and model are required unless all:true is set', { field: 'group' });
+        }
+        if (!getModelGroups().some((g) => g.id === p.group)) {
+          throw new McpError('VALIDATION_ERROR', `Unknown group: ${p.group}`, { field: 'group' });
+        }
+        if (!getModelDef(p.group, p.model)) {
+          throw new McpError('VALIDATION_ERROR',
+            `Unknown model: ${p.group}/${p.model}`, { field: 'model' });
+        }
+        targets = { group: p.group, model: p.model };
+      }
+      const rm = require('./resourceManagerIpc');
+      let result;
+      try {
+        result = targets === null
+          ? await (isLoad ? rm.loadAllPipelineModels() : rm.unloadAllPipelineModels())
+          : await (isLoad
+            ? rm.loadSingleModel(targets.group, targets.model)
+            : rm.unloadSingleModel(targets.group, targets.model));
+      } catch (err) {
+        // 模型文件缺失 / 未安装是"前置条件不满足"，不是宿主内部故障。原样冒泡
+        // 会被 normalizeError 塌成 INTERNAL/500，调用方会把"去下载模型"误判成
+        // "宿主炸了"，重试策略必然做错（与 model.invoke 的 NEED_ENDPOINT 同类）。
+        const msg = String((err && err.message) || err);
+        const precondition = /Model file does not exist|ENOENT|not installed|not found/i.test(msg);
+        throw new McpError(precondition ? 'PRECONDITION_FAILED' : 'INTERNAL', msg,
+          precondition ? { hint: 'install the local ONNX models first (ui.open target=modelDownload)' } : {});
+      }
+      if (result && result.success === false) {
+        throw new McpError('PRECONDITION_FAILED', result.error || `${method} failed`);
+      }
+      return { ok: true, target: targets || 'all', errors: (result && result.errors) || [] };
+    }
+
     default:
       throw new McpError('UNKNOWN_METHOD', `Unknown method ${method}`, { hint: 'see GET /schema' });
   }
