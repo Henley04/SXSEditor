@@ -219,7 +219,7 @@ export default {
       // Q-Drift 漂移校正
       enableQDrift: 'Q-Drift 漂移校正',
       qdriftLockNote: '已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，CFG 调度与动态阈值已关闭。',
-      enableQDriftHint: '对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差沿采样轨迹的多步累积。它是本应用额外加的一层补偿，官方实现没有；想与官方 FP16 对照时请先关掉。开启后会强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复——这些覆盖会写进日志。FP16 下默认开启，INT8 下需手动开启，切换模型精度时自动跟随。',
+      enableQDriftHint: '对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差沿采样轨迹的多步累积。它是本应用额外加的一层补偿，官方实现没有；想与官方 FP16 对照时请先关掉。开启后会强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复——这些覆盖会写进日志。FP16 下默认开启，切换模型精度时自动跟随。INT8（W8A32）实测校正量仅 1e-5 量级，开与不开的 mel 数值完全一致（余弦 0.99989 / SNR 37.5 dB 前后不变），因此默认关闭。',
       // Task 2: 诊断模式
       diagnosticMode: '诊断模式',
     diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
@@ -1115,7 +1115,7 @@ export default {
     enableSDEditRepair: 'SDEdit 局部修复',
     enableSDEditRepairHint: 'SDEdit 局部重绘：扩散结束后找出 NaN 或能量 > 中位数 5 倍的帧，注入 t=0.3 的浅噪声、用 5 步 STORK-2 只重画这些片段。该功能用于排查问题，不是音质选项——重画会改变该段的音色与相位，正常素材不建议开启。',
     enableQDrift: 'Q-Drift 漂移校正',
-    enableQDriftHint: '对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差沿采样轨迹的多步累积。它是本应用额外加的一层补偿，官方实现没有；想与官方 FP16 对照时请先关掉。开启后会强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复——这些覆盖会写进日志。FP16 下默认开启，INT8 下需手动开启，切换模型精度时自动跟随。',
+    enableQDriftHint: '对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差沿采样轨迹的多步累积。它是本应用额外加的一层补偿，官方实现没有；想与官方 FP16 对照时请先关掉。开启后会强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复——这些覆盖会写进日志。FP16 下默认开启，切换模型精度时自动跟随。INT8（W8A32）实测校正量仅 1e-5 量级，开与不开的 mel 数值完全一致（余弦 0.99989 / SNR 37.5 dB 前后不变），因此默认关闭。',
     diagnosticMode: '诊断模式',
     diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
     fixedNoiseSeed: '固定噪声种子（可复现合成）',

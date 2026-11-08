@@ -127,9 +127,18 @@ class OnnxSVSPipeline {
         this.inferenceProvider = options.inferenceProvider || 'ortnode';
         this.webnnDeviceType = null; // 'npu' | 'gpu'，仅当 useWebNN 时有效
         this.useWebNN = false;
-        // int8 与 int8-npu 均为静态形状模型：QDIT 量化版本维度固定为 NPU_STATIC_SEQ_LEN，
-        // 因此分段长度必须固定（禁用动态分块与动态序列），否则 diffstep 会因输入维度不匹配报错。
+        // int8 与 int8-npu 的基础模型（note_*_encoder / f0_encoder / preflow / cond_emb /
+        // mel_transform）是静态 [1, NPU_STATIC_SEQ_LEN] 图上，所以这里管的是**基础模型**
+        // 与"2048 帧分段/钳制"这条链路。
         this.useStaticShapes = options.modelPrecision === 'int8' || options.modelPrecision === 'int8-npu';
+        // diff_step 是否静态**单独跟踪**：int8 v2（W8A32）的 diff_step 是动态导出，
+        // 而同一个仓库里的基础模型仍然是静态 2048。两者共用一个标志会出现两种错误：
+        //   · 用基础模型的 true 去跑动态 diff_step → 被无谓 pad 到 2048 并截尾；
+        //   · 用 diff_step 的 false 去补基础模型 → 静态 encoder 收到 [1,13] 直接报
+        //     "Got: 13 Expected: 2048"。
+        // 因此 padding 相关的传递必须用这个字段（见 _runDiffStep 与三个 diffusion 调用点），
+        // 而分段/钳制仍由上面的 useStaticShapes 决定 —— 静态 encoder 才是 2048 的约束方。
+        this.diffStepStaticShapes = this.useStaticShapes;
         this.vocoderType = 'default';            // 'default' | 'sifigan'，_doInit 中从 settings 读取覆盖
         this.sifiganPrecision = 'fp32';          // 'fp32' | 'fp16'，仅 vocoderType='sifigan' 时生效，控制加载哪个 onnx 变体
         this.sifiganStatsMissing = false;        // SiFiGAN stats 文件缺失标志（运行时兜底归一化用）
@@ -2190,6 +2199,7 @@ class OnnxSVSPipeline {
                 this.diffStepIsFP16 = this.isFP16;
                 this.diffStepIsQDIT = false;
                 this.diffStepLegacyInt8Incompatible = false;
+                this.diffStepStaticShapes = this.useStaticShapes;
                 return;
             }
             const meta = session.inputMetadata || [];
@@ -2208,6 +2218,21 @@ class OnnxSVSPipeline {
             } else {
                 console.warn('[OnnxSVSPipeline] diff_step x/xt_input metadata not found, defaulting to global isFP16');
                 this.diffStepIsFP16 = this.isFP16;
+            }
+
+            // 形状自适应：int8 / int8-npu 历史上 diff_step 都是静态 [1, NPU_STATIC_SEQ_LEN]
+            // 模型（QDIT 量化版），但 int8 v2（W8A32）是动态导出。以模型签名
+            // （xt_input / x 的第 1 维）为准，而不是以精度名称为准。
+            // 只改 diffStepStaticShapes：基础模型（encoder/preflow/cond_emb）在同一个
+            // 仓库里仍是静态 2048，动 useStaticShapes 会让它们收到未填充的短序列。
+            if (this._modelPrecision === 'int8' || this._modelPrecision === 'int8-npu') {
+                const dataMeta = meta.find(m => m && (m.name === 'x' || m.name === 'xt_input'));
+                const seqDim = dataMeta && Array.isArray(dataMeta.shape) ? dataMeta.shape[1] : null;
+                const modelIsStatic = typeof seqDim === 'number' && seqDim > 0;
+                if (this.diffStepStaticShapes !== modelIsStatic) {
+                    console.log(`[OnnxSVSPipeline] diff_step 形状自适应: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}`);
+                    this.diffStepStaticShapes = modelIsStatic;
+                }
             }
 
             // 旧 int8 模型检测：legacy 签名 + cond 维度 ≠ COND_DIM(1024)（旧 int8 为 512）。
@@ -2244,7 +2269,7 @@ class OnnxSVSPipeline {
     }
 
     async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
-        return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.diffStepIsFP16, this.useStaticShapes);
+        return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.diffStepIsFP16, this.diffStepStaticShapes);
     }
 
     /**
@@ -2794,7 +2819,7 @@ class OnnxSVSPipeline {
             await this._diffusion.runDiffusionLoop(
                 this.sessions, subXt, segFrames, ptMelData, ptFrameCount, segCond,
                 totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16,
-                onProgress, progressStart + w * perSeg, perSeg, this.useStaticShapes,
+                onProgress, progressStart + w * perSeg, perSeg, this.diffStepStaticShapes,
                 samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal
             );
 
@@ -2848,9 +2873,9 @@ class OnnxSVSPipeline {
         const _safeChunk = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > _safeChunk) {
             if (!_suppressChunkLog) console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.diffStepStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
         }
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, _suppressChunkLog);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.diffStepStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, _suppressChunkLog);
     }
 
     async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0, abortSignal = null, melCacheKey = null) {
@@ -3893,7 +3918,7 @@ class OnnxSVSPipeline {
                         combinedCond: p.combinedCond,
                         totalSteps, cfgStrength, cfgRescale,
                         isFP16: this.diffStepIsFP16,
-                        useStaticShapes: this.useStaticShapes,
+                        useStaticShapes: this.diffStepStaticShapes,
                         overlap: p.chunkPlan.overlap,
                         // 透传用户选择的推理参数，否则 _runSingleDiffusionChunk → runDiffusionLoop
                         // 会 fallback 到默认值，导致多分片与单片段输出不一致

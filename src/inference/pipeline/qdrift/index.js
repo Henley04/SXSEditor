@@ -29,9 +29,13 @@ const CORRECTION_FP16 = require('./qdriftCorrection');
 const { resolveQDriftDefault } = require('./defaults');
 
 /** 精度 → 资产模块（INT8 资产是可选的，缺失时惰性 require 失败即禁用） */
-const CORRECTION_MODULES = {
-    fp16: './qdriftCorrection',
-    int8: './qdriftCorrectionInt8',
+// ⚠️ 必须写成"每个 require 都是字面量"的加载器函数，不能用
+// `require(CORRECTION_MODULES[precision])`：主进程经过 webpack 打包，
+// 动态表达式的 require 会被打成 critical dependency，运行期直接抛
+// "Cannot find module"，被 try/catch 吞掉后 INT8 校正表就永久静默失效。
+const CORRECTION_LOADERS = {
+    fp16: () => require('./qdriftCorrection'),
+    int8: () => require('./qdriftCorrectionInt8'),
 };
 
 /**
@@ -65,7 +69,7 @@ function getCorrection(precision = 'fp16') {
         asset = CORRECTION_FP16;
     } else {
         try {
-            asset = require(CORRECTION_MODULES.int8);
+            asset = CORRECTION_LOADERS.int8();
         } catch (e) {
             console.warn(`[Q-Drift] INT8 校正表资产缺失（${e && e.message}），本次不启用`);
             _correctionCache.int8 = false;
@@ -75,6 +79,13 @@ function getCorrection(precision = 'fp16') {
 
     try {
         const meta = (asset && asset.meta) || {};
+        // 占位资产（校准未跑完时仓库里保留的全零表）：显式拒绝，否则"启用成功"
+        // 会连带锁死步数/CFG 却完全不产生校正，比禁用更难排查。
+        if (meta.placeholder === true) {
+            console.warn(`[Q-Drift:${precision}] 校准产物尚未生成（占位表），本次不启用`);
+            _correctionCache[precision] = false;
+            return null;
+        }
         if (meta.n_steps !== CONTRACT.nSteps) {
             console.warn(`[Q-Drift:${precision}] 校准步数 ${meta.n_steps} ≠ 合约 ${CONTRACT.nSteps}，已禁用`);
             _correctionCache[precision] = false;

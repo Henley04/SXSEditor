@@ -299,3 +299,12 @@ scripts/mel_proj_train_output/
 
 # 崩溃转储（Electron/Xvfb 调试时产生）
 core.*
+
+# --- INT8（Olive 量化）工作目录 -------------------------------------------
+# int8_w8a8_output/：量化导出与端到端对比的产物（模型副本、e2e 链接农场、
+#   f32/wav dump），单批可达数 GB，全部可由 scripts/olive_int8_w8a8/ 重跑再生。
+# calibrate/data/：GTSinger 抓取出来的校准张量与切分音频（数百 MB）。
+# .tmp-profile/：本地跑 Electron 时生成的临时 userData 目录。
+int8_w8a8_output/
+calibrate/data/
+.tmp-profile/
