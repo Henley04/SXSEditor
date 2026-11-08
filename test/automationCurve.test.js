@@ -10,6 +10,7 @@ const {
   evalAnchors,
   insertAnchor,
   snapshotAnchors,
+  buildPitchCurveSampleTimes,
 } = require('../src/fragmentEditor/automationCurve');
 
 describe('automationCurve (锚点强度 / 平滑过渡)', () => {
@@ -139,5 +140,70 @@ describe('automationCurve (锚点强度 / 平滑过渡)', () => {
       snap[0].value = 99;
       expect(anchors[0].value).to.equal(1);
     });
+  });
+});
+
+/**
+ * 分片编辑器音高曲线的渲染采样网格。
+ *
+ * 用户报的现象：锚点多的时候缩放视图，曲线会缩放并前后跳位。根因是旧的
+ * 绘制代码把采样域延伸到「最远锚点」，锚点数量或视口一变，整条曲线的
+ * 时间↔像素映射就跟着变。修复后采样域固定为可见窗 ±1 拍，与锚点解耦。
+ */
+describe('buildPitchCurveSampleTimes（渲染采样网格）', () => {
+  const base = { startBeat: 0, endBeat: 20, width: 800, interval: 0.02 };
+  const anchors = (count, span = 20) => Array.from({ length: count }, (_, i) => ({
+    time: (i / Math.max(1, count - 1)) * span,
+    value: 60 + (i % 3),
+  }));
+
+  it('采样域固定为可见窗 ±1 拍，不随锚点数量变化', () => {
+    const few = buildPitchCurveSampleTimes({ ...base, sortedAnchors: anchors(3) });
+    const many = buildPitchCurveSampleTimes({ ...base, sortedAnchors: anchors(2000) });
+    for (const ts of [few, many]) {
+      expect(ts[0]).to.be.closeTo(-1, 1e-9);
+      expect(ts[ts.length - 1]).to.be.closeTo(21, 1e-9);
+    }
+    expect(many.length).to.be.greaterThan(few.length);
+  });
+
+  it('视口外的超远锚点不把采样域拉长（缩放时曲线不会整体跳位）', () => {
+    const ts = buildPitchCurveSampleTimes({
+      ...base,
+      sortedAnchors: [...anchors(5), { time: 500, value: 90 }],
+    });
+    expect(ts[ts.length - 1]).to.be.closeTo(21, 1e-9);
+    expect(ts.some((t) => t > 21)).to.equal(false);
+  });
+
+  it('所有可见锚点与 baked 段端点都并入采样网格', () => {
+    const sorted = anchors(7).map((a) => ({ ...a, time: Math.round(a.time * 8) / 8 }));
+    const baked = [{ start: 2, end: 6 }, { start: 10, end: 18 }];
+    const ts = buildPitchCurveSampleTimes({ ...base, sortedAnchors: sorted, bakedSegments: baked });
+    const set = new Set(ts);
+    for (const a of sorted) expect(set.has(a.time), `锚点 ${a.time}`).to.equal(true);
+    for (const seg of baked) {
+      expect(set.has(seg.start)).to.equal(true);
+      expect(set.has(seg.end)).to.equal(true);
+    }
+  });
+
+  it('结果严格升序且无重复，锚点数量增多不会引入乱序', () => {
+    const ts = buildPitchCurveSampleTimes({ ...base, sortedAnchors: anchors(1500) });
+    for (let i = 1; i < ts.length; i++) {
+      expect(ts[i]).to.be.greaterThan(ts[i - 1]);
+    }
+  });
+
+  it('缩放只改变采样域边界，域仍由可见窗决定而非锚点集合', () => {
+    const shared = anchors(900, 40);
+    const wide = buildPitchCurveSampleTimes({ ...base, startBeat: 0, endBeat: 40, sortedAnchors: shared });
+    const zoomed = buildPitchCurveSampleTimes({ ...base, startBeat: 10, endBeat: 20, sortedAnchors: shared });
+    expect(wide[0]).to.be.closeTo(-1, 1e-9);
+    expect(wide[wide.length - 1]).to.be.closeTo(41, 1e-9);
+    expect(zoomed[0]).to.be.closeTo(9, 1e-9);
+    expect(zoomed[zoomed.length - 1]).to.be.closeTo(21, 1e-9);
+    // 缩放视口后，视口外的锚点不应继续占用采样点。
+    expect(zoomed.every((t) => t >= 9 - 1e-9 && t <= 21 + 1e-9)).to.equal(true);
   });
 });

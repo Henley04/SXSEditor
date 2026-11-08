@@ -119,6 +119,67 @@ export function evalAnchors(anchors, time) {
 }
 
 /**
+ * 生成音高曲线的绘制采样时刻：可见窗内均匀采样 ∪ 可见窗内的锚点/派生段端点，
+ * 返回升序、去重后的时间数组。
+ *
+ * 采样域固定为当前可见窗（两端各留 1 拍余量），**不随锚点数量或最远锚点
+ * 变化**。历史实现把「最远锚点 + 2」当作采样右端，于是增删锚点会整体重排
+ * 采样网格：锚点密集时步长与相位同时改变，实线漏采尖峰，看起来就是曲线
+ * 被缩放、前后段位置跳变。把锚点时间并入采样点后，实线精确经过每个可见
+ * 锚点，缩放级别与锚点数量都不再改变曲线形状。
+ *
+ * 纯函数，供渲染层与测试共用；sortedAnchors 需已按 time 升序。
+ *
+ * @param {object} opts
+ * @param {number} opts.startBeat 可见窗左端（拍）
+ * @param {number} opts.endBeat 可见窗右端（拍）
+ * @param {number} opts.width 画布像素宽（决定最大线段数）
+ * @param {number} opts.interval 细采样间隔（拍）
+ * @param {Array<{time:number}>} [opts.sortedAnchors] 已按 time 升序的手动锚点
+ * @param {Array<{start:number,end:number}>} [opts.bakedSegments] 自动曲线派生段
+ * @returns {number[]}
+ */
+export function buildPitchCurveSampleTimes(opts) {
+  const {
+    startBeat, endBeat, width, interval,
+    sortedAnchors = [], bakedSegments = [],
+  } = opts;
+  const from = startBeat - 1;
+  const to = endBeat + 1;
+  const range = Math.max(1e-6, to - from);
+  const denseSteps = Math.floor(range / interval);
+  const steps = Math.min(Math.max(200, width), Math.max(2, denseSteps));
+  const ts = [];
+  for (let i = 0; i <= steps; i++) ts.push(from + (i / steps) * range);
+
+  // 二分定位第一个进入视口的锚点，长分段（数万锚点）下不必全量遍历。
+  let lo = 0;
+  let hi = sortedAnchors.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sortedAnchors[mid].time < from) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo; i < sortedAnchors.length; i++) {
+    const t = sortedAnchors[i].time;
+    if (t > to) break;
+    ts.push(t);
+  }
+  for (const seg of bakedSegments) {
+    if (seg.start >= from && seg.start <= to) ts.push(seg.start);
+    if (seg.end >= from && seg.end <= to) ts.push(seg.end);
+  }
+
+  ts.sort((a, b) => a - b);
+  const unique = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (i > 0 && ts[i] === ts[i - 1]) continue;
+    unique.push(ts[i]);
+  }
+  return unique;
+}
+
+/**
  * 统一的数据结构快照（用于 undo/redo 与缓存键）。
  */
 export function snapshotAnchors(anchors) {

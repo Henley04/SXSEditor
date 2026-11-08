@@ -79,7 +79,7 @@ import {
   getTimbreDragAnchorIdx,
   getAnchorDragHud,
 } from './state.js';
-import { buildEffectiveValues, evalSortedCurve } from './automationCurve.js';
+import { buildEffectiveValues, evalSortedCurve, buildPitchCurveSampleTimes } from './automationCurve.js';
 import { collectCurves, sampleCurve, applyCurveSpec } from '../shared/pluginCurve.js';
 import { applyF0Postprocess } from './f0Smoothing.js';
 import {
@@ -2408,6 +2408,31 @@ function renderPitchCurve(c) {
   }
 
   /**
+   * 曲线采样时刻：可见窗内均匀采样 ∪ 可见窗内锚点/派生段端点，升序返回。
+   *
+   * 采样域固定为当前可见窗（两端各留 1 拍余量），**不随锚点数量或最远锚点
+   * 变化**。旧实现把「最远锚点 + 2」当作右端，于是增删锚点会整体重排采样
+   * 网格：锚点密集时视口内采样间隔被拉大，实线漏掉尖峰；网格相位一变，
+   * 前后段曲线的位置看起来就像被缩放或跳变。把锚点时间并入采样点后，
+   * 实线精确经过每个锚点，与锚点圆点严格对齐。
+   *
+   * 结果按帧缓存：自动层与手动层共用同一份采样时刻，避免重复计算。
+   */
+  let _sampleTimesCache = null;
+  function curveSampleTimes() {
+    if (_sampleTimesCache) return _sampleTimesCache;
+    _sampleTimesCache = buildPitchCurveSampleTimes({
+      startBeat,
+      endBeat,
+      width: w,
+      interval: PITCH_CURVE_SAMPLE_INTERVAL,
+      sortedAnchors: getSortedAnchorPoints(),
+      bakedSegments: pitchCurve.bakedSegments || [],
+    });
+    return _sampleTimesCache;
+  }
+
+  /**
    * 绘制实际生效的自动曲线：作用域外白色实线、作用域内灰色虚线。
    *
    * 采样点 = 均匀采样 ∪ 锚点时间（F11）：旧实现只按等间隔采样，
@@ -2416,18 +2441,7 @@ function renderPitchCurve(c) {
    */
   function drawAutoCurve() {
     if (!autoOn) return;
-    let maxT = endBeat + 2;
-    for (const ap of pitchCurve.anchorPoints) if (ap.time + 2 > maxT) maxT = ap.time + 2;
-    for (const seg of (pitchCurve.bakedSegments || [])) if (seg.end + 2 > maxT) maxT = seg.end + 2;
-    const beatRange = Math.max(1e-6, maxT - startBeat);
-    const denseSteps = Math.floor(beatRange / PITCH_CURVE_SAMPLE_INTERVAL);
-    const steps = Math.min(Math.max(200, w), Math.max(2, denseSteps));
-    const ts = [];
-    for (let i = 0; i <= steps; i++) ts.push(startBeat + (i / steps) * beatRange);
-    for (const ap of pitchCurve.anchorPoints) {
-      if (ap.time >= startBeat && ap.time <= maxT) ts.push(ap.time);
-    }
-    ts.sort((a, b) => a - b);
+    const ts = curveSampleTimes();
 
     ctx.save();
     ctx.lineWidth = 2;
@@ -2524,23 +2538,19 @@ function renderPitchCurve(c) {
   }
 
   if (pitchCurve.anchorPoints.length > 0) {
-    const sorted = getSortedAnchorPoints();
-    const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
-    // 采样密度按视口像素自适应：固定 0.02 拍间隔在缩小到 100+ 拍视口时每帧
-    // 产生 5000+ 次 getPitchAtTime 二分求值（拖拽时逐帧执行）。每个线段超过
-    // 1 像素没有视觉收益，因此取 [200, 视口像素宽] 与细间隔密度的较小值：
-    // 放大保持原 0.02 拍精度，缩小则降到约每像素一个线段。
-    const beatRange = maxTime - startBeat;
-    const denseSteps = Math.floor(beatRange / PITCH_CURVE_SAMPLE_INTERVAL);
-    const steps = Math.min(Math.max(200, w), denseSteps);
+    // 与自动层共用同一套采样时刻：可见窗固定 + 锚点时间并入。
+    // 旧实现按「最远锚点 + 2」等间隔采样，锚点数量一变，整条实线的采样
+    // 网格就重排（步长、相位同时变），密集锚点的尖峰被漏采，于是出现
+    // 整体缩放和前后段位置跳变。改为按时间逐点连接后，曲线精确经过
+    // 每个可见锚点，缩放与锚点数量都不再影响曲线形状。
+    const ts = curveSampleTimes();
 
     ctx.strokeStyle = c.pitchLine;
     ctx.lineWidth = 2;
     ctx.beginPath();
     let first = true;
-    for (let i = 0; i <= steps; i++) {
-      const t = startBeat + (i / steps) * (maxTime - startBeat);
-
+    for (let i = 0; i < ts.length; i++) {
+      const t = ts[i];
       const pitch = getPitchAtTime(t);
       if (pitch === null) continue;
       const px = timeToX(t);
