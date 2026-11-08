@@ -174,5 +174,24 @@ describe('Security Module', function () {
     it('should not detect app data as system path', function () {
       expect(isSystemPath('C:\\Users\\test\\AppData\\Roaming\\sxseditor')).to.be.false;
     });
+
+    // 判定必须与宿主 OS 无关：Windows 上也要认出 POSIX 系统目录（反之亦然，
+    // 上面的 C:\ 用例在 Linux/macOS 的 CI job 上同样成立）。
+    // 否则"从 /etc 安装插件"在 Linux 上报 FORBIDDEN、在 Windows 上退化成
+    // NOT_FOUND —— 同一个请求两种结论，跨平台矩阵一边过一边红。
+    it('should detect POSIX system dirs regardless of host OS', function () {
+      expect(isSystemPath('/etc')).to.be.true;
+      expect(isSystemPath('/etc/passwd')).to.be.true;
+      expect(isSystemPath('/System/Library/CoreServices')).to.be.true;
+      expect(isSystemPath('/Library/Fonts')).to.be.true;
+      expect(isSystemPath('/boot/vmlinuz')).to.be.true;
+    });
+
+    it('should not treat a user home Library as a system path', function () {
+      // macOS 的 ~/Library 是用户目录，不能被根级 /library 前缀误伤
+      expect(isSystemPath('/Users/test/Library/Application Support/app')).to.be.false;
+      expect(isSystemPath('D:/etcetera/plugin.sxsp')).to.be.false;
+      expect(isSystemPath('/etcetera/plugin.sxsp')).to.be.false;
+    });
   });
 });

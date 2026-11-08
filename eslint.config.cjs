@@ -100,6 +100,8 @@ module.exports = [
             'src/shared/pluginServices.js',
             // .sxsp 的签名与完整性（纯函数，CJS，主进程 / 打包脚本 / 单测共用）
             'src/shared/pluginSignature.js',
+            // 内置官方签名公钥表（CJS，被 main/plugins/PluginTrustStore 直接 require）
+            'src/shared/officialKeys.js',
             // 市场索引的契约与检索（纯函数，CJS，主进程 / CLI / 单测共用）
             'src/shared/pluginMarket.js',
             'src/shared/pluginZip.js',

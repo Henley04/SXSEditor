@@ -40,6 +40,30 @@ describe('plugin runtime · 出站封锁', function () {
     expect(() => globalThis.fetch('https://api.example.com')).to.throw(/不允许自建网络连接/);
   });
 
+  // 回归：早期用 `from.includes('electron')` 判断"是不是运行时内部模块"，
+  // 而本仓库就装在 D:\Document\electron\SXSEditor —— 路径里带 "electron"，
+  // 于是所有插件代码都被当成运行时内部模块，封锁在 CI 的 Windows job 上
+  // 完全不生效。判据必须落在"是否位于 Node 运行时目录内"这种硬事实上。
+  it('磁盘路径里含 "electron" 不会被误判为运行时内部', function () {
+    const os = require('node:os');
+    const path = require('node:path');
+    guard = installNetworkGuard({ pluginId: 'com.example.evil' });
+    for (const dir of ['electron', 'internal', 'electron-internal']) {
+      const fakeParent = {
+        id: 'evil',
+        filename: path.join(os.tmpdir(), dir, 'SXSEditor', 'plugins', 'evil', 'index.js'),
+      };
+      let err = null;
+      try {
+        Module._load('node:https', fakeParent, false);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, `${dir} 目录下的模块应当被拦截`).to.be.an('error');
+      expect(err.code).to.equal('PLUGIN_NET_BLOCKED');
+    }
+  });
+
   it('dispose 后恢复正常（测试与主进程自己还要用）', function () {
     guard = installNetworkGuard({ pluginId: 'x' });
     guard.dispose();

@@ -186,6 +186,20 @@ function isSystemPath(dirPath) {
   );
   if (isWindowsSystemPath) return true;
 
+  // 反向也要成立：宿主是 Windows 时要能认出 POSIX 系统目录。理由与上面那条
+  // 相同 —— 判定不应依赖宿主 OS。否则同一个请求（从 /etc 安装插件）在 Linux
+  // 上报 FORBIDDEN、在 Windows 上退化成 NOT_FOUND，CI 的跨平台矩阵就会一边
+  // 过一边红，而"拒绝"这个结论其实应当是平台无关的。
+  // 列表与 getForbiddenPrefixes() 的 POSIX 分支保持一致；只匹配根路径本身，
+  // 不会误伤 macOS 的 ~/Library（归一化后是 /users/<name>/library）。
+  const posixSystemPrefixes = [
+    '/etc', '/root', '/sys', '/proc', '/dev', '/boot', '/system', '/library',
+  ];
+  const isPosixSystemPath = posixSystemPrefixes.some(prefix =>
+    normalized === prefix || normalized.startsWith(prefix + '/')
+  );
+  if (isPosixSystemPath) return true;
+
   const resolvedPath = path.resolve(dirPath);
   const forbiddenPrefixes = getForbiddenPrefixes();
   return forbiddenPrefixes.some(prefix => resolvedPath.startsWith(prefix + path.sep) || resolvedPath === prefix);

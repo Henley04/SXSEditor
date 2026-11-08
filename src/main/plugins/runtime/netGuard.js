@@ -19,6 +19,7 @@
  * 成立的前提 —— 一旦允许插件自带 HTTP，端点鉴权就形同虚设。
  */
 const Module = require('node:module');
+const path = require('node:path');
 
 /** 拦掉的模块名（`node:` 前缀在校验时剥离）。 */
 const BLOCKED_MODULES = Object.freeze([
@@ -58,10 +59,19 @@ function installNetworkGuard(opts = {}) {
   Module._load = function guardedLoad(request, parent, isMain) {
     const name = String(request || '').replace(/^node:/, '');
     if (BLOCKED_MODULES.includes(name)) {
-      // Node / Electron 自身的模块不走这条路；parent 为空或来自内部模块时放行，
-      // 免得把加载器自己的初始化链路一起打断。
+      // 放行 Node / Electron 自身的加载链，只拦"落在磁盘上的真实模块"。
+      // ⚠️ 不能用 `from.includes('electron')` 这种子串判断：本仓库就装在
+      // `D:\Document\electron\SXSEditor`，路径里带 "electron" 会把整个项目
+      // 当成运行时内部模块，封锁直接失效（CI 的 Windows job 上正好命中）。
+      // 判据改成三条硬事实：没有父模块（内建）、父模块是 node: 伪路径、
+      // 或父模块位于 Node 运行时目录内。
       const from = parent && parent.filename ? String(parent.filename) : '';
-      const internal = !parent || from.startsWith('node:') || from.includes('internal') || from.includes('electron');
+      const runtimeDir = path.dirname(process.execPath).replace(/\\/g, '/').toLowerCase();
+      const fromNorm = from.replace(/\\/g, '/').toLowerCase();
+      const internal = !from
+        || from.startsWith('node:')
+        || !path.isAbsolute(from)
+        || (runtimeDir !== '' && fromNorm.startsWith(runtimeDir + '/'));
       if (!internal) {
         blocked.push(name);
         const err = deny(name);
