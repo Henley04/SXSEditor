@@ -300,10 +300,31 @@ jobs:
         run: |
           $env:SKIP_ONNX_MODELS = "1"
           $env:DEBUG = "electron-forge:*"
-          Write-Host "=== Running electron-forge package ==="
-          & npm run package:lite 2>&1 | Tee-Object -FilePath build-output.log
-          $exitCode = $LASTEXITCODE
-          Write-Host "Build exit code: $exitCode"
+          # electron-forge 打包阶段会经 @electron/rebuild 联网下载 Electron headers。
+          # 上游源偶发返回 504 / 连接超时，这类瞬时故障重跑即可恢复；只对网络类
+          # 失败重试，编译或代码错误立即失败，避免把真实问题掩盖成"再试一次"。
+          $networkErrorPattern = 'Gateway Time-out|Response code 5[0-9][0-9]|ETIMEDOUT|ECONNRESET|socket hang up|ENOTFOUND|EAI_AGAIN|ECONNREFUSED'
+          $maxAttempts = 3
+          $exitCode = 1
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Write-Host "=== Running electron-forge package (attempt $attempt/$maxAttempts) ==="
+            # 清掉上一次的半成品，防止 out/ 残留让后续检查把失败误判为成功。
+            Remove-Item -Recurse -Force "out" -ErrorAction SilentlyContinue
+            & npm run package:lite 2>&1 | Tee-Object -FilePath build-output.log
+            $exitCode = $LASTEXITCODE
+            Write-Host "Build exit code: $exitCode"
+            if ($exitCode -eq 0) { break }
+            $log = if (Test-Path build-output.log) { Get-Content build-output.log -Raw } else { "" }
+            if ($log -notmatch $networkErrorPattern) {
+              Write-Host "Non-network failure detected; will not retry."
+              break
+            }
+            if ($attempt -lt $maxAttempts) {
+              $delay = 15 * $attempt
+              Write-Host "Transient network error on attempt $attempt; retrying in $delay s..."
+              Start-Sleep -Seconds $delay
+            }
+          }
           Write-Host "=== .webpack/ directory check ==="
           if (Test-Path ".webpack") {
             Get-ChildItem -Recurse ".webpack" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
@@ -328,6 +349,15 @@ jobs:
               Get-ChildItem -Path "." -Filter "SXSEditor.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize
             }
           }
+          # 以最终产物判定本步骤成败：forge 成功（或网络抖动后重试成功）必然生成
+          # exe；重试耗尽或出现真实编译/打包错误时 exe 缺失就主动报错，把失败明确
+          # 归因到打包这一步，而不是留给后面的步骤去间接发现。
+          $exe = "out\SXSEditor-win32-x64\SXSEditor.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "electron-forge package 失败：$maxAttempts 次尝试后仍未生成 $exe"
+            exit 1
+          }
+          Write-Host "Package verified: $exe"
 
       - name: Verify packaged native ORT bridge
         shell: pwsh
