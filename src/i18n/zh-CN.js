@@ -1556,6 +1556,9 @@ export default {
     uninstallConfirmDetail: '它的菜单、面板、命令、事件监听与后台进程都会被撤销。插件数据目录默认一并删除。',
     uninstallConfirmKeep: '同时保留插件数据（设置、缓存、模型索引）',
 
+    builtin: '内置',
+    builtinNote: '随应用提供，可停用，不能卸载。',
+
     sectionContributions: '贡献',
     sectionPermissions: '权限',
     sectionDetails: '详情',

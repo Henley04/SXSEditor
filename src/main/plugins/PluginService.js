@@ -151,6 +151,9 @@ class PluginService {
       locale: () => this._locale,
     });
 
+    // 只加载已经落在 userData/plugins 的插件。内置插件的安装由主进程装配层在
+    // init() 之前完成（builtinPlugins.js）：放在这里会让每个构造本服务的测试
+    // 都悄悄多出一个插件，掩盖"到底加载了什么"的断言。
     this.loadAll();
     // 插件加载完才有 fileTypes 可注入；投递链路（fileAssociation）一直在等这份快照
     this._syncFileAssociations();
@@ -1248,6 +1251,13 @@ class PluginService {
   async uninstall(id, options = {}) {
     const record = this.registry.getPlugin(id);
     if (!record) return { ok: false, error: `未安装：${id}` };
+
+    // 内置插件随应用分发，卸载会让宿主重新具备打开外部工程的能力无从恢复
+    // （下一次启动又会被装回来，中间还可能出现格式断档）。因此只提供停用，
+    // 不提供卸载。界面、命令行与自动化入口都走本方法，这一道是唯一收口点。
+    if (record.state?.source === 'builtin') {
+      return { ok: false, error: `内置插件不可卸载，可停用：${id}` };
+    }
 
     const before = await this.probe.snapshot(id);
 

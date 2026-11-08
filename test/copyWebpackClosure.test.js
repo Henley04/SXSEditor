@@ -204,4 +204,41 @@ describe('CopyPlugin 拷贝树依赖闭包', () => {
       '裸加载入口存在未被拷贝的依赖：\n  - ' + problems.join('\n  - ')
     );
   });
+
+  it('内置官方插件整目录随包分发到 bundled-plugins，入口相对依赖自洽', () => {
+    const bundled = path.join(MAIN_OUT, 'bundled-plugins', 'official-project-import');
+    const srcDir = path.join(ROOT, 'plugins', 'official-project-import');
+
+    const srcFiles = [];
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, e.name);
+        if (e.isDirectory()) walk(abs);
+        else srcFiles.push(toPosix(path.relative(srcDir, abs)));
+      }
+    };
+    walk(srcDir);
+    assert.ok(srcFiles.length > 0, '未找到内置插件源码文件');
+
+    // 打包后 builtinPlugins.js 从 app.asar/.webpack/main/bundled-plugins/ 复制整目录；
+    // 少任何一个文件，首次启动都会装出一个缺 lib 的插件，且现场极难定位。
+    for (const rel of srcFiles) {
+      assert.ok(
+        copied.has(path.join(bundled, rel)),
+        `内置插件文件 ${rel} 未被 CopyPlugin 拷贝到 bundled-plugins —— 首次启动会装出不完整的插件`
+      );
+    }
+
+    // 插件 runtime 按路径 require main.js，它的相对依赖必须都在同一个随包目录内。
+    const mainText = fs.readFileSync(path.join(srcDir, 'main.js'), 'utf8');
+    REQUIRE_RE.lastIndex = 0;
+    let m;
+    while ((m = REQUIRE_RE.exec(mainText)) !== null) {
+      const rel = toPosix(path.normalize(m[2])).replace(/^\.\//, '');
+      const hit = srcFiles.some(
+        (f) => f === rel || f === `${rel}.js` || f === `${rel}.json` || f === `${rel}/index.js`
+      );
+      assert.ok(hit, `main.js 的 require('${m[2]}') 不在随包目录内，打包后会 MODULE_NOT_FOUND`);
+    }
+  });
 });

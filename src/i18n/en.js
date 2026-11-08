@@ -1550,6 +1550,9 @@ export default {
     uninstallConfirmDetail: 'Its menus, panels, commands, event listeners and background process will all be revoked. The plugin data folder is deleted by default.',
     uninstallConfirmKeep: 'Also keep plugin data (settings, caches, model indexes)',
 
+    builtin: 'Built in',
+    builtinNote: 'Ships with the app. It can be disabled, but not uninstalled.',
+
     sectionContributions: 'Contributions',
     sectionPermissions: 'Permissions',
     sectionDetails: 'Details',

@@ -756,6 +756,10 @@ app.whenReady().then(() => {
         console.error('[models] 初始化失败:', err && err.message);
       }
 
+      // 内置官方插件（VOCALOID / Synthesizer V 工程）必须在 init() 之前落盘：
+      // init 只扫描 userData/plugins，装在它之后的话本次启动扫描不到，外部工程
+      // 格式要等到下一次启动才可用。安装失败不阻断启动，细节由该函数自行记录。
+      require('./main/plugins/builtinPlugins.js').installBuiltinOnStartup(app.getVersion());
       const pluginService = getPluginService();
       pluginService.init({
         getMainWindow: () => {

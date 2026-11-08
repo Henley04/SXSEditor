@@ -302,6 +302,13 @@ body {
   background: var(--danger-soft);
 }
 
+/* 随应用分发的官方插件：与运行状态徽标区分，走强调色而非成功/危险色。 */
+.pm-badge.is-builtin {
+  color: var(--accent-fg);
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+
 .pm-card-meta {
   font-size: var(--font-xs, 11px);
   color: var(--fg-muted);
@@ -320,6 +327,15 @@ body {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
+}
+
+.pm-builtin-note {
+  align-self: center;
+  max-width: 190px;
+  font-size: var(--font-xs, 11px);
+  line-height: 1.5;
+  color: var(--fg-muted);
+  text-align: right;
 }
 
 .pm-card-body {

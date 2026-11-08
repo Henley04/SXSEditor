@@ -414,6 +414,9 @@ function renderCard(plugin) {
   const card = el('li', 'pm-card');
   card.dataset.pluginId = plugin.id;
   if (plugin.status !== 'loaded') card.classList.add('is-disabled');
+  // 来源取注册表里的落盘状态，而不是依赖 id 白名单：以后再加内置插件时，
+  // 界面不需要跟着改一份名单。
+  const isBuiltin = plugin.state?.source === 'builtin';
 
   // ---- 头部
   const head = el('div', 'pm-card-head');
@@ -424,6 +427,9 @@ function renderCard(plugin) {
   const badge = el('span', 'pm-badge', statusLabel(plugin.status));
   badge.classList.add(`is-${plugin.status}`);
   nameRow.appendChild(badge);
+  if (isBuiltin) {
+    nameRow.appendChild(el('span', 'pm-badge is-builtin', t('plugins.builtin')));
+  }
   titles.appendChild(nameRow);
 
   const meta = el('div', 'pm-card-meta');
@@ -454,17 +460,22 @@ function renderCard(plugin) {
   });
   actions.appendChild(toggle);
 
-  const remove = el('button', 'pm-btn pm-btn-danger', t('plugins.uninstall'));
-  remove.type = 'button';
-  remove.dataset.act = 'remove';
-  remove.addEventListener('click', () => {
-    state.confirming.add(plugin.id);
-    // 展开确认条之后，"卸载"按钮被替换掉了；焦点必须主动挪进确认条，
-    // 否则它落在 body 上，键盘用户要靠 Tab 从头找。
-    state.restoreFocus = { pluginId: plugin.id, action: 'cancel' };
-    render();
-  });
-  actions.appendChild(remove);
+  // 内置插件不渲染卸载入口：服务层会拒绝卸载，界面不该给出一个注定失败的按钮。
+  if (isBuiltin) {
+    actions.appendChild(el('span', 'pm-builtin-note', t('plugins.builtinNote')));
+  } else {
+    const remove = el('button', 'pm-btn pm-btn-danger', t('plugins.uninstall'));
+    remove.type = 'button';
+    remove.dataset.act = 'remove';
+    remove.addEventListener('click', () => {
+      state.confirming.add(plugin.id);
+      // 展开确认条之后，"卸载"按钮被替换掉了；焦点必须主动挪进确认条，
+      // 否则它落在 body 上，键盘用户要靠 Tab 从头找。
+      state.restoreFocus = { pluginId: plugin.id, action: 'cancel' };
+      render();
+    });
+    actions.appendChild(remove);
+  }
   head.appendChild(actions);
   card.appendChild(head);
 
@@ -473,8 +484,8 @@ function renderCard(plugin) {
     card.appendChild(el('p', 'pm-card-desc', plugin.description));
   }
 
-  // ---- 卸载确认条
-  if (state.confirming.has(plugin.id)) {
+  // ---- 卸载确认条（内置插件即便被外部状态推入确认态也不展开）
+  if (!isBuiltin && state.confirming.has(plugin.id)) {
     const bar = el('div', 'pm-card-body');
     bar.appendChild(el('p', 'pm-note', t('plugins.uninstallConfirmDetail')));
     const row = el('div', 'pm-card-actions');
