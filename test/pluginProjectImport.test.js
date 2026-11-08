@@ -177,14 +177,169 @@ describe('official-project-import — 错误处理', () => {
 });
 
 describe('official-project-import — manifest', () => {
-  it('声明的扩展名与实现的 codec 一一对应', () => {
-    const manifest = JSON.parse(fs.readFileSync(
-      path.join(__dirname, '..', 'plugins', 'official-project-import', 'manifest.json'),
-      'utf8',
-    ));
-    const declared = manifest.contributes.fileTypes.map((ft) => ft.ext).sort();
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'plugins', 'official-project-import', 'manifest.json'),
+    'utf8',
+  ));
+  const declared = manifest.contributes.fileTypes.map((ft) => ft.ext).sort();
+
+  it('声明的扩展名与实现的 codec 一一对应，读与写都实现', () => {
     expect(declared).to.deep.equal(Object.keys(plugin.codecs).sort());
-    for (const ext of declared) expect(plugin.codecs[ext].read).to.be.a('function');
+    for (const ext of declared) {
+      expect(plugin.codecs[ext].read, `${ext}.read`).to.be.a('function');
+      expect(plugin.codecs[ext].write, `${ext}.write`).to.be.a('function');
+    }
     expect(manifest.author).to.equal('SXSEditor Official');
+  });
+
+  it('三种格式都声明为可打开可保存，并申请写盘权限', () => {
+    for (const ft of manifest.contributes.fileTypes) {
+      expect(ft.role, `${ft.ext}.role`).to.equal('both');
+    }
+    expect(manifest.permissions.fs).to.include('userPicked:write');
+    expect(manifest.version).to.equal('1.1.0');
+  });
+});
+
+// ------------------------------------------------------------------ 保存 / 写回
+
+/** 在锚点之间线性插值取音高，用于比较时间网格不完全相同的两条曲线。 */
+function pitchAt(fragment, time) {
+  const a = anchorsOf(fragment);
+  if (!a.length) return null;
+  if (time <= a[0].time) return a[0].pitch;
+  for (let i = 1; i < a.length; i++) {
+    if (time <= a[i].time) {
+      const span = a[i].time - a[i - 1].time;
+      if (span <= 1e-9) return a[i].pitch;
+      return a[i - 1].pitch + ((a[i].pitch - a[i - 1].pitch) * (time - a[i - 1].time)) / span;
+    }
+  }
+  return a[a.length - 1].pitch;
+}
+
+function notesOf(document) {
+  return document.fragments.map((f) => f.notes.map((n) => [n.pitch, n.start, n.duration, n.lyric]));
+}
+
+async function roundTrip(ext, fileName) {
+  const { ctx } = makeContext();
+  const bytes = fs.readFileSync(path.join(FIXTURES, fileName));
+
+  const first = await plugin.codecs[ext].read(ctx, { name: fileName, bytes });
+  const validated = validateProjectDocument(first.document);
+  expect(validated.ok, validated.error).to.equal(true);
+
+  const saved = await plugin.codecs[ext].write(ctx, {
+    name: `round${ext}`, document: validated.document,
+  });
+  const out = Buffer.isBuffer(saved.bytes) ? saved.bytes : Buffer.from(saved.bytes);
+  expect(out.length, `${ext} 写回字节`).to.be.greaterThan(0);
+
+  const second = await plugin.codecs[ext].read(ctx, { name: `round${ext}`, bytes: out });
+  const restored = validateProjectDocument(second.document);
+  expect(restored.ok, restored.error).to.equal(true);
+
+  return { original: validated.document, restored: restored.document, warnings: saved.warnings, bytes: out };
+}
+
+describe('official-project-import — 三种格式 read → write → read', () => {
+  const cases = [
+    ['.svp', 'sample.svp', 'Synthesizer V'],
+    ['.vsqx', 'sample.vsqx', 'VOCALOID4'],
+    ['.vpr', 'sample.vpr', 'VOCALOID5/6'],
+  ];
+
+  for (const [ext, file, label] of cases) {
+    it(`${label}：音符、速度、拍号与音高曲线在写回后保持一致`, async () => {
+      const { original, restored, warnings } = await roundTrip(ext, file);
+
+      expect(restored.project.bpm).to.equal(original.project.bpm);
+      expect(restored.project.timeSignature).to.deep.equal(original.project.timeSignature);
+      expect(restored.singers).to.have.length(original.singers.length);
+      expect(restored.fragments).to.have.length(original.fragments.length);
+      expect(notesOf(restored)).to.deep.equal(notesOf(original));
+
+      for (let i = 0; i < original.fragments.length; i++) {
+        const a = original.fragments[i];
+        const b = restored.fragments[i];
+        expect(anchorsOf(b), `${ext} 锚点数`).to.have.length(anchorsOf(a).length);
+        const end = Math.max(a.duration, b.duration);
+        for (let t = 0; t <= end + 1e-9; t += 0.25) {
+          const pa = pitchAt(a, t);
+          const pb = pitchAt(b, t);
+          if (pa === null || pb === null) continue;
+          expect(pb, `${ext} t=${t}`).to.be.closeTo(pa, 0.1);
+        }
+      }
+
+      // 有损写回必须显式告警，而不是悄悄丢字段。
+      expect(warnings.join('\n')).to.match(/有损|lossy/i);
+      expect(warnings.join('\n')).to.match(/另存为|native/i);
+    });
+  }
+
+  it('写回产物是对应容器，能被再次解析（不是空壳）', async () => {
+    const vpr = await roundTrip('.vpr', 'sample.vpr');
+    expect(vpr.bytes.slice(0, 2).toString()).to.equal('PK');
+    const vsqx = await roundTrip('.vsqx', 'sample.vsqx');
+    expect(vsqx.bytes.toString('utf8')).to.match(/^\s*<\?xml/);
+  });
+});
+
+/**
+ * 三种格式的歌词都经过 lib/score.js 的 safeLyric → importLyric / exportLyric，
+ * 是同一条共用映射。这里先用纯函数锁定双向语义（含 <SP> 静音不受影响），
+ * 再用 SVP 走一遍真实的"字节 → 文档 → 字节"，证明转译落到了编解码链路上。
+ */
+describe('official-project-import — 呼吸标记 br ↔ 宿主吸气音素', () => {
+  const score = require('../plugins/official-project-import/lib/score.js');
+
+  it('转译双向对称，且不把 <SP> 静音当成吸气', () => {
+    expect(score.importLyric('br')).to.equal('<AP>');
+    expect(score.importLyric('BR')).to.equal('<AP>');
+    expect(score.importLyric(' br ')).to.equal('<AP>');
+    expect(score.importLyric('<SP>')).to.equal('<SP>');
+    expect(score.importLyric('la')).to.equal('la');
+    expect(score.exportLyric('<AP>')).to.equal('br');
+    expect(score.exportLyric('<ap>')).to.equal('br');
+    expect(score.exportLyric('<SP>')).to.equal('<SP>');
+    expect(score.exportLyric('la')).to.equal('la');
+  });
+
+  it('SVP 里 br 导入为 <AP>，写回仍是 br', async () => {
+    const { ctx } = makeContext();
+    const svp = {
+      version: 200,
+      time: {
+        meter: [{ index: 0, numerator: 4, denominator: 4 }],
+        tempo: [{ position: 0, bpm: 120 }],
+      },
+      library: [],
+      tracks: [{
+        name: 'Breath',
+        mainRef: { groupID: 'g1', blickOffset: 0 },
+        mainGroup: {
+          name: 'main', uuid: 'g1',
+          notes: [
+            { onset: 0, duration: 705600000, pitch: 60, lyrics: 'a' },
+            { onset: 705600000, duration: 705600000, pitch: 60, lyrics: 'br' },
+          ],
+        },
+        groups: [],
+      }],
+    };
+    const read = await plugin.codecs['.svp'].read(ctx, {
+      name: 'breath.svp', bytes: Buffer.from(JSON.stringify(svp)),
+    });
+    const doc = validateProjectDocument(read.document);
+    expect(doc.ok, doc.error).to.equal(true);
+    expect(doc.document.fragments[0].notes.map((n) => n.lyric)).to.deep.equal(['a', '<AP>']);
+
+    const saved = await plugin.codecs['.svp'].write(ctx, {
+      name: 'breath.svp', document: doc.document,
+    });
+    const out = JSON.parse(Buffer.from(saved.bytes).toString('utf8'));
+    expect(out.tracks[0].mainGroup.notes.map((n) => n.lyrics)).to.deep.equal(['a', 'br']);
   });
 });

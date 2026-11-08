@@ -16,12 +16,15 @@
  *    按 XML 命名空间区分。
  */
 
-const { parseXml, child, children, textOf, numberOf, numberIn } = require('./xml.js');
-const { isZip, readZip } = require('./zip.js');
+const {
+  parseXml, serializeXml, node, child, children, textOf, numberOf, numberIn,
+} = require('./xml.js');
+const { isZip, readZip, writeZip } = require('./zip.js');
 const { TICKS_PER_BEAT, normalizeColor } = require('./score.js');
 
 const PITCH_MAX = 8191;
 const DEFAULT_PBS = 2;
+const VSQ4_NS = 'http://www.yamaha.co.jp/vocaloid/schema/vsq4/';
 
 // ---------------------------------------------------------------------------
 // 解码
@@ -270,7 +273,21 @@ function parseVsqx(bytes, t) {
     if (parts.some((part) => part.notes.length)) tracks.push({ name: trackName, parts });
   }
 
-  return { format: 'vsqx', bpm, timeSignature, tracks, warnings };
+  return {
+    format: 'vsqx',
+    bpm,
+    timeSignature,
+    tracks,
+    warnings,
+    meta: {
+      format: 'vsqx',
+      rootExtras: {
+        vender: textOf(root, 'vender'),
+        version: textOf(root, 'version'),
+        seqName: textOf(master, 'seqName'),
+      },
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +400,229 @@ function parseVpr(bytes, t) {
     }
   });
 
-  return { format: 'vpr', bpm, timeSignature, tracks, warnings };
+  return {
+    format: 'vpr',
+    bpm,
+    timeSignature,
+    tracks,
+    warnings,
+    meta: collectVprMeta(raw),
+  };
 }
 
-module.exports = { parseVsqx, parseVpr, decodeXmlBytes };
+// ---------------------------------------------------------------------------
+// 写入
+//
+// 与 parseVsqx / parseVpr 严格对称：read 认下来的音符、歌词、音高、速度、
+// 拍号与分片起点，write 必须能原样吐回去。三种格式共用的反向映射在
+// score.js 的 documentToScore —— 这里只负责「把中间谱面编码成容器字节」。
+//
+// 宿主没有等价字段的部分（歌手库、风格、音素、颤音、部分轨道属性）由
+// collect*Meta 收成精简快照，经 document.ext 带回，写回时合并进容器；
+// 带不回来的在 main.js 里逐条告警，绝不静默丢弃。
+
+/** 只保留体量可控的标量/浅对象，避免把整份原始工程塞进扩展域。 */
+function smallMeta(value) {
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+    return typeof value === 'number' && !Number.isFinite(value) ? null : value;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value).slice(0, 16)) {
+      if (item === null || ['string', 'number', 'boolean'].includes(typeof item)) {
+        out[key] = item;
+      }
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function collectVprMeta(raw) {
+  const rootExtras = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (['version', 'masterTrack', 'tracks'].includes(key)) continue;
+    const kept = smallMeta(value);
+    if (kept !== undefined) rootExtras[key] = kept;
+  }
+  const master = raw.masterTrack || {};
+  const masterExtras = {};
+  for (const [key, value] of Object.entries(master)) {
+    if (['tempo', 'timeSig'].includes(key)) continue;
+    const kept = smallMeta(value);
+    if (kept !== undefined) masterExtras[key] = kept;
+  }
+  const tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).slice(0, 64).map((track) => {
+    const out = {};
+    for (const [key, value] of Object.entries(track || {})) {
+      if (['parts', 'name', 'color'].includes(key)) continue;
+      const kept = smallMeta(value);
+      if (kept !== undefined) out[key] = kept;
+    }
+    return out;
+  });
+  return {
+    format: 'vpr',
+    rootExtras,
+    masterExtras,
+    version: smallMeta(raw.version) || { major: 5, minor: 0, revision: 0 },
+    tracks,
+  };
+}
+
+function clampPit(value) {
+  return Math.max(-PITCH_MAX, Math.min(PITCH_MAX, Math.round(value)));
+}
+
+/** 相对半音偏移 → PIT 控制器值（PBS 固定为默认灵敏度）。 */
+function pitFromSemitones(semitones) {
+  return clampPit((Number(semitones) || 0) * PITCH_MAX / DEFAULT_PBS);
+}
+
+/** 把 pitchOffsets 整理成按 tick 升序、同位置去重的数据点。 */
+function pitEvents(part) {
+  const byTick = new Map();
+  for (const offset of (Array.isArray(part.pitchOffsets) ? part.pitchOffsets : [])) {
+    const tick = Math.round(((Number(offset.beat) || 0) - (Number(part.startBeat) || 0)) * TICKS_PER_BEAT);
+    byTick.set(tick, pitFromSemitones(offset.semitones));
+  }
+  return [...byTick.entries()]
+    .map(([pos, value]) => ({ pos, value }))
+    .sort((a, b) => a.pos - b.pos);
+}
+
+function vsqxNote(note, partStartBeat) {
+  return node('note', {}, [
+    node('t', {}, [], String(Math.round(((Number(note.startBeat) || 0) - partStartBeat) * TICKS_PER_BEAT))),
+    node('dur', {}, [], String(Math.max(1, Math.round((Number(note.durationBeat) || 0) * TICKS_PER_BEAT)))),
+    node('n', {}, [], String(Math.round(Number(note.pitch) || 60))),
+    node('y', {}, [], String(note.lyric || 'la')),
+  ]);
+}
+
+/**
+ * @param {object} score documentToScore 的输出
+ * @param {object} meta parseVsqx 收集、经 document.ext 带回的快照
+ * @returns {Buffer} .vsqx 文件字节（UTF-8 XML）
+ */
+function encodeVsqx(score, meta) {
+  const m = meta && meta.format === 'vsqx' ? meta : {};
+  const extras = m.rootExtras || {};
+  const ts = score.timeSignature;
+
+  const masterChildren = [
+    node('seqName', {}, [], extras.seqName || 'SXSEditor'),
+    // preMeasure 固定为 0：read 会减去它作为前导小节，写回的分片起点已经是
+    // 去掉前导后的绝对拍，保留源值会造成二次偏移。
+    node('preMeasure', {}, [], '0'),
+    node('timeSig', {}, [
+      node('m', {}, [], '0'),
+      node('nu', {}, [], String(ts.numerator)),
+      node('de', {}, [], String(ts.denominator)),
+    ]),
+    node('tempo', {}, [
+      node('t', {}, [], '0'),
+      node('v', {}, [], String(Math.round(score.bpm * 100))),
+    ]),
+  ];
+
+  const tracks = (Array.isArray(score.tracks) ? score.tracks : []).map((track, ti) => {
+    const parts = (Array.isArray(track.parts) ? track.parts : []).map((part) => {
+      const startBeat = Number(part.startBeat) || 0;
+      const childrenList = [
+        node('t', {}, [], String(Math.round(startBeat * TICKS_PER_BEAT))),
+        node('playTime', {}, [], String(Math.max(1, Math.round((Number(part.durationBeat) || 0) * TICKS_PER_BEAT)))),
+        node('name', {}, [], String(part.name || track.name || `Part ${ti + 1}`)),
+      ];
+      for (const n of (Array.isArray(part.notes) ? part.notes : [])) {
+        childrenList.push(vsqxNote(n, startBeat));
+      }
+      // PBS 灵敏度固定写默认值；PIT 逐点还原音高曲线。
+      childrenList.push(node('cc', {}, [
+        node('t', {}, [], '0'),
+        node('v', { id: 'S' }, [], String(DEFAULT_PBS)),
+      ]));
+      for (const ev of pitEvents(part)) {
+        childrenList.push(node('cc', {}, [
+          node('t', {}, [], String(ev.pos)),
+          node('v', { id: 'P' }, [], String(ev.value)),
+        ]));
+      }
+      return node('vsPart', {}, childrenList);
+    });
+    return node('vsTrack', {}, [
+      node('tNo', {}, [], String(ti)),
+      node('name', {}, [], String(track.name || `Track ${ti + 1}`)),
+      ...parts,
+    ]);
+  });
+
+  const root = node('vsq4', { xmlns: VSQ4_NS }, [
+    node('vender', {}, [], extras.vender || 'Yamaha corporation'),
+    node('version', {}, [], extras.version || '4.0.0.3'),
+    node('masterTrack', {}, masterChildren),
+    ...tracks,
+  ]);
+  return Buffer.from(serializeXml(root), 'utf8');
+}
+
+/**
+ * @param {object} score documentToScore 的输出
+ * @param {object} meta parseVpr 收集、经 document.ext 带回的快照
+ * @returns {Buffer} .vpr 文件字节（ZIP 内 Project/sequence.json）
+ */
+function encodeVpr(score, meta) {
+  const m = meta && meta.format === 'vpr' ? meta : {};
+  const ts = score.timeSignature;
+  const tracks = (Array.isArray(score.tracks) ? score.tracks : []).map((track, ti) => {
+    const trackMeta = (m.tracks || [])[ti] || {};
+    const parts = (Array.isArray(track.parts) ? track.parts : []).map((part) => {
+      const startBeat = Number(part.startBeat) || 0;
+      const notes = (Array.isArray(part.notes) ? part.notes : []).map((n) => ({
+        pos: Math.round(((Number(n.startBeat) || 0) - startBeat) * TICKS_PER_BEAT),
+        duration: Math.max(1, Math.round((Number(n.durationBeat) || 0) * TICKS_PER_BEAT)),
+        number: Math.round(Number(n.pitch) || 60),
+        lyric: String(n.lyric || 'la'),
+      }));
+      return {
+        ...trackMeta.partDefaults,
+        pos: Math.round(startBeat * TICKS_PER_BEAT),
+        duration: Math.max(1, Math.round((Number(part.durationBeat) || 0) * TICKS_PER_BEAT)),
+        styleName: part.name || trackMeta.styleName || 'No Effect',
+        notes,
+        controllers: [
+          { name: 'pitchBendSens', events: [{ pos: 0, value: DEFAULT_PBS }] },
+          { name: 'pitchBend', events: pitEvents(part) },
+        ],
+      };
+    });
+    return {
+      ...trackMeta,
+      name: track.name,
+      parts,
+    };
+  });
+
+  const raw = {
+    ...(m.rootExtras || {}),
+    version: m.version || { major: 5, minor: 0, revision: 0 },
+    masterTrack: {
+      ...(m.masterExtras || {}),
+      tempo: { events: [{ pos: 0, value: Math.round(score.bpm * 100) }] },
+      timeSig: { events: [{ bar: 0, numer: ts.numerator, denom: ts.denominator }] },
+    },
+    tracks,
+  };
+  return writeZip(
+    [{ name: 'Project/sequence.json', data: JSON.stringify(raw, null, 2) }],
+    { method: 'deflate' },
+  );
+}
+
+module.exports = {
+  parseVsqx,
+  parseVpr,
+  decodeXmlBytes,
+  encodeVsqx,
+  encodeVpr,
+};

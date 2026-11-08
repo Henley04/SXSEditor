@@ -23,6 +23,34 @@ const MAX_ANCHORS = 2000;
 const MIN_ANCHOR_STEP = 1 / 16;
 const MAX_PITCH = 127;
 
+// ---------------------------------------------------------------------------
+// 呼吸音标记转译
+//
+// Synthesizer V 与 VOCALOID 用歌词 "br" 表示可听见的呼吸（breath）音符。宿主
+// 的推理音素表 phone_set.json 把可发声的吸气/气声记为 <AP>（另见用户指南
+// "Type the literal token <AP> for an audible breath" 与 preprocessing.js 对
+// <AP> 为清音、无谐波音高的说明）。两者语义一致，但字面不同：直接把 "br"
+// 当普通歌词交给宿主，会被按拼读规则转换成辅音串并唱出实词，而不是换气声。
+//
+// 因此导入时统一成 <AP>，写回外部格式时还原成 "br" —— 双向对称，round-trip
+// 不会把标记漂移成别的字面量。<SP>（数字静音）与 <AP> 是不同概念，不在此列。
+const HOST_ASPIRATION = '<AP>';
+const SOURCE_BREATH = 'br';
+const BREATH_RE = /^br$/i;
+// 扩展域的命名空间。宿主不解析 ext 内容，只在打开/保存之间原样携带，
+// 因此源工程里带不回来的元数据可以放在这里，不必挤进核心模型。
+const PLUGIN_ID = 'official-project-import';
+
+function importLyric(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return BREATH_RE.test(text) ? HOST_ASPIRATION : text;
+}
+
+function exportLyric(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.toUpperCase() === HOST_ASPIRATION ? SOURCE_BREATH : text;
+}
+
 function roundTime(v) {
   return Math.round(v * 480) / 480;
 }
@@ -49,7 +77,9 @@ function normalizeColor(value) {
 }
 
 function safeLyric(value, fallback) {
-  const text = typeof value === 'string' ? value.trim() : '';
+  // 先把源格式的呼吸标记转成宿主吸气 token，再做长度裁剪：
+  // "<AP>" 只有 4 个字符，裁剪不会破坏它。
+  const text = importLyric(value);
   return (text || fallback).slice(0, 24);
 }
 
@@ -213,18 +243,164 @@ function buildDocument(score) {
   const numerator = clamp(Math.round(Number(ts.numerator) || 4), 1, 32);
   const denominator = clamp(Math.round(Number(ts.denominator) || 4), 2, 32);
 
-  return {
+  const document = {
     version: '1.3.0',
     project: { bpm: Math.round(bpm * 100) / 100, timeSignature: [numerator, denominator] },
     singers,
     fragments,
+  };
+  // 把源工程元数据放进文档级扩展域。宿主校验会用 cloneJson 完整保留 ext
+  // 子树（深度 12、单条 512KB），保存时再交回给 writer 合并，尽量让源
+  // 工程在外部软件里仍可用。没有元数据的格式不写这个字段。
+  if (score.meta && typeof score.meta === 'object') {
+    document.ext = { [PLUGIN_ID]: { sourceMeta: score.meta } };
+  }
+  return document;
+}
+
+/** 把同一拍位置上的重复偏移合并：生成控制器事件时一个位置只允许一个值。 */
+function dedupeOffsets(list) {
+  const byBeat = new Map();
+  for (const item of list) byBeat.set(roundTime(item.beat), item.semitones);
+  return [...byBeat.entries()]
+    .map(([beat, semitones]) => ({ beat, semitones }))
+    .sort((a, b) => a.beat - b.beat);
+}
+
+/**
+ * 音高曲线锚点 → 相对半音偏移。
+ *
+ * buildAnchors 写入的是「音符基础音高 + 偏移」的绝对 MIDI 音高，写回外部格式
+ * 时需要的却是相对量（VOCALOID 的 PIT、SVP 的 pitchDelta 都是相对基础音高）。
+ * 这里按 buildAnchors 完全相同的「当前音符」查找规则反推，避免把音符切换处的
+ * 跳音误算成一次弯音。
+ */
+function anchorsToOffsets(fragment, startBeat) {
+  const curve = fragment.pitchCurve;
+  if (!curve || !curve.enabled || fragment.pitchMode !== 'manual') return [];
+  const anchors = Array.isArray(curve.anchorPoints) ? curve.anchorPoints : [];
+  const notes = (Array.isArray(fragment.notes) ? fragment.notes : [])
+    .filter((n) => n && typeof n === 'object')
+    .slice()
+    .sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0));
+  if (!anchors.length || !notes.length) return [];
+
+  let index = 0;
+  const baseAt = (time) => {
+    while (index + 1 < notes.length
+      && (Number(notes[index + 1].start) || 0) <= time + TIME_EPSILON) index++;
+    return Math.round(Number(notes[index].pitch) || 60);
+  };
+
+  const out = [];
+  for (const anchor of anchors) {
+    const time = Number(anchor.time);
+    const pitch = Number(anchor.pitch);
+    if (!Number.isFinite(time) || !Number.isFinite(pitch)) continue;
+    out.push({
+      beat: roundTime(startBeat + time),
+      semitones: roundPitch(pitch - baseAt(time)),
+    });
+  }
+  return dedupeOffsets(out);
+}
+
+/**
+ * 从文档扩展域取回导入时保存的源工程元数据。
+ *
+ * 只有 format 与目标格式一致才返回：用户把 .svp 另存为 .vpr 时，SVP 的
+ * 音色库/组结构不能套到 VOCALOID 容器上，硬合并只会产出外部软件打不开的
+ * 文件。此时返回 null，writer 按全新工程生成，并在告警里说明元数据未沿用。
+ * @param {object} document
+ * @param {string} format 'svp' | 'vsqx' | 'vpr'
+ */
+function readSourceMeta(document, format) {
+  const bag = document && document.ext && document.ext[PLUGIN_ID];
+  const meta = bag && bag.sourceMeta;
+  if (!meta || typeof meta !== 'object' || meta.format !== format) return null;
+  return meta;
+}
+
+/**
+ * buildDocument 的逆变换：宿主工程文档 → 各格式 writer 共用的中间谱面。
+ *
+ * 保存时宿主交给插件的是**校验过的文档**：分片已经按歌手分组、音符时间是分片内
+ * 相对拍、音高曲线是绝对 MIDI 音高。这里把它们还原成 reader 产出时的绝对拍谱面，
+ * 三个 writer 才能共用同一份映射，不必各自实现一遍「分片怎么拼回轨道」。
+ *
+ * 没有对应歌手的分片不会丢：单独收进一条 Untitled 轨道，并由调用方显式告警。
+ */
+function documentToScore(document) {
+  const singers = Array.isArray(document.singers) ? document.singers : [];
+  const fragments = Array.isArray(document.fragments) ? document.fragments : [];
+  const singerIds = new Set(singers.map((s) => s && s.id));
+  const grouped = new Map();
+  const orphans = [];
+  for (const f of fragments) {
+    if (!f || typeof f !== 'object') continue;
+    if (f.singerId && singerIds.has(f.singerId)) {
+      if (!grouped.has(f.singerId)) grouped.set(f.singerId, []);
+      grouped.get(f.singerId).push(f);
+    } else {
+      orphans.push(f);
+    }
+  }
+
+  const buildParts = (list) => list.map((f) => {
+    const start = Math.max(0, Number(f.startTime) || 0);
+    const notes = (Array.isArray(f.notes) ? f.notes : []).map((n) => ({
+      startBeat: roundTime(start + (Number(n && n.start) || 0)),
+      durationBeat: roundTime(Math.max(Number(n && n.duration) || 0, 1 / 480)),
+      pitch: Math.round(Number(n && n.pitch) || 60),
+      // 与导入相反：宿主的吸气 token 写回源工程时还原成 "br"，否则外部软件
+      // 会把 "<AP>" 当成普通歌词拼读。
+      lyric: exportLyric(n && n.lyric) || 'la',
+    }));
+    const lastEnd = notes.reduce((max, n) => Math.max(max, n.startBeat + n.durationBeat), start);
+    return {
+      name: String(f.name || '').slice(0, 60),
+      startBeat: start,
+      durationBeat: Math.max(roundTime(Number(f.duration) || 0), roundTime(lastEnd - start), 1),
+      notes,
+      pitchOffsets: anchorsToOffsets(f, start),
+    };
+  });
+
+  const tracks = [];
+  for (const s of singers) {
+    if (!s || typeof s !== 'object') continue;
+    tracks.push({
+      name: String(s.trackName || s.singerName || s.id || 'Track').slice(0, 60),
+      color: s.color,
+      parts: buildParts(grouped.get(s.id) || []),
+    });
+  }
+  if (orphans.length) tracks.push({ name: 'Untitled', parts: buildParts(orphans) });
+
+  const project = document.project || {};
+  const ts = Array.isArray(project.timeSignature) ? project.timeSignature : [4, 4];
+  return {
+    bpm: clamp(Number(project.bpm) || 120, 20, 400),
+    timeSignature: {
+      numerator: clamp(Math.round(Number(ts[0]) || 4), 1, 32),
+      denominator: clamp(Math.round(Number(ts[1]) || 4), 2, 32),
+    },
+    tracks,
+    orphanCount: orphans.length,
   };
 }
 
 module.exports = {
   TICKS_PER_BEAT: 480,
   BLICK_PER_BEAT: 705600000,
+  HOST_ASPIRATION,
+  SOURCE_BREATH,
+  PLUGIN_ID,
+  importLyric,
+  exportLyric,
+  readSourceMeta,
   buildDocument,
+  documentToScore,
   normalizeNotes,
   normalizeColor,
   interpolateOffset,

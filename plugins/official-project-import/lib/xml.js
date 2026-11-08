@@ -258,8 +258,68 @@ function deepNumber(node, ...names) {
   return null;
 }
 
+/** 文本与属性值的 XML 转义（顺序固定：& 必须先替换）。 */
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/** 构造节点：{ name, attrs, children, text }，形状与 parseXml 的输出一致。 */
+function node(name, attrs, children, text) {
+  return {
+    name: String(name),
+    attrs: attrs && typeof attrs === 'object' ? { ...attrs } : {},
+    children: Array.isArray(children) ? children : [],
+    text: typeof text === 'string' ? text : '',
+  };
+}
+
+/**
+ * 节点树 → XML 文本。
+ *
+ * 只覆盖写入路径需要的语法：声明、属性、纯文本叶子、子元素、自闭合空节点。
+ * 解析侧支持的注释 / CDATA / 命名空间前缀在生成时用不到；根节点名与 xmlns
+ * 由调用方按 VSQX 版本给出，detectVsqxVersion 正是靠它选择标签表。
+ */
+function serializeXml(root, options = {}) {
+  const indentUnit = options.indent === false ? '' : '  ';
+  const lines = [];
+  if (options.declaration !== false) lines.push('<?xml version="1.0" encoding="UTF-8"?>');
+
+  const render = (item, depth) => {
+    const pad = indentUnit.repeat(depth);
+    const attrs = Object.entries(item.attrs || {})
+      .map(([key, value]) => ` ${key}="${escapeXml(value)}"`)
+      .join('');
+    const children = Array.isArray(item.children) ? item.children : [];
+    const text = typeof item.text === 'string' ? item.text.trim() : '';
+    if (!children.length && !text) {
+      lines.push(`${pad}<${item.name}${attrs}/>`);
+      return;
+    }
+    if (!children.length) {
+      lines.push(`${pad}<${item.name}${attrs}>${escapeXml(text)}</${item.name}>`);
+      return;
+    }
+    lines.push(`${pad}<${item.name}${attrs}>`);
+    if (text) lines.push(`${pad}${indentUnit}${escapeXml(text)}`);
+    for (const child of children) render(child, depth + 1);
+    lines.push(`${pad}</${item.name}>`);
+  };
+
+  render(root, 0);
+  return `${lines.join('\n')}\n`;
+}
+
 module.exports = {
   parseXml,
+  serializeXml,
+  node,
+  escapeXml,
   child,
   children,
   find,

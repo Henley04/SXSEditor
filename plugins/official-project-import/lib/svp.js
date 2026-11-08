@@ -194,7 +194,177 @@ function parseSvp(bytes, t) {
     timeSignature,
     tracks,
     warnings,
+    meta: collectSvpMeta(raw, tracksRaw),
   };
 }
 
-module.exports = { parseSvp };
+// ---------------------------------------------------------------------------
+// 写入
+//
+// 与 parseSvp 严格对称：read 认下来的音符、歌词、音高、速度、拍号与分片起点，
+// write 必须能原样吐回去。源工程里宿主没有等价字段的部分（音色库引用、渲染开关、
+// 音符颤音与音素属性）由 collectSvpMeta 收成一份精简快照，经 document.ext 带回，
+// 保存时合并进生成的工程；带不回来的在 main.js 里逐条告警，绝不静默丢弃。
+
+/** 只保留体量可控、深度可控的值，避免把整份原始工程塞进扩展域。 */
+function smallValue(value) {
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+    return Number.isFinite(value) || typeof value !== 'number' ? value : null;
+  }
+  if (Array.isArray(value) && value.length <= 64
+    && value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
+    return value;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const keys = Object.keys(value);
+    if (keys.length <= 16 && keys.every((key) => (
+      value[key] === null || ['string', 'number', 'boolean'].includes(typeof value[key])
+    ))) return value;
+  }
+  return undefined;
+}
+
+/** 去掉音符与曲线后剩下的组级元数据（音色库、渲染设置等）。 */
+function stripGroup(group) {
+  const out = {};
+  if (!group || typeof group !== 'object') return out;
+  for (const [key, value] of Object.entries(group)) {
+    if (key === 'notes' || key === 'parameters') continue;
+    const kept = smallValue(value);
+    if (kept !== undefined) out[key] = kept;
+  }
+  return out;
+}
+
+function collectSvpMeta(raw, tracksRaw) {
+  const rootExtras = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (['version', 'time', 'library', 'tracks'].includes(key)) continue;
+    const kept = smallValue(value);
+    if (kept !== undefined) rootExtras[key] = kept;
+  }
+
+  const library = Array.isArray(raw.library) ? raw.library : [];
+  const libraryExtras = library.slice(0, 64).map(stripGroup);
+  const tracks = [];
+  const groups = [];
+  for (const track of tracksRaw) {
+    const scalars = {};
+    for (const [key, value] of Object.entries(track || {})) {
+      if (key === 'mainGroup' || key === 'groups' || key === 'notes') continue;
+      const kept = smallValue(value);
+      if (kept !== undefined) scalars[key] = kept;
+    }
+    tracks.push(scalars);
+
+    const own = [];
+    if (track && track.mainGroup) own.push(stripGroup(track.mainGroup));
+    for (const ref of Array.isArray(track && track.groups) ? track.groups : []) {
+      const source = library.find((g) => g && g.uuid === (ref && ref.groupID));
+      own.push(source ? stripGroup(source) : {});
+    }
+    groups.push(own);
+  }
+  return { format: 'svp', version: Number(raw.version) || 200, rootExtras, libraryExtras, tracks, groups };
+}
+
+/**
+ * @param {object} score documentToScore 的输出
+ * @param {object} meta collectSvpMeta 的快照（经 document.ext 带回，可能缺失）
+ * @returns {Buffer} .svp 文件字节
+ */
+function encodeSvp(score, meta) {
+  const m = meta && meta.format === 'svp' ? meta : {};
+  const blick = (beat) => Math.round((Number(beat) || 0) * BLICK_PER_BEAT);
+  const cent = (semitones) => Math.round((Number(semitones) || 0) * 100);
+
+  const library = [];
+  const tracks = (Array.isArray(score.tracks) ? score.tracks : []).map((track, ti) => {
+    const trackMeta = (m.tracks || [])[ti] || {};
+    const groupMeta = (m.groups || [])[ti] || [];
+    const parts = Array.isArray(track.parts) ? track.parts : [];
+
+    const makeGroup = (part, pi) => {
+      const startBeat = Number(part.startBeat) || 0;
+      const notes = (Array.isArray(part.notes) ? part.notes : []).map((n) => ({
+        onset: blick((Number(n.startBeat) || 0) - startBeat),
+        duration: Math.max(1, blick(Number(n.durationBeat) || 0)),
+        pitch: Math.round(Number(n.pitch) || 60),
+        lyrics: String(n.lyric || 'la'),
+      }));
+      const points = [];
+      for (const offset of (Array.isArray(part.pitchOffsets) ? part.pitchOffsets : [])) {
+        points.push(
+          blick((Number(offset.beat) || 0) - startBeat),
+          cent(Number(offset.semitones) || 0),
+        );
+      }
+      const saved = groupMeta[pi] || {};
+      return {
+        ...saved,
+        name: 'main',
+        uuid: `import-group-${ti + 1}-${pi + 1}`,
+        notes,
+        parameters: { pitchDelta: { mode: 'cubic', points } },
+      };
+    };
+
+    const mainPart = parts[0] || { startBeat: 0, notes: [], pitchOffsets: [] };
+    const mainGroup = makeGroup(mainPart, 0);
+    const mainRef = {
+      ...(trackMeta.mainRef || {}),
+      groupID: mainGroup.uuid,
+      blickOffset: blick(Number(mainPart.startBeat) || 0),
+      pitchOffset: Number((trackMeta.mainRef || {}).pitchOffset) || 0,
+    };
+
+    const groups = [];
+    for (let pi = 1; pi < parts.length; pi++) {
+      const group = makeGroup(parts[pi], pi);
+      library.push(group);
+      groups.push({
+        groupID: group.uuid,
+        blickOffset: blick(Number(parts[pi].startBeat) || 0),
+        pitchOffset: 0,
+        isInstrumental: false,
+      });
+    }
+
+    return {
+      ...trackMeta,
+      name: track.name,
+      dispColor: trackMeta.dispColor !== undefined ? trackMeta.dispColor : (track.color || '0xFF3366CC'),
+      dispOrder: Number.isFinite(Number(trackMeta.dispOrder)) ? Number(trackMeta.dispOrder) : ti,
+      renderEnabled: trackMeta.renderEnabled !== false,
+      mainRef,
+      mainGroup,
+      groups,
+    };
+  });
+
+  // 源工程的音色库条目若没有被新生成的组引用，作为元数据保留在 library 里：
+  // 它们不带音符，不会被 parseSvp 当成可导入的音符组，但外部软件仍能读到。
+  for (const extra of (m.libraryExtras || [])) {
+    if (extra && extra.uuid && !library.some((g) => g.uuid === extra.uuid)) {
+      library.push({ ...extra, notes: [], parameters: {} });
+    }
+  }
+
+  const raw = {
+    ...(m.rootExtras || {}),
+    version: Number(m.version) || 200,
+    time: {
+      meter: [{
+        index: 0,
+        numerator: score.timeSignature.numerator,
+        denominator: score.timeSignature.denominator,
+      }],
+      tempo: [{ position: 0, bpm: score.bpm }],
+    },
+    library,
+    tracks,
+  };
+  return Buffer.from(JSON.stringify(raw, null, 2), 'utf8');
+}
+
+module.exports = { parseSvp, encodeSvp, collectSvpMeta };
