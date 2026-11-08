@@ -130,6 +130,8 @@ module.exports = [
             'src/inference/winml/winrt-bindings/**/*.js',
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
+            // EP 显示标签：utils 目录里的 ESM 纯函数（渲染层 import、单测 require）
+            'src/utils/epLabel.js',
             'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
@@ -196,6 +198,8 @@ module.exports = [
             // 工具栏弹出层的通用装配器：渲染层 ESM（utils 目录整体登记在 CJS 档，
             // 新文件必须单独列进 ESM 档，否则 import/export 直接解析失败）
             'src/utils/popoverMenu.js',
+            // EP 显示标签：渲染层 ESM 纯函数，拆出来便于单测直接断言
+            'src/utils/epLabel.js',
             'src/pluginManager/**/*.js',
             'src/modelDownload.js',
             'src/resourceManager.js',

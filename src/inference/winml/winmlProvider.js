@@ -75,6 +75,10 @@ const RETRY_COOLDOWN_MS = 15000;
 let _registeringPromise = null;
 let _readyEpLibrariesPromise = null;
 let _readyEpLibrariesCache = null;
+// 记录解析缓存时的后端门控状态。缓存随后端失效是必要的：用户在 DML 与
+// Windows ML 之间切换时，gate 关闭期间解析出的空 EP 列表若被永久缓存，切回
+// Windows ML 后所有模型会继续回退到 DML/CPU，界面上的 EP 便一直是 DML。
+let _readyEpLibrariesCacheKey = null;
 
 function _getSettings() {
     // worker_threads 场景：svsWorker 启动时把主进程下发的开关快照挂到
@@ -92,11 +96,24 @@ function _getSettings() {
 
 /** Gate for the WinML branch. On by default with backend auto/winml; closed
  * (returns false) when the user opts into DML (nativeInferenceBackend==='dml')
- * or the platform is unsupported. */
+ * or the platform is unsupported.
+ *
+ * 同时校验 nativeInferenceBackend：界面保存时 winmlEnabled 由后端派生，但
+ * 旧配置、CLI 注入或诊断快照可能只带其中一个字段。两者任一指向 DML 都应
+ * 关闭 WinML 分支，避免"设置显示已切回 WinML、实际仍走 DML"的不一致。
+ */
 function isWinmlEnabled() {
     if (!winmlCatalog.isPlatformSupported()) return false;
     const s = _getSettings();
+    if (s.nativeInferenceBackend === 'dml') return false;
+    if (s.inferenceProvider && s.inferenceProvider !== 'ortnode') return false;
     return s.winmlEnabled === true;
+}
+
+/** 解析缓存的键：门控开关 + 显式后端。后端一变，旧缓存立即失效。 */
+function _epCacheKey() {
+    const s = _getSettings();
+    return `${isWinmlEnabled() ? 'on' : 'off'}|${String(s.nativeInferenceBackend || 'auto')}|${String(s.inferenceProvider || '')}`;
 }
 
 /**
@@ -190,16 +207,33 @@ async function _resolveReadyEpLibraries() {
  * overlap, so all callers must share this single flight.
  */
 async function getReadyEpLibraries() {
-    if (_readyEpLibrariesCache) return _readyEpLibrariesCache.map(e => ({ ...e }));
+    const key = _epCacheKey();
+    // 只有当缓存来自**同一个门控状态**时才复用。旧实现无条件命中，
+    // 于是 DML 后端期间解析出的空列表（甚至是 [] 这个 truthy 值）会在切回
+    // Windows ML 后继续被返回，worker 拿到空 EP 快照，全部模型回退 DML。
+    if (_readyEpLibrariesCache && _readyEpLibrariesCacheKey === key) {
+        return _readyEpLibrariesCache.map(e => ({ ...e }));
+    }
     if (_readyEpLibrariesPromise) {
         console.log('[WinML][ready] join=in-flight');
         return _readyEpLibrariesPromise;
     }
+
+    // 门控关闭时不要解析、也不要缓存：诊断/预热等路径会在后端为 DML 时
+    // 调用本函数，若把 [] 写进缓存，切回 Windows ML 后就是永久短路。
+    if (!isWinmlEnabled()) {
+        _readyEpLibrariesCache = null;
+        _readyEpLibrariesCacheKey = null;
+        console.log('[WinML][ready] gate closed; returning empty without caching');
+        return [];
+    }
+
     const started = Date.now();
     console.log('[WinML][ready] start');
     _readyEpLibrariesPromise = _resolveReadyEpLibraries()
         .then((eps) => {
             _readyEpLibrariesCache = eps.map(e => ({ ...e }));
+            _readyEpLibrariesCacheKey = key;
             console.log(`[WinML][ready] done ms=${Date.now() - started} eps=${eps.map(e => e.name).join(',') || 'none'}`);
             return _readyEpLibrariesCache.map(e => ({ ...e }));
         })
@@ -635,16 +669,24 @@ function clearTRTEngineCache() {
     return removed;
 }
 
-/** Test/diagnostic reset. */
-function __resetForTest() {
+/**
+ * 重置全部进程级 EP 状态。
+ *
+ * 后端在 DML 与 Windows ML 之间切换时必须调用：否则主进程里缓存的空 EP
+ * 列表、运行期失败 pin（_runtimeBlockedModels）、已注册集合与冷却计时都会
+ * 残留，导致切回 Windows ML 后仍全部回退 DML。测试也用同一个入口复位。
+ */
+function resetEpState() {
     registeredEps.clear();
     _runtimeBlockedModels.clear();
     registrationAttempted = false;
     _lastAttemptAt = 0;
     _emptyReasonLogged = false;
     _cooldownLogged = false;
+    _registeringPromise = null;
     _readyEpLibrariesPromise = null;
     _readyEpLibrariesCache = null;
+    _readyEpLibrariesCacheKey = null;
 }
 
 module.exports = {
@@ -656,6 +698,8 @@ module.exports = {
     reportRuntimeFailure,
     isRuntimeBlocked,
     clearTRTEngineCache,
+    resetEpState,
     listCompatibleProviders: (...a) => winmlCatalog.listCompatibleProviders(...a),
-    __resetForTest,
+    // 兼容既有测试与诊断脚本使用的旧名称。
+    __resetForTest: resetEpState,
 };

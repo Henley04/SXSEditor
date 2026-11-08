@@ -140,11 +140,26 @@ async function _createPipeline(languageOverride) {
     // svsWorker 启动时挂到 globalThis，winmlProvider 直接 registerEp。
     let winmlEps;
     let winmlEnabled = false;
-    if (settings.winmlEnabled === true) {
+    // 显式后端也要参与判定：settings.winmlEnabled 是界面保存时派生的值，
+    // 后端被改成 DML 但派生字段尚未同步时，不能继续按 WinML 路径下发。
+    const backendIsDml = settings.nativeInferenceBackend === 'dml'
+      || (settings.inferenceProvider && settings.inferenceProvider !== 'ortnode');
+    if (settings.winmlEnabled === true && !backendIsDml) {
       try {
-        winmlEps = await require('../inference/winml/winmlProvider').getReadyEpLibraries();
+        const winmlProvider = require('../inference/winml/winmlProvider');
+        winmlEps = await winmlProvider.getReadyEpLibraries();
+        // 后端已切回 Windows ML 却解析到空列表，通常是旧的门控缓存未失效。
+        // 清一次进程级状态再解析，仍为空则如实告知并回退，不把空快照伪装
+        // 成"WinML 已就绪"。
+        if (!Array.isArray(winmlEps) || winmlEps.length === 0) {
+          winmlProvider.resetEpState();
+          winmlEps = await winmlProvider.getReadyEpLibraries();
+        }
         winmlEnabled = true;
         console.log(`[Main] WinML enabled: resolved ${winmlEps ? winmlEps.length : 0} ready EP(s)${winmlEps && winmlEps.length ? ' -> ' + winmlEps.map((e) => e.name).join(', ') : ''}`);
+        if (!winmlEps || winmlEps.length === 0) {
+          console.warn('[Main] WinML enabled but no compatible EP resolved; sessions will fall back to DML/CPU for this worker');
+        }
       } catch (err) {
         console.warn('[Main] WinML EP resolution failed; worker will use DML/CPU:', err.message);
         winmlEps = [];

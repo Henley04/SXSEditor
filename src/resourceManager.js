@@ -3,6 +3,7 @@ import './resourceManager.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 import { formatBytes } from './utils/formatBytes.js';
+import { getEPLabel, getEPBadgeClass } from './utils/epLabel.js';
 import { createIcon, hydrateIcons } from './icons/iconHelper.js';
 
 const gpuInfoContent = document.getElementById('gpuInfoContent');
@@ -22,26 +23,6 @@ function getLocalizedName(item) {
 function getLocalizedDesc(item) {
     if (getLocale() === 'en' && item.descriptionEn) return item.descriptionEn;
     return item.description;
-}
-
-function getEPLabel(ep) {
-    if (!ep) return '';
-    const map = {
-        dml: 'DML',
-        cpu: 'CPU',
-        tfjs: 'TFJS',
-    };
-    return map[ep.toLowerCase()] || ep.toUpperCase();
-}
-
-function getEPBadgeClass(ep) {
-    if (!ep) return 'none';
-    const map = {
-        dml: 'dml',
-        cpu: 'cpu',
-        tfjs: 'tfjs',
-    };
-    return map[ep.toLowerCase()] || 'none';
 }
 
 // #2: 设置按钮loading状态

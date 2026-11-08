@@ -303,6 +303,9 @@ function registerSettingsIpc() {
         // Windows ML vendor EP 开关影响 diffStep/vocoder/preflow 会话创建路径，
         // 切换后必须重建 pipeline（重建时 createSessionWithValidation 才会尝试 WinML 链）
         'winmlEnabled',
+        // 显式后端（auto / winml / dml）也要参与判定：它与 winmlEnabled 一起
+        // 决定 WinML 门控，只比较派生值会漏掉"后端改了但派生值相同"的情形。
+        'nativeInferenceBackend',
     ];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
@@ -314,6 +317,19 @@ function registerSettingsIpc() {
     const vocoderTypeChanged = current.vocoderType !== merged.vocoderType;
     const sifiganPrecisionChanged = current.sifiganPrecision !== merged.sifiganPrecision;
     if (needsPipelineReset) {
+      // 后端在 DML 与 Windows ML 间切换时，主进程 winmlProvider 里缓存的
+      // EP 解析结果、运行期失败 pin、已注册集合必须一并失效。只重建 pipeline
+      // 不会清这些模块级单例：DML 期间缓存的空 EP 列表会让切回 Windows ML
+      // 后所有模型继续回退 DML，界面 EP 恒定显示 DML。
+      const backendChanged = current.nativeInferenceBackend !== merged.nativeInferenceBackend
+        || current.winmlEnabled !== merged.winmlEnabled;
+      if (backendChanged) {
+        try {
+          require('../inference/winml/winmlProvider').resetEpState();
+        } catch (err) {
+          console.warn('[Main] WinML EP state reset failed:', err && err.message);
+        }
+      }
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();

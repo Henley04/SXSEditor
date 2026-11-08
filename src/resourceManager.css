@@ -387,6 +387,11 @@ body {
     color: var(--color-purple-400);
 }
 
+.ep-badge.winml {
+    background: var(--accent-soft);
+    color: var(--accent-fg);
+}
+
 .ep-badge.none {
     background: var(--ink-soft);
     color: var(--fg-disabled);
