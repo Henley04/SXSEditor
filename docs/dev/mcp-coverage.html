@@ -60,8 +60,8 @@
         <span data-lang="zh">MCP 覆盖范围</span>
       </h1>
 
-      <p data-lang="en">The automation surface has 49 methods, all exposed by the stdio server (68 tool names including aliases and multi-action helpers). Being callable is not the same as being sufficient, so this page is organised by scenario rather than by function, and it identifies the tasks that MCP does not cover.</p>
-      <p data-lang="zh">自动化接口共 49 个方法，stdio 服务器将其全部暴露（含别名与多动作工具共 68 个工具名）。可调用不等于可完成，因此本页按使用场景而非方法清单组织，并说明 MCP 未覆盖的任务。</p>
+      <p data-lang="en">The automation surface has 52 methods, all exposed by the stdio server (71 tool names including aliases and multi-action helpers). Being callable is not the same as being sufficient, so this page is organised by scenario rather than by function, and it identifies the tasks that MCP does not cover.</p>
+      <p data-lang="zh">自动化接口共 52 个方法，stdio 服务器将其全部暴露（含别名与多动作工具共 71 个工具名）。可调用不等于可完成，因此本页按使用场景而非方法清单组织，并说明 MCP 未覆盖的任务。</p>
 
       <h2>
         <span data-lang="en">Covered</span>
@@ -111,6 +111,10 @@
           <tr>
             <td><span data-lang="en">Model calls through your endpoints</span><span data-lang="zh">通过你的端点调用模型</span></td>
             <td><code>model.list / invoke / read</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Local model sessions</span><span data-lang="zh">本地模型会话</span></td>
+            <td><code>pipeline.status / load / unload</code> <span data-lang="en">— reports which ONNX model groups are installed and loaded, and loads or unloads them without an export</span><span data-lang="zh">——报告已安装、已加载的 ONNX 模型组，可在不导出的情况下加载或卸载</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Windows, screenshot, locale</span><span data-lang="zh">窗口、截图、语言</span></td>

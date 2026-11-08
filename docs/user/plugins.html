@@ -66,8 +66,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">No plugin ships with the application. A fresh install shows an empty list until you add one.</p>
-          <p data-lang="zh">应用不内置任何插件。全新安装的列表是空的，直到你自己加一个。</p>
+          <p data-lang="en">One plugin ships with the application: the built-in official project plugin, installed automatically on first launch. It carries a <em>Built-in</em> badge, can be disabled, and cannot be uninstalled. Any other plugin appears only after you add it, so a fresh install shows exactly that one card.</p>
+          <p data-lang="zh">应用随附一个插件：内置官方工程插件，首次启动时自动安装。它带有<em>内置</em>徽章，可停用、不可卸载。除此之外的插件都要由你自行添加，因此全新安装的列表里只有这一张卡片。</p>
         </div>
       </div>
 
@@ -87,6 +87,10 @@
           <tr>
             <td><span data-lang="en">Singing backend</span><span data-lang="zh">歌声后端</span></td>
             <td><span data-lang="en">A new track kind in the Add Singer dialog. Tracks made with it are edited exactly like built-in ones and can be mixed into the same project.</span><span data-lang="zh">「添加歌手」里多出一种轨道。用它建的轨道与内置轨道编辑方式完全相同，可以混在同一个工程里。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">File formats</span><span data-lang="zh">文件格式</span></td>
+            <td><span data-lang="en">VOCALOID (<code>.vsqx</code>, <code>.vpr</code>) and Synthesizer V (<code>.svp</code>) projects open as editable documents and are written back on save or save as, with lossy fields reported as warnings. Provided by the built-in official project plugin.</span><span data-lang="zh">VOCALOID（<code>.vsqx</code>、<code>.vpr</code>）与 Synthesizer V（<code>.svp</code>）工程作为可编辑文档打开，保存 / 另存为时写回原格式，有损字段以警告提示。该能力由内置官方工程插件提供。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Commands</span><span data-lang="zh">命令</span></td>
@@ -144,6 +148,9 @@
         <li><span data-lang="en">Compare the fingerprint with what the author published. If it matches, choose <strong>Trust and install</strong>; otherwise close the banner.</span><span data-lang="zh">把指纹与作者公布的那串对照。一致就点<strong>「信任并安装」</strong>；不一致就关掉横幅。</span></li>
         <li><span data-lang="en">The card appears in the list, already running. No restart.</span><span data-lang="zh">卡片出现在列表里，已经在运行。不用重启。</span></li>
       </ol>
+
+      <p data-lang="en">A package may declare dependencies on other plugins. The manager expands the package into the whole batch, lists everything that will be written, and asks once; nothing is installed before that confirmation, and a declared dependency is never fetched on its own. Self-updates follow the same rule and are never installed or downgraded automatically.</p>
+      <p data-lang="zh">包可以声明对其它插件的依赖。管理器会把安装内容展开为整批清单，列明将要写入的全部内容并只询问一次；确认之前不写入任何文件，已声明的依赖也不会被私自拉取。插件自更新同理，绝不自动安装或自动降级。</p>
 
       <h3>
         <span data-lang="en">From a market source</span>
@@ -205,6 +212,9 @@
           </tr>
         </tbody>
       </table>
+
+      <p data-lang="en">A card marked <em>Built-in</em> offers no <em>Uninstall</em> action; the official project plugin ships with every install, so disabling it is as far as its management goes.</p>
+      <p data-lang="zh">标记为<em>内置</em>的卡片没有<em>卸载</em>操作：官方工程插件随每次安装一同分发，管理它的上限就是停用。</p>
 
       <p data-lang="en">Tracks that were created with a backend you later removed stay in the project and keep their notes, but they cannot be synthesised until that backend is installed again. The error names the missing plugin rather than silently falling back to the built-in model.</p>
       <p data-lang="zh">用某个后端建的轨道，在你卸载该后端后仍然留在工程里、音符也不会丢，但在重新装上之前无法合成。报错会指名缺哪个插件，不会静默回退到内置模型。</p>

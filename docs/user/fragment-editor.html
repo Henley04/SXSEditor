@@ -80,8 +80,8 @@
           <img src="../images/webp/fragment-editor.en.webp" data-en="../images/webp/fragment-editor.en.webp" data-zh="../images/webp/fragment-editor.zh.webp" alt="Fragment Editor: piano keys, piano roll with note bars and lyrics, inspector on the right, parameter lane tabs at the bottom" width="2520" height="1350" loading="lazy" decoding="async" />
         </a>
         <figcaption>
-          <span data-lang="en"><strong>Fragment Editor.</strong> <span class="fig-num">1</span> <strong>Inspector</strong> — pitch, timing and lyric of the selected note, its phonemes, and the timbre / post-processing sliders. <span class="fig-num">2</span> <strong>Piano roll</strong> — note bars with inline lyrics; click to add, drag to move, double-click to edit the lyric. Press <kbd class="kbd">2</kbd> for Pitch mode. <span class="fig-num">3</span> <strong>Parameter lanes</strong> — VOL / PAN / Phoneme / Timbre.</span>
-          <span data-lang="zh"><strong>分片编辑器。</strong> <span class="fig-num">1</span> <strong>检查器</strong>——选中音符的音高、时值与歌词，音素列表，以及音色 / 后处理滑杆。<span class="fig-num">2</span> <strong>钢琴卷帘</strong>——音符条内直接显示歌词；点击添加、拖动移动、双击改歌词。按 <kbd class="kbd">2</kbd> 进入音高模式。<span class="fig-num">3</span> <strong>参数泳道</strong>——音量 / 声像 / 音素 / 音色。</span>
+          <span data-lang="en"><strong>Fragment Editor.</strong> <span class="fig-num">1</span> <strong>Inspector</strong> — the pitch curve controls and naturalness check for the selected note, and the timbre / post-processing sliders. <span class="fig-num">2</span> <strong>Piano roll</strong> — note bars with inline lyrics; click to add, drag to move, double-click to edit the lyric. Press <kbd class="kbd">2</kbd> for Pitch mode. <span class="fig-num">3</span> <strong>Parameter lanes</strong> — VOL / PAN / Phoneme / Timbre.</span>
+          <span data-lang="zh"><strong>分片编辑器。</strong> <span class="fig-num">1</span> <strong>检查器</strong>——所选音符的音高曲线控制与自然度自检，以及音色 / 后处理滑杆。<span class="fig-num">2</span> <strong>钢琴卷帘</strong>——音符条内直接显示歌词；点击添加、拖动移动、双击改歌词。按 <kbd class="kbd">2</kbd> 进入音高模式。<span class="fig-num">3</span> <strong>参数泳道</strong>——音量 / 声像 / 音素 / 音色。</span>
         </figcaption>
       </figure>
 
@@ -428,8 +428,8 @@
         <span data-lang="en">Auto Pitch Curve</span>
         <span data-lang="zh">自动音高曲线</span>
       </h2>
-      <p data-lang="en">The <strong>Auto</strong> switch in the pitch toolbar makes every note sing with a natural contour: a short attack scoop into the note, a portamento between notes, an overshoot after big leaps, a reverse preparation before them, a fall-off at the end, vibrato on long notes, and a little jitter everywhere. It is on by default for new fragments and <strong>off</strong> for existing projects.</p>
-      <p data-lang="zh">音高工具栏的 <strong>自动</strong> 开关会让每个音符带上自然的起伏：起音时的短滑入、音符之间的滑音、大跳进后的过冲、跳进前的反向预备、句尾下滑、长音颤音，以及全程的细微抖动。新建分片默认开启，<strong>已有工程默认关闭</strong>。</p>
+      <p data-lang="en">The <strong>Auto</strong> switch in the inspector's Pitch curve section makes every note sing with a natural contour: a short attack scoop into the note, a portamento between notes, an overshoot after big leaps, a reverse preparation before them, a fall-off at the end, vibrato on long notes, and a little jitter everywhere. It is on by default for new fragments and <strong>off</strong> for existing projects.</p>
+      <p data-lang="zh">音高曲线分区里的 <strong>自动</strong> 开关会让每个音符带上自然的起伏：起音时的短滑入、音符之间的滑音、大跳进后的过冲、跳进前的反向预备、句尾下滑、长音颤音，以及全程的细微抖动。新建分片默认开启，<strong>已有工程默认关闭</strong>。</p>
       <p data-lang="en"><strong>Auto never blocks manual editing.</strong> The curve you see is drawn in three colours:</p>
       <p data-lang="zh"><strong>自动层永远不会妨碍手动编辑。</strong> 曲线用三种颜色表示：</p>
       <ul>
@@ -445,7 +445,7 @@
       </figure>
       <figure class="fig">
         <img src="../images/verify/editor-auto-curve.png" alt="Auto pitch curve over the notes, with the naturalness panel on the right" loading="lazy">
-        <figcaption><span data-lang="en">Auto curve on every note (attack scoop, portamento, vibrato, fall-off). The toolbar shows the Auto switch, preset, Params and Batch; the inspector shows the naturalness check.</span><span data-lang="zh">每个音符上的自动曲线（起音滑入、滑音、颤音、句尾下滑）。工具栏显示 自动 开关、预设、参数与批量；检查器里是自然度自检。</span></figcaption>
+        <figcaption><span data-lang="en">Auto curve on every note (attack scoop, portamento, vibrato, fall-off). The Auto switch, preset, Params and Batch live in the inspector's Pitch curve section; the naturalness check reports alongside.</span><span data-lang="zh">每个音符上的自动曲线（起音滑入、滑音、颤音、句尾下滑）。自动开关、预设、参数与批量位于检查器的音高曲线分区，自然度自检在同一区域显示。</span></figcaption>
       </figure>
 
       <p data-lang="en"><strong>It is not "every note, the same way".</strong> Auto decides per note whether a gesture happens at all: a long, high, phrase-final note is likely to get vibrato; a short detached one is not. Leaps overshoot only sometimes, and the amount varies note to note. Fall-offs are reserved for phrase ends, rests and long legato tails — otherwise every note end would dip and the line would wobble. All of this is deterministic: the same project always sounds the same, and undo/redo/export stay reproducible.</p>
@@ -501,10 +501,6 @@
         <li><span data-lang="en">Hold <kbd class="kbd">Shift</kbd> while dragging an anchor to snap it to the nearest semitone (the snap is on the absolute pitch, not on the drag distance).</span><span data-lang="zh">拖动锚点时按住 <kbd class="kbd">Shift</kbd> 吸附到最近的半音（吸附的是绝对音高，不是拖动量）。</span></li>
         <li><span data-lang="en">The right-click menu has a <strong>pitch field</strong> for exact input (60.25 = 60 semitones + 25 cents), plus the live cent offset.</span><span data-lang="zh">右键菜单里有<strong>音高输入框</strong>可精确填数（60.25 = 60 半音 + 25 音分），旁边显示实时音分偏差。</span></li>
       </ul>
-      <figure class="fig">
-        <img src="../images/verify/editor-batch-tools.png" alt="Pitch toolbar: reset, auto switch, preset, params, batch dropdown, brush smoothing" loading="lazy">
-        <figcaption><span data-lang="en">Pitch toolbar: Reset · Auto switch · preset · Params · <strong>Batch…</strong> (transpose / snap / simplify / smooth) · brush smoothing.</span><span data-lang="zh">音高工具栏：重置 · 自动开关 · 预设 · 参数 · <strong>批量…</strong>（移调 / 贴合 / 抽稀 / 平滑）· 画笔平滑。</span></figcaption>
-      </figure>
 
       <h3 id="naturalness-check">
         <span data-lang="en">Naturalness Check</span>
@@ -682,7 +678,6 @@
           <p data-lang="zh">频谱自动化以<strong>分片的第一个音符</strong>为时间基准（模型从第一个音符开始渲染，而不是从小节线 1 开始）。若分片开头有长休止，曲线的小节位置与 mel 帧号之间会差这段休止——曲线跟随的时间仍是正确的。</p>
           <p data-lang="en">For very long fragments the engine splits into 8–20 s segments and for fragments split at long rests into regions; spectral automation is time-aligned per segment/region (the payload carries the fragment's first-note beat, and the engine converts it per segment), so the curve keeps following wall-clock time. The same alignment applies to single-note fragments that get a 1-beat context padding. F0 automation is not affected because it is applied to the whole curve before splitting.</p>
           <p data-lang="zh">超长分片会被引擎切成 8–20 秒分段、含长休止的分片会被切成 region；频谱自动化按每个分段/region 各自做时间对齐（载荷携带分片首音符的拍位置，引擎逐段换算），曲线跟随的仍是真实时间。单音符分片前后垫 1 拍上下文休止的情况同样做了对齐。F0 自动化不受影响（它在切分之前就作用于整条曲线）。</p>
-          <p data-lang="zh">对于被引擎切分为 8–20 秒分段的超长分片，频谱自动化按每个分段各自对齐；F0 自动化不受影响（它在切分之前就作用于整条曲线）。</p>
         </div>
       </div>
 

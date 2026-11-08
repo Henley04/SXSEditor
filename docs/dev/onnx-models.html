@@ -333,6 +333,14 @@
         </div>
       </div>
 
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>INT8 W8A32 (int8 v2)</strong>: weights stay INT8 while activations and residuals run in FP32, and each model ships as one self-contained file. Static shapes are read from the model rather than assumed: the base model keeps <code>mel_emb.linear.weight</code> at <code>[1, 2048]</code> while <code>diff_step</code> inherits the actual <code>cond</code> shape, so conditions above 512 bins load instead of failing session creation with <code>Got: 1024 Expected: 512</code> (issue #36). The Q-Drift INT8 correction table is available but off by default: measured on W8A32 it moves the output by less than the measurement noise (cosine 0.99989, SNR 37.51 dB), so it runs only when switched on explicitly.</p>
+          <p data-lang="zh"><strong>INT8 W8A32（int8 v2）</strong>：权重保持 INT8，激活与残差按 FP32 计算，每个模型以单文件自包含发布。静态形状改为从模型读取而非凭常量假设：基础模型的 <code>mel_emb.linear.weight</code> 保持 <code>[1, 2048]</code>，<code>diff_step</code> 取实际 <code>cond</code> 形状，因此超过 512 bin 的条件可正常加载，不再在创建会话时报 <code>Got: 1024 Expected: 512</code>（issue #36）。Q-Drift INT8 修正表可选且默认关闭：在 W8A32 上实测对输出的改动小于测量噪声（余弦 0.99989、SNR 37.51 dB），仅在显式开启时启用。</p>
+        </div>
+      </div>
+
       <h2>
         <span data-lang="en">SiFiGAN Vocoder (Optional)</span>
         <span data-lang="zh">SiFiGAN 声码器（可选）</span>
