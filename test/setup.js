@@ -3,6 +3,11 @@ require('@babel/register')({
   ignore: [/node_modules/],
 });
 
+// 必须在加载任何 src/main/** 之前：CI 上 Electron 二进制偶发下载失败时，
+// 顶部 require('electron') 会触发重试下载并抛错，把整轮 mocha 崩在加载阶段。
+// 详见 test/electronBinaryFallback.js；本地装好了二进制时它是 no-op。
+require('./electronBinaryFallback').installFallback();
+
 const { JSDOM } = require('jsdom');
 
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {

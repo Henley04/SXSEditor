@@ -41,7 +41,30 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app } = require('electron');
+
+/**
+ * 惰性取 electron 的 app。
+ *
+ * ⚠️ 不要改回模块顶部的 `const { app } = require('electron')`：
+ * `node_modules/electron/index.js` 在缺二进制时会**自动下载** 100MB+ 安装包
+ * （见其 getElectronPath → downloadElectron）。cli.js 被单测直接 require
+ * （test/cliPlugin.test.js 只需要 parseArgs），顶部 require 会让整个测试套件
+ * 在纯 Node 环境下为了一个 `app` 去下载 Electron；CI 上那次 GitHub Releases
+ * 连续 504，直接把整个 test job 崩在 "Electron failed to install correctly"。
+ * 只有 cmdInfo() 真正需要 app，而它只在 `electron . --cli info` 下被调用。
+ *
+ * @returns {object|null} 不可用时返回 null（纯 Node 测试环境）
+ */
+let _electronApp;
+function getElectronApp() {
+  if (_electronApp !== undefined) return _electronApp;
+  try {
+    _electronApp = require('electron').app || null;
+  } catch (_) {
+    _electronApp = null;
+  }
+  return _electronApp;
+}
 
 const HELP_TEXT = `SXSEditor CLI (agent debug helper)
 
@@ -179,19 +202,26 @@ function cmdVersion() {
 }
 
 function cmdInfo() {
+  const app = getElectronApp();
   section('App');
   log(`productName : SXSEditor`);
-  log(`isPackaged  : ${app.isPackaged}`);
-  log(`appPath     : ${app.getAppPath()}`);
-  log(`version     : ${app.getVersion()}`);
+  if (!app) {
+    // 纯 Node 下跑（单测 / 直接 node src/main/cli.js）—— 这些字段只有 Electron 知道
+    log('isPackaged  : n/a (not running under Electron)');
+  } else {
+    log(`isPackaged  : ${app.isPackaged}`);
+    log(`appPath     : ${app.getAppPath()}`);
+    log(`version     : ${app.getVersion()}`);
+  }
 
   section('Runtime');
   log(`node        : ${process.versions.node}`);
-  log(`electron    : ${process.versions.electron}`);
+  log(`electron    : ${process.versions.electron || 'n/a'}`);
   log(`platform    : ${process.platform}`);
   log(`arch        : ${process.arch}`);
   log(`pid         : ${process.pid}`);
 
+  if (!app) return 0;
   section('Paths');
   log(`userData    : ${app.getPath('userData')}`);
   log(`logs        : ${app.getPath('logs')}`);
