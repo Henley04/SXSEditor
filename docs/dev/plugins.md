@@ -13,8 +13,8 @@
 > 用户指南的「插件后端」页。
 >
 > 适用范围：`src/main/pluginHost.js`（宿主内核）、`src/main/pluginIpc.js`（IPC 层）、
-> `src/shared/pluginContract.js`（**契约唯一真源**，校验常量与纯函数）、
-> `plugins/example-concat/`（可直接运行的模板插件）。
+> `src/shared/pluginContract.js`（**契约唯一真源**，校验常量与纯函数）。宿主内核按
+> 契约版本 1 加载并调用插件，本文完整描述该契约的清单字段、模块接口与调用护栏。
 >
 > 目标：让 SoulX-Singer 以外的模型后端（以及传统拼接方案）以插件形式接入，
 > 且**所有原本会传给模型的参数都能原样传给插件**。
@@ -93,9 +93,9 @@ while (Date.now() - t < 2000) { /* 一个普通的自写函数 */ }
     └── index.js               # manifest.main 指定的入口（CommonJS）
 ```
 
-仓库内 `plugins/example-concat/` 是模板插件，**不会**被应用自动加载——把它整个
-目录复制到 `<userData>/plugins/` 下才会被发现（或用 `pluginAPI.openPluginsFolder()`
-打开目录后手动放入，再 `pluginAPI.reload()`）。
+宿主只扫描 `<userData>/plugins/` 目录。插件目录须符合上述结构，放入该目录后调用
+`pluginAPI.reload()` 即完成加载；也可用 `pluginAPI.openPluginsFolder()` 打开目录后
+手动放入。
 
 ---
 
@@ -119,8 +119,8 @@ while (Date.now() - t < 2000) { /* 一个普通的自写函数 */ }
 
 ```json
 {
-  "id": "example-concat",
-  "name": "示例拼接后端",
+  "id": "my-backend",
+  "name": "示例歌声后端",
   "version": "1.0.0",
   "apiVersion": 1,
   "main": "index.js",
@@ -262,7 +262,7 @@ module.exports = {
    节流：**最小间隔 100ms 且进度变化 ≥ 2%**，进度到 100 / 取消 / 结束**必发**
    （状态每次都立刻更新，被节流掉的只是"推送"这一动作）。
    实测：400 次 `ticket.update()` → 推送 51 次（0→100 每 2% 一帧 + 终态，即理论上限）；
-   模板插件 400 音符的实测量从 403 次降到 35 次。
+   400 音符插件的实测推送次数从 403 次降到 35 次。
 
 ### 5.4 有限值全量扫描的性能取舍
 
@@ -289,8 +289,8 @@ warn，便于发现异常的插件行为——这只是提示，不改变校验�
 UI 显示阻塞信息与进度：
 
 ```js
-const ticket = host.blockPlayback({ title: '正在拼接音源', message: '装载拼接单元…', cancellable: true });
-ticket.update({ message: '拼接中…', progress: 40 });
+const ticket = host.blockPlayback({ title: '正在准备音源', message: '正在装载…', cancellable: true });
+ticket.update({ message: '准备中…', progress: 40 });
 ticket.end();  // 必须调用
 ```
 
@@ -314,7 +314,7 @@ ticket.end();  // 必须调用
 `src/main/svsIpc.js` 的三个 handler 都支持在 `options` 里声明插件后端：
 
 ```js
-options.backend = { type: 'plugin', pluginId: 'example-concat', kindId: 'concat-basic', params: { waveform: 'pulse' } };
+options.backend = { type: 'plugin', pluginId: 'my-backend', kindId: 'basic', params: { waveform: 'pulse' } };
 ```
 
 | handler | 插件分支行为 | 返回形态 |
@@ -366,8 +366,8 @@ options.backend = { type: 'plugin', pluginId: 'example-concat', kindId: 'concat-
 
 ## 9. 写一个自己的插件（最短路径）
 
-1. `cp -r plugins/example-concat <userData>/plugins/my-backend`，把目录名与
-   `manifest.json` 的 `id` 一起改成 `my-backend`；
+1. 在 `<userData>/plugins/` 下新建目录 `my-backend`，目录名与 `manifest.json`
+   的 `id` 保持一致，并按 §2 填写清单字段；
 2. 在 `synthesize()` 里换成你自己的推理 / 拼接逻辑（可以 `require` 自己的依赖，
    插件目录内的一切都由插件自己负责）；
 3. 需要"播放前必须完成"的准备步骤 → 用 `host.blockPlayback()`；
@@ -380,21 +380,12 @@ options.backend = { type: 'plugin', pluginId: 'example-concat', kindId: 'concat-
 `apiVersion` 以外的版本号（会被拒绝）；不要在 `initialize` 里做分钟级的加载而不
 用 `blockPlayback` 告诉用户（UI 会看起来像卡死）。
 
-### 9.1 回归冒烟（`scripts/plugin-smoke.js`）
+### 9.1 宿主侧的契约行为
 
-改完宿主或契约后跑一次：
-
-```bash
-node scripts/plugin-smoke.js     # 不需要 electron，也不需要 node_modules
-```
-
-26 项断言，覆盖插件发现/加载、音色、`request.options` 同一引用透传、阻滞 ticket
-的 start/update/end 配平、**同步忙等插件能否被超时真实抢占**（构造一个忙等 5 秒的
-插件，在 1 秒超时下必须被 `worker.terminate()` 杀掉）、含 NaN 的 PCM 必须被拒、
-以及 `midi-partial` 轨道种类能否被识别与合成。
-
-其中「忙等抢占」是唯一能证明超时不是 `Promise.race` 假超时的用例——如果哪天有人把
-默认执行模式改回 `inprocess`，这条会立刻变红。
+宿主按契约版本 1 提供以下保证：插件的发现与加载、音色查询、`request.options`
+同一引用透传、阻滞 ticket 的 start/update/end 配平、含 NaN 的 PCM 被拒绝，以及
+`midi-partial` 轨道种类的识别与合成。worker 模式下，超时通过终止工作线程真实
+抢占同步忙等的插件，而非仅依赖 `Promise.race` 的超时分支。
 
 ---
 

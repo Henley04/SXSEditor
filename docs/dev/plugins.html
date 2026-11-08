@@ -66,8 +66,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Source files: <code>src/shared/pluginContract.js</code> (the single source of truth for validation), <code>src/main/pluginHost.js</code> (host kernel), <code>src/main/pluginWorker.js</code> (worker runtime and cross-thread codec), <code>src/main/pluginIpc.js</code> (IPC surface), and <code>plugins/example-concat/</code> (a runnable template plugin).</p>
-          <p data-lang="zh">相关源文件：<code>src/shared/pluginContract.js</code>（校验唯一真源）、<code>src/main/pluginHost.js</code>（宿主内核）、<code>src/main/pluginWorker.js</code>（worker 运行时与跨线程编解码）、<code>src/main/pluginIpc.js</code>（IPC 接口），以及 <code>plugins/example-concat/</code>（可直接运行的模板插件）。</p>
+          <p data-lang="en">Source files: <code>src/shared/pluginContract.js</code> (the single source of truth for validation), <code>src/main/pluginHost.js</code> (host kernel), <code>src/main/pluginWorker.js</code> (worker runtime and cross-thread codec), and <code>src/main/pluginIpc.js</code> (IPC surface). The host kernel loads and calls plugins according to contract version 1, which this document specifies in full.</p>
+          <p data-lang="zh">相关源文件：<code>src/shared/pluginContract.js</code>（校验唯一真源）、<code>src/main/pluginHost.js</code>（宿主内核）、<code>src/main/pluginWorker.js</code>（worker 运行时与跨线程编解码）、<code>src/main/pluginIpc.js</code>（IPC 接口）。宿主内核按契约版本 1 加载并调用插件，本文完整描述该契约的清单字段、模块接口与调用护栏。</p>
         </div>
       </div>
 
@@ -156,8 +156,8 @@ while (Date.now() - t &lt; 2000) { /* ordinary plugin code */ }</code></pre>
     ├── manifest.json        # required
     └── index.js             # entry named by manifest.main (CommonJS)</code></pre>
 
-      <p data-lang="en">On Windows <code>&lt;userData&gt;</code> is <code>%APPDATA%\SXSEditor</code>. The host scans only this directory: the repository's <code>plugins/example-concat/</code> is a template and is <strong>never loaded automatically</strong> — copy the directory into <code>&lt;userData&gt;/plugins/</code> to install it, or place it there from the in-app <em>Open Plugins Folder</em> button and then reload. In the app, the plugin section lives in the <strong>Add Singer</strong> dialog (<code>#btn-add-singer</code> in the main window); the <em>Reload</em> button there re-scans without restarting.</p>
-      <p data-lang="zh">Windows 下 <code>&lt;userData&gt;</code> 为 <code>%APPDATA%\SXSEditor</code>。宿主只扫描该目录：仓库内的 <code>plugins/example-concat/</code> 是模板，<strong>永远不会被自动加载</strong>——把整个目录复制到 <code>&lt;userData&gt;/plugins/</code> 即完成安装，或在应用内点「打开插件目录」放入后再重载。应用中的插件分区位于<strong>「添加歌手」对话框</strong>（主窗口的 <code>#btn-add-singer</code>），其中的「重新加载」按钮可在不重启的前提下重新扫描。</p>
+      <p data-lang="en">On Windows <code>&lt;userData&gt;</code> is <code>%APPDATA%\SXSEditor</code>. The host scans only this directory: a plugin is a directory laid out as above, containing <code>manifest.json</code> and the entry file named by <code>manifest.main</code>. Place the directory under <code>&lt;userData&gt;/plugins/</code> and reload to load it, or use the in-app <em>Open Plugins Folder</em> button. In the app, the plugin section lives in the <strong>Add Singer</strong> dialog (<code>#btn-add-singer</code> in the main window); the <em>Reload</em> button there re-scans without restarting.</p>
+      <p data-lang="zh">Windows 下 <code>&lt;userData&gt;</code> 为 <code>%APPDATA%\SXSEditor</code>。宿主只扫描该目录：插件目录须符合上述结构，含 <code>manifest.json</code> 与 <code>manifest.main</code> 指定的入口文件。把目录放入 <code>&lt;userData&gt;/plugins/</code> 后重载即可加载，或在应用内点「打开插件目录」放入。应用中的插件分区位于<strong>「添加歌手」对话框</strong>（主窗口的 <code>#btn-add-singer</code>），其中的「重新加载」按钮可在不重启的前提下重新扫描。</p>
 
       <h2>
         <span data-lang="en">Manifest</span>
@@ -189,8 +189,8 @@ while (Date.now() - t &lt; 2000) { /* ordinary plugin code */ }</code></pre>
       <p data-lang="zh">校验失败不会使主进程崩溃：失败原因写入主进程日志，并通过 <code>plugin:list</code> / <code>plugin:reload</code> 的 <code>errors[]</code> 返回给界面。</p>
 
       <pre><code>{
-  "id": "example-concat",
-  "name": "示例拼接后端",
+  "id": "my-backend",
+  "name": "示例歌声后端",
   "version": "1.0.0",
   "apiVersion": 1,
   "main": "index.js",
@@ -431,7 +431,7 @@ ticket.end();  // required</code></pre>
       <p data-lang="en">All three synthesis handlers accept a plugin backend declared in <code>options</code>:</p>
       <p data-lang="zh">三个合成 handler 都支持在 <code>options</code> 里声明插件后端：</p>
 
-      <pre><code>options.backend = { type: 'plugin', pluginId: 'example-concat', kindId: 'concat-basic', params: { waveform: 'pulse' } };</code></pre>
+      <pre><code>options.backend = { type: 'plugin', pluginId: 'my-backend', kindId: 'basic', params: { waveform: 'pulse' } };</code></pre>
 
       <table class="doc-table">
         <thead>
@@ -494,7 +494,7 @@ ticket.end();  // required</code></pre>
       </h2>
 
       <ol>
-        <li><span data-lang="en">Copy the template: <code>cp -r plugins/example-concat &lt;userData&gt;/plugins/my-backend</code>, then change both the directory name and <code>manifest.id</code> to <code>my-backend</code>.</span><span data-lang="zh">复制模板：<code>cp -r plugins/example-concat &lt;userData&gt;/plugins/my-backend</code>，把目录名与 <code>manifest.id</code> 一起改成 <code>my-backend</code>。</span></li>
+        <li><span data-lang="en">Create a directory <code>my-backend</code> under <code>&lt;userData&gt;/plugins/</code>, keep the directory name equal to <code>manifest.id</code>, and fill in the manifest fields described above.</span><span data-lang="zh">在 <code>&lt;userData&gt;/plugins/</code> 下新建目录 <code>my-backend</code>，目录名与 <code>manifest.id</code> 保持一致，并按前述说明填写清单字段。</span></li>
         <li><span data-lang="en">Replace the body of <code>synthesize()</code> with your own inference or concatenation logic. A plugin may <code>require</code> its own dependencies; everything inside the plugin directory is the plugin's own responsibility.</span><span data-lang="zh">把 <code>synthesize()</code> 换成你自己的推理或拼接逻辑。插件可以 <code>require</code> 自己的依赖，插件目录内的一切由插件自己负责。</span></li>
         <li><span data-lang="en">Expose user-adjustable parameters through <code>trackKinds[].paramSchema</code>; the host turns UI values into <code>request.params</code> and drops undeclared keys.</span><span data-lang="zh">要提供用户可调参数，就在 <code>trackKinds[].paramSchema</code> 里声明；宿主把界面取值算成 <code>request.params</code>，未声明的键会被丢弃。</span></li>
         <li><span data-lang="en">Use <code>host.blockPlayback()</code> for preparation that must complete before playback.</span><span data-lang="zh">需要在播放前完成的准备步骤，用 <code>host.blockPlayback()</code>。</span></li>
@@ -510,17 +510,12 @@ ticket.end();  // required</code></pre>
       </div>
 
       <h3>
-        <span data-lang="en">Regression smoke test</span>
-        <span data-lang="zh">回归冒烟</span>
+        <span data-lang="en">Host contract behaviour</span>
+        <span data-lang="zh">宿主侧的契约行为</span>
       </h3>
 
-      <p data-lang="en">After changing the host or the contract, run:</p>
-      <p data-lang="zh">改动宿主或契约后跑一次：</p>
-
-      <pre><code>node scripts/plugin-smoke.js     # no electron, no node_modules required</code></pre>
-
-      <p data-lang="en">Twenty-six assertions cover discovery and loading, voices, same-reference <code>options</code> pass-through, blocking-ticket start/update/end balance, whether a synchronously busy-waiting plugin is genuinely preempted by the timeout (a plugin busy-waiting five seconds must die under a one-second limit), rejection of PCM containing NaN, and recognition and synthesis of a <code>midi-partial</code> track kind. The busy-wait case is the only assertion that can distinguish a real timeout from a <code>Promise.race</code> illusion; it turns red immediately if the default mode is ever changed back to <code>inprocess</code>.</p>
-      <p data-lang="zh">26 项断言覆盖插件发现与加载、音色、<code>options</code> 同引用透传、阻滞 ticket 的 start/update/end 配平、<strong>同步忙等插件能否被超时真实抢占</strong>（构造一个忙等 5 秒的插件，在 1 秒超时下必须被杀）、含 NaN 的 PCM 必须被拒，以及 <code>midi-partial</code> 轨道种类的识别与合成。其中「忙等抢占」是唯一能区分真超时与 <code>Promise.race</code> 假超时的用例——若哪天有人把默认执行模式改回 <code>inprocess</code>，这条会立刻变红。</p>
+      <p data-lang="en">Under contract version 1 the host guarantees plugin discovery and loading, voice queries, same-reference <code>options</code> pass-through, balanced blocking-ticket start/update/end events, rejection of PCM containing NaN, and recognition and synthesis of a <code>midi-partial</code> track kind. In worker mode a timeout genuinely preempts a synchronously busy-waiting plugin by terminating the worker, rather than relying only on the timeout arm of <code>Promise.race</code>.</p>
+      <p data-lang="zh">宿主按契约版本 1 提供以下保证：插件的发现与加载、音色查询、<code>options</code> 同一引用透传、阻滞 ticket 的 start/update/end 配平、含 NaN 的 PCM 被拒绝，以及 <code>midi-partial</code> 轨道种类的识别与合成。worker 模式下，超时通过终止工作线程真实抢占同步忙等的插件，而非仅依赖 <code>Promise.race</code> 的超时分支。</p>
 
       <h2>
         <span data-lang="en">Host Injection Points</span>

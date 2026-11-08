@@ -150,7 +150,7 @@ const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
 /**
  * 默认日志出口：统一 `[plugins]` 前缀，便于 crashReporter 的会话日志检索。
  * @param {string} level
- * @param {string} scope 形如 `example-concat`
+ * @param {string} scope 插件 id
  * @param {string} message
  */
 function defaultLogSink(level, scope, message) {
