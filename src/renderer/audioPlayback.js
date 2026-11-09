@@ -1128,6 +1128,8 @@ export function getExportInferenceOptions() {
     // Dynamic thresholding (export path)
     dynamicThresholdEnabled: state.audioSettings?.exportDynamicThresholdEnabled === true,
     dynamicThresholdPercentile: Number.isFinite(state.audioSettings?.exportDynamicThresholdPercentile) ? state.audioSettings.exportDynamicThresholdPercentile : 0.995,
+    // 导出内容：MCP 默认沿用界面里的选择，调用方可用 options.scope 覆盖。
+    scope: state.audioSettings?.exportScope ?? 'mix',
   };
 }
 
@@ -1757,7 +1759,9 @@ export async function exportAll() {
  * @param {Function} [opts.onFragmentProgress] - 单分片推理进度回调 (progress: 0-100)
  * @param {Function} [opts.onOverallProgress] - 总体进度回调 (progress: 0-100)
  * @param {Function} [opts.onStatus] - 状态文本回调 (statusKey: string, params?: object)
- * @returns {Promise<{mixedAudio: Float32Array, maxDuration: number, fragmentCount: number}>}
+ * @param {'mix'|'vocal'|'accompaniment'} [opts.scope='mix'] - 导出内容：
+ *   `mix` 人声 + 伴奏；`vocal` 仅人声；`accompaniment` 仅伴奏（不跑推理）。
+ * @returns {Promise<{mixedAudio: Float32Array, maxDuration: number, fragmentCount: number, scope: string}>}
  */
 export async function runExportJob(opts) {
   const {
@@ -1777,6 +1781,12 @@ export async function runExportJob(opts) {
     onStatus,
   } = opts;
 
+  // 导出内容三选一。未知值一律按 `mix`（等价于改动前的唯一行为），
+  // 这样 MCP/插件传入脏参数时退回最保守的"全都导"，不会静默丢伴奏。
+  const scope = opts.scope === 'vocal' || opts.scope === 'accompaniment' ? opts.scope : 'mix';
+  const wantVocal = scope !== 'accompaniment';
+  const wantAccompaniment = scope !== 'vocal';
+
   const fragments = trackManager.getFragments();
   const accTracks = getAccompanimentTracks();
   if (fragments.length === 0 && accTracks.length === 0) {
@@ -1790,7 +1800,9 @@ export async function runExportJob(opts) {
   // 与 playAll 一致：每个 fragment 用相对 notes（clippedNotes）
   // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
   // 确保与分片编辑器播放/导出结果完全一致。
-  const allFragments = fragments
+  // 「仅伴奏」根本不需要人声：这里直接清空候选集，下游循环自然一次都不跑，
+  // 也就不必为此另开一条分支。
+  const allFragments = (wantVocal ? fragments : [])
     .filter(f => {
       // Exclude fragments belonging to accompaniment tracks (no SVS synthesis)
       const singer = singerMap.get(f.singerId);
@@ -1803,19 +1815,29 @@ export async function runExportJob(opts) {
     .sort((a, b) => a.startTime - b.startTime);
 
   if (allFragments.length === 0) {
-    // Allow export if there are accompaniment tracks (audio-only export)
-    if (getAccompanimentTracks().length === 0) {
+    // 「仅伴奏」本来就没有人声，不该因为找不到可合成分片而拒绝；
+    // 「混合」在只有伴奏轨时也允许导出（纯伴奏 WAV，历史行为）。
+    const vocalOptional = scope === 'accompaniment' || (scope === 'mix' && accTracks.length > 0);
+    if (!vocalOptional) {
       throw new Error(t('main.exportDialog.noNotes'));
     }
+  }
+  // 「仅伴奏」没有伴奏轨时必须报错 —— 否则会安静地写出一整段静音文件，
+  // 用户要到播放时才发现导出"成功"了却没有内容。
+  if (scope === 'accompaniment' && accTracks.length === 0) {
+    throw new Error(t('main.exportDialog.noAccompaniment'));
   }
 
   if (onStatus) onStatus('progressPreparing');
 
   // 与 playAll 同一策略：全插件工程不初始化内置 pipeline。
-  if (!allFragmentsUsePluginBackend(allFragments, singerMap)) {
-    await ensurePipelineInitialized();
+  // 仅伴奏不跑推理，加载模型与音频设备都是白等。
+  if (wantVocal) {
+    if (!allFragmentsUsePluginBackend(allFragments, singerMap)) {
+      await ensurePipelineInitialized();
+    }
+    await loadAudioSettings();
   }
-  await loadAudioSettings();
 
   const totalFragments = allFragments.length;
   let audioResults = [];
@@ -1823,7 +1845,7 @@ export async function runExportJob(opts) {
 
   // 注册推理进度监听：转换为单分片进度
   let fragmentProgressCleanup = null;
-  if (onFragmentProgress) {
+  if (onFragmentProgress && totalFragments > 0) {
     try {
       fragmentProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
         onFragmentProgress(progress);
@@ -1931,8 +1953,11 @@ export async function runExportJob(opts) {
 
   if (onStatus) onStatus('progressEncoding');
 
-  const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+  // 伴奏长度只在真的要混伴奏时才算：仅人声导出若多出一段静音尾巴，
+  // 用户会以为"导出把结尾截多了"。
+  const accMaxSamples = wantAccompaniment ? getAccompanimentMaxEndSample(state.project.bpm) : 0;
   const totalSamples = Math.max(Math.ceil(maxDuration * SAMPLE_RATE), accMaxSamples);
+
   const mixedAudio = new Float32Array(totalSamples);
 
   for (const result of audioResults) {
@@ -1947,7 +1972,8 @@ export async function runExportJob(opts) {
     }
   }
 
-  const mixedChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+  // 第三参决定伴奏是否参与混音：仅人声时传 false，得到的是纯人声声道。
+  const mixedChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm, wantAccompaniment);
   const interleaved = new Float32Array(totalSamples * mixedChannels.length);
   for (let i = 0; i < totalSamples; i++) {
     for (let ch = 0; ch < mixedChannels.length; ch++) interleaved[i * mixedChannels.length + ch] = mixedChannels[ch][i];
@@ -1958,7 +1984,11 @@ export async function runExportJob(opts) {
   return {
     mixedAudio: interleaved,
     numChannels: mixedChannels.length,
-    maxDuration,
+    // 成品时长按实际样本数反推：仅伴奏导出时没有任何分片，
+    // 沿用「最后一个分片的结束秒数」会返回 0。
+    maxDuration: totalSamples / SAMPLE_RATE,
     fragmentCount: audioResults.length,
+    accompanimentCount: accTracks.length,
+    scope,
   };
 }

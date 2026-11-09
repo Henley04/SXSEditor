@@ -129,6 +129,65 @@
   line-height: 1.6;
 }
 
+/* 导出内容三选一：三个等宽胶囊，选中态用主色描边 + 淡底，
+   与下方"格式"下拉的视觉重量区分开（一个是分类，一个是单选）。 */
+.export-dialog-scope-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.export-dialog-scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 0;
+  min-width: 132px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  font-size: var(--font-md);
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: border-color var(--motion-base), background var(--motion-base), color var(--motion-base);
+}
+
+.export-dialog-scope-option:hover {
+  border-color: var(--button-secondary-border);
+  color: var(--fg-primary);
+}
+
+.export-dialog-scope-option.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-dialog-scope-option.is-disabled:hover {
+  border-color: var(--border-strong);
+  color: var(--fg-secondary);
+}
+
+.export-dialog-scope-option.is-checked {
+  border-color: var(--accent-fg);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+/* 焦点环挂在 label 上：键盘焦点落在里面的 radio，label 才是可见的框。 */
+.export-dialog-scope-option:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.export-dialog-scope-option input[type="radio"] {
+  margin: 0;
+  flex: none;
+  accent-color: var(--accent-fg);
+  cursor: pointer;
+}
+
 .export-dialog select,
 .export-dialog input[type="text"],
 .export-dialog input[type="number"] {

@@ -334,7 +334,7 @@ const METHODS = {
     target: 'renderer', long: true, requires: ['models'],
     params: obj({
       path: str('Destination WAV path'),
-      options: { type: 'object', additionalProperties: true, description: 'sampleRate / numChannels / inference overrides' },
+      options: { type: 'object', additionalProperties: true, description: 'sampleRate / numChannels / scope (mix | vocal | accompaniment) / inference overrides' },
     }, ['path']),
   },
   'lrc.export': { summary: 'Export lyrics via the GUI dialog.', target: 'renderer', long: true, params: obj({}) },

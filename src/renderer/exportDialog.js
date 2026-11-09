@@ -139,12 +139,22 @@ export async function openExportDialog() {
       exportEnableQDrift: (settings.modelPrecision === 'fp16' || settings.modelPrecision === 'int8')
         && resolveQDriftDefault(settings, 'exportEnableQDrift'),
       outputPath: '',
+      // 导出内容：'mix' 人声 + 伴奏 / 'vocal' 仅人声 / 'accompaniment' 仅伴奏。
+      // 与轨道静音、独奏叠加生效（静音/独奏判定在 trackAudibility.js）。
+      scope: ['mix', 'vocal', 'accompaniment'].includes(settings.exportScope) ? settings.exportScope : 'mix',
       // 成品格式。'wav' 是宿主内置编码器；插件导出器存成 {pluginId,id,ext,label}。
       // 存对象而不是 id 字符串：导出时要同时知道"问哪个插件的哪个导出器"，
       // 以及"目标扩展名必须是什么"（主进程会校验两者一致）。
       exporter: null,
       _exporters: [],
     };
+
+    // 「导出内容」的可选项由工程实际内容决定：没有伴奏轨就没有"仅伴奏"，
+    // 没有带音符的分片就没有"仅人声"。上次存下的选择若已不适用，回落混合。
+    form._hasVocalNotes = hasNotes;
+    form._hasAccompaniment = hasAccompaniment;
+    if (form.scope === 'accompaniment' && !hasAccompaniment) form.scope = 'mix';
+    if (form.scope === 'vocal' && !hasNotes) form.scope = 'mix';
 
     // 插件导出器清单。拿不到（插件系统未初始化 / 一个都没装）就是空数组，
     // 界面上格式下拉只剩 WAV 一项 —— 这是正常状态，不是错误。
@@ -209,6 +219,9 @@ function buildDialog(form, settings, fullCleanup) {
 
   // --- 高级选项区 ---
   body.appendChild(buildAdvancedSection(form, settings));
+
+  // --- 导出内容区 ---
+  body.appendChild(buildScopeSection(form));
 
   // --- 导出位置区 ---
   body.appendChild(buildOutputSection(form));
@@ -912,6 +925,69 @@ function swapOutputExt(p, ext) {
   return `${s.slice(0, dirLen)}${stem}${ext}`;
 }
 
+function buildScopeSection(form) {
+  const section = document.createElement('div');
+  section.className = 'export-dialog-section';
+  section.appendChild(buildSectionTitle('main.exportDialog.scopeSection'));
+
+  const hint = document.createElement('div');
+  hint.className = 'export-dialog-field-hint';
+  hint.textContent = t('main.exportDialog.scopeHint');
+  section.appendChild(hint);
+
+  const group = document.createElement('div');
+  group.className = 'export-dialog-scope-group';
+  // role=radiogroup + 原生 radio：键盘方向键切换、读屏播报都由浏览器保证，
+  // 不需要自己实现 roving tabindex。
+  group.setAttribute('role', 'radiogroup');
+  group.setAttribute('aria-label', t('main.exportDialog.scopeSection'));
+
+  const options = [
+    { value: 'mix', labelKey: 'main.exportDialog.scopeMix' },
+    { value: 'vocal', labelKey: 'main.exportDialog.scopeVocal', available: form._hasVocalNotes !== false, reasonKey: 'main.exportDialog.noNotes' },
+    { value: 'accompaniment', labelKey: 'main.exportDialog.scopeAccompaniment', available: form._hasAccompaniment !== false, reasonKey: 'main.exportDialog.noAccompaniment' },
+  ];
+
+  const inputs = [];
+  for (const opt of options) {
+    const label = document.createElement('label');
+    label.className = 'export-dialog-scope-option';
+    label.dataset.scopeValue = opt.value;
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'export-scope';
+    input.value = opt.value;
+    input.checked = form.scope === opt.value;
+    // 工程里没有对应内容时直接禁用，而不是让用户导出一次再看到报错。
+    if (opt.available === false) {
+      input.disabled = true;
+      label.classList.add('is-disabled');
+      label.title = t(opt.reasonKey);
+    }
+    label.classList.toggle('is-checked', input.checked);
+
+    const text = document.createElement('span');
+    text.textContent = t(opt.labelKey);
+
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      form.scope = opt.value;
+      for (const el of inputs) {
+        el.label.classList.toggle('is-checked', el.input.checked);
+      }
+    });
+
+    label.appendChild(input);
+    label.appendChild(text);
+    group.appendChild(label);
+    inputs.push({ input, label });
+  }
+
+  section.appendChild(group);
+  return section;
+}
+
 function buildOutputSection(form) {
   const section = document.createElement('div');
   section.className = 'export-dialog-section';
@@ -1174,6 +1250,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     exportEnableQDrift: form.exportEnableQDrift === true,
     exportSampleRate: form.outputSampleRate,
     exportBitDepth: form.outputBitDepth,
+    exportScope: form.scope,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -1285,7 +1362,9 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(0);
     setStatus('progressPreparing');
 
-    const { mixedAudio, numChannels, maxDuration, fragmentCount } = await runExportJob({
+    const { mixedAudio, numChannels, maxDuration, fragmentCount, accompanimentCount } = await runExportJob({
+      // 导出内容：mix / vocal / accompaniment，由"导出内容"单选决定。
+      scope: form.scope,
       nSteps: form.exportDiffSteps,
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
@@ -1334,6 +1413,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
             bpm: state.project.bpm,
             exporter: form.exporter.id,
             fragmentCount,
+            scope: form.scope,
           },
         },
       );
@@ -1366,7 +1446,10 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setStatus('progressDone');
 
     // 显示成功视图
-    showSuccessView(body, footer, form.outputPath, maxDuration, fragmentCount, form._exportWarnings || [], fullCleanup);
+    showSuccessView(body, footer, form.outputPath, maxDuration, fragmentCount, form._exportWarnings || [], fullCleanup, {
+      scope: form.scope,
+      accompanimentCount,
+    });
 
     // 自动打开导出位置
     try {
@@ -1393,7 +1476,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
 
 // ==================== 成功/失败视图 ====================
 
-function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, warnings, fullCleanup) {
+function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, warnings, fullCleanup, extra = {}) {
   body.innerHTML = '';
 
   const progressView = document.createElement('div');
@@ -1425,7 +1508,17 @@ function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, w
   const metaEl = document.createElement('div');
   metaEl.className = 'export-dialog-field-hint';
   metaEl.style.textAlign = 'center';
-  metaEl.textContent = `${formatDuration(maxDuration)} · ${t('main.exportDialog.fragmentCount', { count: fragmentCount })}`;
+  // 仅伴奏导出没有合成任何分片，写「0 个分片」只会让人以为出了错，
+  // 这里改报伴奏轨数量。
+  const metaParts = [formatDuration(maxDuration)];
+  if (extra.scope === 'accompaniment') {
+    metaParts.push(t('main.exportDialog.scopeAccompaniment'));
+    metaParts.push(t('main.exportDialog.accompanimentCount', { count: extra.accompanimentCount || 0 }));
+  } else {
+    if (extra.scope === 'vocal') metaParts.push(t('main.exportDialog.scopeVocal'));
+    metaParts.push(t('main.exportDialog.fragmentCount', { count: fragmentCount }));
+  }
+  metaEl.textContent = metaParts.join(' · ');
   result.appendChild(metaEl);
 
   // 插件的导出警告（"8bit 目标被量化"这类）。放在成功视图里而不是弹窗：
