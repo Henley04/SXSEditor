@@ -137,6 +137,14 @@ function buildAppMenu() {
           },
         },
         {
+          label: t('menu.exportMidi'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST);
+            }
+          },
+        },
+        {
           label: t('menu.editSinger'),
           click: () => {
             // 延迟 require：singerIpc 依赖本模块（getMainWindow / openAudioPreprocess），

@@ -366,6 +366,11 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_SAVE_AS_REQUEST, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_SAVE_AS_REQUEST, handler);
   },
+  onMainMenuExportMidiRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST, handler);
+  },
   // 资源管理器
   resmgrOpen: () => ipcRenderer.invoke(IPC_CHANNELS.RESMGR_OPEN),
   resmgrGetGPUInfo: () => ipcRenderer.invoke(IPC_CHANNELS.RESMGR_GET_GPU_INFO),

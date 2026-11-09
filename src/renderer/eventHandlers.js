@@ -13,6 +13,7 @@ import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, pl
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
+import { exportProjectMidi } from './midiExport.js';
 import { appendPluginContextItems, pluginContextItems } from './plugins/contributionContextMenu.js';
 
 // Click-vs-drag tracking for fragment selection
@@ -791,6 +792,12 @@ if (window.electronAPI?.onMainMenuSaveRequest) {
 if (window.electronAPI?.onMainMenuSaveAsRequest) {
   const off2 = window.electronAPI.onMainMenuSaveAsRequest(() => { saveProjectAs(); });
   if (state._ipcCleanups) state._ipcCleanups.push(off2);
+}
+// 文件菜单 → 导出项目为 MIDI（每歌手一轨）。与"导出 LRC"并列，都是把
+// 工程里的**音符**交给别的软件，只是格式不同。
+if (window.electronAPI?.onMainMenuExportMidiRequest) {
+  const off3 = window.electronAPI.onMainMenuExportMidiRequest(() => { void exportProjectMidi(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(off3);
 }
 
 // 模态设置窗口打开时自动暂停播放：模态窗口会禁用主窗口输入（无法点击

@@ -3,38 +3,19 @@ import { showAlertDialog } from '../alertDialog.js';
 import { getCurrentFragment, getCurrentProject, getNotes } from './state.js';
 // 音高曲线采样（含自动层）：用于把曲线导出为 pitch bend
 import { getPitchAtTime } from './canvasRenderer.js';
+// SMF 编码基元（vlq / meta / 拍号 / 轨道组装）与项目级导出共用 shared/midiWriter.js
+import {
+  MIDI_PPQ as PPQ,
+  encodeMidiTrack, assembleMidiFile,
+  midiMeta as meta, midiUtf8 as utf8, midiTimeSignatureBytes as timeSignatureBytes,
+} from '../shared/midiWriter.js';
 
-const PPQ = 480;
-
-function u16(value) { return [(value >>> 8) & 0xff, value & 0xff]; }
-function u32(value) { return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]; }
-function ascii(text) { return Array.from(text, c => c.charCodeAt(0)); }
-function utf8(text) { return Array.from(new TextEncoder().encode(text)); }
-function vlq(value) {
-  let v = Math.max(0, Math.round(value));
-  const bytes = [v & 0x7f];
-  while ((v >>= 7) > 0) bytes.unshift((v & 0x7f) | 0x80);
-  return bytes;
-}
-function meta(type, data) { return [0xff, type, ...vlq(data.length), ...data]; }
-function continuationLyric(note) {
-  return (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : String(note.lyric || '').trim();
-}
 function safeName(value) {
   return String(value || 'fragment').replace(/[\\/:*?"<>|]/g, '_').trim() || 'fragment';
 }
 
-/**
- * 拍号编码：[numerator, log2(denominator), 24, 8]（24 = MIDI clocks/click,
- * 8 = 32nd notes per quarter）。缺省回退 4/4，分母取最近的 2 的幂。
- */
-function timeSignatureBytes(timeSignature) {
-  const num = Number(timeSignature?.[0]);
-  const den = Number(timeSignature?.[1]);
-  const numerator = Number.isFinite(num) && num > 0 ? Math.max(1, Math.min(255, Math.round(num))) : 4;
-  const denominator = Number.isFinite(den) && den > 0 ? Math.round(den) : 4;
-  const dd = Math.max(0, Math.min(7, Math.round(Math.log2(denominator))));
-  return [numerator, dd, 24, 8];
+function continuationLyric(note) {
+  return (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : String(note.lyric || '').trim();
 }
 
 /**
@@ -93,19 +74,8 @@ export function encodeFragmentMidi(notes, bpm, trackName = 'Fragment', timeSigna
     }
   }
 
-  events.sort((a, b) => a.tick - b.tick || a.order - b.order);
-  const track = [];
-  let previousTick = 0;
-  for (const event of events) {
-    track.push(...vlq(event.tick - previousTick), ...event.bytes);
-    previousTick = event.tick;
-  }
-  track.push(0x00, 0xff, 0x2f, 0x00);
-
-  return new Uint8Array([
-    ...ascii('MThd'), ...u32(6), ...u16(0), ...u16(1), ...u16(PPQ),
-    ...ascii('MTrk'), ...u32(track.length), ...track,
-  ]);
+  const track = encodeMidiTrack(events);
+  return assembleMidiFile({ format: 0, ppq: PPQ, tracks: [track] });
 }
 
 export async function exportFragmentMidi() {
