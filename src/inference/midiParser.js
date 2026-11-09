@@ -226,6 +226,20 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds) {
   const result = [];
   let prevEndS = 0.0;
 
+  /**
+   * 连音音符要演唱的歌词 = 前面最近的、真正的歌词。
+   * 往前跳过空歌词与连续的 '-'（连续的连音不能互相继承，否则第一个 '-' 的
+   * 字面值会在链条里一路传下去）。找不到则返回 ''。
+   */
+  function _previousLyric(notes, idx) {
+    for (let k = idx - 1; k >= 0; k--) {
+      const prev = (notes[k] && notes[k].lyric) || '';
+      const t = prev.trim();
+      if (t && t !== '-') return prev;
+    }
+    return '';
+  }
+
   for (let idx = 0; idx < trimmed.length; idx++) {
     const n = trimmed[idx];
     let startS = ticksToSeconds(n.startTicks);
@@ -247,7 +261,12 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds) {
       text = '<SP>';
     } else if (lyric === '-') {
       noteType = 3;
-      text = idx > 0 ? (trimmed[idx - 1].lyric || '-') : '-';
+      // 连音标记本身不是歌词：能继承前一个音符的歌词就继承（上游行为），
+      // 否则留空。历史上的 `|| '-'` 兜底会把字面 '-' 当歌词存进工程 ——
+      // 第一个音符就是 '-'、或前一个音符没有歌词时就会这样 —— 之后管线把
+      // 它当音素查表，报 `Unknown phoneme: "-"` 并落到 <UNK>。
+      // 空歌词 + noteType=3 仍然是一个合法的"连音/不重新起音"音符。
+      text = _previousLyric(trimmed, idx);
     } else {
       noteType = 2;
       text = lyric;

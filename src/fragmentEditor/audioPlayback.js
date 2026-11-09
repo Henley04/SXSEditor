@@ -882,10 +882,12 @@ export function computeFragmentAudioSignature() {
   const singerId = getCurrentFragment()?.singerId || null;
 
   // notes hash — 与服务端 computeSynthCacheKey 保持一致的字段拼接
+  // （含 noteType：3=连音。MIDI 导入的连音音符只带 noteType、没有 isSlur 标志，
+  //   漏掉它会"签名没变"→ 不重新合成，连音改动听不出来。）
   let notesHash = 0;
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i];
-    let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+    let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
     if (n.phonemeAdjustments) {
       for (const adj of n.phonemeAdjustments) {
         s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;

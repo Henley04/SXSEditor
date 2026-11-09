@@ -419,7 +419,9 @@ class AudioSegmentation {
             // phonemeAdjustments 影响合成结果（durationRatios 决定 mel2token 帧分配，
             // volumePoints 决定音量包络），必须纳入缓存键，否则编辑音素边界/音量后
             // 会命中旧缓存返回过期音频。
-            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+            // noteType 同样影响合成结果：3=连音（不重新起音）。MIDI 导入的连音音符
+            // 只有 noteType、没有 isSlur 标志，漏掉它会命中"重新起音"的旧缓存。
+            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
             if (n.phonemeAdjustments) {
                 for (const adj of n.phonemeAdjustments) {
                     s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;

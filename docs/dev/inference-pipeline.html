@@ -279,7 +279,13 @@ else                                     noteType = 2;   // text = lyric
 // src/inference/pipeline/preprocessing.js — notesToSequences()
 // NOTE: the slur check MUST come first: slur notes usually have an empty
 // lyric, so testing "empty lyric" first would misclassify them as rests.
-if (note.isSlur || note.isContinuation) noteType = 3;
+// '-' is a continuation marker, not a phoneme: an editor slur is stored as
+// lyric='' + isContinuation, but MIDI import may leave the literal '-' in
+// the lyric — both are normalized to "type 3 with no lyric" here.
+const isSlurMarker = lyric.trim() === '-';
+if (isSlurMarker) lyric = '';                       // never feed '-' to the vocab
+if (note.isSlur || note.isContinuation || note.noteType === 3 || isSlurMarker)
+                                        noteType = 3;
 else if (this.isRestNote(note))         noteType = 1;
 else                                    noteType = 2;</code></pre>
       <table class="doc-table">
@@ -307,8 +313,8 @@ else                                    noteType = 2;</code></pre>
           <tr>
             <td><code>3</code></td>
             <td><span data-lang="en">slur / continuation</span><span data-lang="zh">连音 / 延续</span></td>
-            <td><span data-lang="en">lyric <code>-</code>, or <code>isSlur</code> / <code>isContinuation</code></span><span data-lang="zh">歌词 <code>-</code>，或 <code>isSlur</code> / <code>isContinuation</code></span></td>
-            <td><span data-lang="en">the <em>previous</em> note's phoneme (no new attack)</span><span data-lang="zh"><em>前一个</em>音符的音素（不重新起音）</span></td>
+            <td><span data-lang="en">lyric <code>-</code>, <code>isSlur</code> / <code>isContinuation</code>, or an explicit <code>noteType === 3</code> (MIDI import)</span><span data-lang="zh">歌词 <code>-</code>、<code>isSlur</code> / <code>isContinuation</code>，或显式 <code>noteType === 3</code>（MIDI 导入）</span></td>
+            <td><span data-lang="en">the <em>previous</em> note's phoneme (no new attack). MIDI import copies the previous lyric onto the slur note, so the sequence repeats it. A slur created in the editor stores an empty lyric instead — the token then resolves to <code>&lt;SP&gt;</code> and the "no new attack" comes entirely from <code>note_type</code>; the literal <code>-</code> is never fed to the vocabulary.</span><span data-lang="zh"><em>前一个</em>音符的音素（不重新起音）。MIDI 导入会把前一个歌词抄到连音音符上，序列因此重复一遍；编辑器里创建的连音存的是空歌词，token 解析为 <code>&lt;SP&gt;</code>，"不重新起音"完全由 <code>note_type</code> 承担。字面 <code>-</code> 永远不会进入词表。</span></td>
           </tr>
         </tbody>
       </table>

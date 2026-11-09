@@ -204,13 +204,27 @@ class Preprocessing {
 
         for (let phIdx = 0; phIdx < notes.length; phIdx++) {
             const note = notes[phIdx];
-            const lyric = note.lyric || '';
+            const rawLyric = note.lyric || '';
+            // '-' 是"连音"标记，不是音素。
+            // 编辑器输入 '-' 会存成 lyric='' + isContinuation（见 fragmentEditor/
+            // eventHandlers.applyLyricEditorValue），但上游 midi_parser 的历史行为是
+            // "第一个音符就是 '-'，或前一个音符没有歌词时，把字面 '-' 原样当歌词存下来"。
+            // 这条路径上的 '-' 以前会直接送进词表 → `Unknown phoneme: "-"` → <UNK>，
+            // 模型于是在这个音节上唱一个未知音素。这里统一归一成空歌词（后续解析为
+            // <SP>），音符类型仍然靠下面的 slur 判定变成 3（不重新起音）。
+            const isSlurMarker = rawLyric.trim() === '-';
+            const lyric = isSlurMarker ? '' : rawLyric;
             const pitch = note.pitch;
             let noteType;
             // 注意: slur/continuation 检查必须优先于空歌词检查。slur 音符通常
             // 歌词为空（延续前一个音节的发音），若先判空歌词会把 slur 误分类
             // 为休止符（type 1），导致模型把连音当成静音处理。
-            if (note.isSlur || note.isContinuation) {
+            //
+            // 判定条件必须与 audioSegmentation.isRestNote() 对齐（那边是
+            // `noteType === 3 || isSlur || isContinuation`）：此前这里漏了
+            // noteType===3，MIDI 导入的连音音符（只带 noteType，没有 isSlur 标志）
+            // 会被当成普通音符**重新起音**唱一遍；歌词是 '-' 时还会变成 <UNK>。
+            if (note.isSlur || note.isContinuation || note.noteType === 3 || isSlurMarker) {
                 noteType = 3;
             } else if (this.isRestNote(note)) {
                 // 休止：空歌词、显式 <SP>、pitch<=0 或 noteType=1

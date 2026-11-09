@@ -523,6 +523,12 @@ class TextProcessing {
             return this.phone2idx['<SP>'] || 1;
         }
         const trimmed = repairMojibake(lyric.trim());
+        // '-' 是"连音"标记而不是音素（见 preprocessing.notesToSequences 的归一化）。
+        // 任何漏网的路径都不该把它变成 <UNK>：静音音素才是它的本义，而且
+        // <UNK> 会让模型在这个音节上唱出未知音素。
+        if (trimmed === '-') {
+            return this.phone2idx['<SP>'] || 1;
+        }
 
         // Ensure vocabulary is loaded (lazy reload if empty)
         if (this._vocabSize === 0) {
