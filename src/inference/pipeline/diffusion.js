@@ -7,6 +7,7 @@ const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
 const { resolveQDrift, buildQDriftCtx, readQDriftEnabled } = require('./qdrift');
+const { summarizeXt, formatXtStats } = require('./diffusionStats.js');
 
 // One fallback notice per loaded diffStep session, not once per streaming chunk.
 // WeakSet follows session lifetime without retaining disposed sessions.
@@ -540,7 +541,7 @@ class Diffusion {
      *
      * @param {string} [samplerName='stork2'] - 求解器名称，见 samplers/index.js
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false, progressCap = 90) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false, progressCap = 90, diagTag = '') {
         const _diffT0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
@@ -982,32 +983,23 @@ class Diffusion {
             // 诊断：检测扩散输出是否包含 NaN/Inf + 统计输出分布（gated by diagnosticMode）
             // NaN/Inf 致命错误 console.error 始终输出（always-on），不受 diagnosticMode 影响。
             {
-                let xtNaN = 0, xtInf = 0;
-                let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
-                const xtData = xt.data;
-                const xtLen = xtData.length;
-                for (let i = 0; i < xtLen; i++) {
-                    const v = xtData[i];
-                    if (Number.isNaN(v)) { xtNaN++; continue; }
-                    if (!Number.isFinite(v)) { xtInf++; continue; }
-                    if (v < xtMin) xtMin = v;
-                    if (v > xtMax) xtMax = v;
-                    xtSum += v;
-                    xtSumSq += v * v;
-                }
-                const xtMean = xtSum / xtLen;
-                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                const stats = summarizeXt(xt.data);
+                this.lastXtStats = stats;
                 if (diagnosticMode) {
-                    console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}, nfe=${totalNFE}`);
+                    console.log(`${diagTag}[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, ${formatXtStats(stats)}, nfe=${totalNFE}`);
                 }
-                if (xtNaN > 0 || xtInf > 0) {
-                    console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
+                if (stats.invalid > 0) {
+                    // 原实现打印 `Inf=${xtInf - xtNaN}`：xtInf 只计真正的 Infinity，
+                    // 全 NaN 时会输出负数（如 Inf=-70144），误导排查。统一走 formatXtStats。
+                    console.error(`${diagTag}[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! ${formatXtStats(stats)}, frames=${totalFrames}, ep=${this._diffStepEp || 'unknown'}, seqLen=${seqLen}, ptFrameCount=${ptFrameCount}`);
 
                     // diff_step 跑在 vendor EP（TRT-RTX）上时，同一批输入形状会稳定
                     // 产出非法值（引擎 profile 不匹配/编译缺陷）。把该模型拉黑：
                     // 之后重建会话会直接落到 DML/CPU，而不是再次得到同样的 NaN。
+                    // 拉黑只影响"下一次重建"，当前会话仍会被本轮用完，因此同时置
+                    // _diffStepBlacklisted，供静态分段/多流式立即停止后续窗口。
                     this._blacklistDiffStepOnVendorEp(sessions,
-                        `diffusion produced NaN=${xtNaN} Inf=${xtInf} frames=${totalFrames}`);
+                        `diffusion produced NaN=${stats.nan} Inf=${stats.inf} frames=${totalFrames}`);
 
                     // Dump ORT native debug logs from stderr capture
                     if (typeof globalThis._flushOrtDebugLogs === 'function') {
@@ -1041,6 +1033,10 @@ class Diffusion {
     _blacklistDiffStepOnVendorEp(sessions, reason) {
         try {
             const ds = sessions && sessions.diffStep;
+            // 无论会话是否为 WinML 包装，本轮输出已经不可用：打标记让调用方
+            // 立即停止继续用同一会话跑后续窗口，而不是把 NaN 一窗窗传下去。
+            this._diffStepBlacklisted = true;
+            if (ds) ds.__invalidOutput = true;
             // WinMLSession 标记 provider='windowsml'；ORT 原生会话没有该字段
             if (!ds || ds.provider !== 'windowsml' || !ds.modelPath) return false;
             const { reportRuntimeFailure } = require('../winml/winmlProvider');

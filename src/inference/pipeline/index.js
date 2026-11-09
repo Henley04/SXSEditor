@@ -12,6 +12,8 @@ const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
+const { planStaticWindows } = require('./staticShapePlan.js');
+const { formatXtStats } = require('./diffusionStats.js');
 const { DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { Postprocessing, parseWavBuffer, isVramOOMError } = require('./postprocessing');
@@ -2194,6 +2196,10 @@ class OnnxSVSPipeline {
      */
     _detectDiffStepPrecision() {
         try {
+            // diff_step 的真实静态 seq（模型 metadata 的 xt_input/x 第 1 维）。
+            // 分段预算必须用它而不是写死 NPU_STATIC_SEQ_LEN：动态导出的 int8
+            // 模型 seqDim 不是 2048，按 2048 规划窗口会把超长输入喂给引擎。
+            this.diffStepSeqLen = null;
             const session = this.sessions.diffStep;
             if (!session) {
                 this.diffStepIsFP16 = this.isFP16;
@@ -2229,8 +2235,9 @@ class OnnxSVSPipeline {
                 const dataMeta = meta.find(m => m && (m.name === 'x' || m.name === 'xt_input'));
                 const seqDim = dataMeta && Array.isArray(dataMeta.shape) ? dataMeta.shape[1] : null;
                 const modelIsStatic = typeof seqDim === 'number' && seqDim > 0;
+                this.diffStepSeqLen = modelIsStatic ? seqDim : null;
                 if (this.diffStepStaticShapes !== modelIsStatic) {
-                    console.log(`[OnnxSVSPipeline] diff_step 形状自适应: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}`);
+                    console.log(`[OnnxSVSPipeline] diff_step 形状自适应: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}, diffStepSeqLen=${this.diffStepSeqLen ?? 'dynamic'}`);
                     this.diffStepStaticShapes = modelIsStatic;
                 }
             }
@@ -2643,17 +2650,23 @@ class OnnxSVSPipeline {
      * @param {string} tag 日志前缀
      * @returns {{totalFrames:number, ptFrameCount:number, ptMelData:Float32Array|null}}
      */
-    _clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag = '') {
+    _staticSeqBudget() {
+        const real = Number(this.diffStepSeqLen);
+        if (Number.isFinite(real) && real > 0) return Math.min(real, NPU_STATIC_SEQ_LEN);
+        return NPU_STATIC_SEQ_LEN;
+    }
+
+    _clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag = '', budget = NPU_STATIC_SEQ_LEN) {
         const minTarget = 50; // 至少保留 50 帧目标，避免全空
-        if (ptFrameCount > NPU_STATIC_SEQ_LEN - minTarget) {
-            const newPt = Math.max(0, NPU_STATIC_SEQ_LEN - minTarget);
+        if (ptFrameCount > budget - minTarget) {
+            const newPt = Math.max(0, budget - minTarget);
             if (ptMelData && ptMelData.length > newPt * MEL_DIM) {
                 console.warn(`${tag} NPU prompt limit: ${ptFrameCount} -> ${newPt}, trimming ref`);
                 ptMelData = ptMelData.subarray(0, newPt * MEL_DIM);
                 ptFrameCount = newPt;
             }
         }
-        const maxFrames = NPU_STATIC_SEQ_LEN - ptFrameCount;
+        const maxFrames = budget - ptFrameCount;
         if (totalFrames > maxFrames) {
             console.warn(`${tag} NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
             sequences.f0Ids = sequences.f0Ids.subarray(0, maxFrames);
@@ -2737,37 +2750,41 @@ class OnnxSVSPipeline {
      * @returns {Promise<Float32Array|null>} 完整 mel（totalFrames*MEL_DIM）；若无需分段返回 null
      */
     async _synthesizeStaticShapeSegments(sequences, totalFrames, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, abortSignal = null, tag = '') {
-        // 每窗口(段)目标帧上限：prompt(每窗口复用) + 目标帧 <= NPU_STATIC_SEQ_LEN
-        const winCap = NPU_STATIC_SEQ_LEN - ptFrameCount;
+        // 每窗口(段)目标帧上限：prompt(每窗口复用) + 目标帧 <= 模型真实静态 seq。
+        // 不能写死 NPU_STATIC_SEQ_LEN：动态导出的 int8 模型 seq 更小，按 2048 规划
+        // 会把超长输入喂给引擎（TRT enqueue failed / DML 输出 NaN）。
+        const budget = this._staticSeqBudget();
+        let winCap = budget - ptFrameCount;
         if (winCap <= 0) {
-            throw new Error(`${tag} static-shape chunking failed: no room for target (ptFrameCount=${ptFrameCount} >= NPU_STATIC_SEQ_LEN)`);
+            throw new Error(`${tag} static-shape chunking failed: no room for target (ptFrameCount=${ptFrameCount} >= budget=${budget})`);
         }
         if (winCap < 50) {
             console.warn(`${tag} static-shape winCap(${winCap}) < 50, clamping prompt for segmentation`);
-            const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag);
+            const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag, budget);
             ptFrameCount = clamped.ptFrameCount;
             ptMelData = clamped.ptMelData;
+            // 钳制改变了 ptFrameCount，窗口容量必须重算；否则会继续用旧的 winCap
+            // 规划窗口，overlap/advance 也可能退化成 1 帧/窗（上千个窗口）。
+            winCap = budget - ptFrameCount;
+            if (winCap <= 0) {
+                throw new Error(`${tag} static-shape chunking failed after prompt clamp (ptFrameCount=${ptFrameCount} >= budget=${budget})`);
+            }
         }
         if (totalFrames <= winCap) return null; // 单窗口即可容纳，回退到常规整段路径
 
         // 相邻窗口之间的重叠帧数（与 diffstep chunk 路径一致，用于共享噪声 + WSOLA
-        // 交叉淡入淡出消除边界不连贯）。默认 50 帧（1s @50Hz）。
-        const overlap = Math.max(1, Math.min(winCap - 1, Math.floor(
+        // 交叉淡入淡出消除边界不连贯）。默认 50 帧（1s @50Hz），上限为窗口的 1/4。
+        const requestedOverlap = Math.floor(
             (this._currentDiffStepChunkOpts && this._currentDiffStepChunkOpts.overlapFrames) || 50
-        )));
-        const advance = winCap - overlap; // 每次窗口起点前进帧数
-        if (advance <= 0) throw new Error(`${tag} static-shape overlap(${overlap}) >= winCap(${winCap})`);
-
-        // 窗口规划：每窗口覆盖 [ws, ws+winCap)，相邻窗口重叠 overlap 帧
-        const wins = [];
-        for (let ws = 0; ws < totalFrames; ws += advance) {
-            const segStart = ws;
-            const segEnd = Math.min(totalFrames, segStart + winCap);
-            wins.push({ segStart, segEnd, segFrames: segEnd - segStart });
-            if (segEnd >= totalFrames) break;
+        );
+        const plan = planStaticWindows(totalFrames, ptFrameCount, budget, requestedOverlap);
+        if (plan.error) {
+            throw new Error(`${tag} static-shape window planning failed: ${plan.error} (budget=${budget}, ptFrameCount=${ptFrameCount})`);
         }
+        const overlap = plan.overlap;
+        const wins = plan.windows;
         const numSegs = wins.length;
-        console.log(`${tag} Static-shape segmented synthesis: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, winCap=${winCap}, overlap=${overlap}, segments=${numSegs}`);
+        console.log(`${tag} Static-shape segmented synthesis: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, budget=${budget}, winCap=${winCap}, overlap=${overlap}, segments=${numSegs}`);
 
         const melOut = new Float32Array(totalFrames * MEL_DIM);
         const mel2tokenFull = sequences.mel2token;
@@ -2816,12 +2833,29 @@ class OnnxSVSPipeline {
             this._diffusion.setDiffStepEp(this.sessionEPs.diffStep || null);
             this._diffusion.setDiffStepPrecision(this._modelPrecision || 'fp32');
             this._diffusion.setQDriftEnabled(this._currentQDriftEnabled === true);
+            const segDiagTag = `[Seg ${w + 1}/${numSegs}] `;
             await this._diffusion.runDiffusionLoop(
                 this.sessions, subXt, segFrames, ptMelData, ptFrameCount, segCond,
                 totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16,
                 onProgress, progressStart + w * perSeg, perSeg, this.diffStepStaticShapes,
-                samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal
+                samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal,
+                false, 90, segDiagTag
             );
+
+            // 扩散输出非有限值：继续拼下去只会把 NaN 送进 vocoder（最终报
+            // "Vocoder input mel is non-finite"）。这里立即失败并带上窗口信息，
+            // 让用户/日志能定位到具体窗口，而不是拿到一段静音或爆音。
+            const stats = this._diffusion.lastXtStats;
+            if (stats && stats.invalid > 0) {
+                const err = new Error(
+                    `${tag} static-shape segment ${w + 1}/${numSegs} produced non-finite mel ` +
+                    `(${formatXtStats(stats)}, ptFrameCount=${ptFrameCount}, budget=${budget})`
+                );
+                err.code = 'STATIC_SEGMENT_NAN';
+                err.windowIndex = w;
+                err.stats = stats;
+                throw err;
+            }
 
             // 提交到 melOut：首窗口整段 memcpy，后续窗口对重叠区做 WSOLA 交叉淡入淡出。
             if (w === 0) {
@@ -2914,11 +2948,14 @@ class OnnxSVSPipeline {
         // 由 _synthesizeStaticShapeSegments 逐段处理 2048 限制。
         const _staticSegChunkEnabled = this.useStaticShapes &&
             (this._currentDiffStepChunkOpts && this._currentDiffStepChunkOpts.enabled === true);
-        if (this.useStaticShapes && !_staticSegChunkEnabled && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
-            const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Segment]');
-            totalFrames = clamped.totalFrames;
-            ptFrameCount = clamped.ptFrameCount;
-            ptMelData = clamped.ptMelData;
+        if (this.useStaticShapes && !_staticSegChunkEnabled) {
+            const budget = this._staticSeqBudget();
+            if (ptFrameCount + totalFrames > budget) {
+                const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Segment]', budget);
+                totalFrames = clamped.totalFrames;
+                ptFrameCount = clamped.ptFrameCount;
+                ptMelData = clamped.ptMelData;
+            }
         }
 
         // WebNN: encoder+diffusion in renderer, vocoder in main process (DML)
@@ -3414,7 +3451,7 @@ class OnnxSVSPipeline {
         // 并记录 warning，避免后续 fragment 的差异化配置被无声忽略。
         const firstOpts = fragments[0].options || {};
         const chunkEnabled = firstOpts.diffStepChunk === true;
-        const chunkFrames = firstOpts.diffStepChunkFrames || 500;
+        let chunkFrames = firstOpts.diffStepChunkFrames || 500;
         const overlapFrames = firstOpts.diffStepOverlapFrames !== undefined ? firstOpts.diffStepOverlapFrames : 50;
         const totalSteps = firstOpts.nSteps || DEFAULT_DIFF_STEPS;
         const cfgStrength = firstOpts.cfg !== undefined ? firstOpts.cfg : CFG_STRENGTH;
@@ -3671,11 +3708,25 @@ class OnnxSVSPipeline {
             // 会不足预留导致拼接溢出。因此统一放在 prompt 注入之后，
             // 用实际 ptFrameCount 预留 target 帧。启用静态形状分段合成时跳过整段钳制，
             // 由 _synthesizeStaticShapeSegments 逐段承载 2048 限制。
-            if (this.useStaticShapes && !chunkEnabled && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
-                const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]');
-                totalFrames = clamped.totalFrames;
-                ptFrameCount = clamped.ptFrameCount;
-                ptMelData = clamped.ptMelData;
+            if (this.useStaticShapes) {
+                const budget = this._staticSeqBudget();
+                if (!chunkEnabled && ptFrameCount + totalFrames > budget) {
+                    const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]', budget);
+                    totalFrames = clamped.totalFrames;
+                    ptFrameCount = clamped.ptFrameCount;
+                    ptMelData = clamped.ptMelData;
+                } else if (chunkEnabled) {
+                    // 分块路径每个 chunk 单独喂给 diff_step：必须保证
+                    // ptFrameCount + chunkFrames <= budget，否则静态引擎收到超长输入
+                    // （TRT enqueue failed / DML 输出 NaN）。原实现只在 !chunkEnabled
+                    // 时钳制，分块路径完全裸奔。
+                    const maxChunk = budget - ptFrameCount;
+                    if (maxChunk < chunkFrames) {
+                        const nextChunk = Math.max(50, maxChunk);
+                        console.warn(`[MultiStream] static budget clamp: chunkFrames ${chunkFrames} -> ${nextChunk} (ptFrameCount=${ptFrameCount}, budget=${budget})`);
+                        chunkFrames = nextChunk;
+                    }
+                }
             }
             // diff_step 模型容量兜底：整段路径钳到 prompt+target<=8192（烘焙
             // rope 表行数）。分块路径每块 diffstep 序列已足够短，无需钳制。
@@ -4370,11 +4421,14 @@ class OnnxSVSPipeline {
             // 启用静态形状分段合成时跳过整段钳制，由 _synthesizeStaticShapeSegments 逐段承载限制。
             const _staticSegEnabled = this.useStaticShapes &&
                 (this._currentDiffStepChunkOpts && this._currentDiffStepChunkOpts.enabled === true);
-            if (this.useStaticShapes && !_staticSegEnabled && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
-                const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]');
-                totalFrames = clamped.totalFrames;
-                ptFrameCount = clamped.ptFrameCount;
-                ptMelData = clamped.ptMelData;
+            if (this.useStaticShapes && !_staticSegEnabled) {
+                const budget = this._staticSeqBudget();
+                if (ptFrameCount + totalFrames > budget) {
+                    const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]', budget);
+                    totalFrames = clamped.totalFrames;
+                    ptFrameCount = clamped.ptFrameCount;
+                    ptMelData = clamped.ptMelData;
+                }
             }
             // diff_step 模型容量兜底：prompt+target 总长 <=8192（烘焙 rope 表
             // 行数，超限时 Slice 行数不足会广播失败）。优先只截 prompt，目标乐句

@@ -748,6 +748,13 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                         const wr = (werr.message || '').split('\n')[0].slice(0, 120);
                         console.warn(`[Model][fallback] name=${modelName} from=winml to=dml/cpu stage=warmup error=${wr}`);
                         try { wsession.release(); } catch (_) {}
+                        // warmup 失败说明该 EP 连能力探测都过不了（静态 2048 引擎在
+                        // 512 seq 上必然失败）。不拉黑的话，每次重建都会重新选中它、
+                        // 再失败、再回退，日志里就是反复的 select→fail→fallback。
+                        try {
+                            const { reportRuntimeFailure } = require('../winml/winmlProvider');
+                            reportRuntimeFailure(modelPath, `warmup failed: ${wr}`);
+                        } catch (_) {}
                     }
                 }
             }
