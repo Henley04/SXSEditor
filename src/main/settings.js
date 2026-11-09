@@ -440,9 +440,16 @@ function loadSettings() {
 // cannot leave a truncated/invalid JSON file that would lose all settings
 // on next launch. On failure the cache is invalidated and an error result
 // is returned so callers do not report a false success.
+//
+// 临时文件名必须每次唯一：settings:save / 主题切换 / 模型下载进度会从不同窗口
+// 并发调到这里，共用一个 `settings.json.tmp` 时后一个 rename 会撞上"源文件已被
+// 前一个搬走"→ ENOENT（ConfigStore 的 locale 写就踩过这个坑，见 configStore.js）。
+let _saveTmpSeq = 0;
+
 async function saveSettingsFile(settings) {
   const filePath = getSettingsFilePath();
-  const tmpPath = `${filePath}.tmp`;
+  _saveTmpSeq += 1;
+  const tmpPath = `${filePath}.${process.pid}.${_saveTmpSeq}.tmp`;
   try {
     const data = JSON.stringify(settings, null, 2);
     await fs.promises.writeFile(tmpPath, data, 'utf-8');

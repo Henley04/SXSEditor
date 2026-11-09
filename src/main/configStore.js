@@ -59,37 +59,127 @@ function readJsonConfig(name, fallback = null) {
 }
 
 /**
+ * 每次写入独立临时名。
+ *
+ * 历史实现是 `${configPath}.${process.pid}.tmp` —— **同一进程内并发写同一文件时
+ * 临时路径完全相同**，于是后一个 writer 的 rename 找不到源文件（前一个已经把它
+ * 搬走了），报：
+ *
+ *   ENOENT: no such file or directory, rename '…sxseditor-locale.json.42728.tmp'
+ *                                    -> '…sxseditor-locale.json'
+ *
+ * 这在启动时必现：主窗口 / 设置窗口各自 renderer 的 i18n.setLocale 都会 invoke
+ * save-locale。加序号后每个 writer 只碰自己的临时文件，剩下的并发问题（谁最后
+ * 落盘）交给队列处理。
+ */
+let _writeSeq = 0;
+function _tmpPathFor(configPath) {
+  _writeSeq += 1;
+  return `${configPath}.${process.pid}.${_writeSeq}.tmp`;
+}
+
+/** 每文件一条写队列，串行化同一配置文件的写入。 */
+const _writeQueues = new Map();
+
+/** rename 可能被 Windows 上的杀软/索引器短暂占用，重试几次即可。 */
+const _RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const _RENAME_MAX_ATTEMPTS = 3;
+
+async function _renameWithRetry(from, to) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fs.promises.rename(from, to);
+    } catch (err) {
+      if (attempt >= _RENAME_MAX_ATTEMPTS || !_RENAME_RETRY_CODES.has(err && err.code)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+    }
+  }
+}
+
+/**
+ * 磁盘上已经是这份内容吗？
+ *
+ * 启动时每个窗口都会把 locale 回写一遍，内容通常与磁盘完全一致。不判等的话
+ * 每次启动都在 userData 里做几轮"建临时文件 + rename"，纯属自找噪声（还会
+ * 让备份/同步工具反复扫描）。
+ */
+function _sameContentSync(configPath, json) {
+  try {
+    const current = fs.readFileSync(configPath, 'utf8');
+    if (current === json) return true;
+    return JSON.stringify(JSON.parse(current)) === json;
+  } catch (_) {
+    return false; // 不存在 / 读不了 / 不是合法 JSON —— 都照常写
+  }
+}
+
+async function _sameContent(configPath, json) {
+  try {
+    const current = await fs.promises.readFile(configPath, 'utf8');
+    if (current === json) return true;
+    return JSON.stringify(JSON.parse(current)) === json;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** writeJsonConfig 的实际写盘部分（已在队列里串行执行）。 */
+async function _writeJsonConfigNow(name, data) {
+  const configPath = getConfigPath(name);
+  let tmpPath = null;
+  try {
+    const json = JSON.stringify(data);
+    await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
+    if (await _sameContent(configPath, json)) return true;
+    tmpPath = _tmpPathFor(configPath);
+    await fs.promises.writeFile(tmpPath, json, 'utf8');
+    await _renameWithRetry(tmpPath, configPath);
+    return true;
+  } catch (err) {
+    console.warn(`[ConfigStore] 写入 ${name} 配置失败:`, err && err.message);
+    if (tmpPath) {
+      try { await fs.promises.unlink(tmpPath); } catch (_) { /* 临时文件本来就没建成 */ }
+    }
+    return false;
+  }
+}
+
+/**
  * 原子写入 JSON 配置（写临时文件 → rename），避免半截 JSON 让下次启动崩溃。
  * @param {keyof typeof CONFIG_FILES} name
  * @returns {Promise<boolean>} 是否写成功
  */
 async function writeJsonConfig(name, data) {
-  const configPath = getConfigPath(name);
-  const tmpPath = `${configPath}.${process.pid}.tmp`;
-  try {
-    await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.promises.writeFile(tmpPath, JSON.stringify(data), 'utf8');
-    await fs.promises.rename(tmpPath, configPath);
-    return true;
-  } catch (err) {
-    console.warn(`[ConfigStore] 写入 ${name} 配置失败:`, err && err.message);
-    try { await fs.promises.unlink(tmpPath); } catch (_) { /* 临时文件本来就没建成 */ }
-    return false;
-  }
+  // 同一个配置文件会被多个窗口的 IPC 处理器并发写（启动时每个窗口的
+  // i18n.setLocale 都会 invoke 一次 save-locale）。串行化到每文件一条队列上，
+  // 既避免并发撞车，也保证"后发起的写"最终落盘 —— 否则慢的那个写可能
+  // 覆盖掉用户刚改的新值。
+  const prev = _writeQueues.get(name) || Promise.resolve();
+  const next = prev.then(
+    () => _writeJsonConfigNow(name, data),
+    () => _writeJsonConfigNow(name, data),
+  );
+  _writeQueues.set(name, next.then(() => {}, () => {}));
+  return next;
 }
 
 /** 同步版原子写入，供启动早期（app ready 前）的调用点使用。 */
 function writeJsonConfigSync(name, data) {
   const configPath = getConfigPath(name);
-  const tmpPath = `${configPath}.${process.pid}.tmp`;
+  let tmpPath = null;
   try {
+    const json = JSON.stringify(data);
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(tmpPath, JSON.stringify(data), 'utf8');
+    if (_sameContentSync(configPath, json)) return true;
+    tmpPath = _tmpPathFor(configPath);
+    fs.writeFileSync(tmpPath, json, 'utf8');
     fs.renameSync(tmpPath, configPath);
     return true;
   } catch (err) {
     console.warn(`[ConfigStore] 写入 ${name} 配置失败:`, err && err.message);
-    try { fs.unlinkSync(tmpPath); } catch (_) { /* 同上 */ }
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch (_) { /* 同上 */ }
+    }
     return false;
   }
 }
