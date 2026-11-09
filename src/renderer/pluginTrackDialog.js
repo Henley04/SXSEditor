@@ -19,6 +19,7 @@ import {
   coerceParamValue,
   isRenderableParam,
   truncateText,
+  describeTrackBackend,
   MAX_DESC_LEN,
 } from './pluginBackend.js';
 import { createDialog } from './uiControls.js';
@@ -61,10 +62,12 @@ function makeRow(text, cssText) {
  * @param {object} [options]
  * @param {string|null} [options.singerId] 非 null 时把后端应用到该轨道而非新建
  * @param {(singer:object)=>void} [options.onCreated] 建轨后的回调（markDirty / refresh）
+ * @param {boolean} [options.includeBuiltin] 是否在列表顶部列出内置后端（SXS INFERENCE）。
+ *        只在「替换歌手」时开：新建轨道走的是"建一条插件轨道"，没有"切回内置"的语义。
  * @returns {HTMLElement}
  */
 export function createPluginBackendSection(options = {}) {
-  const { singerId = null, onCreated = null } = options;
+  const { singerId = null, onCreated = null, includeBuiltin = false } = options;
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px;';
@@ -108,20 +111,28 @@ export function createPluginBackendSection(options = {}) {
 
   function renderList(catalog) {
     const entries = listTrackKinds();
-    if (entries.length === 0) {
-      statusEl.textContent = catalog && catalog.unavailable
-        ? t('main.plugin.loadFailed')
-        : t('main.plugin.none');
-      listWrap.replaceChildren(statusEl);
-      return;
-    }
     const frag = document.createDocumentFragment();
-    for (const entry of entries) {
-      frag.appendChild(makeKindItem(entry, () => {
-        showPluginTrackCreateDialog(entry, (singer) => {
-          if (onCreated) onCreated(singer);
-        }, singerId);
+    // 内置后端排在最前：它是最常用的那一个，也是从插件后端"退回来"的入口。
+    const withBuiltin = includeBuiltin && !!singerId;
+    if (withBuiltin) {
+      frag.appendChild(makeBuiltinBackendItem(singerId, (singer) => {
+        if (onCreated) onCreated(singer);
       }));
+    }
+    if (entries.length === 0) {
+      // 没有插件条目不是错误：内置后端在时这是正常状态（一个插件都没装）
+      frag.appendChild(makeRow(
+        catalog && catalog.unavailable ? t('main.plugin.loadFailed') : t('main.plugin.none'),
+        'font-size: 11px; color: var(--fg-muted); padding: 4px 0;',
+      ));
+    } else {
+      for (const entry of entries) {
+        frag.appendChild(makeKindItem(entry, () => {
+          showPluginTrackCreateDialog(entry, (singer) => {
+            if (onCreated) onCreated(singer);
+          }, singerId);
+        }));
+      }
     }
     listWrap.replaceChildren(frag);
   }
@@ -136,12 +147,10 @@ export function createPluginBackendSection(options = {}) {
 }
 
 /**
- * 单个 trackKind 条目：kind 名 + 插件名/版本 + 描述。
- * @param {{plugin:object, kind:object}} entry
- * @param {()=>void} onPick
+ * 可点条目的外壳（插件 trackKind / 内置后端共用一套外观与 hover）。
+ * @returns {HTMLButtonElement}
  */
-function makeKindItem(entry, onPick) {
-  const { plugin, kind } = entry;
+function makeItemShell() {
   const item = document.createElement('button');
   item.type = 'button';
   item.style.cssText = `
@@ -165,6 +174,48 @@ function makeKindItem(entry, onPick) {
     item.style.background = 'var(--bg-button)';
     item.style.borderColor = 'var(--button-secondary-border)';
   });
+  return item;
+}
+
+/**
+ * 内置后端（SXS INFERENCE）那一行。
+ *
+ * 为什么必须显式列出来：插件分区的列表只遍历 `listTrackKinds()`，也就是**插件**
+ * 声明的轨道种类。轨道被换到插件后端之后，用户就再没有回到内置推理的入口 ——
+ * 除非把插件卸掉。替换歌手对话框里这一行就是那个入口。
+ *
+ * 标签直接取 describeTrackBackend() 的品牌串（'SXS INFERENCE' 不翻译），
+ * 保证与轨道行上显示的是同一个字符串。
+ *
+ * @param {string} singerId
+ * @param {(singer:object)=>void} [onApplied]
+ * @returns {HTMLButtonElement}
+ */
+function makeBuiltinBackendItem(singerId, onApplied) {
+  const item = makeItemShell();
+  const label = describeTrackBackend({ backend: { type: 'sxs' } }).label;
+  item.appendChild(makeRow(label, 'font-size: 12px; font-weight: 600;'));
+  item.appendChild(makeRow(t('main.builtinBackendHint'), 'font-size: 11px; color: var(--fg-muted); line-height: 1.4;'));
+  item.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const singer = trackManager.getSinger(singerId);
+    if (!singer) return;
+    // backendMissing 一并清掉：换回内置后端之后，之前"插件缺失"的标记不再成立，
+    // 留着会让轨道行一直挂着一条误导性的缺失提示。
+    trackManager.updateSinger(singerId, { backend: { type: 'sxs' }, backendMissing: false });
+    if (onApplied) onApplied(singer);
+  });
+  return item;
+}
+
+/**
+ * 单个 trackKind 条目：kind 名 + 插件名/版本 + 描述。
+ * @param {{plugin:object, kind:object}} entry
+ * @param {()=>void} onPick
+ */
+function makeKindItem(entry, onPick) {
+  const { plugin, kind } = entry;
+  const item = makeItemShell();
   item.appendChild(makeRow(truncateText(kind.name || kind.id), 'font-size: 12px; font-weight: 600;'));
   item.appendChild(makeRow(
     truncateText(plugin.name || plugin.id, 40) + (plugin.version ? ` v${truncateText(plugin.version, 24)}` : ''),

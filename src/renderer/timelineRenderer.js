@@ -1135,6 +1135,26 @@ export function renderSingerList() {
       }
       infoDiv.appendChild(singerNameDiv);
 
+      if (!isAccompaniment) {
+        // 双击歌手名 = 替换歌手。轨道名（上面那行）双击是重命名，两者作用对象
+        // 不同：轨道名是标签，歌手名是音色，所以入口分开。
+        // 键盘也要能用：dblclick-only 的入口对键盘用户等于不存在，补 Enter/Space。
+        singerNameDiv.classList.add('singer-singer-name--replaceable');
+        singerNameDiv.title = t('main.replaceSinger');
+        singerNameDiv.setAttribute('role', 'button');
+        singerNameDiv.setAttribute('aria-label', t('main.replaceSinger'));
+        singerNameDiv.tabIndex = 0;
+        const openReplace = (e) => {
+          e.stopPropagation();
+          showSingerSelectDialog(singer.id, { mode: 'replace' });
+        };
+        singerNameDiv.addEventListener('dblclick', openReplace);
+        singerNameDiv.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          openReplace(e);
+        });
+      }
       if (isAccompaniment) {
         if (singer.audioFileMissing) {
           const warningDiv = document.createElement('div');

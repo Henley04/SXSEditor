@@ -314,6 +314,23 @@
   text-overflow: ellipsis;
 }
 
+/* 双击歌手名替换歌手：可点的东西必须看起来可点（指针 + hover 变色 + 焦点环）。
+   下面一行 .singer-track-name 双击是重命名，两者作用对象不同，所以只给这一行加。 */
+.singer-singer-name--replaceable {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color var(--motion-fast) var(--ease-standard);
+}
+
+.singer-singer-name--replaceable:hover {
+  color: var(--accent);
+}
+
+.singer-singer-name--replaceable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .singer-config {
   font-size: 9px;
   color: var(--fg-disabled);

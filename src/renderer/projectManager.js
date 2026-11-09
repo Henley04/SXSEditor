@@ -9,7 +9,7 @@ import { t } from '../i18n/index.js';
 import { showAlertDialog, showConfirmDialog } from '../alertDialog.js';
 import { createDialog, showSingerValidationReport } from './uiControls.js';
 import { createPluginBackendSection } from './pluginTrackDialog.js';
-import { ensurePluginCatalog, findTrackKind } from './pluginBackend.js';
+import { ensurePluginCatalog, findTrackKind, describeTrackBackend } from './pluginBackend.js';
 import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
 
 // 保存纪元：每次 markDirty 自增。异步写盘完成后只有纪元未变（期间没有新编辑）
@@ -123,7 +123,18 @@ export async function applySingerDataToSinger(singer, singerData) {
   if (singerData.singerData) singer.singerData = singerData.singerData;
 }
 
-export async function loadSingerFile(singerId, buffer, filePath) {
+/**
+ * 把一份 .sxssinger 载入到已有轨道（换音色）。
+ *
+ * @param {string} singerId
+ * @param {ArrayBuffer} buffer
+ * @param {string} filePath
+ * @param {{keepTrackName?: boolean}} [options] keepTrackName：只换音色，不动轨道名。
+ *        「替换歌手」走这条 —— 轨道名是用户的标签（他可能改成了"主唱"），
+ *        换一个歌手的音色不该顺带把它改掉。
+ */
+export async function loadSingerFile(singerId, buffer, filePath, options = {}) {
+  const keepTrackName = options.keepTrackName === true;
   let singerData;
   try {
     const text = new TextDecoder().decode(buffer);
@@ -151,7 +162,7 @@ export async function loadSingerFile(singerId, buffer, filePath) {
     const singer = trackManager.getSinger(singerId);
     if (singer) {
       const updates = {
-        trackName: singerData.singerName || singer.trackName,
+        ...(keepTrackName ? {} : { trackName: singerData.singerName || singer.trackName }),
         singerName: singerData.singerName || singer.singerName,
         avatarPath: singerData.avatarBase64 || singer.avatarPath,
         color: singerData.color || singer.color,
@@ -340,7 +351,56 @@ export async function loadAccompanimentFile(singerId, buffer, filePath) {
   }
 }
 
-export function showSingerSelectDialog(singerId) {
+/**
+ * "当前音色"一行：歌手名字 + 后端标签。
+ *
+ * 标签复用 describeTrackBackend()，与轨道行上显示的是同一个字符串
+ * （内置后端就是 'SXS INFERENCE'，插件后端是插件声明的 kind 名）。
+ *
+ * @param {object} singer
+ * @returns {HTMLElement}
+ */
+function _buildCurrentVoiceRow(singer) {
+  const desc = describeTrackBackend(singer);
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: var(--surface-2, var(--bg-button));
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  `;
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size: 11px; color: var(--fg-muted);';
+  title.textContent = t('main.currentVoice');
+  const name = document.createElement('div');
+  name.style.cssText = 'font-size: 12px; font-weight: 600;';
+  name.textContent = singer.singerName || singer.trackName || '';
+  const backend = document.createElement('div');
+  backend.style.cssText = 'font-size: 11px; color: var(--fg-muted);';
+  backend.textContent = desc.detail ? `${desc.label} · ${desc.detail}` : desc.label;
+  wrap.append(title, name, backend);
+  return wrap;
+}
+
+/**
+ * 「选择 / 替换歌手」对话框。
+ *
+ * 两种模式共用一套内容：
+ *   · 新建（singerId === null）：给空轨道挑音色，或从文件/插件新建轨道；
+ *   · 替换（mode === 'replace'）：双击歌手名进入，只改这条轨道现有的音色 ——
+ *     换一个歌手文件（按文件里的**歌手名字**显示），或换回内置后端
+ *     （列表顶部的 SXS INFERENCE 那一行）。
+ *
+ * 替换模式不再提供"新建歌手"入口：用户是在改这一条轨道，不是要再造一条。
+ *
+ * @param {string|null} singerId
+ * @param {{mode?: 'create'|'replace'}} [options]
+ */
+export function showSingerSelectDialog(singerId, options = {}) {
+  const replaceMode = options.mode === 'replace' && !!singerId;
   // 插件建轨会在本对话框之上再叠一层"创建插件轨道"对话框（见
   // pluginTrackDialog.js）。建轨成功后内层那层会自己关掉，但外层这层没人管，
   // 于是它立刻重新露出来继续盖住整个主窗口 —— 用户看到的就是"新建轨道后
@@ -357,6 +417,8 @@ export function showSingerSelectDialog(singerId) {
   // 因此这里不会阻塞对话框打开。
   const pluginSection = createPluginBackendSection({
     singerId,
+    // 替换模式要把"内置后端"这一行列进去，否则换了插件后端就回不去了
+    includeBuiltin: replaceMode,
     onCreated: async () => {
       // 先关窗再刷新：refreshAll 是同步重绘，先关可以避免用户看到
       // "遮罩还在、列表已更新"的中间态。
@@ -368,12 +430,23 @@ export function showSingerSelectDialog(singerId) {
     },
   });
 
+  // 替换模式在分区上方补一行"当前音色"：用户点进来第一件事是确认现在用的是什么。
+  const content = document.createElement('div');
+  content.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+  if (replaceMode) {
+    const singer = trackManager.getSinger(singerId);
+    if (singer) {
+      content.appendChild(_buildCurrentVoiceRow(singer));
+    }
+  }
+  content.appendChild(pluginSection);
+
   dialogRef = createDialog({
-    title: t('main.selectSinger'),
+    title: replaceMode ? t('main.replaceSinger') : t('main.selectSinger'),
     minWidth: 320,
-    contentElement: pluginSection,
+    contentElement: content,
     buttons: [
-      {
+      ...(replaceMode ? [] : [{
         text: t('main.openSingerCreator'),
         type: 'primary',
         onClick: () => {
@@ -383,10 +456,10 @@ export function showSingerSelectDialog(singerId) {
             showAlertDialog(t('main.singerCreatorNotImplemented'));
           }
         },
-      },
+      }]),
       {
-        text: t('main.openExistingSinger'),
-        type: 'success',
+        text: replaceMode ? t('main.chooseSingerFile') : t('main.openExistingSinger'),
+        type: replaceMode ? 'default' : 'success',
         onClick: async () => {
           if (window.electronAPI?.showOpenDialog) {
             try {
@@ -398,9 +471,15 @@ export function showSingerSelectDialog(singerId) {
                 const filePath = result.filePaths[0];
                 const buffer = await window.electronAPI.readFileBuffer(filePath);
                 if (singerId !== null) {
-                  await loadSingerFile(singerId, buffer, filePath);
+                  // 替换歌手：只换音色，保留用户给轨道起的名字
+                  await loadSingerFile(singerId, buffer, filePath, { keepTrackName: replaceMode });
                 } else {
                   await addSingerFromFile(buffer, filePath);
+                }
+                // 替换模式换完就收窗：用户点的是"换这条路轨的音色"，不是"开个面板继续看"
+                if (replaceMode) {
+                  closeSelf();
+                  markDirty();
                 }
                 // Dynamic import to avoid circular dependency with timelineRenderer
                 const { refreshAll } = await import('./timelineRenderer.js');
