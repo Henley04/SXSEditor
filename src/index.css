@@ -358,7 +358,8 @@
 
 /* 行内图标按钮：统一 24×24，扁平（无位移、无缩放、无发光） */
 .btn-fragment-add,
-.btn-singer-delete {
+.btn-singer-delete,
+.btn-track-flag {
   width: 24px;
   height: 24px;
   background: var(--bg-button);
@@ -384,6 +385,38 @@
 
 .btn-fragment-add:active {
   background: var(--bg-button-active);
+}
+
+/* 轨道开关（M / S）：默认与 +/× 同一套扁平外观，开启时用语义色区分。
+   静音走警示色、独奏走强调色 —— 两者语义不同，不能共用一种高亮。 */
+.btn-track-flag {
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.btn-track-mute.is-on {
+  background: var(--warning-soft);
+  color: var(--warning-fg);
+  border-color: var(--warning-line);
+}
+
+.btn-track-solo.is-on {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+/* 关闭态给一点 hover 反馈，但不用 + 按钮那种实心强调色 —— 这是开关，不是主操作。
+   开启态故意不写 hover 规则：配色一变，用户会以为"再点一下要关掉"。 */
+.btn-track-flag:not(.is-on):hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+}
+
+/* 静音轨整行降权：M 亮起之外，还要一眼看出这条现在不响 */
+.singer-item.is-muted .singer-avatar,
+.singer-item.is-muted .singer-info {
+  opacity: 0.5;
 }
 
 .btn-singer-delete:hover {

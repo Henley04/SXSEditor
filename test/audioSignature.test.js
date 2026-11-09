@@ -254,3 +254,35 @@ describe('audioSignature — 全局参数与稳定性', () => {
     expect(project([f1], [singer])).to.equal(project([f2], [singer]));
   });
 });
+
+describe('audioSignature — 静音 / 独奏', () => {
+  const f1 = makeFragment('f1', 's1', [makeNote(0, 440)]);
+  const f2 = makeFragment('f2', 's2', [makeNote(0, 494)]);
+
+  it('静音一条轨改变签名（否则按 Play 还会放出被静音那条的人声）', () => {
+    const plain = [makeSinger('s1'), makeSinger('s2')];
+    const muted = [makeSinger('s1', { mute: true }), makeSinger('s2')];
+    expect(project([f1, f2], plain)).to.not.equal(project([f1, f2], muted));
+  });
+
+  it('静音前后的两个状态各自稳定，切回去能命中同一签名', () => {
+    const plain = [makeSinger('s1'), makeSinger('s2')];
+    const muted = [makeSinger('s1', { mute: true }), makeSinger('s2')];
+    const a = project([f1, f2], plain);
+    const b = project([f1, f2], muted);
+    expect(project([f1, f2], plain)).to.equal(a);
+    expect(project([f1, f2], muted)).to.equal(b);
+    expect(a).to.not.equal(b);
+  });
+
+  it('独奏一条轨与只保留那一条轨等价（其余分片被排除）', () => {
+    const soloed = [makeSinger('s1', { solo: true }), makeSinger('s2')];
+    const onlyOne = [makeSinger('s1')];
+    expect(project([f1, f2], soloed)).to.equal(project([f1], onlyOne));
+  });
+
+  it('全部静音时签名为"没有可唱分片"（与空工程一致）', () => {
+    const allMuted = [makeSinger('s1', { mute: true }), makeSinger('s2', { mute: true })];
+    expect(project([f1, f2], allMuted)).to.equal(project([], []));
+  });
+});

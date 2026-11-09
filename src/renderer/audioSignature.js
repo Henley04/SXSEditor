@@ -31,6 +31,7 @@
 
 import { hashNumberArray, hashString } from '../shared/hashSignature.js';
 import { computeActiveClippedNotes } from '../shared/activeNotes.js';
+import { computeAudibility } from '../shared/trackAudibility.js';
 import { buildMelPostprocessPayload, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
 import { fragmentPitchMode } from '../shared/pitchControl.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
@@ -231,9 +232,13 @@ export function computeProjectSignature({ fragments, singers, bpm, autoShift = f
     : new Map((singers || []).map((s) => [s.id, s]));
 
   // 伴奏轨不参与人声合成：跳过（见文件头「只覆盖真正影响人声音频的输入」）。
+  // 静音 / 独奏在这里就生效：不可听轨道的分片不参与合成，也就不该算进签名
+  // —— 否则静音一条轨后签名不变，按 Play 会继续播旧音频（还带着那条轨的人声）。
+  const audibility = computeAudibility(Array.from(singerMap.values()));
   const list = (fragments || [])
     .filter((f) => f && f.notes && f.notes.length > 0)
     .filter((f) => singerMap.get(f.singerId)?.type !== 'accompaniment')
+    .filter((f) => audibility.audible(singerMap.get(f.singerId)))
     .slice()
     .sort((a, b) => (a.startTime - b.startTime) || String(a.id).localeCompare(String(b.id)));
 

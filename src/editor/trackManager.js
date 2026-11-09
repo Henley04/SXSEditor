@@ -103,6 +103,10 @@ function createSinger(data = {}) {
     wavPath: data.wavPath ?? null,
     midiPath: data.midiPath ?? null,
     color: data.color ?? TRACK_COLORS[_hashCode(String(id)) % TRACK_COLORS.length],
+    // 轨道开关：静音 / 独奏。判定规则集中在 shared/trackAudibility.js，
+    // 这里只负责存取 —— 白名单重建时漏掉这两个字段，工程一存一读就失效。
+    mute: data.mute === true,
+    solo: data.solo === true,
     singerFilePath: data.singerFilePath ?? null,
     singerFileMissing: data.singerFileMissing ?? false,
     // Accompaniment track fields (only used when type === 'accompaniment')

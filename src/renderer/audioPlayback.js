@@ -8,6 +8,7 @@ import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { computeProjectSignature } from './audioSignature.js';
+import { computeAudibility } from '../shared/trackAudibility.js';
 import { fragmentPitchMode } from '../shared/pitchControl.js';
 // F2/F3：主窗口参与合成的音符集合必须与分片编辑器同一套（过滤未激活重叠 + 排序）。
 import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes.js';
@@ -78,10 +79,19 @@ function attachPluginBackend(options, singer) {
 
 /**
  * Get all accompaniment tracks that have loaded audio buffers.
+ *
+ * 静音/独奏在这里一并生效：伴奏是独立 source（不经过人声混音），如果只在
+ * 人声侧过滤，独奏时伴奏仍会照常播放 —— 用户按 Solo 听到的会是"这条人声
+ * + 完整伴奏"，等于没独奏。
+ *
  * @returns {Array} Singer objects with type === 'accompaniment' and audioBuffer set
  */
 function getAccompanimentTracks() {
-  return trackManager.getSingers().filter(s => s.type === 'accompaniment' && (s.audioChannels?.length || s.audioBuffer));
+  const singers = trackManager.getSingers();
+  const audibility = computeAudibility(singers);
+  return singers.filter(s => s.type === 'accompaniment'
+    && (s.audioChannels?.length || s.audioBuffer)
+    && audibility.audible(s));
 }
 
 /**
@@ -498,11 +508,17 @@ export async function playAll() {
     const singers = trackManager.getSingers();
     const singerMap = new Map();
     singers.forEach(s => singerMap.set(s.id, s));
+    // 静音 / 独奏：判定规则见 shared/trackAudibility.js。
+    // 在**合成之前**就过滤掉不可听轨道的分片 —— 静音轨不该消耗推理时间，
+    // 也不该出现在混音里（导出侧用同一个判定，保证"导出的就是听到的"）。
+    const audibility = computeAudibility(singers);
 
     // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
-    // 排除伴奏轨道的分片（伴奏轨道不应有分片，但防御性过滤）。
+    // 排除伴奏轨道的分片（伴奏轨道不应有分片，但防御性过滤）与静音轨道的分片。
     const allFragments = fragments
-      .filter(f => f.notes && f.notes.length > 0 && singerMap.get(f.singerId)?.type !== 'accompaniment')
+      .filter(f => f.notes && f.notes.length > 0
+        && singerMap.get(f.singerId)?.type !== 'accompaniment'
+        && audibility.audible(singerMap.get(f.singerId)))
       .sort((a, b) => a.startTime - b.startTime);
 
     const accTracks = getAccompanimentTracks();
@@ -1770,8 +1786,7 @@ export async function runExportJob(opts) {
   const singers = trackManager.getSingers();
   const singerMap = new Map();
   singers.forEach(s => singerMap.set(s.id, s));
-
-  // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
+  const exportAudibility = computeAudibility(singers);
   // 与 playAll 一致：每个 fragment 用相对 notes（clippedNotes）
   // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
   // 确保与分片编辑器播放/导出结果完全一致。
@@ -1780,6 +1795,9 @@ export async function runExportJob(opts) {
       // Exclude fragments belonging to accompaniment tracks (no SVS synthesis)
       const singer = singerMap.get(f.singerId);
       if (singer && singer.type === 'accompaniment') return false;
+      // 静音 / 独奏同样生效：导出的应当是"听到的"，不是"工程里全部的"。
+      // 判定与 playAll、播放缓存签名共用 shared/trackAudibility.js。
+      if (singer && !exportAudibility.audible(singer)) return false;
       return f.notes && f.notes.length > 0;
     })
     .sort((a, b) => a.startTime - b.startTime);

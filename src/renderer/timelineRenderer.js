@@ -895,6 +895,50 @@ function commitTrackNameEdit(singer, newName) {
 }
 
 /**
+ * 轨道开关按钮（静音 M / 独奏 S）。
+ *
+ * 为什么不做成"点一下只改样式"：可听性会同时影响播放、导出与播放缓存签名。
+ * 这里只改工程数据（trackManager）+ 记一步撤销 + 标脏，其余由各消费方按
+ * shared/trackAudibility.js 的规则自然生效 —— 静音后按 Play 会因为签名变化
+ * 重新合成（见 renderer/audioSignature.js），不需要在这里单独清缓存。
+ *
+ * @param {object} singer 轨道
+ * @param {'mute'|'solo'} kind
+ * @returns {HTMLButtonElement}
+ */
+function _createTrackFlag(singer, kind) {
+  const isMute = kind === 'mute';
+  const label = isMute ? t('main.muteTrack') : t('main.soloTrack');
+  const active = singer[kind] === true;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = `btn-track-flag btn-track-${kind}${active ? ' is-on' : ''}`;
+  btn.textContent = isMute ? 'M' : 'S';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  // aria-pressed 表达"开关当前是开的"，读屏才分得清启用与未启用
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  btn.dataset.singerId = singer.id;
+
+  btn.addEventListener('click', (e) => {
+    // 行本身有 click（选中轨道），开关不能顺带把轨道选中
+    e.stopPropagation();
+    const singerId = singer.id;
+    const next = !(singer[kind] === true);
+    trackManager.updateSinger(singerId, { [kind]: next });
+    history.push({
+      undo() { trackManager.updateSinger(singerId, { [kind]: !next }); refreshAll(); },
+      redo() { trackManager.updateSinger(singerId, { [kind]: next }); refreshAll(); },
+    });
+    markDirty();
+    refreshAll();
+  });
+
+  return btn;
+}
+
+/**
  * 把轨道后端标签写进歌手行：内置后端是既有的 'SXS INFERENCE' 品牌标识，
  * 插件后端由插件自己声明名称（见 pluginBackend.describeTrackBackend）。
  */
@@ -931,7 +975,9 @@ export function renderSingerList() {
     const s = singers[i];
     // color/avatarPath 参与缓存键：换色或换头像后列表 UI 必须重建，
     // 否则用户改完看不到变化（功能性 bug）。
-    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}`;
+    // mute/solo 必须进缓存键：它们是行内的可见状态（M/S 高亮 + 整行降权），
+    // 不进键的话点击后 refreshAll 会因为"列表没变"直接早退，按钮看起来点不动。
+    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}~${s.mute ? 1 : 0}${s.solo ? 1 : 0}`;
     const backend = s.backend;
     key += `~${backend ? backend.type : 'sxs'}${backend && backend.pluginId ? backend.pluginId : ''}${backend && backend.kindId ? backend.kindId : ''}${backend && backend.voiceId ? backend.voiceId : ''}${s.backendMissing ? 1 : 0}`;
   }
@@ -1192,6 +1238,12 @@ export function renderSingerList() {
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'singer-item-actions';
 
+    // 静音 / 独奏：放在行内动作区最左侧，与 +/× 同尺寸，不额外占用行高。
+    // 行为（谁发声、伴奏跟不跟着静音）由 shared/trackAudibility.js 唯一决定，
+    // 这里只负责把开关切过去。
+    actionsDiv.appendChild(_createTrackFlag(singer, 'mute'));
+    actionsDiv.appendChild(_createTrackFlag(singer, 'solo'));
+
     // Accompaniment tracks don't have fragments (no SVS synthesis)
     if (!isAccompaniment) {
       const addBtn = document.createElement('button');
@@ -1214,6 +1266,10 @@ export function renderSingerList() {
     item.appendChild(avatarDiv);
     item.appendChild(infoDiv);
     item.appendChild(actionsDiv);
+
+    // 静音轨降低整行存在感：M 亮起之外还需要一眼看出"这条现在不响"。
+    if (singer.mute === true) item.classList.add('is-muted');
+    else if (singer.solo === true) item.classList.add('is-soloed');
 
     item.addEventListener('click', (e) => {
       if (e.target.closest('.btn-fragment-add') || e.target.closest('.btn-singer-delete') || e.target.closest('.singer-track-name-input') || e.target.closest('.btn-relocate-singer')) {
