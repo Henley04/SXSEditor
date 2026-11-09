@@ -7,6 +7,7 @@ import { setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
+import { computeProjectSignature } from './audioSignature.js';
 import { fragmentPitchMode } from '../shared/pitchControl.js';
 // F2/F3：主窗口参与合成的音符集合必须与分片编辑器同一套（过滤未激活重叠 + 排序）。
 import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes.js';
@@ -445,6 +446,7 @@ function _abandonActiveSession() {
   stopAudioSource();
   state.isPlaying = false;
   state.currentAudioData = null;
+  state.currentAudioSignature = null;
   state.currentAudioChannels = null;
   state.currentAudioBuffer = null;
 }
@@ -519,6 +521,9 @@ export async function playAll() {
       const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
       const silentVocal = new Float32Array(accMaxSamples);
       state.currentAudioData = silentVocal;
+      // 纯伴奏不入签名：这份 buffer 的时长由伴奏轨道决定，与人声输入无关，
+      // 留 null 让下一次 Play 老老实实重走 playAll（没有推理成本）。
+      state.currentAudioSignature = null;
       state.currentAudioChannels = _buildPlaybackChannels(silentVocal, state.project.bpm, false);
       state.currentAudioBuffer = null;
       setTimeDisplay(formatTime(state.playbackPauseOffset));
@@ -543,6 +548,10 @@ export async function playAll() {
     }
 
     const inferenceOpts = getPreviewInferenceOptions();
+
+    // 这一轮合成对应的输入签名。算一次、在两处写入点复用，保证
+    // "记录下来的签名"与"真正送去推理的输入"是同一时刻的快照。
+    const mySignature = computePlaybackSignature();
 
     if (inferenceOpts.diffStepChunk) {
       // === 流式合成路径 ===
@@ -825,6 +834,7 @@ export async function playAll() {
         if (streamingChunkCleanup) { safeCleanup('audioPlayback.streamingChunkCleanup', streamingChunkCleanup); streamingChunkCleanup = null; }
 
         state.currentAudioData = mixedAudio;
+        state.currentAudioSignature = mySignature;
         // Always rebuild the complete playback mix. On cache-fast replays the IPC
         // result can arrive before all chunk events are rendered; this provides a
         // correct accompaniment-inclusive fallback and fixes silent accompaniment
@@ -980,6 +990,7 @@ export async function playAll() {
       // 推理可能耗时数秒：落地前再确认一次没有被取消，避免"取消后声音仍响起"
       throwIfCancelled();
       state.currentAudioData = mixedAudio;
+      state.currentAudioSignature = mySignature;
       state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm, false);
 
       // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
@@ -1102,6 +1113,47 @@ export function getExportInferenceOptions() {
     dynamicThresholdEnabled: state.audioSettings?.exportDynamicThresholdEnabled === true,
     dynamicThresholdPercentile: Number.isFinite(state.audioSettings?.exportDynamicThresholdPercentile) ? state.audioSettings.exportDynamicThresholdPercentile : 0.995,
   };
+}
+
+/**
+ * 当前工程的播放签名（见 renderer/audioSignature.js）。
+ *
+ * 每次调用都从工程数据现算：签名必须是"输入的函数"，不能依赖任何缓存，
+ * 否则改了输入又忘了刷新缓存，就退回到这个函数要解决的问题本身。
+ * 开销是逐音符的字符串哈希 + 曲线求值，只在按 Play / 拖播放头松手时调用，
+ * 与合成（数秒级）相比可忽略。
+ */
+export function computePlaybackSignature() {
+  return computeProjectSignature({
+    fragments: trackManager.getFragments(),
+    singers: trackManager.getSingers(),
+    bpm: state.project.bpm,
+    autoShift: !!dom.autoShiftCheck?.checked,
+    inferenceOpts: getPreviewInferenceOptions(),
+  });
+}
+
+/**
+ * 手上这份 currentAudioData 是否还能直接续播。
+ *
+ * 旧判定只看 `currentAudioData.length > 0`，于是「把分片拖到别的歌手轨道」
+ * 「改了音符」「换了音色文件」之后按 Play，播的仍是改动前那份音频 —— 主进程
+ * 的合成缓存键其实带了 singerId，但渲染层压根没重新请求，缓存键没有机会生效。
+ *
+ * @returns {boolean}
+ */
+export function hasReusablePlaybackAudio() {
+  if (!state.currentAudioData || state.currentAudioData.length === 0) return false;
+  if (!state.currentAudioSignature) return false;
+  let current = null;
+  try {
+    current = computePlaybackSignature();
+  } catch (err) {
+    // 签名算不出来（工程数据异常）时宁可重推一次，也不要播错音频
+    console.warn('[Audio] Failed to compute playback signature:', err && err.message);
+    return false;
+  }
+  return current === state.currentAudioSignature;
 }
 
 export function applyAudioSettings() {
@@ -1469,6 +1521,7 @@ export function stopPlayback() {
   state.playbackPauseOffset = 0;
   stopPlayheadAnimation();
   state.currentAudioData = null;
+  state.currentAudioSignature = null;
   state.currentAudioBuffer = null;
   setTimeDisplay(formatTime(0));
   setTransport(TRANSPORT.IDLE);

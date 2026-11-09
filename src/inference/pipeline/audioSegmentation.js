@@ -1,4 +1,7 @@
 const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
+// 哈希算法与渲染层签名共用一份（src/shared/hashSignature.js）。
+// 这里保留 hashArray 方法名：调用点遍布本文件与 index.js，改名没有收益。
+const { hashNumberArray } = require('../../shared/hashSignature.js');
 
 // Only rests >= 1.5 seconds are excluded from inference; 150 ms of rest
 // context is kept on both sides of the split so consonant releases and the
@@ -336,32 +339,12 @@ class AudioSegmentation {
      * 采用 FNV-1a 32-bit 变种，对短数组（≤2000 元素）全量哈希避免下采样盲区；
      * 长数组仍按 2000 个采样点哈希以控制开销，但 FNV-1a 的雪崩效应优于原多项式哈希，
      * 显著降低微调单点改动落在步长盲区内导致缓存误命中的概率。
+     *
+     * 实现已收敛到 src/shared/hashSignature.js —— 渲染层播放签名与分片编辑器
+     * 预览签名调的是同一个函数，不再是"两份靠注释维系的副本"。
      */
     hashArray(arr) {
-        if (!arr) return 0;
-        let h = 0x811c9dc5;
-        const bytes = new Uint8Array(8);
-        const view = new DataView(bytes.buffer);
-        const hashValue = (value) => {
-            // Preserve fractional edits. The old bitwise coercion collapsed every
-            // value in (-1, 1) to zero, causing stale synthesis-cache hits for F0 curves.
-            view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
-            for (let j = 0; j < bytes.length; j++) {
-                h ^= bytes[j];
-                h = Math.imul(h, 0x01000193);
-            }
-        };
-
-        const step = Math.max(1, Math.floor(arr.length / 2000));
-        let lastHashed = -1;
-        for (let i = 0; i < arr.length; i += step) {
-            hashValue(arr[i]);
-            lastHashed = i;
-        }
-        // Sampling must include the tail, where editor curves commonly receive a final keyframe.
-        if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
-        hashValue(arr.length);
-        return h | 0;
+        return hashNumberArray(arr);
     }
 
     /**

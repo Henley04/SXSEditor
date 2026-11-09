@@ -44,6 +44,11 @@ export const state = {
   synthesisCancelled: false,
   playheadRaf: null,
   currentAudioData: null,
+  // 上面这份音频对应的输入签名（见 renderer/audioSignature.js）。
+  // 只在**人声**合成完成时写入；纯伴奏路径不写（它的音频时长取决于伴奏
+  // 轨道，跟人声签名不是一回事，留 null 让下一次 Play 重新走 playAll）。
+  // 为 null 时的语义是「不可直接续播」，不是「没播过」。
+  currentAudioSignature: null,
   currentAudioChannels: null,
   gainNode: null,
   useExclusiveMode: false,

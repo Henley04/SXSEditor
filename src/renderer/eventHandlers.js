@@ -6,7 +6,7 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
 import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
@@ -204,8 +204,12 @@ function _endPlayheadDrag() {
       // 注意不能看 getTransportState()：pausePlayback 已经把传输条改成 PAUSED，
       // 这里只能靠 state.isSynthesizing 判断"还有一轮推理在跑"。
       void playAll();
-    } else {
+    } else if (hasReusablePlaybackAudio()) {
+      // 与 btnPlay 同一套判定：输入已经变了的话，续播旧 buffer 就是播错声音，
+      // 此时走 playAll 重新合成（主进程分段缓存让已算过的部分几乎瞬时命中）。
       startAudioPlayback(state.playbackPauseOffset);
+    } else {
+      void playAll();
     }
   }
 }
@@ -284,9 +288,12 @@ dom.btnPlay.addEventListener('click', async () => {
     await playAll();
     return;
   }
-  // 已有缓存的合成音频：从暂停位置恢复播放（无需重新合成）。
+  // 已有缓存、且缓存对应的输入就是当前输入：从暂停位置恢复播放（无需重新合成）。
+  // 只看 currentAudioData 非空是不够的 —— 分片被拖到别的歌手轨道、音符/音高
+  // 曲线/音色文件改过之后，这份音频仍然是"改动前"的，直接续播就是播错声音。
+  // 判定交给 hasReusablePlaybackAudio()（签名对比，见 renderer/audioSignature.js）。
   // stopPlayback / 自然结束时 currentAudioData 会被置 null，下次点击 Play 会重新合成。
-  if (state.currentAudioData && state.currentAudioData.length > 0) {
+  if (hasReusablePlaybackAudio()) {
     await startAudioPlayback(state.playbackPauseOffset);
   } else {
     await playAll();

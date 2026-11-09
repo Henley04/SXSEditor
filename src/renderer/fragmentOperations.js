@@ -32,6 +32,37 @@ export function openFragmentEditor(fragment) {
   }
 }
 
+/**
+ * 把一个分片同步到已打开的分片编辑器：边界 + （换轨时）新歌手的音色。
+ *
+ * 为什么必须把音色一起送过去：编辑器 window 是独立进程，它手上的
+ * `wavBuffer / backend` 是**打开那一刻**从轨道取的快照。主窗口把分片拖到
+ * 另一个歌手之后，只同步 singerId 会让编辑器拿着「新歌手的 id + 老歌手的
+ * 参考音频」去推理 —— 既不是老声音也不是新声音。所以换轨时必须把新轨道的
+ * 参考音频与后端一起推过去，编辑器才能真的换成新音色。
+ *
+ * 没换轨时只发边界：参考音频是几 MB 的 ArrayBuffer，每次拖动都发一遍没有意义。
+ *
+ * @param {string} fragmentId
+ * @param {{startTime:number, duration:number}} bounds
+ * @param {{singerId?: string|null, previousSingerId?: string|null}} [routing]
+ */
+function _syncFragmentToEditor(fragmentId, bounds, routing) {
+  if (!window.electronAPI?.updateFragmentBounds) return;
+  const payload = { ...bounds };
+  const nextId = routing ? routing.singerId : null;
+  const prevId = routing ? routing.previousSingerId : null;
+  if (routing && nextId !== prevId) {
+    const singer = nextId ? trackManager.getSinger(nextId) : null;
+    payload.singerId = nextId ?? null;
+    payload.color = singer ? singer.color : undefined;
+    payload.voice = singer
+      ? { wavBuffer: singer.wavBuffer || null, backend: singer.backend ?? { type: 'sxs' } }
+      : null;
+  }
+  window.electronAPI.updateFragmentBounds(fragmentId, payload);
+}
+
 export function finishDrag() {
   if (state.dragState && state.fragmentDragSnapshot) {
     const fragment = state.dragState.fragment;
@@ -57,9 +88,9 @@ export function finishDrag() {
             }
           }
           renderFragmentTimeline();
-          if (window.electronAPI?.updateFragmentBounds) {
-            window.electronAPI.updateFragmentBounds(fragmentId, { startTime: oldStart, duration: oldDuration });
-          }
+          _syncFragmentToEditor(fragmentId,
+            { startTime: oldStart, duration: oldDuration },
+            { singerId: oldSingerId, previousSingerId: newSingerId });
         },
         redo() {
           const f = trackManager.getFragment(fragmentId);
@@ -73,15 +104,15 @@ export function finishDrag() {
             }
           }
           renderFragmentTimeline();
-          if (window.electronAPI?.updateFragmentBounds) {
-            window.electronAPI.updateFragmentBounds(fragmentId, { startTime: newStart, duration: newDuration });
-          }
+          _syncFragmentToEditor(fragmentId,
+            { startTime: newStart, duration: newDuration },
+            { singerId: newSingerId, previousSingerId: oldSingerId });
         }
       });
       markDirty();
-      if (window.electronAPI?.updateFragmentBounds) {
-        window.electronAPI.updateFragmentBounds(fragmentId, { startTime: newStart, duration: newDuration });
-      }
+      _syncFragmentToEditor(fragmentId,
+        { startTime: newStart, duration: newDuration },
+        { singerId: newSingerId, previousSingerId: oldSingerId });
     }
   }
   state.dragState = null;

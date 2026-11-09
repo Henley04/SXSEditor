@@ -40,6 +40,7 @@ import {
   setFragmentDataReceived,
   getKanjiGroups, setKanjiGroups,
   setPostprocess, invalidateTimbreCache, getSelectedTimbreAnchors,
+  setFragmentAudioDataSignature,
 } from './state.js';
 import { PARAM_MODES } from './constants.js';
 import { normalizePostprocessState } from '../shared/postprocessCurves.js';
@@ -91,11 +92,12 @@ export function setupIpcHandlers() {
       if (currentFragment && currentFragment.id === fragmentId) {
         if (startTime !== undefined) currentFragment.startTime = startTime;
         if (duration !== undefined) currentFragment.duration = duration;
+        applyRoutingChange(currentFragment, data);
         render();
       } else {
         // currentFragment 尚未就绪（分片编辑器刚打开、handleFragmentData 还没跑完），
         // 缓存最新的边界更新，待 handleFragmentData 完成后回放，避免静默丢弃。
-        setPendingBoundsUpdate({ fragmentId, startTime, duration });
+        setPendingBoundsUpdate({ fragmentId, startTime, duration, singerId: data.singerId, color: data.color, voice: data.voice });
       }
     });
     if (cleanup) _ipcCleanups.push(cleanup);
@@ -119,6 +121,38 @@ export function setupIpcHandlers() {
     });
     if (cleanup) _ipcCleanups.push(cleanup);
   }
+}
+
+/**
+ * 主窗口把分片拖到别的歌手轨道后，同步编辑器的「路由 + 音色」。
+ *
+ * 只同步 singerId 是不够的：编辑器手上的参考音频（wavBuffer）与后端是**打开
+ * 那一刻**从轨道取的快照。只改 id 会让它拿着"新歌手的 id + 老歌手的参考音频"
+ * 去推理，唱出来还是老声音。所以换轨时主窗口把新轨道的 wavBuffer/backend
+ * 一起推过来（见 renderer/fragmentOperations.js 的 _syncFragmentToEditor）。
+ *
+ * 音色变化后必须作废本地音频签名：签名里含 singerId，本来下一次比对也能发现，
+ * 但显式清空让"需要重新推理"这件事在点播放之前就成立，不依赖比对时机。
+ *
+ * @param {object} fragment 编辑器当前分片
+ * @param {{singerId?:string|null, color?:string, voice?:{wavBuffer?:ArrayBuffer|null, backend?:object}|null}} data
+ */
+function applyRoutingChange(fragment, data) {
+  if (!fragment || !data) return;
+  let changed = false;
+  if (data.singerId !== undefined && fragment.singerId !== data.singerId) {
+    fragment.singerId = data.singerId;
+    changed = true;
+  }
+  if (typeof data.color === 'string') fragment.color = data.color;
+  if (data.voice) {
+    setWavFileBuffer(data.voice.wavBuffer || null);
+    setTrackBackend(normalizeTrackBackend(data.voice.backend));
+    getPhonemeCache().clear();
+    invalidateTimbreCache();
+    changed = true;
+  }
+  if (changed) setFragmentAudioDataSignature(null);
 }
 
 /**
@@ -300,6 +334,7 @@ async function handleFragmentData(data) {
     if (cf && cf.id === pendingBounds.fragmentId) {
       if (pendingBounds.startTime !== undefined) cf.startTime = pendingBounds.startTime;
       if (pendingBounds.duration !== undefined) cf.duration = pendingBounds.duration;
+      applyRoutingChange(cf, pendingBounds);
       render();
     }
   }

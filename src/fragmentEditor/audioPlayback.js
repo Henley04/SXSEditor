@@ -40,6 +40,8 @@ import {
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render } from './canvasRenderer.js';
 import { firstNoteStart } from '../shared/activeNotes.js';
+// 哈希算法与主进程合成缓存键、主窗口播放签名共用一份（src/shared/hashSignature.js）。
+import { hashNumberArray } from '../shared/hashSignature.js';
 import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
@@ -822,32 +824,12 @@ function padAudioToFragmentDuration(audioData) {
  * 语义一致的 FNV-1a 32-bit 哈希：短数组（≤2000 元素）全量、长数组 2000 采样 +
  * 尾部补偿 + 长度折叠，float64 字节展开保留小数编辑。
  *
- * ⚠️ 两端必须同步修改。旧 renderer 签名用多项式哈希 + 4000 采样 + 仅取
- * refAudioWavBuffer.byteLength —— 微调单点 pitch 落在采样盲区、或换同长度
- * 参考音频时签名不变 → 直接复用旧音频，服务端全量哈希没有纠正机会。
+ * 算法本体已移到 src/shared/hashSignature.js，三处消费方（主进程合成缓存键、
+ * 主窗口播放签名、本文件预览签名）调同一个函数，不再依赖"改一处记得改另一处"。
+ * 保留 _hashArrayFNV 这个名字是因为本文件有十来个调用点，改名没有收益。
  */
 function _hashArrayFNV(arr) {
-  if (!arr) return 0;
-  let h = 0x811c9dc5;
-  const bytes = new Uint8Array(8);
-  const view = new DataView(bytes.buffer);
-  const hashValue = (value) => {
-    view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
-    for (let j = 0; j < bytes.length; j++) {
-      h ^= bytes[j];
-      h = Math.imul(h, 0x01000193);
-    }
-  };
-  const step = Math.max(1, Math.floor(arr.length / 2000));
-  let lastHashed = -1;
-  for (let i = 0; i < arr.length; i += step) {
-    hashValue(arr[i]);
-    lastHashed = i;
-  }
-  // 采样必须包含尾部：编辑器曲线的最后一个关键帧常落在尾部
-  if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
-  hashValue(arr.length);
-  return h | 0;
+  return hashNumberArray(arr);
 }
 
 /**

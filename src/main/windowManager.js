@@ -1026,6 +1026,12 @@ function registerWindowIpc() {
     if (pending && pending.fragment) {
       if (data.startTime !== undefined) pending.fragment.startTime = data.startTime;
       if (data.duration !== undefined) pending.fragment.duration = data.duration;
+      // 换轨必须同步进快照：否则编辑器关掉再打开时，getFragmentData 兜底会把它
+      // 还原成拖动前那个歌手，用户看到分片"自己跳回去了"。
+      if (data.singerId !== undefined) pending.fragment.singerId = data.singerId;
+      if (data.color !== undefined) pending.fragment.color = data.color;
+      // 音色是轨道级数据，不在 fragment 上；单独存一份供下一次 openFragmentEditor
+      // 复用（openFragmentEditor 会重新按 singerId 取，所以这里只需要不污染快照）。
     }
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_BOUNDS_CHANGED, { fragmentId, ...data });
