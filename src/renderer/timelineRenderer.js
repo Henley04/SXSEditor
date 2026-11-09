@@ -744,16 +744,38 @@ export function renderFragmentTimeline() {
     }
   });
 
-  // 调整 playhead canvas 大小会清空其内容；非播放态时立即重绘 playhead，
-  // 避免缩放/滚动后 playhead 消失（播放态由 rAF 循环自动刷新）。
-  // playhead canvas 只覆盖 container 大小，重绘成本很低。
-  if (!state.isPlaying && (state.playbackPauseOffset > 0 || state.currentAudioData)) {
-    drawPausedPlayheadAt(state.playbackPauseOffset);
+  // 重绘播放头。
+  //
+  // 旧实现只在"未播放"时补画（`!state.isPlaying`），于是播放中（以及等推理
+  // 期间 isPlaying 仍为 true、rAF 已被取消）做缩放或横向滚动时，画布上的
+  // 播放头既不重画也不清空 —— 它停在缩放前那个**屏幕坐标**上，看起来像被
+  // 钉死不动，而时间轴已经在它下面滚过去了。
+  //
+  // 现在只要画布上应该有播放头，就用"最后一次画到的位置"补画：
+  //   · 播放中 / 等推理：沿用 rAF 最后给出的位置（等推理时位置本来就不动）；
+  //   · 暂停：用 playbackPauseOffset（用户拖到哪就停在哪）。
+  // 位置永远由时间轴推导（playbackTimeToX - scrollX），视图变化时它跟着内容走。
+  const playheadSeconds = state.isPlaying
+    ? _lastPlayheadSeconds
+    : (state.playbackPauseOffset > 0 || state.currentAudioData ? state.playbackPauseOffset : null);
+  if (playheadSeconds != null) {
+    if (state.isPlaying) drawPlayheadLine(playheadSeconds);
+    else drawPausedPlayheadAt(playheadSeconds);
   }
 }
 
 // 播放头拖拽 hit-test 容差（像素）
 export const PLAYHEAD_HIT_WIDTH = 12;
+
+/**
+ * 最后一次真正画到画布上的播放位置（秒）。
+ *
+ * 为什么需要记这个：播放中的位置由 rAF 每帧推进，而缩放/横向滚动会触发一次
+ * 重绘（renderFragmentTimeline）。等推理期间 rAF 已被取消、位置不再推进，
+ * 此时重绘必须用"停在哪儿就画在哪儿"的位置，而不是重新从头算一个值 ——
+ * 否则等待期间一缩放，播放头就会自己跳位置。
+ */
+let _lastPlayheadSeconds = null;
 
 /**
  * 把秒数转换为 fragment canvas 内部的 X 坐标（含 zoom，不含 scroll，
@@ -779,6 +801,8 @@ export function xToPlaybackTime(x) {
 
 export function drawPlayheadLine(elapsedSeconds, options = {}) {
   if (!dom.fragmentPlayheadCanvas) return;
+  // 记下位置：等待推理/暂停时若发生缩放或横向滚动，重绘要画在同一个时间点上
+  if (Number.isFinite(elapsedSeconds)) _lastPlayheadSeconds = elapsedSeconds;
   const ctx = dom.fragmentPlayheadCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = dom.fragmentPlayheadCanvas.width / dpr;
@@ -842,6 +866,7 @@ export function drawPausedPlayheadAt(offsetSeconds) {
 
 export function clearPlayheadLine() {
   if (!dom.fragmentPlayheadCanvas) return;
+  _lastPlayheadSeconds = null;
   const ctx = dom.fragmentPlayheadCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = dom.fragmentPlayheadCanvas.width / dpr;

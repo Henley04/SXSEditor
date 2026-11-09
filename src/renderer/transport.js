@@ -141,13 +141,11 @@ export function setTransportProgress(label, percent) {
     dom.transportStatus.classList.add('active');
     _progressVisible = true;
 
-    if (dom.transportProgress && dom.transportProgressFill) {
-        if (hasPct) {
-            dom.transportProgress.hidden = false;
-            dom.transportProgressFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-        } else {
-            dom.transportProgress.hidden = true;
-        }
+    // 百分比未知（等待推理 / 不确定进度）时**不动进度条**：
+    // 既不隐藏轨道，也不把填充宽度归零 —— 那两个动作都会让"进度条位置"
+    // 在推理等待的瞬间自己变掉（旧实现隐藏轨道，整块区域跟着塌陷）。
+    if (hasPct && dom.transportProgressFill) {
+        dom.transportProgressFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
     }
 }
 
@@ -157,10 +155,10 @@ export function clearTransportStatus() {
     _etaStartAt = 0;
     _etaStartPct = -1;
     _etaSmoothedSec = -1;
+    // 只清文本与填充，容器与轨道始终留在布局里（见 index.css 的 .transport-status）
     if (dom.transportStatus) dom.transportStatus.classList.remove('active');
     if (dom.transportStatusText) dom.transportStatusText.textContent = '';
     if (dom.transportProgressFill) dom.transportProgressFill.style.width = '0%';
-    if (dom.transportProgress) dom.transportProgress.hidden = true;
 }
 
 /**

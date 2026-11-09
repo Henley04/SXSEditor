@@ -793,15 +793,19 @@
   border-color: transparent;
 }
 
-/* 进度区：空闲时不占位；有内容时展开并右对齐 */
+/* 进度区：DAW 风格的常驻状态条。
+   --------------------------------------------------------------------------
+   始终占据固定宽度。旧实现在空闲时整块 display:none、等待推理时又把进度条
+   hidden 掉，于是两侧控件随文本出现/消失左右横跳 —— 也就是"位置自动更改"。
+   现在宽度固定，文本再长也只被省略号吃掉，进度条的轨道与位置都不动；
+   等待推理（百分比未知）时轨道继续显示、填充停在原处，不会缩回去。 */
 .transport-status {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 340px;
+  flex: 0 0 auto;
+  width: 176px;
   padding-left: 6px;
   font-size: 11px;
   line-height: 1;
@@ -812,14 +816,12 @@
   overflow: hidden;
 }
 
-.transport-status.active {
-  display: flex;
-}
-
 .transport-status-text {
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  text-align: right;
 }
 
 .transport-progress {
@@ -838,12 +840,21 @@
   transition: width 120ms linear;
 }
 
-/* 窄屏：先牺牲进度条，只留文本（百分比本身比条更精确）。
-   字号同步降到 10px —— "模型加载中 88% · 还剩 12:34" 在 220px 里会被省略号
-   吃掉 ETA，而 ETA 正是这个区域存在的意义。 */
-@media (max-width: 1360px) {
-  .transport-status { max-width: 240px; font-size: 10px; }
-  .transport-progress { display: none; }
+/* 工具栏收紧时同步压缩进度区，但绝不整块隐藏 —— 宽度变化只发生在窗口尺寸
+   变化时，不会因为"这次有没有任务在跑"而变化。 */
+@media (max-width: 1500px) {
+  .transport-status { width: 148px; }
+}
+
+@media (max-width: 1180px) {
+  .transport-status { width: 120px; gap: 6px; font-size: 10px; }
+  .transport-progress { width: 48px; }
+}
+
+/* ≤980px 工具栏已收成图标、文本标签全部折叠，再塞一块状态区会把按钮挤出去。
+   这是唯一隐藏它的条件：由窗口宽度决定，与运行状态无关。 */
+@media (max-width: 980px) {
+  .transport-status { display: none; }
 }
 
 /* 播放中：Play 被禁用但保持可见（视觉上表示"正在播放"），由 Pause 接管。

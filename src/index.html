@@ -27,11 +27,12 @@
                改版时它被误删过一次，结果每帧抛 TypeError 打断播放头动画
                —— 删除前先看 src/renderer/state.js 里的 dom.timeDisplay。 -->
           <span id="time-display">00:00:000</span>
-          <!-- 推理 / 模型加载进度：空闲时 display:none（完全不占位），
-               有进度时展开，文本右对齐，进度条在最右 -->
+          <!-- 推理 / 模型加载进度：DAW 风格的常驻状态条（宽度固定、始终占位，
+               避免文本出现/消失时两侧控件左右跳动）。等待推理（百分比未知）时
+               轨道仍在、填充停在原处；进度条本身不做 display:none。 -->
           <div id="transport-status" class="transport-status" role="status" aria-live="polite">
             <span id="transport-status-text" class="transport-status-text"></span>
-            <div id="transport-progress" class="transport-progress" hidden>
+            <div id="transport-progress" class="transport-progress">
               <div id="transport-progress-fill" class="transport-progress-fill"></div>
             </div>
           </div>
