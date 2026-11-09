@@ -98,3 +98,19 @@ export const dom = {
   bpmDisplayBadge: document.getElementById('bpm-display-badge'),
   versionDisplay: document.getElementById('version-display'),
 };
+
+/**
+ * 写播放时间码 —— 时间显示位的唯一写入口。
+ *
+ * 为什么不让调用方直接 `dom.timeDisplay.textContent = …`：这个节点是**可选**
+ * 展示位，一旦 DOM 里没有（历史上工具栏改版就漏删过一次），直接写就是
+ * "Cannot set properties of null"。而其中最要命的调用点是播放头的 rAF
+ * 循环（updatePlayhead）：每帧抛一次，playhead 停住、错误弹窗刷屏，
+ * 播放本身其实还在跑。这里统一兜成 no-op —— 时间码看不见不影响出声。
+ *
+ * @param {string} text 已格式化的文本（formatTime / 本地化串）
+ */
+export function setTimeDisplay(text) {
+  if (!dom.timeDisplay) return;
+  dom.timeDisplay.textContent = text;
+}

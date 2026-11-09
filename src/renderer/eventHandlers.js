@@ -1,4 +1,4 @@
-import { state, dom, trackManager, history } from './state.js';
+import { state, dom, trackManager, history, setTimeDisplay } from './state.js';
 import {
   SINGER_ROW_HEIGHT,
   HEADER_HEIGHT,
@@ -168,7 +168,7 @@ function _canvasXToClampedSeconds(x) {
  */
 function _updatePlayheadVisual(seconds) {
   state.playbackPauseOffset = seconds;
-  dom.timeDisplay.textContent = formatTime(seconds);
+  setTimeDisplay(formatTime(seconds));
   _playheadDragPendingSeconds = seconds;
   if (!_playheadDragRaf) {
     _playheadDragRaf = requestAnimationFrame(() => {
@@ -299,7 +299,7 @@ dom.btnPause.addEventListener('click', async () => {
 
 dom.btnStop.addEventListener('click', () => {
   stopPlayback();
-  dom.timeDisplay.textContent = formatTime(0);
+  setTimeDisplay(formatTime(0));
 });
 
 // Project save/load/export

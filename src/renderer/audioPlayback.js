@@ -1,4 +1,4 @@
-import { state, dom, trackManager } from './state.js';
+import { state, dom, trackManager, setTimeDisplay } from './state.js';
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
 import { buildMelPostprocessPayload, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
 import { t } from '../i18n/index.js';
@@ -291,7 +291,7 @@ function _createScheduler() {
         cancelAnimationFrame(state.playheadRaf);
         state.playheadRaf = null;
       }
-      dom.timeDisplay.textContent = t('main.waitingForInference');
+      setTimeDisplay(t('main.waitingForInference'));
       setTransportProgress(t('main.waitingForInference'), null);
       // watchdog 带 0.3s 提前量时冻结点在 buffer 前沿之前，
       // 播放头画在当前（即将冻结的）位置而非前沿，避免恢复后回跳。
@@ -332,7 +332,7 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.waitingForInference');
+    setTimeDisplay(t('main.waitingForInference'));
     drawPlayheadLine(_scheduler.bufferEndSec);
     setTransportProgress(t('main.waitingForInference'), null);
   });
@@ -351,7 +351,7 @@ function _finishStreamingPlayback() {
   _streamingActive = false;
   if (_scheduler) _scheduler.deactivate();
   stopPlayheadAnimation();
-  dom.timeDisplay.textContent = formatTime(0);
+  setTimeDisplay(formatTime(0));
   clearPlayheadLine();
   setTransport(TRANSPORT.IDLE);
 }
@@ -521,7 +521,7 @@ export async function playAll() {
       state.currentAudioData = silentVocal;
       state.currentAudioChannels = _buildPlaybackChannels(silentVocal, state.project.bpm, false);
       state.currentAudioBuffer = null;
-      dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+      setTimeDisplay(formatTime(state.playbackPauseOffset));
       if (state.playbackPauseOffset > 0) {
         drawPausedPlayheadAt(state.playbackPauseOffset);
       }
@@ -852,14 +852,14 @@ export async function playAll() {
           // 仍会生效（_scheduler.inferenceDone 已为真、前沿为 0），播放头会在
           // 0.5s 后被误判为“已播完”而停止，音频却仍在出声。
           _streamingActive = false;
-          dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+          setTimeDisplay(formatTime(state.playbackPauseOffset));
           if (state.playbackPauseOffset > 0) {
             drawPausedPlayheadAt(state.playbackPauseOffset);
           }
           await startAudioPlayback(state.playbackPauseOffset);
         } else if (!_streamingActive) {
           // 流式播放已结束（所有 chunk 已播完）
-          dom.timeDisplay.textContent = formatTime(0);
+          setTimeDisplay(formatTime(0));
         }
         // 否则流式播放仍在进行，playhead 动画已在运行，不重置 timeDisplay
       } catch (error) {
@@ -956,7 +956,7 @@ export async function playAll() {
         const overallProgress = (completedFrags / totalFrags) * 100;
         const currentSeconds = (overallProgress / 100) * totalSeconds;
         // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
-        dom.timeDisplay.textContent = t('main.synthesizingProgressTime', { current: formatTime(currentSeconds), total: formatTime(totalSeconds) });
+        setTimeDisplay(t('main.synthesizingProgressTime', { current: formatTime(currentSeconds), total: formatTime(totalSeconds) }));
       }
 
       const maxEndBeat = globalLastEnd;
@@ -984,7 +984,7 @@ export async function playAll() {
 
       // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
       // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
-      dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+      setTimeDisplay(formatTime(state.playbackPauseOffset));
       if (state.playbackPauseOffset > 0) {
         drawPausedPlayheadAt(state.playbackPauseOffset);
       }
@@ -1007,7 +1007,7 @@ export async function playAll() {
       // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
       showAlertDialog(t('main.synthesisFailedDetail', { detail: error.message }));
     }
-    dom.timeDisplay.textContent = formatTime(0);
+    setTimeDisplay(formatTime(0));
   } finally {
     // 只有最新一代才能改动共享状态：被取消的旧会话可能在新会话已经开始后
     // 才走到 finally，无条件复位会把新会话的 isSynthesizing 清掉。
@@ -1200,7 +1200,7 @@ export function startSharedPlayback(offset) {
         cancelAnimationFrame(state.playheadRaf);
         state.playheadRaf = null;
       }
-      dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+      setTimeDisplay(formatTime(state.playbackPauseOffset));
       drawPausedPlayheadAt(state.playbackPauseOffset);
       // 播放头停在当前位置 → 暂停态（Play 可点 = 继续）
       setTransport(TRANSPORT.PAUSED);
@@ -1208,7 +1208,7 @@ export function startSharedPlayback(offset) {
       // 自然播放结束：重置到 0
       state.playbackPauseOffset = 0;
       stopPlayheadAnimation();
-      dom.timeDisplay.textContent = formatTime(0);
+      setTimeDisplay(formatTime(0));
       clearPlayheadLine();
       // 必须显式回 IDLE：PLAYING 下 Play 是 disabled 的，漏掉这一步会让
       // 播完之后 Play 永久变灰、Pause 亮着却因 isPlaying=false 空转。
@@ -1292,14 +1292,14 @@ export async function startExclusivePlayback(offset) {
           cancelAnimationFrame(state.exclusivePlaybackRaf);
           state.exclusivePlaybackRaf = null;
         }
-        dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+        setTimeDisplay(formatTime(state.playbackPauseOffset));
         drawPausedPlayheadAt(state.playbackPauseOffset);
         setTransport(TRANSPORT.PAUSED);
       } else {
         // 自然播放结束：重置到 0
         state.playbackPauseOffset = 0;
         stopPlayheadAnimation();
-        dom.timeDisplay.textContent = formatTime(0);
+        setTimeDisplay(formatTime(0));
         clearPlayheadLine();
         setTransport(TRANSPORT.IDLE);
       }
@@ -1336,13 +1336,13 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
           cancelAnimationFrame(state.exclusivePlaybackRaf);
           state.exclusivePlaybackRaf = null;
         }
-        dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+        setTimeDisplay(formatTime(state.playbackPauseOffset));
         drawPausedPlayheadAt(state.playbackPauseOffset);
         setTransport(TRANSPORT.PAUSED);
       } else {
         state.playbackPauseOffset = 0;
         stopPlayheadAnimation();
-        dom.timeDisplay.textContent = formatTime(0);
+        setTimeDisplay(formatTime(0));
         clearPlayheadLine();
         setTransport(TRANSPORT.IDLE);
       }
@@ -1350,7 +1350,7 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
       return;
     }
 
-    dom.timeDisplay.textContent = formatTime(elapsed);
+    setTimeDisplay(formatTime(elapsed));
     drawPlayheadLine(elapsed);
     state.exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
   }
@@ -1398,7 +1398,7 @@ export function pausePlayback() {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
+    setTimeDisplay(t('main.pausedTime', { time: formatTime(elapsed) }));
     drawPausedPlayheadAt(elapsed);
     setTransport(TRANSPORT.PAUSED);
     return;
@@ -1414,7 +1414,7 @@ export function pausePlayback() {
       cancelAnimationFrame(state.exclusivePlaybackRaf);
       state.exclusivePlaybackRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
+    setTimeDisplay(t('main.pausedTime', { time: formatTime(elapsed) }));
     drawPausedPlayheadAt(elapsed);
     setTransport(TRANSPORT.PAUSED);
   } else {
@@ -1425,7 +1425,7 @@ export function pausePlayback() {
     stopAudioSource();
     state.isPlaying = false;
     // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
-    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
+    setTimeDisplay(t('main.pausedTime', { time: formatTime(elapsed) }));
     drawPausedPlayheadAt(elapsed);
     setTransport(TRANSPORT.PAUSED);
   }
@@ -1470,7 +1470,7 @@ export function stopPlayback() {
   stopPlayheadAnimation();
   state.currentAudioData = null;
   state.currentAudioBuffer = null;
-  dom.timeDisplay.textContent = formatTime(0);
+  setTimeDisplay(formatTime(0));
   setTransport(TRANSPORT.IDLE);
   clearTransportStatus();
 }
@@ -1503,7 +1503,7 @@ export async function seekPlayback(newOffset) {
     state.playbackPauseOffset = Math.max(0, newOffset);
     setTransport(TRANSPORT.PAUSED);
     drawPausedPlayheadAt(state.playbackPauseOffset);
-    dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+    setTimeDisplay(formatTime(state.playbackPauseOffset));
     return;
   }
 
@@ -1512,7 +1512,7 @@ export async function seekPlayback(newOffset) {
     // 没有缓存的音频：仅记录用户选择的位置，等合成后从这里开始
     state.playbackPauseOffset = Math.max(0, newOffset);
     drawPausedPlayheadAt(state.playbackPauseOffset);
-    dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+    setTimeDisplay(formatTime(state.playbackPauseOffset));
     return;
   }
 
@@ -1632,7 +1632,7 @@ export function startPlayheadAnimation() {
           }
           state.streamingSources = [];
           stopPlayheadAnimation();
-          dom.timeDisplay.textContent = formatTime(0);
+          setTimeDisplay(formatTime(0));
           setTransport(TRANSPORT.IDLE);
           clearPlayheadLine();
         }
@@ -1644,13 +1644,13 @@ export function startPlayheadAnimation() {
       const duration = state.currentAudioBuffer.duration;
       if (renderedElapsed >= duration) {
         stopPlayback();
-        dom.timeDisplay.textContent = formatTime(0);
+        setTimeDisplay(formatTime(0));
         clearPlayheadLine();
         return;
       }
     }
 
-    dom.timeDisplay.textContent = formatTime(elapsed);
+    setTimeDisplay(formatTime(elapsed));
     drawPlayheadLine(elapsed);
     state.playheadRaf = requestAnimationFrame(updatePlayhead);
   }

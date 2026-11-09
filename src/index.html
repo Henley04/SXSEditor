@@ -22,6 +22,11 @@
           <button id="btn-stop" class="transport-btn" data-icon="stop"
                   data-i18n-title="main.stop" data-i18n-aria-label="main.stop"
                   aria-label="停止" disabled></button>
+          <!-- 播放时间码：audioPlayback / eventHandlers / 插件阻滞浮层都往这个
+               节点写文本（playhead rAF、拖拽 playhead、插件 progress）。工具栏
+               改版时它被误删过一次，结果每帧抛 TypeError 打断播放头动画
+               —— 删除前先看 src/renderer/state.js 里的 dom.timeDisplay。 -->
+          <span id="time-display">00:00:000</span>
           <!-- 推理 / 模型加载进度：空闲时 display:none（完全不占位），
                有进度时展开，文本右对齐，进度条在最右 -->
           <div id="transport-status" class="transport-status" role="status" aria-live="polite">
