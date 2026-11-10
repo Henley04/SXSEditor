@@ -68,15 +68,27 @@ describe('prompt cond alignment', () => {
       expect(out.promptSeq.mel2token[0]).to.equal(1); // BOW
     });
 
-    it('shifts the mel crop by trimOffsetSec', () => {
+    it('keeps the full reference length by default and shifts lead-in silence into rests', () => {
+      const out = prep.buildPromptSequence(
+        makeSingerData({ trimOffsetSec: 0.4 }), makeMidiNotes(), null, makeMel(100), 100,
+        {}
+      );
+      expect(out.promptSeq).to.be.an('object');
+      // 默认不裁剪：参考 mel 有多长，prompt 就多长
+      expect(out.ptFrameCount).to.equal(100);
+      expect(out.ptMelData[0]).to.equal(0);
+      // 前 0.4s 是前导静音，应补成 rest token，而不是丢弃
+      expect(out.promptSeq.tokenCount).to.be.greaterThan(1);
+    });
+
+    it('still supports the explicit maxPromptFrames cap from frame 0', () => {
       const out = prep.buildPromptSequence(
         makeSingerData({ trimOffsetSec: 0.4 }), makeMidiNotes(), null, makeMel(100), 100,
         { maxPromptFrames: 25 }
       );
       expect(out.promptSeq).to.be.an('object');
       expect(out.ptFrameCount).to.equal(25);
-      // 0.4s @50Hz = 20 帧
-      expect(out.ptMelData[0]).to.equal(20);
+      expect(out.ptMelData[0]).to.equal(0);
     });
 
     it('uses f0Data when available and leaves leading unvoiced frames at bin 0', () => {
@@ -113,7 +125,7 @@ describe('prompt cond alignment', () => {
       expect(prep.buildPromptSequence(makeSingerData(), makeMidiNotes(), null, null, 0).promptSeq).to.equal(null);
     });
 
-    it('caps a 30s reference prompt to 5s by default; maxPromptFrames=0 disables the cap', () => {
+    it('keeps the full 30s reference by default; maxPromptFrames only caps when explicit', () => {
       const N = 60; // 60 × 0.5s = 30s
       const text = [];
       const dur = [];
@@ -134,10 +146,12 @@ describe('prompt cond alignment', () => {
         note_pitch: pitch.join(' '), note_type: type.join(' '),
         f0: f0.map(v => v.toFixed(1)).join(' '), trimOffsetSec: 0,
       };
-      const capped = prep.buildPromptSequence(sd, midi, null, makeMel(1500), 1500, {});
-      expect(capped.ptFrameCount).to.equal(250);
-      const full = prep.buildPromptSequence(sd, midi, null, makeMel(1500), 1500, { maxPromptFrames: 0 });
+      const full = prep.buildPromptSequence(sd, midi, null, makeMel(1500), 1500, {});
       expect(full.ptFrameCount).to.equal(1500);
+      const capped = prep.buildPromptSequence(sd, midi, null, makeMel(1500), 1500, { maxPromptFrames: 250 });
+      expect(capped.ptFrameCount).to.equal(250);
+      const explicitZero = prep.buildPromptSequence(sd, midi, null, makeMel(1500), 1500, { maxPromptFrames: 0 });
+      expect(explicitZero.ptFrameCount).to.equal(1500);
     });
   });
 

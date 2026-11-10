@@ -468,8 +468,10 @@ class AudioSegmentation {
                 promptHash = ((promptHash << 5) - promptHash + s.charCodeAt(i)) | 0;
             }
         }
-        // prompt 截断长度也会改变 cond（默认 250 帧；0 = 不限制）
-        const promptFramesCap = options.maxPromptFrames !== undefined ? options.maxPromptFrames : 'default';
+        // prompt 截断长度也会改变 cond（0/undefined = 完整参考音频；>0 = 从第 0 帧截断）
+        const promptFramesCap = Number.isFinite(options.maxPromptFrames) && options.maxPromptFrames > 0
+            ? Math.floor(options.maxPromptFrames)
+            : 0;
 
         // 音高来源：score 时 pitchCurveF0 为 null、f0Hash 也是 0，与"manual 空曲线"
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。

@@ -5,13 +5,6 @@ const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils')
 const { isRestNote } = require('./audioSegmentation');
 const durationStats = require('./durationStats');
 
-// prompt cond 的默认时长上限（帧，50Hz）。仓库里的导出/验证脚本
-// scripts/verify_e2e_precision.py 用 1s prompt 做静态 shape 对比；上游训练
-// 代码不在本仓库，真实训练 prompt 长度未知。app 过去把整段参考音频（最长 30s）
-// 全量塞进扩散，会吃掉 NPU 静态预算（2048 帧）的大半，并显著拉长扩散序列。
-// 5s 是工程折中；调用方可用 options.maxPromptFrames 覆盖（0 = 不限制）。
-const DEFAULT_PROMPT_FRAMES = 250;
-
 /**
  * Pre-processing: note encoding, pitch encoding, F0 encoding, condition embedding
  */
@@ -869,6 +862,7 @@ class Preprocessing {
      * @param {Float32Array|null} ptMelData - 完整参考音频的 mel
      * @param {number} ptFrameCount - 参考 mel 帧数
      * @param {{maxPromptFrames?: number, promptFramesCap?: number}} [opts]
+     *        0/undefined = 使用完整参考音频；>0 = 从第 0 帧起截断到该帧数
      * @returns {{promptSeq: Object|null, ptMelData: Float32Array|null, ptFrameCount: number}}
      */
     buildPromptSequence(refSingerData, refMidiNotes, refF0Data, ptMelData, ptFrameCount, opts = {}) {
@@ -893,38 +887,24 @@ class Preprocessing {
         const f0Source = this._buildPromptF0Source(refSingerData, refF0Data);
         const trimOffsetFrame = Math.round(trimOffsetSec * SAMPLE_RATE / HOP_SIZE);
 
-        // 优先从第一个有声帧所在音符开始，避免 prompt 以长前导静音为主。
-        let startNote = null;
-        if (f0Source && f0Source.length > 0) {
-            for (let i = 0; i < f0Source.length; i++) {
-                if (f0Source[i] > 0) {
-                    const voicedSec = trimOffsetSec + i * HOP_SIZE / SAMPLE_RATE;
-                    startNote = notes.find(n => n.endSec > voicedSec) || null;
-                    break;
-                }
-            }
-        }
-        if (!startNote) {
-            startNote = notes.find(n => n.lyric && !this.isRestNote({ lyric: n.lyric, pitch: n.pitch, noteType: n.noteType })) || notes[0];
-        }
-        if (!startNote) return unchanged;
-
-        const promptStartSec = startNote.startSec;
-        let lastNoteEndSec = 0;
-        for (const n of notes) if (n.endSec > lastNoteEndSec) lastNoteEndSec = n.endSec;
-
-        // 默认 5s cap（见 DEFAULT_PROMPT_FRAMES）。maxPromptFrames=0 表示不限制。
+        // 参考音频长度行为保持原样：默认使用完整 prompt（上游 infer() 也是用
+        // 整段 prompt metadata；其 example prompt 约 10s）。只有显式
+        // maxPromptFrames > 0 时才截断，且与旧实现一样从第 0 帧开始截。
         const capRaw = opts.promptFramesCap !== undefined ? opts.promptFramesCap : opts.maxPromptFrames;
-        const capFrames = capRaw === 0
-            ? 0
-            : (Number.isFinite(capRaw) && capRaw > 0 ? Math.floor(capRaw) : DEFAULT_PROMPT_FRAMES);
-        const promptEndSec = capFrames > 0
-            ? Math.min(lastNoteEndSec, promptStartSec + capFrames * HOP_SIZE / SAMPLE_RATE)
-            : lastNoteEndSec;
-        if (promptEndSec - promptStartSec < 0.1) return unchanged;
+        const capFrames = Number.isFinite(capRaw) && capRaw > 0 ? Math.floor(capRaw) : 0;
+        const promptFrames = Math.min(
+            capFrames > 0 ? capFrames : ptFrameCount,
+            ptFrameCount,
+            Math.floor(ptMelData.length / MEL_DIM)
+        );
+        if (promptFrames <= 0) return unchanged;
 
-        // notesToSequences 按 duration 累加打包，不读 start；因此必须把音符间的
-        // 空隙补成 <SP> rest，否则 prompt token 会和参考 mel 越走越偏。
+        const promptStartSec = 0;
+        const promptEndSec = promptFrames * HOP_SIZE / SAMPLE_RATE;
+
+        // notesToSequences 按 duration 累加打包，不读 start；必须把 [0, promptEndSec]
+        // 之间的空隙（含前导静音/尾静音）补成 <SP> rest，保证 token 时间轴与
+        // prompt mel 严格对齐。
         const clipped = [];
         let cursor = promptStartSec;
         const sorted = notes
@@ -962,31 +942,29 @@ class Preprocessing {
 
         // bpm=60 → notesToSequences 的 beat 单位就是秒，mel2token 帧数 = 窗口时长 * 50
         const seq = this.notesToSequences(clipped, 60, null, null, 0, 0);
-        const promptFrames = seq.mel2token.length;
-        if (promptFrames <= 0 || seq.tokenCount <= 1) return unchanged;
-
-        const promptMelStartFrame = Math.round(promptStartSec * SAMPLE_RATE / HOP_SIZE);
-        const take = Math.min(promptFrames, ptFrameCount - promptMelStartFrame);
-        if (promptMelStartFrame >= ptFrameCount || take <= 0) return unchanged;
-
-        const croppedMel = new Float32Array(promptFrames * MEL_DIM);
-        croppedMel.set(ptMelData.subarray(
-            promptMelStartFrame * MEL_DIM,
-            (promptMelStartFrame + take) * MEL_DIM
-        ));
-        if (take < promptFrames) {
-            // 参考 wav 比标注短（末尾静音被截/舍入误差）：重复最后一帧，避免把
-            // prompt 尾部变成数字静音造成音色断层。
-            const lastFrameStart = (promptMelStartFrame + take - 1) * MEL_DIM;
-            for (let f = take; f < promptFrames; f++) {
-                croppedMel.set(ptMelData.subarray(lastFrameStart, lastFrameStart + MEL_DIM), f * MEL_DIM);
-            }
+        // notesToSequences 对总时长做 floor，可能比 promptFrames 少 1 帧；以
+        // promptFrames 为准补齐/裁剪，保证与参考 mel 等长。
+        const mel2token = new Int32Array(promptFrames);
+        const copyLen = Math.min(promptFrames, seq.mel2token.length);
+        if (copyLen > 0) {
+            mel2token.set(seq.mel2token.subarray(0, copyLen));
+            if (copyLen < promptFrames) mel2token.fill(mel2token[copyLen - 1], copyLen);
         }
+        let tokenCount = seq.tokenCount;
+        let maxToken = 0;
+        for (let i = 0; i < promptFrames; i++) {
+            if (mel2token[i] > maxToken) maxToken = mel2token[i];
+        }
+        tokenCount = Math.min(tokenCount, maxToken + 1);
+        if (tokenCount <= 1) return unchanged;
+
+        // prompt mel 从第 0 帧开始，长度与原始参考一致（或显式 maxPromptFrames）。
+        const croppedMel = ptMelData.subarray(0, promptFrames * MEL_DIM);
 
         let f0Ids = null;
         if (f0Source && f0Source.length > 0) {
             const f0Hz = new Float32Array(promptFrames);
-            const srcStart = promptMelStartFrame - trimOffsetFrame;
+            const srcStart = -trimOffsetFrame;
             for (let i = 0; i < promptFrames; i++) {
                 const src = srcStart + i;
                 if (src >= 0 && src < f0Source.length) f0Hz[i] = f0Source[src];
@@ -999,17 +977,19 @@ class Preprocessing {
             if (voiced) f0Ids = quantized;
         }
         // 没有可用 F0 标注时退回 note pitch，至少保证 prompt 段不是全 unvoiced。
-        if (!f0Ids) f0Ids = seq.f0Ids.subarray(0, promptFrames);
+        if (!f0Ids) {
+            f0Ids = this._padInt32(seq.f0Ids.subarray(0, Math.min(promptFrames, seq.f0Ids.length)), promptFrames);
+        }
 
         const promptSeq = {
-            noteTextSeq: seq.noteTextSeq,
-            notePitchSeq: seq.notePitchSeq,
-            noteTypeSeq: seq.noteTypeSeq,
+            noteTextSeq: seq.noteTextSeq.subarray(0, tokenCount),
+            notePitchSeq: seq.notePitchSeq.subarray(0, tokenCount),
+            noteTypeSeq: seq.noteTypeSeq.subarray(0, tokenCount),
             f0Ids: f0Ids.length === promptFrames ? f0Ids : this._padInt32(f0Ids, promptFrames),
-            mel2token: seq.mel2token,
-            tokenCount: seq.tokenCount,
+            mel2token,
+            tokenCount,
         };
-        console.log(`[PromptCond] aligned prompt: ${promptFrames}f, ${promptSeq.tokenCount}tok, start=${promptStartSec.toFixed(3)}s, cap=${capFrames || 'none'}`);
+        console.log(`[PromptCond] aligned prompt: ${promptFrames}f, ${promptSeq.tokenCount}tok, cap=${capFrames || 'none'}`);
         return { promptSeq, ptMelData: croppedMel, ptFrameCount: promptFrames };
     }
 
