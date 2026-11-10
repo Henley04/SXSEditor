@@ -1357,6 +1357,15 @@ export default {
     startingInstaller: 'Starting installer...',
     installFailed: 'Failed to start installer',
   },
+  mcpSetup: {
+    title: 'MCP Connection',
+    description: 'The instructions below already contain the paths detected on this installation and the configuration for each of the four clients. Copy them and paste them into your AI assistant so it can complete the installation and verification.',
+    unavailable: 'The bundled MCP server file was not found. Verify the application installation and try again; replace the paths below with the actual installation location.',
+    copy: 'Copy Instructions',
+    copied: 'Copied',
+    copyFailed: 'Automatic copy failed. Select all text in the box and copy it manually.',
+    close: 'Close',
+  },
   menu: {
     aboutSXSEditor: 'About SXSEditor',
     quit: 'Quit',
@@ -1364,6 +1373,7 @@ export default {
     save: 'Save',
     saveAs: 'Save As...',
     exportMidi: 'Export Project as MIDI...',
+    mcpSetup: 'MCP Connection...',
     edit: 'Edit',
     undo: 'Undo',
     redo: 'Redo',

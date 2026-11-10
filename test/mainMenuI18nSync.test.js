@@ -24,6 +24,7 @@ describe('主进程菜单文案跨字典同步', () => {
   it('能从菜单模板提取到本轮新增的导出 MIDI 项', () => {
     expect(keys.length).to.be.greaterThan(10);
     expect(keys).to.include('menu.exportMidi');
+    expect(keys).to.include('menu.mcpSetup');
   });
 
   for (const locale of ['zh-CN', 'en']) {
@@ -55,5 +56,13 @@ describe('主进程菜单文案跨字典同步', () => {
     // 本轮新增项两侧都必须存在。
     expect(resolveKey(zh, 'menu.exportMidi')).to.equal('导出项目为 MIDI...');
     expect(resolveKey(en, 'menu.exportMidi')).to.equal('Export Project as MIDI...');
+    expect(resolveKey(zh, 'menu.mcpSetup')).to.equal('MCP 连接...');
+    expect(resolveKey(en, 'menu.mcpSetup')).to.equal('MCP Connection...');
+    // 对话框用的短键两侧都必须存在且已翻译，不能回落成键名。
+    for (const key of ['title', 'description', 'copy', 'copied', 'copyFailed', 'close', 'unavailable']) {
+      const dotted = `mcpSetup.${key}`;
+      expect(resolveKey(zh, dotted), `zh-CN 缺少 ${dotted}`).to.be.a('string').and.not.empty;
+      expect(resolveKey(en, dotted), `en 缺少 ${dotted}`).to.be.a('string').and.not.empty;
+    }
   });
 });

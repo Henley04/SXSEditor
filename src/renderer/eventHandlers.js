@@ -14,6 +14,7 @@ import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } f
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
 import { exportProjectMidi } from './midiExport.js';
+import { showMcpSetupDialog } from './mcpSetupDialog.js';
 import { appendPluginContextItems, pluginContextItems } from './plugins/contributionContextMenu.js';
 
 // Click-vs-drag tracking for fragment selection
@@ -798,6 +799,12 @@ if (window.electronAPI?.onMainMenuSaveAsRequest) {
 if (window.electronAPI?.onMainMenuExportMidiRequest) {
   const off3 = window.electronAPI.onMainMenuExportMidiRequest(() => { void exportProjectMidi(); });
   if (state._ipcCleanups) state._ipcCleanups.push(off3);
+}
+// 帮助菜单 → MCP 连接：主进程只发一个「请打开」事件，路径探测与 prompt 生成
+// 都在渲染层完成，避免在菜单点击的同步回调里做文件 IO。
+if (window.electronAPI?.onMainMenuMcpSetupRequest) {
+  const offMcpSetup = window.electronAPI.onMainMenuMcpSetupRequest(() => { void showMcpSetupDialog(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offMcpSetup);
 }
 
 // 模态设置窗口打开时自动暂停播放：模态窗口会禁用主窗口输入（无法点击

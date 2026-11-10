@@ -379,6 +379,10 @@ app.whenReady().then(() => {
   // 零重型依赖，适合提前注册。
   ipcMain.handle(IPC_CHANNELS.GET_LOCALE, async () => require('./main/locale').getLocale());
 
+  // 帮助 → MCP 连接：按当前安装探测 MCP 服务器 / skill 的真实绝对路径。
+  // 零重型依赖，与 get-locale 一起提前注册，避免用户点菜单时 handler 尚未挂载。
+  ipcMain.handle(IPC_CHANNELS.MCP_SETUP_GET_INFO, () => require('./main/mcpSetupInfo').getMcpSetupInfo());
+
   let resolveHeavyIpcReady;
   const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
   ipcMain.handle(IPC_CHANNELS.APP_WAIT_FOR_HEAVY_IPC, () => heavyIpcReady);

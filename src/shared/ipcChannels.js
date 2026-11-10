@@ -308,12 +308,14 @@ const IPC_CHANNELS = {
   FRAGMENT_SVS_CHUNK_AUDIO: 'fragment-svs:chunk-audio',
   // ---- main-menu ----
   MAIN_MENU_EXPORT_MIDI_REQUEST: 'main-menu:export-midi-request',
+  MAIN_MENU_MCP_SETUP_REQUEST: 'main-menu:mcp-setup-request',
   MAIN_MENU_SAVE_AS_REQUEST: 'main-menu:save-as-request',
   MAIN_MENU_SAVE_REQUEST: 'main-menu:save-request',
   // ---- mcp ----
   MCP_AUTOMATION_REQUEST: 'mcp:automation-request',
   MCP_AUTOMATION_RESPONSE: 'mcp:automation-response',
   MCP_AUTOMATION_EVENT: 'mcp:automation-event',
+  MCP_SETUP_GET_INFO: 'mcp:setup-get-info',
   // ---- model-download ----
   MODEL_DOWNLOAD_CHECK_ALL_VERSIONS: 'model-download:check-all-versions',
   MODEL_DOWNLOAD_CHECK_JP_VERSION: 'model-download:check-jp-version',

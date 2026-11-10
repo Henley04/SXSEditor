@@ -254,6 +254,17 @@ function buildAppMenu() {
         },
         { type: 'separator' },
         {
+          // 按当前安装的实际目录生成 MCP/skill 安装 prompt，交给渲染层展示。
+          // 主进程只负责探测路径，不拼配置文本（那部分是可单测的纯函数）。
+          label: t('menu.mcpSetup'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_MCP_SETUP_REQUEST);
+            }
+          },
+        },
+        { type: 'separator' },
+        {
           label: t('menu.openLogDir'),
           click: () => {
             try {

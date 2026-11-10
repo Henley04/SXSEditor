@@ -1360,6 +1360,15 @@ export default {
     startingInstaller: '正在启动安装程序...',
     installFailed: '启动安装程序失败',
   },
+  mcpSetup: {
+    title: 'MCP 连接',
+    description: '下面这段说明已按当前安装填入实际路径，包含四种客户端各自的配置。复制后粘贴给正在使用的 AI 助手，让它按说明完成安装与验证。',
+    unavailable: '未能找到随包的 MCP 服务器文件。请确认应用安装完整后重试；下方说明中的路径需按实际安装位置替换。',
+    copy: '复制安装说明',
+    copied: '已复制',
+    copyFailed: '自动复制失败，请在文本框中全选后手动复制。',
+    close: '关闭',
+  },
   menu: {
     aboutSXSEditor: '关于 SXSEditor',
     quit: '退出',
@@ -1367,6 +1376,7 @@ export default {
     save: '保存',
     saveAs: '另存为...',
     exportMidi: '导出项目为 MIDI...',
+    mcpSetup: 'MCP 连接...',
     edit: '编辑',
     undo: '撤销',
     redo: '重做',
