@@ -131,7 +131,11 @@ export async function showMcpSetupDialog() {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
   });
+  // focus() 会把光标与滚动位置放到文本末尾，用户首屏会看到「注意事项」而不是
+  // 开头的环境事实与四端配置；显式归零保证打开时从第一段开始阅读。
   textarea.focus();
+  textarea.setSelectionRange(0, 0);
+  textarea.scrollTop = 0;
 
   return close;
 }

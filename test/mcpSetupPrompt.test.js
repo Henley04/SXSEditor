@@ -101,6 +101,29 @@ describe('MCP 连接 — 完整 prompt', () => {
     expect(prompt).to.contain('[mcp_servers.sxseditor]');
   });
 
+  it('英文 prompt 不夹中文说明，中文 prompt 不夹英文整句', () => {
+    const info = sampleInfo();
+    const en = buildMcpSetupPrompt(info, 'en');
+    const zh = buildMcpSetupPrompt(info, 'zh-CN');
+    // 四端配置文件说明与 Notes 曾硬编码中文，英文版会出现中英混排。
+    expect(en).to.not.match(/[\u4e00-\u9fff]/);
+    expect(en).to.contain('command is an array');
+    expect(en).to.contain('Trust the server in the connector manager');
+    expect(zh).to.contain('command 是数组');
+    expect(zh).to.contain('写入后还需到连接器管理页');
+    expect(zh).to.not.contain('command is an array');
+  });
+
+  it('单独取配置片段时也按语言输出文件名说明', () => {
+    const en = buildClientConfigs(sampleInfo(), 'en');
+    const zh = buildClientConfigs(sampleInfo(), 'zh-CN');
+    expect(en.claudeCode.file).to.contain('project root');
+    expect(en.claudeCode.file).to.not.match(/[\u4e00-\u9fff]/);
+    expect(en.codex.note).to.contain('This is TOML');
+    expect(zh.claudeCode.file).to.contain('项目根');
+    expect(zh.codex.note).to.contain('这是 TOML');
+  });
+
   it('源码树布局在说明里标注为源码树', () => {
     const prompt = buildMcpSetupPrompt(sampleInfo({ layout: 'source' }), 'zh-CN');
     expect(prompt).to.contain('源码树');

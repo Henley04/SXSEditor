@@ -38,36 +38,47 @@ function jsonBlock(value) {
  * @param {object} info getMcpSetupInfo() 的结果，至少含 serverPath / skillDir / endpointPath
  * @returns {object} 每个客户端的 { file, snippet, note, cli }
  */
-export function buildClientConfigs(info) {
+export function buildClientConfigs(info, locale = 'zh-CN') {
   // 注意不能写 String(info && info.serverPath)：info 为 null 时结果是字符串
   // 'null'，truthy，会把无效路径塞进配置片段。
   const server = info && info.serverPath ? String(info.serverPath) : '<server path>';
   const node = info && info.nodeCommand ? String(info.nodeCommand) : 'node';
+  const zh = isZh(locale);
 
   const claudeCode = {
-    file: '.mcp.json（项目根）或 ~/.claude.json',
+    file: zh
+      ? '.mcp.json（项目根）或 ~/.claude.json'
+      : '.mcp.json (project root) or ~/.claude.json',
     snippet: jsonBlock({
       mcpServers: {
         [SERVER_NAME]: { type: 'stdio', command: node, args: [server] },
       },
     }),
     cli: `claude mcp add --transport stdio ${SERVER_NAME} -- ${node} "${server}"`,
-    note: '项目级 .mcp.json 首次使用需要在客户端里确认授权；-- 之后的参数会原样传给服务器。',
+    note: zh
+      ? '项目级 .mcp.json 首次使用需要在客户端里确认授权；-- 之后的参数会原样传给服务器。'
+      : 'A project-level .mcp.json needs client approval on first use; arguments after -- are passed to the server unchanged.',
   };
 
   const workbuddy = {
-    file: '~/.workbuddy/mcp.json（或 ~/.codebuddy/mcp.json、项目级 .mcp.json）',
+    file: zh
+      ? '~/.workbuddy/mcp.json（或 ~/.codebuddy/mcp.json、项目级 .mcp.json）'
+      : '~/.workbuddy/mcp.json (or ~/.codebuddy/mcp.json, or a project-level .mcp.json)',
     snippet: jsonBlock({
       mcpServers: {
         [SERVER_NAME]: { command: node, args: [server] },
       },
     }),
     cli: '',
-    note: '写入后还需到连接器管理页对该服务器点「信任」，否则不会真正连接；合并配置时保留原有 mcpServers 条目。',
+    note: zh
+      ? '写入后还需到连接器管理页对该服务器点「信任」，否则不会真正连接；合并配置时保留原有 mcpServers 条目。'
+      : 'Trust the server in the connector manager afterwards, or it will not connect; keep existing mcpServers entries when merging.',
   };
 
   const opencode = {
-    file: 'opencode.json / opencode.jsonc（项目根或 ~/.config/opencode）',
+    file: zh
+      ? 'opencode.json / opencode.jsonc（项目根或 ~/.config/opencode）'
+      : 'opencode.json / opencode.jsonc (project root or ~/.config/opencode)',
     snippet: jsonBlock({
       $schema: 'https://opencode.ai/config.json',
       mcp: {
@@ -80,12 +91,16 @@ export function buildClientConfigs(info) {
       },
     }),
     cli: '',
-    note: 'command 是数组（命令与参数写在一起），不是 command + args；旧版若不支持 type，去掉该字段并保留 enabled。timeout 单位是毫秒，长导出需放宽。',
+    note: zh
+      ? 'command 是数组（命令与参数写在一起），不是 command + args；旧版若不支持 type，去掉该字段并保留 enabled。timeout 单位是毫秒，长导出需放宽。'
+      : 'command is an array containing both the command and its arguments, not command + args; older versions may not support type — drop it and keep enabled. timeout is in milliseconds; raise it for long exports.',
   };
 
   const codexArgs = `[${tomlString(server)}]`;
   const codex = {
-    file: '~/.codex/config.toml（或受信任项目下的 .codex/config.toml）',
+    file: zh
+      ? '~/.codex/config.toml（或受信任项目下的 .codex/config.toml）'
+      : '~/.codex/config.toml (or a trusted project-level .codex/config.toml)',
     snippet: [
       `[mcp_servers.${SERVER_NAME}]`,
       `command = ${tomlString(node)}`,
@@ -94,7 +109,9 @@ export function buildClientConfigs(info) {
       'tool_timeout_sec = 600',
     ].join('\n'),
     cli: `codex mcp add ${SERVER_NAME} -- ${node} "${server}"`,
-    note: '这是 TOML，不是 JSON；顶层表名是 mcp_servers。tool_timeout_sec 默认 60 秒，导出类长任务需放宽。',
+    note: zh
+      ? '这是 TOML，不是 JSON；顶层表名是 mcp_servers。tool_timeout_sec 默认 60 秒，导出类长任务需放宽。'
+      : 'This is TOML, not JSON; the top-level table is mcp_servers. tool_timeout_sec defaults to 60 seconds — raise it for long exports.',
   };
 
   return { claudeCode, workbuddy, opencode, codex };
@@ -108,7 +125,7 @@ export function buildClientConfigs(info) {
  */
 export function buildMcpSetupPrompt(info, locale = 'zh-CN') {
   const zh = isZh(locale);
-  const configs = buildClientConfigs(info);
+  const configs = buildClientConfigs(info, locale);
   const pick = (key, fallback) => (info && info[key] ? String(info[key]) : fallback);
   const server = pick('serverPath', '<server path>');
   const skillDir = pick('skillDir', '<skill dir>');
