@@ -7,10 +7,11 @@
  * 三种格式共用 lib/score.js 的映射管线（轨道→歌手、分片、音符清洗、音高
  * 曲线采样及其逆变换），各自只实现"怎么读"与"怎么写"。
  *
- * 写回是有损的：VOCALOID 的歌手/风格、SV 的颤音与音素、变速变拍号等
- * 在宿主里没有等价字段。源工程里能精简保存的元数据经 document.ext 带回并
- * 合并进生成的文件，其余部分逐条告警；需要完整保留编辑结果时应另存为
- * 宿主原生格式。插件不会把有损写回伪装成无损。
+ * 写回是有损的：VOCALOID 的歌手/风格，SV 的组级颤音强度包络、颤音起始相位
+ * 与渐出、音素属性，以及变速变拍号等在宿主里没有等价字段。音符颤音的主参数
+ * 可以双向转换；能精简保存的元数据经 document.ext 带回并合并进生成的文件，
+ * 其余部分逐条告警。需要完整保留编辑结果时应另存为宿主原生格式，插件不会把
+ * 有损写回伪装成无损。
  */
 
 const {
@@ -57,8 +58,8 @@ function statusText(ctx, verb, name) {
 function saveWarnings(ctx, formatId) {
   const w = [];
   w.push(msg(ctx,
-    '写回外部工程格式是有损的：源工程的歌手库、音色与风格设置、音符颤音、音素属性无法在宿主中表达，不会写入。',
-    'Saving back to an external project format is lossy: voice libraries, singer styles, vibrato and phoneme attributes have no equivalent in the host and are not written.',
+    '写回外部工程格式是有损的：源工程的歌手库、音色与风格设置、音素属性，以及颤音的组级强度包络、起始相位与渐出无法在宿主中表达，不会写入；音符颤音的深度、频率、起点与渐入会按宿主设置写回。',
+    'Saving back to an external project format is lossy: voice libraries, singer styles, phoneme attributes, and vibrato depth envelopes, start phase and fade-out have no equivalent in the host and are not written. Note vibrato depth, rate, start and fade-in are written back from the host settings.',
   ));
   if (formatId === 'svp') {
     w.push(msg(ctx,
@@ -113,10 +114,13 @@ function makeRead(format) {
     stats.lastFormat = format.id;
 
     await ctx.ui.status('state', statusText(ctx, '导入', name));
+    const vibratoNote = Number(score.vibratoImported) > 0
+      ? `，其中 ${score.vibratoImported} 个音符带颤音参数`
+      : '';
     ctx.log.info(
       `导入 ${format.id} ${name}：${document.singers.length} 轨 / ${document.fragments.length} 段 / `
-      + `${document.fragments.reduce((sum, f) => sum + f.notes.length, 0)} 个音符，`
-      + `${score.warnings.length} 条告警`,
+      + `${document.fragments.reduce((sum, f) => sum + f.notes.length, 0)} 个音符`
+      + `${vibratoNote}，${score.warnings.length} 条告警`,
     );
 
     const warningText = summarizeWarnings(ctx, score.warnings);

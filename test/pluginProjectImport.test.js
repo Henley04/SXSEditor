@@ -343,3 +343,140 @@ describe('official-project-import — 呼吸标记 br ↔ 宿主吸气音素', (
     expect(out.tracks[0].mainGroup.notes.map((n) => n.lyrics)).to.deep.equal(['a', 'br']);
   });
 });
+
+// ------------------------------------------------------------------ 颤音转译
+
+describe('official-project-import — SVP 音符颤音 ↔ 宿主音符颤音', () => {
+  const vibrato = require('../plugins/official-project-import/lib/vibrato.js');
+  const BLICK = 705600000;
+
+  const makeSvp = (attributes, envPoints) => ({
+    version: 200,
+    time: {
+      meter: [{ index: 0, numerator: 4, denominator: 4 }],
+      tempo: [{ position: 0, bpm: 120 }],
+    },
+    library: [],
+    tracks: [{
+      name: 'Vibrato',
+      mainRef: { groupID: 'g1', blickOffset: 0 },
+      mainGroup: {
+        name: 'main', uuid: 'g1',
+        notes: [
+          { onset: 0, duration: BLICK, pitch: 60, lyrics: 'a', ...(attributes ? { attributes } : {}) },
+          { onset: BLICK, duration: BLICK, pitch: 62, lyrics: 'i' },
+        ],
+        parameters: envPoints
+          ? { vibratoEnv: { mode: 'linear', points: envPoints } }
+          : {},
+      },
+      groups: [],
+    }],
+  });
+
+  async function readDoc(raw) {
+    const { ctx } = makeContext();
+    const result = await plugin.codecs['.svp'].read(ctx, {
+      name: 'vibrato.svp', bytes: Buffer.from(JSON.stringify(raw)),
+    });
+    const validated = validateProjectDocument(result.document);
+    expect(validated.ok, validated.error).to.equal(true);
+    return { document: validated.document, warnings: result.warnings, ctx };
+  }
+
+  it('换算：秒与半音转成宿主音分与相对占比，并标记承载不了的相位与渐出', () => {
+    const { vibrato: v, lossy } = vibrato.svpToHostVibrato(
+      {
+        dF0Vbr: 1.0, tF0VbrStart: 0.25, tF0VbrLeft: 0.2,
+        tF0VbrRight: 0.2, fF0Vbr: 5.5, pF0Vbr: 0.8,
+      },
+      null, 0.5,
+    );
+    expect(v.enabled).to.equal(true);
+    expect(v.depth).to.equal(50);       // 1.0 半音 × 50 → 50 音分
+    expect(v.rate).to.equal(5.5);
+    expect(v.start).to.equal(0.5);      // 0.25 秒 / 0.5 秒
+    expect(v.length).to.equal(0.5);
+    expect(v.fadeIn).to.equal(0.8);     // 0.2 / (0.5 × 0.5)
+    expect(lossy).to.include('phase');
+    expect(lossy).to.include('easeOut');
+
+    // 没有显式 attributes 时不导入，避免把 SV 默认自动颤音套到每个音符上。
+    expect(vibrato.svpToHostVibrato(null, null, 0.5).vibrato).to.equal(null);
+    expect(vibrato.svpToHostVibrato(undefined, { dF0Vbr: 1 }, 0.5).vibrato).to.equal(null);
+  });
+
+  it('组级包络只有出现非 1.0 的深度缩放才算非平凡', () => {
+    expect(vibrato.hasNonTrivialVibratoEnv(null)).to.equal(false);
+    expect(vibrato.hasNonTrivialVibratoEnv({ vibratoEnv: { points: [0, 1, BLICK, 1] } })).to.equal(false);
+    expect(vibrato.hasNonTrivialVibratoEnv({ vibratoEnv: { points: [0, 1, BLICK, 0.4] } })).to.equal(true);
+  });
+
+  it('宿主关闭颤音时写回 dF0Vbr=0，不会把已关闭的颤音复活', () => {
+    const attrs = vibrato.hostToSvpAttributes(
+      { enabled: false, depth: 80, rate: 5.5, start: 0.2, length: 0.8, fadeIn: 0.3 },
+      0.5,
+      { dF0Vbr: 1.0, pF0Vbr: 0.4 },
+    );
+    expect(attrs.dF0Vbr).to.equal(0);
+    expect(attrs.pF0Vbr).to.equal(0.4); // 沿用原相位
+  });
+
+  it('显式颤音参数导入为宿主音符颤音，无参数的音符不产生颤音', async () => {
+    const { document, warnings } = await readDoc(makeSvp({
+      tF0VbrStart: 0.25, tF0VbrLeft: 0.2, tF0VbrRight: 0.2,
+      dF0Vbr: 1.0, fF0Vbr: 5.5, pF0Vbr: 0.8,
+    }));
+    const notes = document.fragments[0].notes;
+    expect(notes).to.have.length(2);
+    expect(notes[0].vibrato).to.deep.equal({
+      enabled: true, depth: 50, rate: 5.5, start: 0.5, length: 0.5, fadeIn: 0.8,
+    });
+    expect(notes[1].vibrato).to.equal(undefined);
+    // 起始相位与渐出承载不了，要显式告警，不能沿用旧版「没有等价字段」的误报。
+    expect(warnings.join('\n')).to.match(/相位|phase/i);
+    expect(warnings.join('\n')).to.not.match(/没有等价字段/);
+  });
+
+  it('read → write → read 写回 note.attributes，并沿用宿主承载不了的相位与渐出', async () => {
+    const { document, ctx } = await readDoc(makeSvp({
+      tF0VbrStart: 0.25, tF0VbrLeft: 0.2, tF0VbrRight: 0.2,
+      dF0Vbr: 1.0, fF0Vbr: 5.5, pF0Vbr: 0.8,
+    }));
+    const saved = await plugin.codecs['.svp'].write(ctx, {
+      name: 'vibrato.svp', document,
+    });
+    const out = JSON.parse(Buffer.from(saved.bytes).toString('utf8'));
+    const attrs = out.tracks[0].mainGroup.notes[0].attributes;
+    expect(attrs).to.be.an('object');
+    expect(attrs.dF0Vbr).to.be.closeTo(1.0, 1e-3);
+    expect(attrs.fF0Vbr).to.be.closeTo(5.5, 1e-3);
+    expect(attrs.tF0VbrStart).to.be.closeTo(0.25, 1e-3);
+    expect(attrs.tF0VbrLeft).to.be.closeTo(0.2, 1e-3);
+    expect(attrs.tF0VbrRight).to.be.closeTo(0.2, 1e-3);
+    expect(attrs.pF0Vbr).to.be.closeTo(0.8, 1e-3);
+    // 第二个音符没有颤音，不应凭空写出 attributes。
+    expect(out.tracks[0].mainGroup.notes[1].attributes).to.equal(undefined);
+
+    const again = await readDoc(out);
+    expect(again.document.fragments[0].notes[0].vibrato.depth).to.equal(50);
+  });
+
+  it('组级颤音强度包络非平凡时告警，不静默丢弃', async () => {
+    const { warnings } = await readDoc(makeSvp(
+      { dF0Vbr: 1.0 },
+      [0, 1.0, BLICK, 0.4, 2 * BLICK, 1.0],
+    ));
+    expect(warnings.join('\n')).to.match(/包络|envelope/i);
+  });
+
+  it('超出宿主可调范围的颤音参数按边界处理并告警', async () => {
+    const { document, warnings } = await readDoc(makeSvp({
+      dF0Vbr: 10,   // → depth 500，宿主上限 200
+      fF0Vbr: 40,   // → rate 上限 10
+    }));
+    expect(document.fragments[0].notes[0].vibrato.depth).to.equal(200);
+    expect(document.fragments[0].notes[0].vibrato.rate).to.equal(10);
+    expect(warnings.join('\n')).to.match(/可调范围|range/i);
+  });
+});

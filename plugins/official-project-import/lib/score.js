@@ -10,7 +10,7 @@
  *       name, color,
  *       parts: [{
  *         name, startBeat, durationBeat,
- *         notes: [{ startBeat, durationBeat, pitch, lyric }],
+ *         notes: [{ startBeat, durationBeat, pitch, lyric, vibrato? }],
  *         pitchOffsets: [{ beat, semitones }],   // 绝对拍位置，可为空
  *       }],
  *   }], warnings: [] }
@@ -102,6 +102,10 @@ function normalizeNotes(rawNotes, partStartBeat) {
       duration,
       pitch: Math.round(pitch),
       lyric: safeLyric(raw.lyric, 'la'),
+      // 音符颤音由 SVP reader 换算好，随音符一起穿过排序与重叠裁剪。
+      // 只认普通对象，避免把非法值带进宿主文档（cloneJson 也会再过滤一层）。
+      ...(raw.vibrato && typeof raw.vibrato === 'object' && !Array.isArray(raw.vibrato)
+        ? { vibrato: raw.vibrato } : {}),
     });
   }
   list.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
@@ -119,6 +123,7 @@ function normalizeNotes(rawNotes, partStartBeat) {
       start: roundTime(note.start),
       duration: roundTime(duration),
       lyric: note.lyric,
+      ...(note.vibrato ? { vibrato: note.vibrato } : {}),
     });
   }
   return out;
@@ -355,6 +360,10 @@ function documentToScore(document) {
       // 与导入相反：宿主的吸气 token 写回源工程时还原成 "br"，否则外部软件
       // 会把 "<AP>" 当成普通歌词拼读。
       lyric: exportLyric(n && n.lyric) || 'la',
+      // 音符颤音的主参数交给 SVP writer 反向写回 note.attributes；相位与渐出
+      // 由 writer 从源工程元数据快照里还原。
+      ...(n && n.vibrato && typeof n.vibrato === 'object' && !Array.isArray(n.vibrato)
+        ? { vibrato: n.vibrato } : {}),
     }));
     const lastEnd = notes.reduce((max, n) => Math.max(max, n.startBeat + n.durationBeat), start);
     return {

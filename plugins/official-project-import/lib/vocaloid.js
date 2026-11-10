@@ -417,9 +417,10 @@ function parseVpr(bytes, t) {
 // 拍号与分片起点，write 必须能原样吐回去。三种格式共用的反向映射在
 // score.js 的 documentToScore —— 这里只负责「把中间谱面编码成容器字节」。
 //
-// 宿主没有等价字段的部分（歌手库、风格、音素、颤音、部分轨道属性）由
-// collect*Meta 收成精简快照，经 document.ext 带回，写回时合并进容器；
-// 带不回来的在 main.js 里逐条告警，绝不静默丢弃。
+// 宿主没有等价字段的部分（歌手库、风格、音素、VOCALOID 控制器细节、
+// 部分轨道属性）由 collect*Meta 收成精简快照，经 document.ext 带回，
+// 写回时合并进容器；带不回来的在 main.js 里逐条告警，绝不静默丢弃。
+// SVP 的音符颤音由 lib/svp.js 转译为宿主音符颤音，不属于这里的无等价字段。
 
 /** 只保留体量可控的标量/浅对象，避免把整份原始工程塞进扩展域。 */
 function smallMeta(value) {

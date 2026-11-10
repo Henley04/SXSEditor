@@ -35,8 +35,11 @@ const NOTE_VIBRATO = {
   description: 'Per-note vibrato. `source` marks who owns it: "manual" = the user (or automation) pinned it, "auto" = written by the auto layer.',
   properties: {
     enabled: bool('Vibrato on/off for this note'),
-    depth: num('Peak deviation in cents', { minimum: 0, maximum: 100 }),
-    rate: num('Rate in Hz', { minimum: 1, maximum: 12 }),
+    // 与片段编辑器音符级颤音滑杆（src/fragmentEditor.html）保持一致：
+    // depth 0–200 音分、rate 2–10 Hz。之前误用了「自动颤音参数」的 100 / 12，
+    // 会把 UI 允许的强颤音预设（depth 130）与 SVP 导入值挡在 MCP 之外。
+    depth: num('Peak deviation in cents', { minimum: 0, maximum: 200 }),
+    rate: num('Rate in Hz', { minimum: 2, maximum: 10 }),
     start: num('Start position inside the note (0-1)'),
     length: num('Length as a fraction of the note (0-1)'),
     fadeIn: num('Fade-in as a fraction of the vibrato span (0-1)'),

@@ -14,10 +14,19 @@
  *    blick 相对 group 起点，cent 是相对基础音高的偏移。
  *  - 附加 group 通过 track.groups[].groupID 到 project.library[].uuid 里取内容。
  *
- * 已知取舍：SVP 的颤音（vibratoEnv / 音符颤音属性）没有等价字段，导入时明确告警。
+ *  - 音符颤音参数在 note.attributes（tF0VbrStart / tF0VbrLeft / tF0VbrRight /
+ *    dF0Vbr / fF0Vbr / pF0Vbr），缺省值可能来自 mainRef.voice；组级颤音强度
+ *    包络在 group.parameters.vibratoEnv。
+ *  - 宿主用「音符颤音」表达正弦颤音（深度、频率、起点、时长、渐入），换算见
+ *    lib/vibrato.js；组级包络、起始相位与渐出没有对应设置，导入时逐类告警，
+ *    写回时尽量沿用原值。
  */
 
 const { BLICK_PER_BEAT, normalizeColor, roundTime } = require('./score.js');
+const {
+  svpToHostVibrato, hostToSvpAttributes,
+  hasNonTrivialVibratoEnv, collectNoteAttributes,
+} = require('./vibrato.js');
 
 function decodeUtf8(bytes) {
   let buf = Buffer.from(bytes);
@@ -70,16 +79,37 @@ function toPitchOffsets(pitchDelta, blickOffset) {
     .sort((a, b) => a.beat - b.beat);
 }
 
-function groupNotes(group, ref) {
+/**
+ * 一个音符组 → 中间谱面音符。
+ *
+ * SV 只在用户手动改过参数时才写 note.attributes，自动生成（未写 attributes）
+ * 的颤音不在这里出现，因此也就不导入 —— 否则会把 SV 的默认自动颤音套到每个
+ * 音符上，与宿主自己的音高层叠加成双重颤音。换算结果累加到 stats，供
+ * parseSvp 汇总有损告警。
+ */
+function groupNotes(group, ref, bpm, stats) {
   const blickOffset = Number(ref && ref.blickOffset) || 0;
   const pitchOffset = Number(ref && ref.pitchOffset) || 0;
+  const voice = (ref && ref.voice) || (group && group.voice) || null;
+  const secPerBeat = 60 / (Number(bpm) > 0 ? Number(bpm) : 120);
   const notes = Array.isArray(group && group.notes) ? group.notes : [];
-  return notes.map((note) => ({
-    startBeat: ((Number(note.onset) || 0) + blickOffset) / BLICK_PER_BEAT,
-    durationBeat: (Number(note.duration) || 0) / BLICK_PER_BEAT,
-    pitch: (Number(note.pitch) || 0) + pitchOffset,
-    lyric: note.lyrics,
-  }));
+  return notes.map((note) => {
+    const durationBeat = (Number(note && note.duration) || 0) / BLICK_PER_BEAT;
+    const { vibrato, lossy } = svpToHostVibrato(
+      note && note.attributes, voice, durationBeat * secPerBeat,
+    );
+    if (vibrato) {
+      stats.imported += 1;
+      for (const kind of lossy) stats.lossy[kind] = (stats.lossy[kind] || 0) + 1;
+    }
+    return {
+      startBeat: ((Number(note && note.onset) || 0) + blickOffset) / BLICK_PER_BEAT,
+      durationBeat,
+      pitch: (Number(note && note.pitch) || 0) + pitchOffset,
+      lyric: note && note.lyrics,
+      ...(vibrato ? { vibrato } : {}),
+    };
+  });
 }
 
 /**
@@ -128,7 +158,9 @@ function parseSvp(bytes, t) {
   const tracksRaw = (Array.isArray(raw.tracks) ? raw.tracks : []).slice();
   tracksRaw.sort((a, b) => (Number(a.dispOrder) || 0) - (Number(b.dispOrder) || 0));
 
-  let unportedVibrato = 0;
+  // 颤音换算统计：导入了多少个音符、哪些字段有损、多少组用了组级包络。
+  const vibratoStats = { imported: 0, lossy: {} };
+  let vibratoEnvGroups = 0;
   const tracks = [];
 
   tracksRaw.forEach((track, index) => {
@@ -150,14 +182,9 @@ function parseSvp(bytes, t) {
 
     const parts = [];
     for (const { ref, group } of refs) {
-      const notes = groupNotes(group, ref);
+      const notes = groupNotes(group, ref, bpm, vibratoStats);
       if (!notes.length) continue;
-      for (const note of group.notes || []) {
-        const attributes = note && note.attributes;
-        if (attributes && (Number(attributes.dF0Vbr) > 0 || Number(attributes.tF0VbrStart) > 0)) {
-          unportedVibrato++;
-        }
-      }
+      if (hasNonTrivialVibratoEnv(group.parameters)) vibratoEnvGroups += 1;
       const startBeat = (Number(ref && ref.blickOffset) || 0) / BLICK_PER_BEAT;
       const lastEnd = notes.reduce(
         (max, note) => Math.max(max, note.startBeat + note.durationBeat),
@@ -181,10 +208,28 @@ function parseSvp(bytes, t) {
     });
   });
 
-  if (unportedVibrato > 0) {
+  // 颤音换算里「承载不了」的部分逐类告警，绝不静默丢弃。成功导入的主参数不
+  // 打扰用户，只在插件日志里记数；这里只报真正有损的项目。
+  const structuralLossy = ['phase', 'easeOut']
+    .filter((kind) => (vibratoStats.lossy[kind] || 0) > 0);
+  if (structuralLossy.length) {
     warnings.push(t(
-      `${unportedVibrato} 个音符带颤音设置，SXSEditor 没有等价字段，未导入（可在编辑器里重画）`,
-      `Vibrato settings on ${unportedVibrato} note(s) have no equivalent and were not imported`,
+      '音符颤音的起始相位与渐出过程在 SXSEditor 中没有对应设置，未能导入；写回外部工程时会尽量沿用原值。',
+      'Vibrato start phase and fade-out have no equivalent in SXSEditor and were not imported; the original values are kept when writing back where possible.',
+    ));
+  }
+  const clamped = ['depth', 'rate', 'start', 'length', 'fadeIn']
+    .reduce((sum, kind) => sum + (vibratoStats.lossy[kind] || 0), 0);
+  if (clamped > 0) {
+    warnings.push(t(
+      `${clamped} 项颤音参数超出 SXSEditor 的可调范围，已取最接近的边界值。`,
+      `${clamped} vibrato parameter(s) exceeded the SXSEditor range and were clamped to the nearest bound.`,
+    ));
+  }
+  if (vibratoEnvGroups > 0) {
+    warnings.push(t(
+      `${vibratoEnvGroups} 个音符组使用了随时间变化的颤音强度包络，SXSEditor 不支持，未导入。`,
+      `${vibratoEnvGroups} note group(s) use a time-varying vibrato depth envelope, which SXSEditor does not support; it was not imported.`,
     ));
   }
 
@@ -194,6 +239,7 @@ function parseSvp(bytes, t) {
     timeSignature,
     tracks,
     warnings,
+    vibratoImported: vibratoStats.imported,
     meta: collectSvpMeta(raw, tracksRaw),
   };
 }
@@ -203,8 +249,10 @@ function parseSvp(bytes, t) {
 //
 // 与 parseSvp 严格对称：read 认下来的音符、歌词、音高、速度、拍号与分片起点，
 // write 必须能原样吐回去。源工程里宿主没有等价字段的部分（音色库引用、渲染开关、
-// 音符颤音与音素属性）由 collectSvpMeta 收成一份精简快照，经 document.ext 带回，
-// 保存时合并进生成的工程；带不回来的在 main.js 里逐条告警，绝不静默丢弃。
+// 组级参数与音素属性，以及宿主承载不了的颤音起始相位与渐出）由 collectSvpMeta
+// 收成一份精简快照，经 document.ext 带回，保存时合并进生成的工程；音符颤音的
+// 主参数由 note.vibrato 反向写回 note.attributes。带不回来的在 main.js 里逐条
+// 告警，绝不静默丢弃。
 
 /** 只保留体量可控、深度可控的值，避免把整份原始工程塞进扩展域。 */
 function smallValue(value) {
@@ -257,11 +305,19 @@ function collectSvpMeta(raw, tracksRaw) {
     }
     tracks.push(scalars);
 
+    // 每个组额外带一份精简的音符颤音属性快照：宿主承载不了的起始相位与渐出
+    // 等字段，写回 .svp 时用它还原，避免在宿主里调一次颤音就抹掉源工程参数。
     const own = [];
-    if (track && track.mainGroup) own.push(stripGroup(track.mainGroup));
+    const pushGroup = (source) => {
+      const saved = source ? stripGroup(source) : {};
+      const noteAttributes = collectNoteAttributes(source);
+      if (noteAttributes) saved.noteAttributes = noteAttributes;
+      own.push(saved);
+    };
+    if (track && track.mainGroup) pushGroup(track.mainGroup);
     for (const ref of Array.isArray(track && track.groups) ? track.groups : []) {
       const source = library.find((g) => g && g.uuid === (ref && ref.groupID));
-      own.push(source ? stripGroup(source) : {});
+      pushGroup(source);
     }
     groups.push(own);
   }
@@ -286,12 +342,23 @@ function encodeSvp(score, meta) {
 
     const makeGroup = (part, pi) => {
       const startBeat = Number(part.startBeat) || 0;
-      const notes = (Array.isArray(part.notes) ? part.notes : []).map((n) => ({
-        onset: blick((Number(n.startBeat) || 0) - startBeat),
-        duration: Math.max(1, blick(Number(n.durationBeat) || 0)),
-        pitch: Math.round(Number(n.pitch) || 60),
-        lyrics: String(n.lyric || 'la'),
-      }));
+      const secPerBeat = 60 / (Number(score.bpm) > 0 ? Number(score.bpm) : 120);
+      // noteAttributes 是导入时保存的私有快照，不能 spread 进生成的组里。
+      // 它与音符按序尽力对齐：宿主的音符清洗会排序/裁掉重叠音符，对不上的
+      // 索引按「无原值」处理，只写宿主能表达的主参数，不伪造相位或渐出。
+      const { noteAttributes, ...saved } = groupMeta[pi] || {};
+      const original = Array.isArray(noteAttributes) ? noteAttributes : [];
+      const notes = (Array.isArray(part.notes) ? part.notes : []).map((n, ni) => {
+        const durationSec = (Number(n && n.durationBeat) || 0) * secPerBeat;
+        const attributes = hostToSvpAttributes(n && n.vibrato, durationSec, original[ni]);
+        return {
+          onset: blick((Number(n && n.startBeat) || 0) - startBeat),
+          duration: Math.max(1, blick(Number(n && n.durationBeat) || 0)),
+          pitch: Math.round(Number(n && n.pitch) || 60),
+          lyrics: String((n && n.lyric) || 'la'),
+          ...(attributes ? { attributes } : {}),
+        };
+      });
       const points = [];
       for (const offset of (Array.isArray(part.pitchOffsets) ? part.pitchOffsets : [])) {
         points.push(
@@ -299,7 +366,6 @@ function encodeSvp(score, meta) {
           cent(Number(offset.semitones) || 0),
         );
       }
-      const saved = groupMeta[pi] || {};
       return {
         ...saved,
         name: 'main',
