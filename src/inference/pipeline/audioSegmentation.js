@@ -382,6 +382,7 @@ class AudioSegmentation {
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
+        const refSingerData = options.refSingerData || null;
         const totalSteps = options.nSteps || 32;
         const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.7;
@@ -451,11 +452,30 @@ class AudioSegmentation {
             }
         }
 
+        // prompt 标注（歌词/MIDI/F0）决定 prompt cond；同一段参考音频换标注后
+        // 必须重算，否则会命中旧的 prompt cond。
+        let promptHash = 0;
+        if (refSingerData && typeof refSingerData === 'object') {
+            const s = [
+                refSingerData.text || '',
+                refSingerData.note_pitch || '',
+                refSingerData.duration || '',
+                refSingerData.note_type || '',
+                refSingerData.f0 || '',
+                refSingerData.trimOffsetSec !== undefined ? refSingerData.trimOffsetSec : '',
+            ].join('|');
+            for (let i = 0; i < s.length; i++) {
+                promptHash = ((promptHash << 5) - promptHash + s.charCodeAt(i)) | 0;
+            }
+        }
+        // prompt 截断长度也会改变 cond（默认 250 帧；0 = 不限制）
+        const promptFramesCap = options.maxPromptFrames !== undefined ? options.maxPromptFrames : 'default';
+
         // 音高来源：score 时 pitchCurveF0 为 null、f0Hash 也是 0，与"manual 空曲线"
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
         const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptHash}_pf${promptFramesCap}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
     }
 
     /**

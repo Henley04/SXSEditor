@@ -473,6 +473,7 @@ async function exportFragmentTo(p) {
       refAudioWavBuffer: singer?.wavBuffer || null,
       refMidiNotes: singer?.midiNotes || null,
       refF0Data: singer?.f0Data || null,
+      refSingerData: singer?.singerData || null,
       singerId: singer?.id || null,
       pitchCurveF0,
       autoShift: !!o.autoShift,

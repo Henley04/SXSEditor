@@ -147,6 +147,7 @@ class OnnxSVSPipeline {
         this.sifiganStatsPath = null;            // sifigan_stats.joblib 路径（与 onnx 同目录）
         this._resolvedVocoderFile = null;       // 解析后的 vocoder 文件名（供 _detectVocoderPrecision / loadModel 复用）
         this._currentF0Hz = null;                // 当前推理的 F0 序列（Hz，mel 帧率=50Hz），供 SiFiGAN vocoder 使用；null 表示缺失
+        this._currentPromptSeq = null;           // 当前推理的参考段 token 序列（由 .sxssinger 标注构建），null = prompt cond 置零
         // LRU 缓存：保留最近 N 次合成结果，支持 A/B 比较场景，避免微调单音符时全量重算
         this._synthCache = null;                 // 单条目快速访问指针（指向 _synthCacheMap 中最新条目，兼容旧代码）
         this._synthCacheMap = null;              // Map<key, {audio, size}>，按插入顺序天然 LRU
@@ -2271,8 +2272,29 @@ class OnnxSVSPipeline {
         return this._postprocessing.extractRefMelOnnx(this.sessions, refAudioWavBuffer, this.isFP16, this.useStaticShapes);
     }
 
-    async _runEncoder(sequences, tokenCount, totalFrames, ptFrameCount = 0) {
-        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes, this._pitchControlMode === 'score');
+    async _runEncoder(sequences, tokenCount, totalFrames, ptFrameCount = 0, promptSeq = this._currentPromptSeq) {
+        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes, this._pitchControlMode === 'score', promptSeq);
+    }
+
+    /**
+     * 从 .sxssinger 的 MIDI/歌词/F0 标注构建 prompt token 序列，并把参考 mel
+     * 裁到同一时间窗。无标注/无参考音频时返回 null，保持旧的 prompt cond=0 行为。
+     */
+    _buildPromptCond(options, ptMelData, ptFrameCount) {
+        return this._preprocessing.buildPromptSequence(
+            options.refSingerData || null,
+            options.refMidiNotes || null,
+            options.refF0Data || null,
+            ptMelData,
+            ptFrameCount,
+            { maxPromptFrames: options.maxPromptFrames }
+        );
+    }
+
+    /** 序列长度钳制后同步裁剪 promptSeq，避免 cond 比 mel 长。 */
+    _finalizePromptSeq(promptSeq, ptFrameCount) {
+        if (!promptSeq || !(ptFrameCount > 0)) return null;
+        return this._preprocessing.slicePromptSeq(promptSeq, ptFrameCount);
     }
 
     async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
@@ -2772,6 +2794,9 @@ class OnnxSVSPipeline {
         }
         if (totalFrames <= winCap) return null; // 单窗口即可容纳，回退到常规整段路径
 
+        // prompt 可能被上面的钳制缩短；所有窗口共用同一份裁剪后的 prompt。
+        const promptSeq = this._finalizePromptSeq(this._currentPromptSeq, ptFrameCount);
+
         // 相邻窗口之间的重叠帧数（与 diffstep chunk 路径一致，用于共享噪声 + WSOLA
         // 交叉淡入淡出消除边界不连贯）。默认 50 帧（1s @50Hz），上限为窗口的 1/4。
         const requestedOverlap = Math.floor(
@@ -2822,7 +2847,7 @@ class OnnxSVSPipeline {
             };
 
             // 窗口内 encoder：只对该窗口 token/帧范围编码，输出该窗口 cond（含复用的 prompt 头）
-            const segCond = await this._runEncoder(subSequences, subTokenCount, segFrames, ptFrameCount);
+            const segCond = await this._runEncoder(subSequences, subTokenCount, segFrames, ptFrameCount, promptSeq);
             await gpuDrainAdaptive();
 
             // 从全局噪声场提取本窗口噪声（复制），保持与相邻窗口重叠区一致
@@ -2958,6 +2983,9 @@ class OnnxSVSPipeline {
             }
         }
 
+        // 长度钳制可能缩短了 prompt；同步裁剪 promptSeq，保证 cond 与 mel 等长。
+        const promptSeq = this._finalizePromptSeq(this._currentPromptSeq, ptFrameCount);
+
         // WebNN: encoder+diffusion in renderer, vocoder in main process (DML)
         // 渲染进程运行 encoder+diffusion 返回 mel；主进程 DML 运行 vocoder（支持 SiFiGAN 双输入）
         if (this.useWebNN) {
@@ -2970,6 +2998,7 @@ class OnnxSVSPipeline {
             const result = await this._runWebNNSynthesis({
                 sequences, tokenCount, totalFrames,
                 ptMelData, ptFrameCount,
+                promptSeq,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
@@ -3021,7 +3050,7 @@ class OnnxSVSPipeline {
                 xt = { data: cachedSegMel.mel, dims: [1, totalFrames, MEL_DIM] };
                 console.log('[OnnxSVSPipeline] >>> SEGMENT MEL CACHE HIT <<< skipping encoder+diffusion (vocoder only)');
             } else {
-                const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
+                const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount, promptSeq);
 
                 // GPU 排空点 1：encoder（6 次推理）→ diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
                 await gpuDrainAdaptive();
@@ -3281,6 +3310,7 @@ class OnnxSVSPipeline {
             {
                 sequences: seqA, tokenCount: seqA.tokenCount, totalFrames: framesA,
                 ptMelData, ptFrameCount,
+                promptSeq: this._currentPromptSeq,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
@@ -3290,6 +3320,7 @@ class OnnxSVSPipeline {
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
                 ptMelData, ptFrameCount,
+                promptSeq: this._currentPromptSeq,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
@@ -3435,6 +3466,8 @@ class OnnxSVSPipeline {
         this._currentF0Hz = null;
         // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
         this._currentPitchCurveF0 = null;
+        // 每次合成入口重置 prompt token 序列，避免上一轮歌手的标注残留。
+        this._currentPromptSeq = null;
         // 逐 region 覆盖，这里先回到 manual，避免 regions 为空时沿用上一轮的 score
         this._pitchControlMode = 'manual';
         const onProgress = options.onProgress || (() => {});
@@ -3669,6 +3702,13 @@ class OnnxSVSPipeline {
                     } catch (_) {}
                 }
             }
+            // 用该分片歌手自己的 .sxssinger 标注构建 prompt cond；没有标注时保持
+            // promptSeq=null（旧行为：prompt 段 cond 全 0）。
+            const promptInfo = this._buildPromptCond(fragOpts, ptMelData, ptFrameCount);
+            let promptSeq = promptInfo.promptSeq;
+            ptMelData = promptInfo.ptMelData;
+            ptFrameCount = promptInfo.ptFrameCount;
+            this._currentPromptSeq = promptSeq;
 
             // 不调用 _buildVocalSegments 取 segments[0]：多分片流式路径中每个 fragment
             // 已是独立单元，若 fragment 音符跨度 > 30s（LONG_AUDIO_THRESHOLD_SEC），
@@ -3736,6 +3776,9 @@ class OnnxSVSPipeline {
                 ptFrameCount = seqClamped.ptFrameCount;
                 ptMelData = seqClamped.ptMelData;
             }
+
+            promptSeq = this._finalizePromptSeq(promptSeq, ptFrameCount);
+            this._currentPromptSeq = promptSeq;
 
             // Encoder（动态形状整段编码；静态形状分段合成时逐段编码后直接产出整段 mel）
             let combinedCond = null;
@@ -4189,6 +4232,8 @@ class OnnxSVSPipeline {
         this._currentF0Hz = null;
         // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
         this._currentPitchCurveF0 = null;
+        // 每次合成入口重置 prompt token 序列，避免上一轮歌手的标注残留。
+        this._currentPromptSeq = null;
         const onProgress = options.onProgress || (() => {});
         const abortSignal = options.abortSignal || null;
         throwIfCancelled(abortSignal);
@@ -4331,6 +4376,7 @@ class OnnxSVSPipeline {
 
         let ptMelData = null;
         let ptFrameCount = 0;
+        let promptSeq = null;
 
         if (refAudioWavBuffer) {
             try {
@@ -4347,10 +4393,16 @@ class OnnxSVSPipeline {
                     // JS fallback also failed, use zero prompt
                 }
             }
+            // 用 .sxssinger 的歌词/MIDI/F0 构建 prompt token 序列，并把参考 mel
+            // 裁到同一时间窗。无标注时 promptSeq=null，保持旧的 cond=0 行为。
+            const promptInfo = this._buildPromptCond(options, ptMelData, ptFrameCount);
+            promptSeq = promptInfo.promptSeq;
+            ptMelData = promptInfo.ptMelData;
+            ptFrameCount = promptInfo.ptFrameCount;
             // Diagnostic cap (CLI --max-prompt-frames): keep the first N prompt
             // frames, matching the qdrift-conds export convention. Used to
             // isolate long-reference-prompt effects on long target sequences.
-            if (Number.isInteger(options.maxPromptFrames) && options.maxPromptFrames > 0
+            if (!promptSeq && Number.isInteger(options.maxPromptFrames) && options.maxPromptFrames > 0
                 && ptFrameCount > options.maxPromptFrames) {
                 console.log(`[OnnxSVSPipeline] Reference mel capped: ${ptFrameCount} -> ${options.maxPromptFrames}frames (diagnostic)`);
                 ptMelData = ptMelData.subarray(0, options.maxPromptFrames * MEL_DIM);
@@ -4438,6 +4490,12 @@ class OnnxSVSPipeline {
                 totalFrames = seqClamped.totalFrames;
                 ptFrameCount = seqClamped.ptFrameCount;
                 ptMelData = seqClamped.ptMelData;
+            }
+
+            promptSeq = this._finalizePromptSeq(promptSeq, ptFrameCount);
+            this._currentPromptSeq = promptSeq;
+            if (promptSeq) {
+                console.log(`[OnnxSVSPipeline] Prompt cond aligned: ${ptFrameCount}f, ${promptSeq.tokenCount}tok`);
             }
 
             console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
@@ -4666,6 +4724,10 @@ class OnnxSVSPipeline {
             ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFramesEst * 0.1)));
             ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
         }
+
+        // 多 segment 路径：每个 segment 的 encoder 都用同一份 prompt token 序列；
+        // _synthesizeSegment 会在自己的长度钳制后按实际 ptFrameCount 再裁一次。
+        this._currentPromptSeq = promptSeq;
 
         const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
         const overlapSamples = Math.floor(SEGMENT_OVERLAP_SEC * SAMPLE_RATE);

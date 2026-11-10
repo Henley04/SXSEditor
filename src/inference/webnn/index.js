@@ -196,7 +196,12 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         // NPU_STATIC_SEQ_LEN 时会把超长输入喂给固定 [1,2048] 的模型。
         // 与单段路径一致：按实际 ptFrameCount 预留 target 帧，超出则截断。
         let { sequences, tokenCount, totalFrames, ptMelData, ptFrameCount } = params;
-        const batchPromptSeq = params.promptSeq;
+        let batchPromptSeq = params.promptSeq;
+        if (batchPromptSeq && batchPromptSeq.tokenCount > 0 && ptFrameCount > 0
+            && useStaticShapes && batchPromptSeq.tokenCount + tokenCount > NPU_STATIC_SEQ_LEN) {
+            console.warn(`[WebNN] batch prompt ${batchPromptSeq.tokenCount}tok + target ${tokenCount}tok > static ${NPU_STATIC_SEQ_LEN}; prompt cond will be zero-filled`);
+            batchPromptSeq = null;
+        }
         if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
             const maxFrames = NPU_STATIC_SEQ_LEN - ptFrameCount;
             if (maxFrames <= 0) {
@@ -309,7 +314,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         const combinedMel2token = new Int32Array(combinedFrames);
         if (hasPrompt) {
             for (let f = 0; f < ptFrameCount; f++) {
-                combinedMel2token[f] = batchPromptSeq.mel2token[f];
+                const raw = f < batchPromptSeq.mel2token.length ? (batchPromptSeq.mel2token[f] | 0) : 0;
+                combinedMel2token[f] = Math.max(0, Math.min(ptTokenCount - 1, raw));
             }
         }
         for (let f = 0; f < totalFrames; f++) {
@@ -318,7 +324,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
 
         const totalCondFrames = combinedFrames;
         const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-        for (let f = 0; f < combinedFrames; f++) {
+        const firstCondFrame = hasPrompt ? 0 : ptFrameCount;
+        for (let f = firstCondFrame; f < combinedFrames; f++) {
             const tokenIdx = combinedMel2token[f];
             for (let d = 0; d < EMBED_DIM; d++) {
                 condCodeData[f * EMBED_DIM + d] =

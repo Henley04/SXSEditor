@@ -33,6 +33,7 @@ import {
   getFragmentAudioDataSignature, setFragmentAudioDataSignature,
   getPipelineInitialized,
   getWavFileBuffer,
+  getSingerAnnotation,
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
@@ -910,11 +911,29 @@ export function computeFragmentAudioSignature() {
     refHash = _hashArrayFNV(refBytes);
   }
 
+  // prompt 标注（歌词/MIDI/F0）会改变 prompt cond，必须进签名；否则改完
+  // .sxssinger 标注后仍会复用旧的 fragmentAudioData。
+  const singerAnn = getSingerAnnotation() || {};
+  const promptSig = singerAnn.singerData
+    ? [
+      singerAnn.singerData.text || '',
+      singerAnn.singerData.note_pitch || '',
+      singerAnn.singerData.duration || '',
+      singerAnn.singerData.note_type || '',
+      singerAnn.singerData.f0 || '',
+      singerAnn.singerData.trimOffsetSec !== undefined ? singerAnn.singerData.trimOffsetSec : '',
+    ].join('|')
+    : '';
+  let promptHash = 0;
+  for (let i = 0; i < promptSig.length; i++) {
+    promptHash = ((promptHash << 5) - promptHash + promptSig.charCodeAt(i)) | 0;
+  }
+
   // 音高来源也必须进签名：manual 空曲线（平直 F0）与 score（f0 条件全 0）都
   // 产出 pitchCurveF0=null、f0Hash 都是 0，只靠曲线哈希区分不出来 —— 切模式后
   // 会命中上一模式的音频，听起来像"切换没生效"。
   const pitchControl = currentPitchControl();
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}`;
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_p${promptHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}`;
 }
 
 export async function playFragment() {
@@ -1121,6 +1140,9 @@ export async function playFragment() {
         pitchCurveF0: pitchCurveF0Serializable,
         pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: previewOpts.nSteps,
@@ -1286,6 +1308,9 @@ export async function synthesizeFragmentInBackground(opts = {}) {
         pitchCurveF0: pitchCurveF0 || null,
         pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: previewOpts.nSteps,
@@ -1368,6 +1393,9 @@ export async function exportFragment() {
         pitchCurveF0: pitchCurveF0Serializable,
         pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: exportOpts.nSteps,

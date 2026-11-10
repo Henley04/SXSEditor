@@ -651,10 +651,10 @@ function openUpdateNotificationWindow(data) {
   });
 }
 
-function openFragmentEditor(fragment, project, wavBuffer, backend) {
+function openFragmentEditor(fragment, project, wavBuffer, backend, singerAnnotation = null) {
   // backend 缺省按内置后端：老工程 / 内置轨道没有这个字段。
   const trackBackend = backend && typeof backend === 'object' ? backend : { type: 'sxs' };
-  const sendData = { fragment, project, wavBuffer, backend: trackBackend };
+  const sendData = { fragment, project, wavBuffer, backend: trackBackend, singerAnnotation };
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
     fragmentWindows[fragment.id].webContents.send(IPC_CHANNELS.LOAD_FRAGMENT, sendData);
@@ -962,8 +962,8 @@ function getAllWebContents() {
 }
 
 function registerWindowIpc() {
-  safeHandle(IPC_CHANNELS.OPEN_FRAGMENT_EDITOR, async (event, { fragment, project, wavBuffer, backend }) => {
-    openFragmentEditor(fragment, project, wavBuffer, backend);
+  safeHandle(IPC_CHANNELS.OPEN_FRAGMENT_EDITOR, async (event, { fragment, project, wavBuffer, backend, singerAnnotation }) => {
+    openFragmentEditor(fragment, project, wavBuffer, backend, singerAnnotation || null);
   });
 
   safeHandle(IPC_CHANNELS.GET_FRAGMENT_DATA, async (event, fragmentId) => {
