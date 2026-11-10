@@ -5,10 +5,11 @@ const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils')
 const { isRestNote } = require('./audioSegmentation');
 const durationStats = require('./durationStats');
 
-// prompt cond 的默认时长上限（帧，50Hz）。上游 demo/训练用的参考 prompt 约 1s；
-// app 过去把整段参考音频（最长 30s）全量塞进扩散，既超出训练分布，又会把
-// NPU 静态形状预算（2048 帧）吃掉大半。5s 是在"音色信息量"和"OOD 风险"之间的
-// 折中；调用方可用 options.maxPromptFrames 覆盖（0 = 不限制）。
+// prompt cond 的默认时长上限（帧，50Hz）。仓库里的导出/验证脚本
+// scripts/verify_e2e_precision.py 用 1s prompt 做静态 shape 对比；上游训练
+// 代码不在本仓库，真实训练 prompt 长度未知。app 过去把整段参考音频（最长 30s）
+// 全量塞进扩散，会吃掉 NPU 静态预算（2048 帧）的大半，并显著拉长扩散序列。
+// 5s 是工程折中；调用方可用 options.maxPromptFrames 覆盖（0 = 不限制）。
 const DEFAULT_PROMPT_FRAMES = 250;
 
 /**
@@ -853,9 +854,9 @@ class Preprocessing {
      * 从 .sxssinger 的 MIDI / 歌词 / F0 标注构建 prompt 段 token 序列，并把
      * 参考 mel 裁剪到与 token 序列严格对齐的时间窗。
      *
-     * 背景：上游 SoulX-Singer 的 infer() 会把 prompt token + target token 拼在
-     * 一起送 encoder/preflow，prompt 段拿到的是参考片段真实的 phoneme/pitch/
-     * type/F0。app 过去只编码 target，prompt 段 cond 全 0，与训练分布不一致。
+     * 背景：仓库的官方对比脚本 scripts/verify_e2e_precision.py 会把 prompt token
+     * + target token 拼在一起送 encoder/preflow，prompt 段拿到的是参考片段真实
+     * 的 phoneme/pitch/type/F0。app 过去只编码 target，prompt 段 cond 全 0。
      * 这里用歌手文件里已经强制保存的 singerData（歌词 + MIDI + F0）补齐。
      *
      * 时间轴：singerData / f0Data / midiNotes 都以"裁掉前导静音后的 0 点"为

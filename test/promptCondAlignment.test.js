@@ -2,8 +2,9 @@
 /**
  * prompt cond 对齐回归测试。
  *
- * 背景：app 过去只编码 target，prompt 段 cond 全 0；上游 SoulX-Singer 会把
- * prompt token + target token 拼在一起跑 encoder/preflow。本文件锁住：
+ * 背景：app 过去只编码 target，prompt 段 cond 全 0；仓库的官方对比脚本
+ * scripts/verify_e2e_precision.py 会把 prompt token + target token 拼在一起
+ * 跑 encoder/preflow。本文件锁住：
  *   1) 从 .sxssinger 的 MIDI/歌词/F0 构建 prompt token 序列并与参考 mel 对齐；
  *   2) runEncoder 的 prompt+target 合并、f0 顺序、cond 前缀不再被 PAD/f0-bin0 污染；
  *   3) score 模式把 prompt/target f0 一起清零，但保留 prompt 的 text 条件。
