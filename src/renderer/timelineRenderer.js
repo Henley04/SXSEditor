@@ -1255,14 +1255,19 @@ export function renderSingerList() {
       });
     }
 
+    // 静音 / 独奏：微型开关独占信息区底部一行，不占动作区的横向宽度。
+    // 歌手面板只有 240px（窄屏 200px），动作区每多一个按钮都会直接
+    // 挤掉 flex:1 的信息区；开关并排放回去，轨道名 / 歌手名 / 推理
+    // 后端三行文字又会退化成省略号。行为规则仍由
+    // shared/trackAudibility.js 唯一决定，这里只负责把开关切过去。
+    const flagsDiv = document.createElement('div');
+    flagsDiv.className = 'singer-track-flags';
+    flagsDiv.appendChild(_createTrackFlag(singer, 'mute'));
+    flagsDiv.appendChild(_createTrackFlag(singer, 'solo'));
+    infoDiv.appendChild(flagsDiv);
+
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'singer-item-actions';
-
-    // 静音 / 独奏：放在行内动作区最左侧，与 +/× 同尺寸，不额外占用行高。
-    // 行为（谁发声、伴奏跟不跟着静音）由 shared/trackAudibility.js 唯一决定，
-    // 这里只负责把开关切过去。
-    actionsDiv.appendChild(_createTrackFlag(singer, 'mute'));
-    actionsDiv.appendChild(_createTrackFlag(singer, 'solo'));
 
     // Accompaniment tracks don't have fragments (no SVS synthesis)
     if (!isAccompaniment) {

@@ -125,4 +125,20 @@ describe('轨道静音 / 独奏开关', () => {
     flagsOf(row)[0].click();
     expect(state.selectedSingerId, '点 M 不应把轨道设为选中').to.not.equal(row.dataset.singerId);
   });
+
+  it('M / S 归属信息区，动作区不得再出现开关', () => {
+    // 240px 的歌手栏里，动作区每多一个按钮，flex:1 的信息区就被挤掉一段；
+    // 四个按钮并排时信息区所剩无几，轨道名 / 歌手名 / 推理后端会被裁光。
+    // 这里把「开关不占动作区宽度」锁成一条可回归的结构约束。
+    trackManager.addSinger({ name: 's1', type: 'singer' });
+    timeline.renderSingerList();
+
+    const row = dom.singerListEl.querySelector('[data-singer-id]');
+    const info = row.querySelector('.singer-info');
+    const actions = row.querySelector('.singer-item-actions');
+    expect(info.querySelector('.singer-track-flags'), '开关应归属信息区').to.exist;
+    expect(actions.querySelectorAll('.btn-track-flag').length,
+      '动作区不得再放开关，否则会挤掉三行文字').to.equal(0);
+    expect(flagsOf(row).length).to.equal(2);
+  });
 });

@@ -379,6 +379,10 @@
 .btn-track-flag {
   width: 24px;
   height: 24px;
+  /* 通用 button 规则带 padding:8px 20px，border-box 下会把 24px 撑成 42px：
+     四个按钮并排就是 180px，240px 的歌手栏里信息区直接被压到 0。
+     行内图标按钮靠 flex 居中，不需要内边距。 */
+  padding: 0;
   background: var(--bg-button);
   color: var(--fg-muted);
   border: 1px solid var(--button-secondary-border);
@@ -405,8 +409,22 @@
 }
 
 /* 轨道开关（M / S）：默认与 +/× 同一套扁平外观，开启时用语义色区分。
-   静音走警示色、独奏走强调色 —— 两者语义不同，不能共用一种高亮。 */
+   静音走警示色、独奏走强调色 —— 两者语义不同，不能共用一种高亮。
+   尺寸刻意压到 16px，且独占信息区底部一行：不占动作区的横向宽度。
+   若把它们放回 .singer-item-actions 与 +/× 并排，动作区会重新吃掉
+   信息区宽度，三行文字又会退化成一片省略号。 */
+.singer-track-flags {
+  display: flex;
+  gap: 3px;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
 .btn-track-flag {
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  border-radius: 3px;
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -430,9 +448,10 @@
   color: var(--fg-primary);
 }
 
-/* 静音轨整行降权：M 亮起之外，还要一眼看出这条现在不响 */
+/* 静音轨整行降权：M 亮起之外，还要一眼看出这条现在不响。
+   M / S 开关本身排除在外，否则"亮起的 M"会被一起压淡，反而读不出状态。 */
 .singer-item.is-muted .singer-avatar,
-.singer-item.is-muted .singer-info {
+.singer-item.is-muted .singer-info > *:not(.singer-track-flags) {
   opacity: 0.5;
 }
 
