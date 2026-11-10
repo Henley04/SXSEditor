@@ -9,8 +9,14 @@
  * 是只读的，直接在包内运行会让这些机制全部落空。因此源码随包分发到
  * `.webpack/main/bundled-plugins/`，启动时复制一份到用户目录并走标准安装链路。
  *
- * 不覆盖原则：已经装过（含用户停用、或用户自行装了别的版本）时一律不动。
- * 内置只负责"从无到有"，不负责升级，也不把用户停用的插件重新启用。
+ * 不覆盖原则：已经装过的用户目录一律不动 —— 但有一个例外：**内置来源的旧版本
+ * 要升级**。内置插件随应用分发，旧版本里缺失的能力（例如 .svp 的 codec.write
+ * 与 role:'both'）不会因为应用升级而自动出现；若坚持"永不覆盖"，老用户会永远
+ * 停留在首次启动时装上的那份副本，表现为"能打开工程却无法保存"。因此仅当
+ * 已装副本来源为 builtin、且包内版本更高时，才走标准安装链路覆盖升级。
+ *
+ * 用户自行安装的同名插件（来源非 builtin）、以及版本相同或更高的副本，仍一律
+ * 不覆盖；升级也绝不把用户停用的插件重新启用。
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,6 +24,7 @@ const path = require('node:path');
 const installer = require('./PluginInstaller.js');
 const store = require('./PluginStateStore.js');
 const { SIGNATURE_STATUS } = require('../../shared/pluginSignature.js');
+const { compareVersions } = require('../../shared/pluginMarket.js');
 
 /** 随包分发的内置插件目录名（与 manifest.id 一致，便于校验）。 */
 const BUILTIN_ID = 'official-project-import';
@@ -57,13 +64,23 @@ function resolveBuiltinPluginsDir() {
   return null;
 }
 
+/** 读取已安装副本的清单版本；读不到或不是合法清单时返回 null。 */
+function readInstalledVersion(dir) {
+  try {
+    const res = installer.readManifestFile(dir);
+    return res.ok && res.value ? String(res.value.version || '') : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
- * 确保内置插件已安装。幂等：只在"从未安装"时安装一次。
+ * 确保内置插件已安装且为随包分发的版本。幂等：版本相同且目录完好时不写盘。
  *
  * @param {object} [options]
  * @param {string} [options.sourceDir] 覆盖内置源码目录（测试注入）
  * @param {string} [options.appVersion] 传入应用版本做清单兼容性校验
- * @returns {{ok:boolean, installed:boolean, id?:string, reason?:string, error?:string}}
+ * @returns {{ok:boolean, installed:boolean, id?:string, reason?:string, error?:string, upgraded?:boolean}}
  */
 function ensureBuiltinPlugins(options = {}) {
   const sourceDir = options.sourceDir || resolveBuiltinPluginsDir();
@@ -89,9 +106,23 @@ function ensureBuiltinPlugins(options = {}) {
   const previousState = recorded ? store.getPluginState(registry, id) : null;
   const dirExists = fs.existsSync(path.join(targetDir, 'manifest.json'));
 
-  // 注册表有记录且目录还在：无论是用户停用了、还是自行装了别的来源，
-  // 都不覆盖 —— 不覆盖用户的选择是内置策略的底线。
-  if (recorded && dirExists) {
+  // 注册表有记录且目录还在时，默认不覆盖 —— 不覆盖用户的选择是内置策略的底线。
+  // 唯一的例外是"随包版本更新"：内置插件的能力（例如 .svp 的 codec.write 与
+  // role:'both'）只会随应用升级出现，旧副本不会自己长出这些能力。仅当四个条件
+  // 同时成立才升级：已登记、目录完好、来源是 builtin、包内版本严格更高。
+  //
+  // 版本必须读用户目录的 manifest：registry 的 getPluginState 不返回 version。
+  // compareVersions 在任一版本非法时返回 null，按"无法比较"处理 —— 宁可不升级，
+  // 也不能因为一份坏清单覆盖用户目录。非 builtin 来源（用户自行安装的同名插件）
+  // 即使版本更低也绝不升级。
+  const bundledVersion = String(manifestRes.value.version || '');
+  const installedVersion = dirExists ? readInstalledVersion(targetDir) : null;
+  const comparison = installedVersion === null ? null : compareVersions(bundledVersion, installedVersion);
+  const needsUpgrade = recorded && dirExists
+    && previousState && previousState.source === 'builtin'
+    && comparison !== null && comparison > 0;
+
+  if (recorded && dirExists && !needsUpgrade) {
     return { ok: true, installed: false, id, reason: 'already-installed' };
   }
 
@@ -119,15 +150,33 @@ function ensureBuiltinPlugins(options = {}) {
     if (!result.ok) {
       return { ok: false, installed: false, id, error: result.error };
     }
-    // 目录曾被移除但注册表还在：安装器会写 enabled:true，这里必须把用户此前的
-    // 停用状态还原，否则"停用"这个选择会在下一次启动被悄悄改回启用。
-    if (previousState && previousState.enabled === false) {
+    // 安装器每次都会写 enabled:true 并重置签名与安装时间。目录被删后的重装、
+    // 以及按版本升级，都必须把用户此前的状态还原 —— 否则一次升级就把"停用"
+    // 悄悄改回启用，用户的插件设置和签名历史也会凭空消失。
+    // permissionsHash 属于新清单，不还原；quarantine/crash 计数由安装器清零，
+    // 那是运行期事实，不该从上一版本继承。
+    if (previousState) {
       const current = store.readRegistry();
-      store.setPluginState(current, id, { enabled: false });
+      store.setPluginState(current, id, {
+        enabled: previousState.enabled,
+        settings: previousState.settings,
+        signature: previousState.signature,
+        installedAt: previousState.installedAt,
+        keybindingsEnabled: previousState.keybindingsEnabled,
+        automationExpose: previousState.automationExpose,
+      });
       store.writeRegistry(current);
     }
-    // 安装器内部已经按 source='builtin' 写过 install 审计，这里不重复留痕。
-    return { ok: true, installed: true, id, version: result.version };
+    // 安装器内部已经按 source='builtin' 写过 install 审计，这里不重复留痕；
+    // 升级额外补一条带 from/to 的记录，便于日后追溯"这次升级替换了哪一份副本"。
+    if (needsUpgrade) {
+      store.audit('upgrade', id, {
+        from: installedVersion,
+        to: result.version,
+        source: 'builtin',
+      });
+    }
+    return { ok: true, installed: true, id, version: result.version, upgraded: needsUpgrade };
   } catch (err) {
     return { ok: false, installed: false, id, error: String((err && err.message) || err) };
   } finally {
@@ -150,7 +199,9 @@ function ensureBuiltinPlugins(options = {}) {
 function installBuiltinOnStartup(appVersion) {
   try {
     const result = ensureBuiltinPlugins({ appVersion });
-    if (result.ok && result.installed) {
+    if (result.ok && result.upgraded) {
+      console.log(`[plugins] 内置插件已升级：${result.id}@${result.version || ''}`);
+    } else if (result.ok && result.installed) {
       console.log(`[plugins] 内置插件已安装：${result.id}@${result.version || ''}`);
     } else if (result.ok) {
       // already-installed：用户可能已停用或自行装过，保持原样。

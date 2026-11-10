@@ -55,6 +55,7 @@ describe('builtinPlugins — 内置官方插件默认安装', function () {
   let store;
   let builtin;
   let service;
+  let oldSrcDir;
 
   before(function () {
     Module._load = function (request) {
@@ -65,6 +66,17 @@ describe('builtinPlugins — 内置官方插件默认安装', function () {
     store = require('../src/main/plugins/PluginStateStore.js');
     store._setRootForTests(root);
     builtin = require('../src/main/plugins/builtinPlugins.js');
+
+    // 复现 11-07 的初版内置插件：1.0.0、三个格式全是 role:'open'、无 codec.write。
+    // 用户在这个时期启动过一次，用户目录里就会永久留下这份副本 —— 这正是
+    // 「打开 .svp 能成功、保存却报没有插件」的真实场景。
+    oldSrcDir = fs.mkdtempSync(path.join(root, 'old-src-'));
+    fs.cpSync(PLUGIN_SRC, oldSrcDir, { recursive: true });
+    const manifestPath = path.join(oldSrcDir, 'manifest.json');
+    const oldManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    oldManifest.version = '1.0.0';
+    for (const ft of oldManifest.contributes.fileTypes) ft.role = 'open';
+    fs.writeFileSync(manifestPath, JSON.stringify(oldManifest, null, 2));
   });
 
   after(function () {
@@ -184,5 +196,140 @@ describe('builtinPlugins — 内置官方插件默认安装', function () {
     expect(result.error).to.match(/不可卸载/);
     expect(fs.existsSync(path.join(targetDir(), 'manifest.json'))).to.equal(true);
     expect(service.registry.getPlugin(BUILTIN_ID)).to.be.ok;
+  });
+});
+
+/**
+ * 按版本升级：复现「用户机器上是旧副本、应用已经升级」的真实场景。
+ *
+ * 单独一个 describe 用隔离的临时根，避免和上面那组顺序依赖的用例串状态：
+ * 上面的用例走到最后已经是「停用 + 重装」，这里需要的是「首次装旧版」。
+ */
+describe('builtinPlugins — 内置插件按版本升级', function () {
+  this.timeout(30000);
+
+  let root;
+  let store;
+  let builtin;
+
+  /** 造一份指定版本 / role 的内置源码目录。 */
+  const sourceWith = (version, role) => {
+    const dir = fs.mkdtempSync(path.join(root, `src-${version}-${role}-`));
+    fs.cpSync(PLUGIN_SRC, dir, { recursive: true });
+    const manifestPath = path.join(dir, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.version = version;
+    for (const ft of manifest.contributes.fileTypes) ft.role = role;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    return dir;
+  };
+
+  const installDir = () => path.join(root, 'plugins', BUILTIN_ID);
+  const installedManifest = () => JSON.parse(fs.readFileSync(path.join(installDir(), 'manifest.json'), 'utf8'));
+  const ensureFrom = (sourceDir) => builtin.ensureBuiltinPlugins({ sourceDir, appVersion: APP_VERSION });
+  const stateOf = () => store.getPluginState(store.readRegistry(), BUILTIN_ID);
+  const upgrades = () => store.readAudit().filter((e) => e.event === 'upgrade' && e.pluginId === BUILTIN_ID);
+
+  before(function () {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'sxs-builtin-upgrade-'));
+    store = require('../src/main/plugins/PluginStateStore.js');
+    store._setRootForTests(root);
+    builtin = require('../src/main/plugins/builtinPlugins.js');
+  });
+
+  after(function () {
+    store._setRootForTests(null);
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('旧副本（1.0.0 / role:open）遇到更高版本时升级，磁盘上的清单与 codec 一起换新', function () {
+    expect(ensureFrom(sourceWith('1.0.0', 'open')).installed).to.equal(true);
+    expect(installedManifest().version).to.equal('1.0.0');
+    expect(installedManifest().contributes.fileTypes[2].role).to.equal('open');
+
+    const result = ensureFrom(PLUGIN_SRC);
+    expect(result.ok, result.error).to.equal(true);
+    expect(result.installed).to.equal(true);
+    expect(result.upgraded).to.equal(true);
+
+    const updated = installedManifest();
+    expect(updated.version).to.equal('1.1.0');
+    expect(updated.contributes.fileTypes.every((ft) => ft.role === 'both')).to.equal(true);
+    // 旧副本缺 codec.write；升级后必须真的有了，而不只是清单里的 role 变了。
+    expect(fs.readFileSync(path.join(installDir(), 'main.js'), 'utf8')).to.contain('codec.write');
+  });
+
+  it('升级保留用户的停用状态、设置、签名历史与首次安装时间', function () {
+    // 手工把磁盘上的清单降回旧版本，模拟「应用升级了、用户目录还是旧副本」。
+    // 直接用更低版本的 sourceDir 调 ensure 不会升级（那是下一个用例要验的），
+    // 所以这里必须直接改磁盘，才能让随后这次 ensure 真的走升级分支。
+    const manifestPath = path.join(installDir(), 'manifest.json');
+    const downgraded = installedManifest();
+    downgraded.version = '0.9.0';
+    fs.writeFileSync(manifestPath, JSON.stringify(downgraded, null, 2));
+
+    const registry = store.readRegistry();
+    store.setPluginState(registry, BUILTIN_ID, {
+      enabled: false,
+      settings: { theme: 'dark' },
+      signature: { status: 'unsigned', origin: 'builtin', publisher: 'SXSEditor Official', verifiedAt: 12345 },
+      installedAt: 11111,
+      keybindingsEnabled: true,
+    });
+    store.writeRegistry(registry);
+
+    const before = upgrades().length;
+    const result = ensureFrom(PLUGIN_SRC);
+    expect(result.ok, result.error).to.equal(true);
+    expect(result.upgraded, '包内 1.1.0 高于磁盘 0.9.0，必须升级').to.equal(true);
+    expect(upgrades()).to.have.length(before + 1);
+
+    const state = stateOf();
+    expect(state.enabled, '升级不得把停用的插件悄悄启用').to.equal(false);
+    expect(state.settings).to.deep.equal({ theme: 'dark' });
+    expect(state.signature.publisher).to.equal('SXSEditor Official');
+    expect(state.installedAt).to.equal(11111);
+    expect(state.keybindingsEnabled).to.equal(true);
+  });
+
+  it('写一条带 from/to 的升级审计，且与 install 审计分开', function () {
+    const upgradeLog = upgrades();
+    expect(upgradeLog.length).to.be.greaterThan(0);
+    const last = upgradeLog[upgradeLog.length - 1].detail;
+    expect(last.source).to.equal('builtin');
+    expect(last.to).to.equal('1.1.0');
+    expect(last.from).to.not.equal(last.to);
+  });
+
+  it('版本相同不覆盖（用户目录里的文件保持原样）', function () {
+    fs.writeFileSync(path.join(installDir(), 'user-marker.txt'), 'keep me');
+    const result = ensureFrom(PLUGIN_SRC);
+    expect(result.ok).to.equal(true);
+    expect(result.installed).to.equal(false);
+    expect(result.reason).to.equal('already-installed');
+    expect(result.upgraded).to.not.equal(true);
+    expect(fs.readFileSync(path.join(installDir(), 'user-marker.txt'), 'utf8')).to.equal('keep me');
+  });
+
+  it('包内版本更低时不降级', function () {
+    const before = upgrades().length;
+    const result = ensureFrom(sourceWith('0.5.0', 'open'));
+    expect(result.ok).to.equal(true);
+    expect(result.installed).to.equal(false);
+    expect(installedManifest().version).to.equal('1.1.0');
+    expect(upgrades()).to.have.length(before);
+  });
+
+  it('非 builtin 来源（用户自行安装的同名插件）即使版本更低也绝不覆盖', function () {
+    const registry = store.readRegistry();
+    store.setPluginState(registry, BUILTIN_ID, { source: 'folder' });
+    store.writeRegistry(registry);
+
+    fs.writeFileSync(path.join(installDir(), 'user-marker.txt'), 'user installed');
+    const result = ensureFrom(PLUGIN_SRC);
+    expect(result.ok).to.equal(true);
+    expect(result.installed).to.equal(false);
+    expect(result.reason).to.equal('already-installed');
+    expect(fs.readFileSync(path.join(installDir(), 'user-marker.txt'), 'utf8')).to.equal('user installed');
   });
 });

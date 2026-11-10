@@ -11,6 +11,7 @@ import { createDialog, showSingerValidationReport } from './uiControls.js';
 import { createPluginBackendSection } from './pluginTrackDialog.js';
 import { ensurePluginCatalog, findTrackKind, describeTrackBackend } from './pluginBackend.js';
 import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
+import { shouldNotifyAutoSaveFailure, resetAutoSaveNotification } from './autoSaveNotification.js';
 
 // 保存纪元：每次 markDirty 自增。异步写盘完成后只有纪元未变（期间没有新编辑）
 // 才允许 markClean，否则会把写盘期间产生的新改动误标为"已保存"。
@@ -729,9 +730,10 @@ export function updateProjectSettings(options = {}) {
   }
 }
 
-let _lastAutoSaveAlertAt = 0;
 // 自动保存采用 trailing 防抖：分片编辑器连续编辑时避免每个事件都全量
 // JSON.stringify + 写盘（工程大时 stringify 是明显的主线程卡顿源）。
+// 失败通知的「同一原因只弹一次」判定收敛在 autoSaveNotification.js（纯逻辑，
+// 可单测），这里只负责把 path + code 组成 key 传进去。
 const AUTOSAVE_DEBOUNCE_MS = 400;
 let _autoSaveTimer = null;
 
@@ -789,14 +791,17 @@ async function _commitAutoSave() {
     await _writeProjectTo(path, { silentWarnings: true });
     // 仅在写盘期间没有新编辑时清除脏标记。
     if (epoch === _saveEpoch) markClean();
+    // 成功一次就复位：之后若因别的原因再次失败，用户仍应看到新的提示。
+    resetAutoSaveNotification();
     console.log('Project auto-saved to', path);
   } catch (err) {
     console.warn('Project auto-save failed:', err);
     // 自动保存失败必须让用户感知，否则"已保存"的假象会在关闭时丢数据。
-    // 用节流弹窗提示（60s 内不重复轰炸），并保留 console 记录。
-    const now = Date.now();
-    if (now - _lastAutoSaveAlertAt > 60000) {
-      _lastAutoSaveAlertAt = now;
+    // 但同一个"路径 + 错误码"只通知一次：能力边界类错误（没有插件能保存、
+    // 权限不足）不会因用户继续编辑而改变，重复弹窗只会逼用户关掉应用。
+    // console.warn 每次都留，便于排查；手动 Ctrl+S 的错误不走这里，照常提示。
+    const key = `${path}|${err.code || err.message || 'unknown'}`;
+    if (shouldNotifyAutoSaveFailure(key)) {
       try {
         showAlertDialog(t('main.autoSaveFailed', { error: err.message }));
       } catch (_) {}
@@ -1025,6 +1030,8 @@ export async function saveProject() {
       await _writeProjectTo(state.currentProjectFilePath, {});
       // 写盘期间若有新编辑，不能清掉 dirty。
       if (epoch === _saveEpoch) markClean();
+      // 手动保存成功：此前自动保存失败留下的"已通知"标记作废。
+      resetAutoSaveNotification();
       console.log('Project saved to', state.currentProjectFilePath);
       return { saved: true, canceled: false };
     } catch (err) {
@@ -1063,6 +1070,8 @@ export async function saveProjectAs() {
         state.currentProjectFilePath = result.filePath;
         // 写盘期间若有新编辑，不能清掉 dirty。
         if (epoch === _saveEpoch) markClean();
+        // 另存为换了目标格式，旧的失败原因与新文件无关，复位。
+        resetAutoSaveNotification();
         console.log('Project saved to', result.filePath);
         return { saved: true, canceled: false };
       }
@@ -1336,6 +1345,9 @@ export async function applyProjectDocument(obj, targetPath, options = {}) {
   };
   syncRenderIntent();
   state.projectSaveWarnings = [];
+  // 换了一份工程，上一个文件的自动保存失败提示与它无关，复位以免新工程
+  // 的首次失败被旧标记吞掉。
+  resetAutoSaveNotification();
   history.clear();
   state.selectedFragmentId = null;
   markClean();
