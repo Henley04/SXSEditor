@@ -874,7 +874,7 @@ _target: `renderer` · long-running (job-able) · requires: `models`_
 | Parameter | Type / notes |
 |---|---|
 | `path` | string · required · Destination WAV path |
-| `options` | object · optional · sampleRate / numChannels / inference overrides |
+| `options` | object · optional · sampleRate / numChannels / scope (mix | vocal | accompaniment) / inference overrides |
 
 ```json
 {

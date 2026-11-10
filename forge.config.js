@@ -114,15 +114,19 @@ module.exports = {
       return !keep;
     },
     icon: './assets/SXS',
-    // Ship the documentation site (docs/) next to the app (resources/docs).
-    // It must live OUTSIDE app.asar: the docs are opened with the system
-    // default browser via file:// and a browser cannot read inside an asar.
-    // src/main/docs.js resolves this directory at runtime.
-    // docs 与文件图标都必须落在 asar 之外：前者要给系统浏览器以 file:// 打开，
-    // 后者要给 Windows 注册表的 DefaultIcon 引用（系统读不了 asar 内部路径）。
-    extraResource: skipDocs
-      ? ['assets/fileicons']
-      : ['docs', 'assets/fileicons'],
+    // docs / mcp / 文件图标都必须落在 asar 之外：
+    //   · docs 要给系统浏览器以 file:// 打开，浏览器读不了 asar 内部路径；
+    //   · mcp 是独立 node 进程的 stdio 服务器，客户端配置里写的是磁盘绝对路径，
+    //     塞进 asar 后路径既不存在、node 也无法按普通文件加载；
+    //   · fileicons 要给 Windows 注册表的 DefaultIcon 引用。
+    // mcp/ 由 scripts/build-mcp-resources.js 在 prepackage / premake 生成，
+    // 落到 resources/mcp；帮助菜单「MCP 连接」按这个实际路径生成配置片段。
+    // 注意 extraResource 用 fs-extra.copy 直接复制，不受上面的 ignore 白名单影响。
+    extraResource: [
+      ...(skipDocs ? [] : ['docs']),
+      'mcp',
+      'assets/fileicons',
+    ],
     // macOS 靠 Info.plist 声明"哪些文件归我"，Windows 靠注册表，Linux 靠 .desktop。
     // 这里只写 macOS 的一份；图标文件随 extraResource 进 Contents/Resources。
     extendInfo: {

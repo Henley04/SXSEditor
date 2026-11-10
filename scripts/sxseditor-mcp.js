@@ -6,12 +6,45 @@
 // bridge. Tool definitions are generated from src/shared/mcpSchema.js, so the
 // schemas an MCP client sees are the same ones the bridge validates against —
 // there is no second hand-maintained list to drift.
+//
+// 两种运行时共用这一份文件：
+//   · 源码树：node scripts/sxseditor-mcp.js（npm run mcp），schema 从
+//     src/shared/ 这个唯一真源加载；
+//   · 安装包：本文件由 scripts/build-mcp-resources.js 复制到 resources/mcp/，
+//     与 mcpSchema.js / modelContract.js 副本同目录，schema 从副本加载。
+// 因此客户端配置里必须写**绝对路径**（见帮助菜单「MCP 连接」生成的说明）。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 
-const { schema } = require('../src/shared/mcpSchema');
+/**
+ * 按运行时布局定位 schema 模块，返回 { schema }。
+ *
+ * 顺序有意把源码树放在前面：开发者改了 src/shared/mcpSchema.js 后，源码运行的
+ * MCP 网关立即用上新表；安装包里没有 src/ 目录，自然落到随包自包含副本。
+ * mcpSchema.js 内部 require('./modelContract')，所以两种布局都要求两份文件同目录。
+ */
+function resolveSchema() {
+  const candidates = [
+    path.join(__dirname, '..', 'src', 'shared', 'mcpSchema.js'),
+    path.join(__dirname, 'mcpSchema.js'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        const loaded = require(candidate);
+        if (loaded && typeof loaded.schema === 'function') return loaded;
+      }
+    } catch (_) { /* 试下一个候选 */ }
+  }
+  throw new Error(
+    'SXSEditor MCP schema not found. Reinstall the application or run '
+    + 'node scripts/build-mcp-resources.js in the source tree.',
+  );
+}
+
+const { schema } = resolveSchema();
 
 function endpoint() {
   const candidates = [];
@@ -223,8 +256,15 @@ async function handle(x) {
   const { id, method, params = {} } = x;
   try {
     if (method === 'initialize') {
+      // 回显客户端请求的版本：MCP 客户端会在握手时校验两端版本是否一致，
+      // 固定回一个版本会让使用其它协议版本的客户端直接判握手失败。网关只用
+      // tools / resources / prompts 这些稳定能力，跟随客户端版本是安全的。
+      const requested = params && typeof params.protocolVersion === 'string'
+        && params.protocolVersion.trim()
+        ? params.protocolVersion.trim()
+        : '2025-06-18';
       return ok(id, {
-        protocolVersion: '2025-06-18',
+        protocolVersion: requested,
         capabilities: { tools: {}, resources: {}, prompts: {} },
         serverInfo: { name: 'sxseditor', version: '2.0.0' },
         instructions: 'Call sxs_capabilities first, then sxs_schema for parameter schemas. '

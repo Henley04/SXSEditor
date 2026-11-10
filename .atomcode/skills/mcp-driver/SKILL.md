@@ -12,7 +12,7 @@
 
 ## 连接
 
-stdio 服务器：`node <repo>/scripts/sxseditor-mcp.js`。它自己发现端口与 token：
+stdio 服务器：`node <sxseditor-mcp.js 的绝对路径>`。绝对路径在应用的「帮助 → MCP 连接」里按当前安装生成：源码树通常是 `<repo>/scripts/sxseditor-mcp.js`，安装包是 `<安装目录>/resources/mcp/sxseditor-mcp.js`。它自己发现端口与 token：
 
 ```
 <userData>/mcp-endpoint.json   ← 应用启动时写入，权限 0600
@@ -25,13 +25,13 @@ stdio 服务器：`node <repo>/scripts/sxseditor-mcp.js`。它自己发现端口
 如果应用是用 `--user-data-dir=/tmp/xxx` 起的，发现文件在那边，服务器找不到，会拿着旧端口报 `ECONNREFUSED`。显式指定：
 
 ```bash
-SXSEDITOR_MCP_ENDPOINT=/tmp/xxx/mcp-endpoint.json node scripts/sxseditor-mcp.js
+SXSEDITOR_MCP_ENDPOINT=/tmp/xxx/mcp-endpoint.json node <sxseditor-mcp.js 的绝对路径>
 ```
 
 ## 第一件事：读 schema，不要背方法名
 
 ```
-sxs_schema_get            → 49 个方法 + 每个方法的 JSON Schema
+sxs_schema_get            → 完整方法表 + 每个方法的 JSON Schema（方法数随版本变化，不要背数字）
 sxs_capabilities          → 运行期事实：平台、后端、限速、插件方法数
 ```
 
