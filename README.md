@@ -6,7 +6,7 @@
 
   AI Singing Voice Synthesis Workstation
 
-  [![Version](https://img.shields.io/badge/version-2.0.2-blue?style=flat-square)](https://github.com/Henley04/SXSEditor/releases)
+  [![Version](https://img.shields.io/badge/version-2.0.3-blue?style=flat-square)](https://github.com/Henley04/SXSEditor/releases)
   [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
   [![Platform](https://img.shields.io/badge/platform-Windows%20(primary)%20%C2%B7%20macOS%2FLinux%20(source%20build%2C%20CPU%2Donly%2C%20unverified)-lightgrey?style=flat-square)]()
   [![SVS Languages](https://img.shields.io/badge/SVS-EN%20|%20ZH%20|%20JP-orange?style=flat-square)]()
@@ -37,6 +37,8 @@ Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese
 - [Help & FAQ](https://henley04.github.io/SXSEditor/user/faq.html)
 - [Uninstall](https://henley04.github.io/SXSEditor/user/uninstall.html)
 
+**MCP / AI assistants**: the stdio MCP server ships with the packaged application (`<install>/resources/mcp/sxseditor-mcp.js`; in a source tree use `npm run mcp`). Open **Help → MCP Connection…** for a copyable setup prompt with configuration blocks for Claude Code, WorkBuddy, OpenCode and Codex, plus the companion skill. Start SXSEditor before connecting. See [MCP usage](https://henley04.github.io/SXSEditor/user/plugins.html) and the [MCP reference](https://henley04.github.io/SXSEditor/MCP.html).
+
 ### License
 
 [MIT](LICENSE)
@@ -60,6 +62,8 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 - [模型更新](https://henley04.github.io/SXSEditor/user/model-updates.html)
 - [帮助与常见问题](https://henley04.github.io/SXSEditor/user/faq.html)
 - [卸载](https://henley04.github.io/SXSEditor/user/uninstall.html)
+
+**MCP 与 AI 助手**：stdio MCP 服务器随安装包分发（`<安装目录>/resources/mcp/sxseditor-mcp.js`；源码树可用 `npm run mcp`）。打开**帮助 → MCP 连接…** 可复制一段安装说明，内含 Claude Code、WorkBuddy、OpenCode、Codex 四端各自的配置片段与配套 skill。连接前请先启动 SXSEditor。详见 [MCP 用法](https://henley04.github.io/SXSEditor/user/plugins.html) 与 [MCP 方法参考](https://henley04.github.io/SXSEditor/MCP.html)。
 
 ### 许可证
 

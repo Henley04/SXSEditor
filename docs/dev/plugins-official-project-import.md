@@ -13,9 +13,11 @@
 | `.svp` | Synthesizer V / SV2 | JSON（可用 `\u0000` 串联多份，取 version 最大者） | 1.x / 2.x 工程 | 打开、保存 |
 
 三种格式都声明 `role: "both"`，既出现在「文件 → 打开工程」，也出现在「另存为」。
-**写回外部工程格式是有损的**：歌手库、音色与风格、颤音、音素属性、变速与变拍号
-在宿主中没有等价字段，不会写入；插件会逐条返回告警，并建议另存为宿主原生工程
-格式以完整保留编辑结果。插件不会把有损写回伪装成无损。
+**写回外部工程格式是有损的**：歌手库、音色与风格、组级颤音强度包络、颤音起始
+相位与渐出、音素属性、变速与变拍号在宿主中没有等价字段，不会写入；插件会逐条
+返回告警，并建议另存为宿主原生工程格式以完整保留编辑结果。音符颤音的深度、频率、
+起点、时长与渐入可以双向转换，写回时还原为 SVP 的 `note.attributes`。插件不会
+把有损写回伪装成无损。
 
 源工程中可精简保留的元数据（版本、容器附加字段、轨道与音色库条目等）通过
 `document.ext` 的 `official-project-import.sourceMeta` 在打开与保存之间携带，
@@ -32,8 +34,14 @@
    插件签名文件，安装记录如实标为未签名，不显示为验签通过。
 3. 插件管理器显示「内置」徽标，不提供卸载入口；服务层同样拒绝卸载，避免命令行
    与自动化入口绕过。需要关闭其贡献点时，在管理器中停用即可。
-4. 不覆盖用户选择：已安装（含用户停用、或自行安装了其它版本）时保持原状；
-   目录被移除而注册表仍在时重新补齐，但保留此前的停用状态。
+4. 默认不覆盖用户选择：已安装（含用户停用、或自行安装了其它版本）时保持原状；
+   目录被移除而注册表仍在时重新补齐，但保留此前的停用状态。唯一例外是按版本
+   升级：仅当注册记录存在、目录完好、来源为 `builtin`，且包内清单版本严格高于
+   用户目录里的版本时，才用包内副本覆盖（`src/main/plugins/builtinPlugins.js`
+   的 `needsUpgrade`）。这用于修掉早期内置副本缺少 `.svp` 保存能力所导致的
+   「没有插件能保存该格式」误报。升级保留停用状态、设置、签名历史与首次安装
+   时间，并写一条带 `from` / `to` 的 `upgrade` 审计；用户自行安装的同名插件、
+   版本相同或更高者一律不覆盖。
 
 在插件管理器的「已安装」页可以看到「内置」徽标，签名栏显示为未签名、来源为内置，
 这是随应用分发的真实状态。手动制作签名包分发是另一条路径，见 §8。
@@ -52,6 +60,7 @@
 | 音符音高 | MIDI 音高，整数 |
 | 歌词 `lyric` / `y` / `lyrics` | 音符歌词（最多 24 字符；空歌词回落为 `la`） |
 | 歌词 `br`（呼吸） | 宿主吸气音素 `<AP>`，写回时还原为 `br` |
+| SVP 音符颤音 `attributes` | 宿主「音符颤音」的 `depth` / `rate` / `start` / `length` / `fadeIn`，写回时还原为 `attributes` |
 | 全局速度 | 工程 BPM（VSQX/VPR 的 `bpm × 100` 会先除以 100） |
 | 拍号 | 工程拍号（取第一处） |
 | PIT + PBS（VOCALOID） | 音高曲线：`相对半音 = PIT × PBS / 8191`，叠加到音符基础音高 |
@@ -63,6 +72,23 @@
 与表示静音的 `<SP>` 不是同一概念。因此导入时把 `br` 转译为 `<AP>`，写回时还原为
 `br`，保证往返对称；`<SP>` 与普通歌词不参与转译。三种格式共用同一条歌词映射，
 不存在某一格式单独漏译的情况。
+
+SVP 的音符颤音参数在 `note.attributes`（缺省值回落到 `mainRef.voice`），组级
+强度包络在 `group.parameters.vibratoEnv`。换算规则集中在 `lib/vibrato.js`：
+
+| SVP | 宿主 | 换算 |
+|---|---|---|
+| `dF0Vbr`（半音，振幅再乘 0.5） | `depth`（音分） | `depth = dF0Vbr × 50` |
+| `fF0Vbr`（Hz） | `rate`（Hz） | 直接对应 |
+| `tF0VbrStart`（秒） | `start`（0–1） | 除以音符时长 |
+| `tF0VbrLeft`（秒） | `fadeIn`（0–1） | 除以颤音区间时长 |
+| 音符剩余时长 | `length`（0–1） | `1 − start` |
+
+只有显式写了 `attributes` 的音符才导入：SVP 只在用户手动改过参数时才写这个字段，
+自动生成（未写 `attributes`）的颤音若一并导入，会与宿主自己的自动音高层叠加成
+双重颤音。`pF0Vbr`（起始相位）、`tF0VbrRight`（渐出）与非平凡的 `vibratoEnv`
+曲线在宿主没有承载，导入时逐类告警；写回 `.svp` 时从源工程元数据快照沿用原值。
+超出宿主可调范围的参数按边界处理并告警。
 
 音高曲线按 1/16 拍为最小步长采样（每分片最多 2000 个锚点，长分片会自动放大步长），
 写入 `pitchCurve.anchorPoints` 并置 `pitchMode: 'manual'`，在编辑器里可以直接改锚点。
@@ -82,12 +108,12 @@
 | 限制 | 行为 |
 |---|---|
 | 变速 / 变拍号 | SXSEditor 只有全局 BPM 与拍号；使用第一处，并在导入后弹出告警 |
-| SVP 颤音 | 无等价字段，统计受影响音符数并告警 |
+| SVP 颤音 | 音符级参数换算为宿主的「音符颤音」；组级强度包络、起始相位与渐出无承载，逐类告警，写回时尽量沿用原值 |
 | VOCALOID 音素、歌手、风格 | 不导入；歌词保留，音素由宿主按歌词推导 |
 | 音高曲线 | 是"音符基础音高 + 控制器偏移"的采样近似，不是逐采样还原 |
 | 重叠音符 | 按后一个音符的起点裁掉前一个的尾巴（编辑器假定音符不重叠） |
 | 非法/零长度音符 | 跳过，不阻断整份工程 |
-| 写回外部格式 | 歌手库、音色与风格、颤音、音素属性、变速与变拍号、前导小节与弯音灵敏度曲线不写入；逐条返回告警，并建议另存为宿主原生工程格式 |
+| 写回外部格式 | 歌手库、音色与风格、组级颤音强度包络、颤音起始相位与渐出、音素属性、变速与变拍号、前导小节与弯音灵敏度曲线不写入；音符颤音主参数写回 `note.attributes`；逐条返回告警，并建议另存为宿主原生工程格式 |
 
 ## 5. 为什么是一个插件而不是两个
 
@@ -119,7 +145,7 @@ buildDocument / documentToScore：轨道↔歌手、part↔分片、音符清洗
 
 ### 7.1 仓库内测试
 
-`test/pluginProjectImport.test.js`（13 个用例）用三份最小样例工程断言**内容一致**，
+`test/pluginProjectImport.test.js` 用三份最小样例工程断言**内容一致**，
 而不只是"没抛异常"：
 
 | 样例 | 断言 |
@@ -137,11 +163,21 @@ buildDocument / documentToScore：轨道↔歌手、part↔分片、音符清洗
 - manifest 的三个 `fileTypes` 都声明 `role: "both"` 与 `userPicked:write` 权限，
   且每个 codec 同时实现 `read` 与 `write`。
 - 写回返回的告警含有损说明，以及另存为宿主原生工程格式的建议。
+- SVP 音符颤音的换算与往返：显式 `attributes` 转译为宿主音符颤音、缺省值回落
+  `mainRef.voice`、关闭状态写回不复活颤音、组级 `vibratoEnv` 与起始相位/渐出
+  逐类告警、超出宿主范围的参数按边界处理；换算规则见 §3。
 
 内置安装、界面 EP 显示与曲线采样另有独立回归测试：
-`test/pluginBuiltinInstall.test.js`（首次安装、不覆盖、停用保持、拒绝卸载）、
+`test/pluginBuiltinInstall.test.js`（首次安装、不覆盖、停用保持、拒绝卸载，
+以及内置旧副本按版本升级、升级保留用户状态、`upgrade` 审计、同版本不覆盖、
+包内版本更低不降级、非内置来源不覆盖）、
 `test/copyWebpackClosure.test.js`（随包目录完整性）、`test/epLabel.test.js`、
 `test/automationCurve.test.js` 与 `test/winmlEpState.test.js`。
+
+自动保存失败去重由 `test/autoSaveNotification.test.js` 覆盖；MCP 随包分发与
+帮助菜单安装说明分别由 `test/mcpBundle.test.js`（副本与真源一致、模拟安装包
+布局启动、`initialize` 回显协议版本）和 `test/mcpSetupPrompt.test.js`（四端
+配置片段、路径探测、中英文案）覆盖。
 
 ```powershell
 npx mocha --require ./test/setup.js "test/pluginProjectImport.test.js" "test/pluginBuiltinInstall.test.js" "test/copyWebpackClosure.test.js" "test/epLabel.test.js" "test/automationCurve.test.js" "test/winmlEpState.test.js" --timeout 30000

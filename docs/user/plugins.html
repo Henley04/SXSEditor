@@ -66,8 +66,10 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">No plugin ships with the application. A fresh install shows an empty list until you add one.</p>
-          <p data-lang="zh">应用不内置任何插件。全新安装的列表是空的，直到你自己加一个。</p>
+          <p data-lang="en">One official plugin ships with the application: <strong>VOCALOID / Synthesizer V Project Import</strong>, installed automatically on first launch. It opens and saves <code>.vsqx</code>, <code>.vpr</code> and <code>.svp</code> projects, appears in the Plugins window, and cannot be uninstalled. Any other plugin has to be added by you.</p>
+          <p data-lang="zh">应用内置一个官方插件：<strong>VOCALOID / Synthesizer V 工程导入</strong>，首次启动时自动安装。它支持打开与保存 <code>.vsqx</code>、<code>.vpr</code>、<code>.svp</code> 工程，可在插件管理器中查看，且不可卸载。其余插件需自行添加。</p>
+          <p data-lang="en">When the application is updated, a built-in copy older than the bundled version is upgraded automatically; the disabled state and settings you chose are kept. A user-installed plugin with the same id is never overwritten.</p>
+          <p data-lang="zh">应用升级时，若内置副本的版本低于随包版本会自动升级，并保留你设置的停用状态与配置；自行安装的同名插件不会被覆盖。</p>
         </div>
       </div>
 
@@ -260,6 +262,10 @@
             <td><span data-lang="en">A command is missing from the menu</span><span data-lang="zh">菜单里少了某个命令</span></td>
             <td><span data-lang="en">The plugin is disabled, or it only declares the command for automation (visible to MCP and the CLI, not to the menu).</span><span data-lang="zh">插件被停用了，或那条命令只声明给自动化用（MCP 与 CLI 看得见，菜单里没有）。</span></td>
           </tr>
+          <tr>
+            <td><span data-lang="en">Opening an .svp project warns "no plugin can save .svp"</span><span data-lang="zh">打开 .svp 工程后提示「没有插件可以保存 .svp」</span></td>
+            <td><span data-lang="en">An older bundled copy of the official plugin lacked save support. It is now upgraded by version on startup — no manual action is needed. A repeated auto-save failure with the same cause is reported only once until the project is saved or replaced.</span><span data-lang="zh">早期随包内置的官方插件旧副本缺少保存能力，现在会在启动时按版本自动升级，无需手动处理。同一原因反复触发的自动保存失败只提示一次，直到工程保存成功或被替换。</span></td>
+          </tr>
         </tbody>
       </table>
 
@@ -294,20 +300,49 @@
         <span data-lang="zh">第二步：接上客户端</span>
       </h3>
 
-      <p data-lang="en">Add the stdio server to your MCP client's configuration. It reads the discovery file written by the running application, so no port or token needs to be copied:</p>
-      <p data-lang="zh">在 MCP 客户端的配置里加上这个 stdio 服务器。它自己读运行中的应用写下的发现文件，不需要你抄端口或 token：</p>
+      <p data-lang="en"><strong>Help → MCP Connection…</strong> generates a ready-to-copy set of instructions using the paths detected on your installation: the configuration block for each client, the companion skill and the verification steps. Paste it into your AI assistant and let it complete the setup. Start SXSEditor first — the stdio server reads the discovery file written by the running application, so no port or token needs to be copied.</p>
+      <p data-lang="zh"><strong>帮助 → MCP 连接…</strong> 会按当前安装的实际路径生成一段可复制的说明，内含各客户端的配置片段、配套 skill 与验证步骤，把它粘贴给正在使用的 AI 助手即可完成配置。请先启动 SXSEditor：stdio 服务器会自行读取应用写下的发现文件，不需要抄端口或令牌。</p>
 
-      <pre><code>{
-  "mcpServers": {
-    "sxseditor": {
-      "command": "node",
-      "args": ["/path/to/SXSEditor/scripts/sxseditor-mcp.js"]
-    }
-  }
-}</code></pre>
+      <p data-lang="en">The server file is <code>&lt;install&gt;/resources/mcp/sxseditor-mcp.js</code> in a packaged build, or <code>&lt;repo&gt;/mcp/sxseditor-mcp.js</code> when running from source. Paths must be absolute. The four clients use different configuration shapes — do not paste one client's block into another:</p>
+      <p data-lang="zh">安装包中服务器文件位于 <code>&lt;安装目录&gt;/resources/mcp/sxseditor-mcp.js</code>，源码运行时位于 <code>&lt;仓库&gt;/mcp/sxseditor-mcp.js</code>，配置里必须使用绝对路径。四种客户端的配置格式各不相同，不要把某一端的片段照抄到另一端：</p>
 
-      <p data-lang="en">Start SXSEditor first. The client then exposes one tool per automation method, plus aliases, covering projects, editing, playback, export, settings, windows and model calls.</p>
-      <p data-lang="zh">先启动 SXSEditor。客户端会为每个自动化方法提供一个工具（另含别名），覆盖工程、编辑、播放、导出、设置、窗口与模型调用。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Client</span><span data-lang="zh">客户端</span></th>
+            <th><span data-lang="en">Config file</span><span data-lang="zh">配置文件</span></th>
+            <th><span data-lang="en">Shape</span><span data-lang="zh">格式要点</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Claude Code</td>
+            <td><code>.mcp.json</code> / <code>~/.claude.json</code></td>
+            <td><span data-lang="en"><code>mcpServers</code> with <code>command</code> and <code>args</code>; or <code>claude mcp add --transport stdio</code>.</span><span data-lang="zh"><code>mcpServers</code> 配 <code>command</code> / <code>args</code>；也可用 <code>claude mcp add --transport stdio</code>。</span></td>
+          </tr>
+          <tr>
+            <td>WorkBuddy / CodeBuddy</td>
+            <td><code>~/.workbuddy/mcp.json</code></td>
+            <td><span data-lang="en">Same <code>mcpServers</code> shape; the connector must be trusted before it connects.</span><span data-lang="zh">同为 <code>mcpServers</code>；需在连接器管理页先「信任」该服务器。</span></td>
+          </tr>
+          <tr>
+            <td>OpenCode</td>
+            <td><code>opencode.json</code></td>
+            <td><span data-lang="en"><code>mcp.&lt;name&gt;.command</code> is an <strong>array</strong>, with <code>type: "local"</code> and <code>enabled: true</code>.</span><span data-lang="zh"><code>mcp.&lt;名称&gt;.command</code> 是<strong>数组</strong>，需 <code>type: "local"</code> 与 <code>enabled: true</code>。</span></td>
+          </tr>
+          <tr>
+            <td>Codex</td>
+            <td><code>~/.codex/config.toml</code></td>
+            <td><span data-lang="en">TOML <code>[mcp_servers.*]</code> table, not JSON; raise <code>tool_timeout_sec</code> for long exports.</span><span data-lang="zh">TOML 的 <code>[mcp_servers.*]</code> 表，不是 JSON；长导出需放宽 <code>tool_timeout_sec</code>。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p data-lang="en">The companion skill (<code>skills/mcp-driver/SKILL.md</code>) is copied into the client's skill directory, for example <code>.claude/skills/</code> or <code>.codebuddy/skills/</code>. OpenCode and Codex have no unified skill directory; merge the file into the project instructions instead.</p>
+      <p data-lang="zh">配套 skill（<code>skills/mcp-driver/SKILL.md</code>）放到客户端的 skill 目录，例如 <code>.claude/skills/</code> 或 <code>.codebuddy/skills/</code>；OpenCode 与 Codex 没有统一的 skill 目录，可把内容并入项目指令文件。</p>
+
+      <p data-lang="en">Restart the client afterwards and verify with <code>sxs_capabilities</code> and <code>sxs_schema_get</code>. The client then exposes one tool per automation method, plus aliases, covering projects, editing, playback, export, settings, windows and model calls.</p>
+      <p data-lang="zh">随后重启客户端，用 <code>sxs_capabilities</code> 与 <code>sxs_schema_get</code> 验证连接。连接成功后，客户端会为每个自动化方法提供一个工具（另含别名），覆盖工程、编辑、播放、导出、设置、窗口与模型调用。</p>
 
       <h3>
         <span data-lang="en">Step 3 — Ask for the work, not for the tool</span>

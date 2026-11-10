@@ -747,6 +747,13 @@
         <li><span data-lang="en"><strong>Presets</strong> — <em>Soft</em> / <em>Medium</em> / <em>Strong</em> apply common vibrato profiles in one click.</span><span data-lang="zh"><strong>预设</strong>——<em>柔和</em> / <em>中等</em> / <em>强烈</em>一键套用常用颤音参数组合。</span></li>
         <li><span data-lang="en"><strong>Visual feedback</strong> — a small sine-wave marker is drawn at the top-left of notes with vibrato enabled, and the pitch curve in Pitch mode shows the actual oscillation.</span><span data-lang="zh"><strong>视觉反馈</strong>——启用颤音的音符左上角会绘制一个小正弦波标记，Pitch 模式下的音高曲线会显示实际振荡。</span></li>
       </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Imported from Synthesizer V projects</strong> — note vibrato parameters in an <code>.svp</code> file are translated into the host's per-note vibrato: depth, rate, start, length and fade-in are converted from Synthesizer V's seconds / semitones / Hz values, and written back to <code>note.attributes</code> when saving as <code>.svp</code>. Only notes with explicit parameters are imported, so an automatically generated Synthesizer V vibrato will not double up with the host's auto pitch layer. Group-level vibrato envelopes, the starting phase and the fade-out have no host equivalent and are reported as warnings on import. The depth (0–200¢) and rate (2–10 Hz) ranges below are also the ranges enforced by the automation interface.</p>
+          <p data-lang="zh"><strong>从 Synthesizer V 工程导入</strong>——<code>.svp</code> 文件中的音符颤音参数会转译为宿主的逐音符颤音：幅度、频率、起始点、长度与渐入由 Synthesizer V 的秒 / 半音 / Hz 换算而来，另存为 <code>.svp</code> 时写回 <code>note.attributes</code>。只导入显式设置了参数的音符，避免 Synthesizer V 自动生成的颤音与宿主的自动音高层叠加成双重颤音。组级颤音包络、起始相位与渐出在宿主中没有承载，导入时逐类告警。下表的幅度（0–200¢）与频率（2–10 Hz）范围，同时也是自动化接口校验时采用的范围。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Fade In / Fade Out</span>

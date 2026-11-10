@@ -60,8 +60,8 @@
         <span data-lang="zh">MCP 覆盖范围</span>
       </h1>
 
-      <p data-lang="en">The automation surface has 49 methods, all exposed by the stdio server (68 tool names including aliases and multi-action helpers). Being callable is not the same as being sufficient, so this page is organised by scenario rather than by function, and it identifies the tasks that MCP does not cover.</p>
-      <p data-lang="zh">自动化接口共 49 个方法，stdio 服务器将其全部暴露（含别名与多动作工具共 68 个工具名）。可调用不等于可完成，因此本页按使用场景而非方法清单组织，并说明 MCP 未覆盖的任务。</p>
+      <p data-lang="en">The automation surface has 52 methods, all exposed by the stdio server (71 tool names including aliases and multi-action helpers). Being callable is not the same as being sufficient, so this page is organised by scenario rather than by function, and it identifies the tasks that MCP does not cover.</p>
+      <p data-lang="zh">自动化接口共 52 个方法，stdio 服务器将其全部暴露（含别名与多动作工具共 71 个工具名）。可调用不等于可完成，因此本页按使用场景而非方法清单组织，并说明 MCP 未覆盖的任务。</p>
 
       <h2>
         <span data-lang="en">Covered</span>
@@ -113,6 +113,10 @@
             <td><code>model.list / invoke / read</code></td>
           </tr>
           <tr>
+            <td><span data-lang="en">Query and load local ONNX models</span><span data-lang="zh">查询与加载本地 ONNX 模型</span></td>
+            <td><code>pipeline.status / load / unload</code></td>
+          </tr>
+          <tr>
             <td><span data-lang="en">Windows, screenshot, locale</span><span data-lang="zh">窗口、截图、语言</span></td>
             <td><code>ui.windows / resize / reload / locale / screenshot / open</code></td>
           </tr>
@@ -130,6 +134,14 @@
           </tr>
         </tbody>
       </table>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Parameter validation follows the editor's controls rather than a separate set of limits: per-note vibrato accepts depth 0–200 cents and rate 2–10 Hz, matching the sliders in the fragment editor and the values imported from Synthesizer V projects. Values outside those ranges fail schema validation instead of being silently clamped. The <code>pipeline.*</code> domain reports and loads local ONNX model groups; it does not install or trust plugins.</p>
+          <p data-lang="zh">参数校验沿用编辑器的控件范围，而不是另设一套上限：音符级颤音的幅度为 0–200 音分、频率为 2–10 Hz，与片段编辑器的滑杆以及从 Synthesizer V 工程导入的取值一致。超出范围的值无法通过接口的参数校验，也不会被静默裁剪。<code>pipeline.*</code> 域用于查询与加载本地 ONNX 模型组，不涉及插件的安装与信任。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">Not Covered</span>
@@ -189,7 +201,10 @@
       <p data-lang="en">The stdio server locates the running app by reading <code>mcp-endpoint.json</code> from the platform's standard userData path. If you start the app with <code>--user-data-dir=/tmp/something</code>, that file is written there instead and discovery silently fails with <code>ECONNREFUSED</code> against a stale port. Point the server at the right file:</p>
       <p data-lang="zh">stdio 服务器从平台标准的 userData 路径读取 <code>mcp-endpoint.json</code>，以定位正在运行的应用。若应用以 <code>--user-data-dir=/tmp/something</code> 启动，该文件会写入该目录，默认发现路径将读到旧端口并返回 <code>ECONNREFUSED</code>。此时需将服务器指向正确的文件：</p>
 
-      <pre><code>SXSEDITOR_MCP_ENDPOINT=/tmp/something/mcp-endpoint.json node scripts/sxseditor-mcp.js</code></pre>
+      <pre><code>SXSEDITOR_MCP_ENDPOINT=/tmp/something/mcp-endpoint.json node &lt;server absolute path&gt;/sxseditor-mcp.js</code></pre>
+
+      <p data-lang="en">In a packaged build the server is <code>&lt;install&gt;/resources/mcp/sxseditor-mcp.js</code>; in a source tree it is <code>&lt;repo&gt;/mcp/sxseditor-mcp.js</code>. <strong>Help → MCP Connection…</strong> prints the exact paths for the current installation and the configuration blocks for Claude Code, WorkBuddy, OpenCode and Codex. The four clients do not share one JSON shape: OpenCode takes a <code>command</code> array and Codex takes a TOML <code>[mcp_servers.*]</code> table.</p>
+      <p data-lang="zh">安装包中服务器位于 <code>&lt;安装目录&gt;/resources/mcp/sxseditor-mcp.js</code>，源码树中位于 <code>&lt;仓库&gt;/mcp/sxseditor-mcp.js</code>。<strong>帮助 → MCP 连接…</strong> 会给出当前安装的实际路径，以及 Claude Code、WorkBuddy、OpenCode、Codex 四端各自的配置片段。四端并不共用同一种 JSON：OpenCode 的 <code>command</code> 是数组，Codex 使用 TOML 的 <code>[mcp_servers.*]</code> 表。</p>
 
       <h3>
         <span data-lang="en">Model errors keep their classification</span>
