@@ -211,6 +211,19 @@ describe('audioSignature — 全局参数与稳定性', () => {
     expect(project([f], [singer], { inferenceOpts: { ...OPTS, diffStepChunk: true } })).to.not.equal(base);
   });
 
+  it('切换模型精度改变签名（fp32 → fp16 → int8 是三套不同权重）', () => {
+    // 没有这一项时，切精度后按 Play 会命中上一精度算出的音频，听感上
+    // "换了精度却毫无变化"，用户会误判成新精度没效果。
+    const fp32 = project([f], [singer], { inferenceOpts: { ...OPTS, modelPrecision: 'fp32' } });
+    const fp16 = project([f], [singer], { inferenceOpts: { ...OPTS, modelPrecision: 'fp16' } });
+    const int8 = project([f], [singer], { inferenceOpts: { ...OPTS, modelPrecision: 'int8' } });
+    expect(fp16).to.not.equal(fp32);
+    expect(int8).to.not.equal(fp16);
+    expect(int8).to.not.equal(fp32);
+    // 同一精度必须稳定，否则每次 Play 都会重推
+    expect(project([f], [singer], { inferenceOpts: { ...OPTS, modelPrecision: 'int8' } })).to.equal(int8);
+  });
+
   it('自动变调开关改变签名', () => {
     expect(project([f], [singer], { autoShift: true })).to.not.equal(project([f], [singer]));
   });

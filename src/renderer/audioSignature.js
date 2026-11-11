@@ -209,6 +209,9 @@ function optionsKey(autoShift, opts) {
     keyframes,
     o.dynamicThresholdEnabled ? 1 : 0,
     o.dynamicThresholdPercentile ?? '',
+    // 模型精度：切换 fp32/fp16/int8 用的是另一套权重，同一分片的输出音频
+    // 量化误差不同。不纳入签名会让"切了精度再按播放"继续播上一精度的音频。
+    o.modelPrecision ?? '',
   ].join(',');
 }
 

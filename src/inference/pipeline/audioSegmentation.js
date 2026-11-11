@@ -395,6 +395,17 @@ class AudioSegmentation {
         // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
         // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
         const singerId = options.singerId || null;
+        // 模型精度必须纳入缓存键：切换 fp32/fp16/int8 后推理用的是另一套权重，
+        // 同一个分片的输入完全相同，但输出音频的量化误差不同。不纳入键的话，
+        // 切精度后会直接命中上一精度的 mel，听感上"换了精度却没有任何变化"，
+        // 而用户会误判成新精度的效果。后端（DML / WinML / 插件）同理。
+        const modelPrecision = options.modelPrecision || 'base';
+        const inferBackend = options.backend && options.backend.type
+            ? `${options.backend.type}:${options.backend.pluginId || ''}:${options.backend.kindId || ''}`
+            : 'builtin';
+        // 用户主动「重新合成」时渲染层注入的一次性 nonce。只用来让缓存失配，
+        // 不参与任何推理参数；缺省时不追加后缀，保持默认可命中。
+        const retakeSuffix = options.retakeNonce ? `_rt${options.retakeNonce}` : '';
 
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
@@ -455,7 +466,7 @@ class AudioSegmentation {
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
         const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}_pm${modelPrecision}_be${inferBackend}${retakeSuffix}`;
     }
 
     /**
