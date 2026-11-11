@@ -12,6 +12,7 @@ import { createPluginBackendSection } from './pluginTrackDialog.js';
 import { ensurePluginCatalog, findTrackKind, describeTrackBackend } from './pluginBackend.js';
 import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
 import { shouldNotifyAutoSaveFailure, resetAutoSaveNotification } from './autoSaveNotification.js';
+import { extensionOf, normalizeSavePath, isExternalFormat } from './saveAsPath.js';
 
 // 保存纪元：每次 markDirty 自增。异步写盘完成后只有纪元未变（期间没有新编辑）
 // 才允许 markClean，否则会把写盘期间产生的新改动误标为"已保存"。
@@ -1021,8 +1022,12 @@ function _notifySaveWarnings(warnings) {
  * 串行化与"用哪条路径"是两件独立的事，不能只有一条路径排队。
  */
 async function _writeProjectTo(filePath, opts = {}) {
-  const ext = (String(filePath || '').split('.').pop() || '').toLowerCase();
-  const viaPlugin = !BUILTIN_PROJECT_EXTENSIONS.includes(ext);
+  // 只看最后一段文件名的扩展名。原来用 split('.').pop() 会把目录里的点
+  // （C:\a.b\proj）算进去，无后缀路径更会返回整段路径，两者都会被误判成
+  // 插件格式，交给 saveDocument 后回 FILE_NOT_HANDLED —— 表现就是
+  // 「另存为保存成功，再打开却报错」。
+  const ext = extensionOf(filePath);
+  const viaPlugin = ext !== '' && !BUILTIN_PROJECT_EXTENSIONS.includes(ext);
   // 未显式指定时按"会不会丢音频"决定：自动保存与就地 Ctrl+S 都不经过保存
   // 选项对话框，这条默认值是它们唯一的依据。
   const embedAccompanimentAudio = opts.embedAccompanimentAudio === undefined
@@ -1094,25 +1099,44 @@ export async function saveProjectAs() {
       const result = await window.electronAPI.showSaveDialog({
         filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj'] }],
         // 让"另存为"也能选插件格式：主进程把 registry 里 role=save/both 的
-        // 扩展名并进来。渲染层不维护这份知识 —— 插件装/卸后两边不会对不上。
+        // 扩展名并进来，但只单列、绝不并入第一项。第一项代表宿主原生格式
+        // "SXSEditor Project (*.sxsproj)"；一旦把 .vpr/.svp 等并进去，用户
+        // 看到的就是"工程文件的后缀名包括了所有支持打开的后缀"，默认落点也
+        // 会变成有损的外部格式（伴奏不写回）。插件装/卸的知识仍只在主进程。
         includePluginFormats: true,
+        extendFirstFilter: false,
         defaultPath: state.currentProjectFilePath || undefined,
       });
       if (!result.canceled && result.filePath) {
+        // 部分平台的原生保存框不自动补后缀、用户也可能删掉后缀。没有扩展名
+        // 的路径会被写出端误判成插件格式并回 FILE_NOT_HANDLED，写出的文件
+        // 之后也打不开；统一补宿主默认格式。已有扩展名（含用户主动选的外部
+        // 格式）一律原样保留。
+        const filePath = normalizeSavePath(result.filePath);
+        // 外部格式（.vpr/.svp/.vsqx/.sv2）不写伴奏音频，插件只在 codec.write
+        // 里留一条"伴奏不会写回"的告警 —— 那是**保存之后**才看得到的，用户
+        // 往往先发现伴奏没了。这里在写盘前把后果讲清楚，并给出无损选项。
+        if (isExternalFormat(filePath)
+          && trackManager.getSingers().some((s) => s && s.type === 'accompaniment')) {
+          const proceed = await showConfirmDialog(
+            t('main.saveExternalFormatDropsAccompaniment', { ext: extensionOf(filePath).toUpperCase() }),
+          );
+          if (!proceed) return { saved: false, canceled: true };
+        }
         const epoch = _saveEpoch;
-        await _writeProjectTo(result.filePath, {
+        await _writeProjectTo(filePath, {
           embedSingerFiles: saveOptions.embedSingerFiles,
           embedAccompanimentAudio: saveOptions.embedAccompanimentAudio,
         });
         // projectImportSource 不清：它带着 extSchema 与文档级 ext，是**数据**而不是
         // "当前格式"的标记。存成 .sxsproj 之后这些数据仍要跟着走，否则
         // `sv2 → sxsproj → sv2` 这一趟会丢插件私有字段。
-        state.currentProjectFilePath = result.filePath;
+        state.currentProjectFilePath = filePath;
         // 写盘期间若有新编辑，不能清掉 dirty。
         if (epoch === _saveEpoch) markClean();
         // 另存为换了目标格式，旧的失败原因与新文件无关，复位。
         resetAutoSaveNotification();
-        console.log('Project saved to', result.filePath);
+        console.log('Project saved to', filePath);
         return { saved: true, canceled: false };
       }
       return { saved: false, canceled: true };

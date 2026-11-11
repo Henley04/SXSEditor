@@ -294,6 +294,7 @@ export default {
     projectPluginSaveFailed: '插件无法保存该文件',
     projectPluginUnavailable: '插件系统不可用，无法保存该格式',
     projectSaveWarnings: '文件已保存，但有 {count} 项内容未能完整写入：',
+    saveExternalFormatDropsAccompaniment: '保存为 {ext} 格式不会写入伴奏音频，重新打开后伴奏将丢失。建议改存为 SXSEditor 工程（.sxsproj）以保留伴奏。仍要继续吗？',
     projectNotAProject: '这个文件不是 SXSEditor 工程（缺少 project / singers / fragments 字段）',
     projectFilterAll: '所有支持的格式',
     relocateSingerFile: '重新选定歌手文件',

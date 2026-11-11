@@ -296,6 +296,7 @@ export default {
     projectPluginSaveFailed: 'The plugin could not save this file',
     projectPluginUnavailable: 'The plugin system is unavailable; this format cannot be saved',
     projectSaveWarnings: 'Saved, but {count} item(s) could not be written in full:',
+    saveExternalFormatDropsAccompaniment: 'Saving to {ext} will not write the accompaniment audio; it will be missing when the file is reopened. Save as an SXSEditor project (.sxsproj) to keep it. Continue anyway?',
     projectNotAProject: 'This is not a SXSEditor project (missing project / singers / fragments)',
     projectFilterAll: 'All supported formats',
     relocateSingerFile: 'Relocate Singer File',
