@@ -30,6 +30,7 @@
  */
 
 import { hashNumberArray, hashString } from '../shared/hashSignature.js';
+import { computePromptCondSignature } from '../shared/promptCondSignature.js';
 import { computeActiveClippedNotes } from '../shared/activeNotes.js';
 import { computeAudibility } from '../shared/trackAudibility.js';
 import { buildMelPostprocessPayload, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
@@ -122,6 +123,9 @@ export function singerVoiceSignature(singer) {
     hashBuffer(singer.wavBuffer),
     hashNotes(singer.midiNotes),
     hashBuffer(singer.f0Data),
+    // prompt cond 还依赖 singerData 的歌词/F0/trimOffset；与主进程缓存键共用
+    // 同一签名实现，避免任一份标注变化后仍复用旧播放缓存。
+    computePromptCondSignature(singer.singerData, singer.midiNotes, singer.f0Data, undefined),
   ].join('/');
 }
 

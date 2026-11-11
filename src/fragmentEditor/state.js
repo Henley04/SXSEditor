@@ -30,6 +30,9 @@ let fragmentExclusiveRaf = null;
 let fragmentAudioSettings = null;
 
 let wavFileBuffer = null;
+// 当前歌手的 .sxssinger 标注（singerData / midiNotes / f0Data）。分片编辑器
+// 用它构建 prompt cond；没有标注时保持旧的 prompt cond=0 行为。
+let singerAnnotation = null;
 
 let currentFragment = null;
 let currentProject = null;
@@ -228,6 +231,8 @@ export function setFragmentAudioSettings(v) { fragmentAudioSettings = v; }
 
 export function getWavFileBuffer() { return wavFileBuffer; }
 export function setWavFileBuffer(v) { wavFileBuffer = v; }
+export function getSingerAnnotation() { return singerAnnotation; }
+export function setSingerAnnotation(v) { singerAnnotation = v; }
 
 export function getCurrentFragment() { return currentFragment; }
 export function setCurrentFragment(v) { currentFragment = v; }

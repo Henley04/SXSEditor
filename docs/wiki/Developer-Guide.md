@@ -233,6 +233,8 @@ Binary audio data uses `Float32Array` transfer for low latency.
 
 Key constants: `SAMPLE_RATE=24000`, `HOP_SIZE=480`, `EMBED_DIM=512`, `COND_DIM=1024`.
 
+**Prompt conditioning**: when the singer has `.sxssinger` annotations (`singerData` + `midiNotes` + `f0Data`), `buildPromptSequence()` builds the prompt token/pitch/type/F0 sequence and aligns it to the reference mel on the original WAV timeline. Prompt and target tokens are encoded together (four encoders → preflow → `mel2token` expansion → `cond_emb`), matching upstream `SoulXSinger.infer()`. The full reference prompt is used by default; `maxPromptFrames > 0` is an explicit opt-in cap. Without annotations, the prompt section falls back to zero-filled cond.
+
 ### Diffusion Samplers
 
 `src/inference/pipeline/samplers/` is a pluggable ODE-solver abstraction for the flow-matching diffusion loop. The model outputs a velocity field `flow_pred = v(x, t)`; sampling solves `dx/dt = v(x, t)` with `t` going 0 → 1 (equivalent to the paper's reverse integration). The solver only decides *when* to call `diffStep` and *how* to combine predictions into the `xt` delta — CFG / Rescale / tensor lifecycle stay with the caller, so both the ORT/DML path (`pipeline/diffusion.js`) and the WebNN/NPU path (`webnn/diffusion.js`) share one algorithm.

@@ -552,7 +552,7 @@ async function cmdSynthProject(opts) {
   // ---- 歌手参考（工程自带；缺失就退化为纯音符合成）----
   const singerMeta = (proj.singers || []).find(s => s.id === frag.singerId) || null;
   const singerPath = opts.singer || (singerMeta && singerMeta.singerFilePath) || null;
-  let refAudioWavBuffer = null, refF0Data = null, refMidiNotes = null;
+  let refAudioWavBuffer = null, refF0Data = null, refMidiNotes = null, refSingerData = null;
   let singerName = null, singerLanguage = null;
   if (singerPath && fs.existsSync(singerPath)) {
     const sj = JSON.parse(fs.readFileSync(singerPath, 'utf-8'));
@@ -561,6 +561,7 @@ async function cmdSynthProject(opts) {
     if (sj.wavBase64) refAudioWavBuffer = Buffer.from(sj.wavBase64, 'base64');
     refF0Data = Array.isArray(sj.f0Data) ? sj.f0Data : null;
     refMidiNotes = Array.isArray(sj.midiNotes) ? sj.midiNotes : null;
+    refSingerData = sj.singerData && typeof sj.singerData === 'object' ? sj.singerData : null;
     log(`singer     : ${singerName} lang=${singerLanguage} ref=${refAudioWavBuffer ? fmtBytes(refAudioWavBuffer.length) : 'none'} f0=${refF0Data ? refF0Data.length : 0} midi=${refMidiNotes ? refMidiNotes.length : 0}`);
   } else {
     log(`singer     : none (${singerPath || 'no singerFilePath'}) → 无参考音色，只反映音符层面的误差`);
@@ -632,6 +633,7 @@ async function cmdSynthProject(opts) {
       refAudioWavBuffer,
       refF0Data,
       refMidiNotes,
+      refSingerData,
       singerId: frag.singerId || null,
       onProgress: (p) => { if (p % 25 === 0) log(`[progress] ${p}%`); },
     };

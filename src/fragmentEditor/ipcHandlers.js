@@ -17,6 +17,7 @@ import {
   getCurrentProject,
   setScrollY,
   setWavFileBuffer,
+  setSingerAnnotation,
   setPitchCurveSnapshotBeforeDrag,
   setEnvelopeSnapshotBeforeDrag,
   setDragOperation,
@@ -147,6 +148,7 @@ function applyRoutingChange(fragment, data) {
   if (typeof data.color === 'string') fragment.color = data.color;
   if (data.voice) {
     setWavFileBuffer(data.voice.wavBuffer || null);
+    setSingerAnnotation(data.voice.singerAnnotation || null);
     setTrackBackend(normalizeTrackBackend(data.voice.backend));
     getPhonemeCache().clear();
     invalidateTimbreCache();
@@ -317,6 +319,9 @@ async function handleFragmentData(data) {
   if (data.wavBuffer) {
     setWavFileBuffer(data.wavBuffer);
   }
+  // 歌手标注（singerData / midiNotes / f0Data）用于 prompt cond；老工程没有该
+  // 字段时置 null，保持旧的 prompt cond=0 行为。
+  setSingerAnnotation(data.singerAnnotation || null);
 
   getPhonemeCache().clear();
   resizeCanvases();
