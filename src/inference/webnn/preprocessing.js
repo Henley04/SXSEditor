@@ -18,11 +18,19 @@ import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trim
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @returns {{ combinedCond: Float32Array, totalCondFrames: number, totalFramesWithPrompt: number }}
  */
-export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null, scoreMode = false }) {
+export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null, scoreMode = false, pitchControlMode = null }) {
     await ensureOrt();
     const ort = getOrt();
 
     const tEnc0 = performance.now();
+
+    // 官方 control 互斥：score → note_pitch 有效 / f0 全 0；
+    // melody（manual）→ f0 有效 / note_pitch 全 0。
+    const mode = pitchControlMode === 'score' || pitchControlMode === 'manual'
+        ? pitchControlMode
+        : (scoreMode ? 'score' : null);
+    const isScore = mode === 'score';
+    const isMelody = mode === 'manual';
 
     // Static-shape encoders/preflow are fixed [1, NPU_STATIC_SEQ_LEN]. If prompt
     // tokens do not fit alongside the target, fall back to zero-filled prompt cond.
@@ -47,10 +55,10 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     if (hasPrompt) {
         for (let i = 0; i < ptTokenCount; i++) {
             phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i] || 0);
-            pitchIds[i] = BigInt(promptSeq.notePitchSeq[i] || 0);
+            if (!isMelody) pitchIds[i] = BigInt(promptSeq.notePitchSeq[i] || 0);
             typeIds[i] = BigInt(promptSeq.noteTypeSeq[i] || 0);
         }
-        if (!scoreMode) {
+        if (!isScore) {
             // score 模式下 prompt 侧 f0 同样置 0 —— 官方 control="score" 把
             // gt_f0 / pt_f0 一起 zeros_like，参考音频的音高不参与条件。
             for (let i = 0; i < ptFrameCount; i++) {
@@ -60,10 +68,10 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     }
     for (let i = 0; i < tokenCount; i++) {
         phonemeIds[ptTokenCount + i] = BigInt(sequences.noteTextSeq[i]);
-        pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
+        if (!isMelody) pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
         typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
     }
-    if (!scoreMode) {
+    if (!isScore) {
         for (let i = 0; i < totalFrames; i++) {
             f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
         }

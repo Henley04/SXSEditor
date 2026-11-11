@@ -1123,7 +1123,19 @@ class Preprocessing {
     /**
      * Run all encoders and produce the combined condition embedding
      */
-    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false, scoreMode = false, promptSeq = null) {
+    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false, scoreMode = false, promptSeq = null, pitchControlMode = null) {
+        // 官方 infer() 的两种 control 是互斥的：
+        //   score  —— note_pitch 有效，f0 全 0；
+        //   melody —— f0 有效，note_pitch 全 0（App 里叫 manual）。
+        // 之前 manual 同时喂 note_pitch + f0，等于多给了一套阶梯音高条件，
+        // 与官方 melody 分布不一致。pitchControlMode 传入后按官方语义屏蔽其中一路。
+        // 不传时保留旧的 scoreMode 行为，兼容诊断脚本/旧调用方。
+        const mode = pitchControlMode === 'score' || pitchControlMode === 'manual'
+            ? pitchControlMode
+            : (scoreMode ? 'score' : null);
+        const isScore = mode === 'score';
+        const isMelody = mode === 'manual';
+
         // 静态形状的 4 个 encoder / preflow 固定 [1, NPU_STATIC_SEQ_LEN]。prompt
         // token 与 target token 合起来放不下时，退回旧的 prompt cond 置零路径，
         // 而不是把超长张量喂给静态引擎。
@@ -1145,17 +1157,18 @@ class Preprocessing {
         if (hasPrompt) {
             for (let i = 0; i < ptTokenCount; i++) {
                 phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i]);
-                pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
+                // melody（manual）模式：note_pitch 条件整体屏蔽，只保留 f0
+                if (!isMelody) pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
                 typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
             }
         }
         for (let i = 0; i < tokenCount; i++) {
             const o = ptTokenCount + i;
             phonemeIds[o] = BigInt(sequences.noteTextSeq[i]);
-            pitchIds[o] = BigInt(sequences.notePitchSeq[i]);
+            if (!isMelody) pitchIds[o] = BigInt(sequences.notePitchSeq[i]);
             typeIds[o] = BigInt(sequences.noteTypeSeq[i]);
         }
-        if (scoreMode) {
+        if (isScore) {
             // score 模式：f0 条件整条置 0（bin 0 = unvoiced），与官方
             // SoulXSinger.infer(control="score") 中 gt_f0/pt_f0 被 zeros_like
             // 覆盖后的结果逐位一致。音高只由 note_pitch_encoder 提供，F0 曲线

@@ -2273,7 +2273,7 @@ class OnnxSVSPipeline {
     }
 
     async _runEncoder(sequences, tokenCount, totalFrames, ptFrameCount = 0, promptSeq = this._currentPromptSeq) {
-        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes, this._pitchControlMode === 'score', promptSeq);
+        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes, this._pitchControlMode === 'score', promptSeq, this._pitchControlMode);
     }
 
     /**
@@ -3003,6 +3003,7 @@ class OnnxSVSPipeline {
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
                 scoreMode: this._pitchControlMode === 'score',
+                pitchControlMode: this._pitchControlMode,
             }, webnnOnProgress);
             // Forward WebNN warnings (e.g. NPU static shape truncation)
             if (result.warnings && result.warnings.length > 0) {
@@ -3319,6 +3320,7 @@ class OnnxSVSPipeline {
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
                 dynamicThresholdOpts: this._currentDynamicThresholdOpts,
                 scoreMode: this._pitchControlMode === 'score',
+                pitchControlMode: this._pitchControlMode,
             },
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
@@ -3329,6 +3331,7 @@ class OnnxSVSPipeline {
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
                 dynamicThresholdOpts: this._currentDynamicThresholdOpts,
                 scoreMode: this._pitchControlMode === 'score',
+                pitchControlMode: this._pitchControlMode,
             },
         ], webnnOnProgress);
         const ms = performance.now() - t0;

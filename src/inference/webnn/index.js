@@ -60,6 +60,7 @@ async function _runSynthesisUnlocked(params) {
         cfgScheduleOpts = null,
         dynamicThresholdOpts = null,
         scoreMode = false,
+        pitchControlMode = null,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -94,7 +95,7 @@ async function _runSynthesisUnlocked(params) {
     if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
     const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
-        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq, scoreMode,
+        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq, scoreMode, pitchControlMode,
     });
 
     // ===== Stage 2: Diffusion Loop =====
@@ -220,6 +221,11 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         }
 
         // P1 fix: Merge prompt + target token sequences when promptSeq is available
+        const batchPitchMode = params.pitchControlMode === 'score' || params.pitchControlMode === 'manual'
+            ? params.pitchControlMode
+            : (params.scoreMode ? 'score' : null);
+        const batchIsScore = batchPitchMode === 'score';
+        const batchIsMelody = batchPitchMode === 'manual';
         const hasPrompt = batchPromptSeq && ptFrameCount > 0 && batchPromptSeq.tokenCount > 0;
         const ptTokenCount = hasPrompt ? batchPromptSeq.tokenCount : 0;
         const combinedTokenCount = ptTokenCount + tokenCount;
@@ -233,20 +239,24 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         if (hasPrompt) {
             for (let i = 0; i < ptTokenCount; i++) {
                 phonemeIds[i] = BigInt(batchPromptSeq.noteTextSeq[i]);
-                pitchIds[i] = BigInt(batchPromptSeq.notePitchSeq[i]);
+                if (!batchIsMelody) pitchIds[i] = BigInt(batchPromptSeq.notePitchSeq[i]);
                 typeIds[i] = BigInt(batchPromptSeq.noteTypeSeq[i]);
             }
-            for (let i = 0; i < ptFrameCount; i++) {
-                f0IdsArr[i] = BigInt(batchPromptSeq.f0Ids[i]);
+            if (!batchIsScore) {
+                for (let i = 0; i < ptFrameCount; i++) {
+                    f0IdsArr[i] = BigInt(batchPromptSeq.f0Ids[i]);
+                }
             }
         }
         for (let i = 0; i < tokenCount; i++) {
             phonemeIds[ptTokenCount + i] = BigInt(sequences.noteTextSeq[i]);
-            pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
+            if (!batchIsMelody) pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
             typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
         }
-        for (let i = 0; i < totalFrames; i++) {
-            f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+        if (!batchIsScore) {
+            for (let i = 0; i < totalFrames; i++) {
+                f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+            }
         }
 
         const bEncSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;

@@ -239,7 +239,12 @@ describe('prompt cond alignment', () => {
       };
       return {
         noteTextEncoder: textEncoder,
-        notePitchEncoder: zeroEncoder,
+        notePitchEncoder: {
+          run: async (feeds) => {
+            capture.pitch = Array.from(feeds.input_ids.data, (v) => Number(v));
+            return { embeddings: new ort.Tensor('float32', new Float32Array(feeds.input_ids.dims[1] * EMBED_DIM), [1, feeds.input_ids.dims[1], EMBED_DIM]) };
+          },
+        },
         noteTypeEncoder: zeroEncoder,
         f0Encoder: {
           run: async (feeds) => {
@@ -325,13 +330,25 @@ describe('prompt cond alignment', () => {
     it('score mode zeros prompt+target f0 but keeps prompt text cond', async () => {
       const capture = {};
       const seq = makeSequences();
-      await prep.runEncoder(makeSessions(capture), seq, 3, 4, false, 2, false, true, makePromptSeq());
+      await prep.runEncoder(makeSessions(capture), seq, 3, 4, false, 2, false, true, makePromptSeq(), 'score');
 
       expect(capture.f0).to.deep.equal([0, 0, 0, 0, 0, 0]);
+      // prompt 3 tok + target 3 tok 的 note_pitch 都保留
+      expect(capture.pitch).to.deep.equal([0, 55, 57, 0, 60, 62]);
       // score: f0 bin 0 仍有 embedding（mock=1）
       expect(capture.cond[0]).to.be.closeTo(2, 1e-6);
       // target frame 0 -> target token 3 (text=4) + f0 bin0 (mock=1) = 5
       expect(capture.cond[2 * EMBED_DIM]).to.be.closeTo(5, 1e-6);
+    });
+
+    it('manual (upstream melody) zeros prompt+target note_pitch but keeps f0', async () => {
+      const capture = {};
+      const seq = makeSequences();
+      await prep.runEncoder(makeSessions(capture), seq, 3, 4, false, 2, false, false, makePromptSeq(), 'manual');
+
+      expect(capture.f0).to.deep.equal([5, 6, 17, 18, 19, 20]);
+      // 官方 melody 把 note_pitch 整条 zeros_like，prompt 和 target 都一样
+      expect(capture.pitch).to.deep.equal([0, 0, 0, 0, 0, 0]);
     });
   });
 });

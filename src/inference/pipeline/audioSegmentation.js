@@ -466,7 +466,7 @@ class AudioSegmentation {
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
         const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}v2`;
     }
 
     /**

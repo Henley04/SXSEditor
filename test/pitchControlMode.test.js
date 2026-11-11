@@ -130,7 +130,12 @@ describe('runEncoder 在 score 模式下把 f0 条件清零', () => {
     });
     return {
       noteTextEncoder: mk('embeddings'),
-      notePitchEncoder: mk('embeddings'),
+      notePitchEncoder: {
+        run: async (feeds) => {
+          capture.pitch = Array.from(feeds.input_ids.data, (v) => Number(v));
+          return { embeddings: emb(feeds.input_ids.dims[1]) };
+        },
+      },
       noteTypeEncoder: mk('embeddings'),
       f0Encoder: {
         run: async (feeds) => {
@@ -168,17 +173,21 @@ describe('runEncoder 在 score 模式下把 f0 条件清零', () => {
     const capture = {};
     const prep = new Preprocessing(new TextProcessing());
     const seq = makeSequences([17, 18, 19, 20]);
-    await prep.runEncoder(makeSessions(capture), seq, seq.tokenCount, 4, false, 0, false, true);
+    await prep.runEncoder(makeSessions(capture), seq, seq.tokenCount, 4, false, 0, false, true, null, 'score');
     expect(capture.f0).to.deep.equal([0, 0, 0, 0]);
+    expect(capture.pitch).to.deep.equal([0, 60, 62]);
     // sequences.f0Ids 不能被就地改写：SiFiGAN vocoder 还要用真实 f0
     expect(Array.from(seq.f0Ids)).to.deep.equal([17, 18, 19, 20]);
   });
 
-  it('manual：f0 输入按曲线原样下发', async () => {
+  it('manual（官方 melody）：f0 按曲线下发，note_pitch 整条置 0', async () => {
     const capture = {};
     const prep = new Preprocessing(new TextProcessing());
     const seq = makeSequences([17, 18, 19, 20]);
-    await prep.runEncoder(makeSessions(capture), seq, seq.tokenCount, 4, false, 0, false, false);
+    await prep.runEncoder(makeSessions(capture), seq, seq.tokenCount, 4, false, 0, false, false, null, 'manual');
     expect(capture.f0).to.deep.equal([17, 18, 19, 20]);
+    // 官方 infer(control="melody") 会把 note_pitch 变成 zeros_like；
+    // manual 不能再额外喂一套阶梯音高，否则和官方条件分布不一致。
+    expect(capture.pitch).to.deep.equal([0, 0, 0]);
   });
 });

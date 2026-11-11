@@ -190,7 +190,7 @@ export function computeFragmentSignature(fragment, singer, bpm) {
     fragment.startTime,
     fragment.duration,
     notesHash,
-    pitchMode,
+    pitchMode + 'v2',
     f0Hash,
     ppKey,
   ].join('~');
