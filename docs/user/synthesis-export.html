@@ -92,8 +92,13 @@
       <ul>
         <li><span data-lang="en"><strong>▶ Play</strong>: Start synthesis and playback. On first play, the SVS pipeline initializes (loads models into GPU).</span><span data-lang="zh"><strong>▶ Play</strong>：开始合成与播放。首次播放时，SVS 管线会初始化（将模型加载到 GPU）。</span></li>
         <li><span data-lang="en"><strong>⏸ Pause</strong>: Pause playback. Resume from the paused position.</span><span data-lang="zh"><strong>⏸ Pause</strong>：暂停播放。从暂停位置继续。</span></li>
-        <li><span data-lang="en"><strong>⏹ Stop</strong>: Stop playback and reset to the beginning.</span><span data-lang="zh"><strong>⏹ Stop</strong>：停止播放并重置到开头。</span></li>
+        <li><span data-lang="en"><strong>⏹ Stop</strong>: Stop playback and reset to the beginning. The rendered audio is kept, so pressing Play again resumes immediately instead of re-running inference. It is only discarded when synthesis itself is cancelled.</span><span data-lang="zh"><strong>⏹ Stop</strong>：停止播放并重置到开头。已渲染的音频会被保留，再按 Play 直接续播，不必重跑推理；只有「合成过程被取消」时才会丢弃。</span></li>
+        <li><span data-lang="en"><strong>⟳ Retake</strong>: Re-render the current performance with the same settings and play the new take. Unlike editing a parameter, this deliberately bypasses cached results, so repeated retakes produce different results from the same input.</span><span data-lang="zh"><strong>⟳ 重新合成</strong>：用当前参数重新渲染一版演奏并播放。它有意绕过缓存，因此不改任何参数、连续点几次也能得到不同结果。</span></li>
       </ul>
+      <p>
+        <span data-lang="en">The playback cache is keyed on the inputs that actually change the vocal audio: notes, pitch curves, singer voice files, reference audio, tempo, diffusion settings, and <strong>model precision</strong>. Switching between FP32 / FP16 / INT8 therefore triggers a fresh synthesis instead of replaying the previous precision's result.</span>
+        <span data-lang="zh">播放缓存以「真正会改变人声音频的输入」为键：音符、音高曲线、歌手音色文件、参考音频、速度、扩散参数，以及<strong>模型精度</strong>。因此在 FP32 / FP16 / INT8 之间切换会触发重新合成，而不是继续播放上一精度的结果。</span>
+      </p>
       <h3>
         <span data-lang="en">Fragment-Level Playback</span>
         <span data-lang="zh">片段级播放</span>
