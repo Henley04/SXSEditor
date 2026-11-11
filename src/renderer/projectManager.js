@@ -255,6 +255,9 @@ async function applyAccompanimentDataToSinger(singer, audioData) {
     singer.analysisMono = null;
     singer.audioBuffer = decoded.audioChannels[0]; // compatibility: waveform display only
     singer.audioSampleRate = decoded.sampleRate;
+    // 声道数随解码结果走：工程里存的值可能来自另一台机器/另一份文件，混音时
+    // 以实际声道为准，否则立体声伴奏会被当成单声道处理。
+    singer.numberOfChannels = decoded.numberOfChannels;
     singer.audioDuration = audioData.audioDuration || decoded.duration;
   } catch (e) {
     console.error('Failed to decode embedded accompaniment audio:', e);
@@ -343,6 +346,9 @@ export async function loadAccompanimentFile(singerId, buffer, filePath) {
     audioDuration: audioData.duration,
     numberOfChannels: audioData.numberOfChannels,
     audioSampleRate: audioData.sampleRate,
+    // 换了音频源：之前那份内嵌 base64 已经与 audioChannels 不同源，必须作废，
+    // 否则下次保存（复用已有 base64 的那条快路径）会把旧音频写回工程。
+    embeddedAudioData: null,
   });
   const singer = trackManager.getSinger(singerId);
   if (singer) {
@@ -560,29 +566,40 @@ export async function buildProjectObject(embedSingerFiles = false, embedAccompan
     if (singer.type === 'accompaniment') {
       // Accompaniment track: optionally embed audio as base64 WAV
       if (embedAccompanimentAudio && singer.audioBuffer) {
-        let wavBase64 = null;
-        try {
-          const { encodeWav } = require('../audio/wavEncoder.js');
-          const channels = singer.audioChannels?.length ? singer.audioChannels : [singer.audioBuffer];
-          const frames = channels[0].length;
-          const interleaved = new Float32Array(frames * channels.length);
-          for (let i = 0; i < frames; i++) {
-            for (let ch = 0; ch < channels.length; ch++) interleaved[i * channels.length + ch] = channels[ch][i] || 0;
+        // 优先复用工程里已有的 base64。
+        //
+        // 伴奏没有"编辑"路径 —— 只有"换一个音频文件"，而那条路径
+        // （loadAccompanimentFile）会把 embeddedAudioData 置空。所以一份存在的
+        // base64 必然与 audioChannels 同源，可以直接搬过去。这不是小优化：
+        // 一首歌的伴奏是几十 MB，每次自动保存都重编码一次 WAV 再 base64
+        // （几百毫秒 + 一份同等大小的临时字符串）会让编辑明显发涩。
+        let wavBase64 = singer.embeddedAudioData && typeof singer.embeddedAudioData.wavBase64 === 'string'
+          ? singer.embeddedAudioData.wavBase64
+          : null;
+        if (!wavBase64) {
+          try {
+            const { encodeWav } = require('../audio/wavEncoder.js');
+            const channels = singer.audioChannels?.length ? singer.audioChannels : [singer.audioBuffer];
+            const frames = channels[0].length;
+            const interleaved = new Float32Array(frames * channels.length);
+            for (let i = 0; i < frames; i++) {
+              for (let ch = 0; ch < channels.length; ch++) interleaved[i * channels.length + ch] = channels[ch][i] || 0;
+            }
+            const wavBytes = encodeWav(interleaved, singer.audioSampleRate || SAMPLE_RATE, channels.length);
+            const blob = new Blob([wavBytes]);
+            wavBase64 = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const result = reader.result;
+                const base64 = result.substring(result.indexOf(',') + 1);
+                resolve(base64);
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch (e) {
+            console.error('Failed to encode accompaniment audio:', e);
           }
-          const wavBytes = encodeWav(interleaved, singer.audioSampleRate || SAMPLE_RATE, channels.length);
-          const blob = new Blob([wavBytes]);
-          wavBase64 = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const result = reader.result;
-              const base64 = result.substring(result.indexOf(',') + 1);
-              resolve(base64);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-        } catch (e) {
-          console.error('Failed to encode accompaniment audio:', e);
         }
         singerObj.embeddedAudioData = {
           wavBase64,
@@ -855,7 +872,8 @@ export function showSaveProjectOptionsDialog() {
       `;
       const accEmbedCheckbox = document.createElement('input');
       accEmbedCheckbox.type = 'checkbox';
-      accEmbedCheckbox.checked = false;
+      // 默认值与就地保存的规则一致：没有源文件的伴奏不嵌入就会丢，默认勾上。
+      accEmbedCheckbox.checked = needsAccompanimentEmbed();
       const accEmbedLabel = document.createElement('span');
       accEmbedLabel.textContent = t('main.embedAccompanimentAudio');
       accEmbedOption.appendChild(accEmbedCheckbox);
@@ -967,7 +985,24 @@ function _checkSaveResult(res) {
   }
 }
 
-/** 保存/导出后，把插件报的"没写进去的东西"显示出来。 */
+/**
+ * 就地保存时必须嵌入伴奏音频吗？
+ *
+ * 伴奏音频只有两种存在方式：源文件路径（下次打开能重新解码）或工程内嵌 base64。
+ * 从外部工程导入的伴奏（如 .vpr 里的 `Project/Audio/*.wav`）、以及上次以嵌入
+ * 方式保存的伴奏，都没有源路径 —— 这种情况下不嵌入就是**静默丢音频**：用户按
+ * 一次 Ctrl+S，重开工程伴奏就空了。所以默认值由"有没有可重新加载的源文件"决定，
+ * 而不是照抄上一次的勾选。
+ */
+function needsAccompanimentEmbed() {
+  return trackManager.getSingers().some((singer) => singer
+    && singer.type === 'accompaniment'
+    && !singer.audioFilePath
+    && (singer.audioBuffer || (Array.isArray(singer.audioChannels) && singer.audioChannels.length)));
+}
+
+/**
+ * 保存/导出后，把插件报的"没写进去的东西"显示出来。 */
 function _notifySaveWarnings(warnings) {
   if (!Array.isArray(warnings) || !warnings.length) return;
   const head = t('main.projectSaveWarnings', { count: warnings.length });
@@ -988,9 +1023,14 @@ function _notifySaveWarnings(warnings) {
 async function _writeProjectTo(filePath, opts = {}) {
   const ext = (String(filePath || '').split('.').pop() || '').toLowerCase();
   const viaPlugin = !BUILTIN_PROJECT_EXTENSIONS.includes(ext);
+  // 未显式指定时按"会不会丢音频"决定：自动保存与就地 Ctrl+S 都不经过保存
+  // 选项对话框，这条默认值是它们唯一的依据。
+  const embedAccompanimentAudio = opts.embedAccompanimentAudio === undefined
+    ? needsAccompanimentEmbed()
+    : !!opts.embedAccompanimentAudio;
 
   if (!viaPlugin) {
-    const data = await serializeProject(opts.embedSingerFiles, opts.embedAccompanimentAudio);
+    const data = await serializeProject(opts.embedSingerFiles, embedAccompanimentAudio);
     await _enqueueProjectWrite(async () => {
       const res = await window.electronAPI.saveFile(filePath, data);
       _checkSaveResult(res);
@@ -1004,7 +1044,7 @@ async function _writeProjectTo(filePath, opts = {}) {
   const api = window.electronAPI?.pluginHost;
   if (!api?.saveDocument) throw new Error(t('main.projectPluginUnavailable'));
   return _enqueueProjectWrite(async () => {
-    const { out } = await buildProjectObject(opts.embedSingerFiles, opts.embedAccompanimentAudio);
+    const { out } = await buildProjectObject(opts.embedSingerFiles, embedAccompanimentAudio);
     const res = await api.saveDocument(filePath, out, { target: 'save' });
     if (!res || !res.ok) {
       const err = new Error((res && res.message) || t('main.projectPluginSaveFailed'));

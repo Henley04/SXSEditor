@@ -2,8 +2,8 @@
   "apiVersion": 2,
   "id": "official-project-import",
   "name": "Official Project Import (VOCALOID / Synthesizer V)",
-  "version": "1.1.0",
-  "description": "官方插件：打开与保存 VOCALOID3/4 的 .vsqx、VOCALOID5/6 的 .vpr、Synthesizer V / SV2 的 .svp 工程（音符、歌词、音高曲线、速度、拍号、轨道与分片）。写回外部格式为有损保存，插件会逐条告警并建议另存为宿主原生格式。格式结构参考 Apache-2.0 的开源实现 UtaFormatix，解析与编码代码为独立重写。",
+  "version": "1.1.1",
+  "description": "官方插件：打开与保存 VOCALOID3/4 的 .vsqx、VOCALOID5/6 的 .vpr、Synthesizer V / SV2 的 .svp 工程（音符、歌词、音高曲线、速度、拍号、轨道与分片；.vpr 里的伴奏音频一并导入为伴奏轨）。写回外部格式为有损保存，插件会逐条告警并建议另存为宿主原生格式。格式结构参考 Apache-2.0 的开源实现 UtaFormatix，解析与编码代码为独立重写。",
   "author": "SXSEditor Official",
   "main": "main.js",
   "engines": {

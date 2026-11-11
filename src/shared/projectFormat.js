@@ -113,8 +113,17 @@ export const PROJECT_DOC_LIMITS = Object.freeze({
   arrayLength: 50000,
   stringLength: 100000,
   depth: 12,
-  /** 克隆后 JSON 序列化的字节上限（100MB）。 */
+  /** 克隆后 JSON 序列化的字节上限（100MB，不含嵌入式音频）。 */
   bytes: 100 * 1024 * 1024,
+  /**
+   * 嵌入式音频（base64）的合计上限。
+   *
+   * 伴奏轨本来就是一整首歌的 WAV：44.1kHz/16bit 立体声约 10MB 每分钟，
+   * base64 再涨 4/3 —— 和"工程数据"根本不是一个量级，所以单独预算，不挤占
+   * `bytes`。256MB 够两三条十分钟级的伴奏；再多就意味着插件在拿工程当音频
+   * 容器用，那不是导入该干的事。
+   */
+  embeddedAudioBytes: 256 * 1024 * 1024,
 });
 
 /**
@@ -122,6 +131,17 @@ export const PROJECT_DOC_LIMITS = Object.freeze({
  * 但一经 Object.assign / 展开就会改写原型链。这里在克隆阶段直接丢弃。
  */
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * 嵌入式音频的键名。
+ *
+ * `wavBase64` 天生是百万字符级的字符串：按 `stringLength` 截断等于把 WAV 剪成
+ * 一段能装进工程、但解出来是噪音的废字节 —— 用户看到的是"伴奏导进来了，播放
+ * 却是爆音"。这类载荷不按字符串长度管，改由 `embeddedAudioBytes` 统一预算，
+ * 超限就整份拒绝（明确失败），绝不截断（静默损坏）。
+ */
+const EMBEDDED_AUDIO_KEYS = new Set(['wavBase64']);
+
 const TIME_SIGNATURE_DENOMS = new Set([1, 2, 4, 8, 16, 32]);
 
 function isPlainObject(v) {
@@ -139,10 +159,11 @@ function isPlainObject(v) {
  *
  * `ext` 子树例外：那里是插件自己的数据，字符串被截断等于"看起来合法但内容已损坏"，
  * 比整条丢掉更危险。所以 ext 下不截断字符串，长度由 `normalizeExtData` 按字节判定。
+ * 嵌入式音频（`wavBase64`）同理不截断，由 `embeddedAudioBytes` 单独预算。
  *
  * 返回 undefined 表示"这一项不该存在"，调用方据此跳过数组元素或对象字段。
  */
-function cloneJson(value, depth, warnings, label, inExt = false) {
+function cloneJson(value, depth, warnings, label, keepLongStrings = false) {
   if (depth > PROJECT_DOC_LIMITS.depth) {
     warnings.push(`${label} 嵌套超过 ${PROJECT_DOC_LIMITS.depth} 层，已截断`);
     return undefined;
@@ -150,7 +171,7 @@ function cloneJson(value, depth, warnings, label, inExt = false) {
   if (value === null) return null;
   const t = typeof value;
   if (t === 'string') {
-    if (!inExt && value.length > PROJECT_DOC_LIMITS.stringLength) {
+    if (!keepLongStrings && value.length > PROJECT_DOC_LIMITS.stringLength) {
       return value.slice(0, PROJECT_DOC_LIMITS.stringLength);
     }
     return value;
@@ -165,7 +186,7 @@ function cloneJson(value, depth, warnings, label, inExt = false) {
     if (value.length > limit) warnings.push(`${label} 长度超过 ${limit}，已截断`);
     const out = [];
     for (let i = 0; i < limit; i++) {
-      const item = cloneJson(value[i], depth + 1, warnings, `${label}[${i}]`, inExt);
+      const item = cloneJson(value[i], depth + 1, warnings, `${label}[${i}]`, keepLongStrings);
       if (item !== undefined) out.push(item);
     }
     return out;
@@ -177,7 +198,8 @@ function cloneJson(value, depth, warnings, label, inExt = false) {
         warnings.push(`${label} 含被忽略的键 ${key}`);
         continue;
       }
-      const item = cloneJson(value[key], depth + 1, warnings, `${label}.${key}`, inExt || key === 'ext');
+      const childKeepLong = keepLongStrings || key === 'ext' || EMBEDDED_AUDIO_KEYS.has(key);
+      const item = cloneJson(value[key], depth + 1, warnings, `${label}.${key}`, childKeepLong);
       if (item !== undefined) out[key] = item;
     }
     return out;
@@ -199,6 +221,37 @@ function normalizeTimeSignature(raw, warnings) {
     return fallback;
   }
   return [n, d];
+}
+
+/**
+ * 嵌入式音频所在的全部位置：伴奏轨（`embeddedAudioData`）与歌手的参考音频
+ * （`embeddedSingerData`）。两者的载荷都是 base64 WAV，预算与统计口径一致。
+ */
+function embeddedAudioBags(singers) {
+  const bags = [];
+  for (const s of singers) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.embeddedAudioData && typeof s.embeddedAudioData === 'object') bags.push(s.embeddedAudioData);
+    if (s.embeddedSingerData && typeof s.embeddedSingerData === 'object') bags.push(s.embeddedSingerData);
+  }
+  return bags.filter((bag) => typeof bag.wavBase64 === 'string' && bag.wavBase64.length > 0);
+}
+
+/** 嵌入音频合计字符数（base64 是 ASCII，一个字符一个字节）。 */
+function embeddedAudioBytes(singers) {
+  return embeddedAudioBags(singers).reduce((sum, bag) => sum + bag.wavBase64.length, 0);
+}
+
+/**
+ * 临时清空嵌入音频，返回恢复函数。
+ * 只用于体积统计，绝不能拿清理后的对象去干别的事。
+ */
+function stripEmbeddedAudio(singers) {
+  const saved = embeddedAudioBags(singers).map((bag) => [bag, bag.wavBase64]);
+  for (const [bag] of saved) bag.wavBase64 = '';
+  return () => {
+    for (const [bag, value] of saved) bag.wavBase64 = value;
+  };
 }
 
 /**
@@ -325,9 +378,26 @@ export function validateProjectDocument(raw) {
   const rootExt = normalizeExtData(raw.ext, warnings, 'ext');
   if (Object.keys(rootExt).length) document.ext = rootExt;
 
+  // 嵌入式音频（伴奏）单独预算，且不参与下面的 JSON 体积统计。
+  const audioBytes = embeddedAudioBytes(singers);
+  if (audioBytes > PROJECT_DOC_LIMITS.embeddedAudioBytes) {
+    return {
+      ok: false,
+      error: `工程内嵌音频合计 ${Math.round(audioBytes / 1024 / 1024)}MB，超过上限 ${PROJECT_DOC_LIMITS.embeddedAudioBytes / 1024 / 1024}MB`,
+      warnings,
+    };
+  }
+
   let bytes = 0;
   try {
-    bytes = JSON.stringify(document).length;
+    // 把音频载荷临时摘掉再统计：否则光是给 50MB 的 base64 做一次 stringify
+    // 就要多分配一份同样大的字符串，只为得到一个"减去载荷后"的数字。
+    const restore = stripEmbeddedAudio(singers);
+    try {
+      bytes = JSON.stringify(document).length;
+    } finally {
+      restore();
+    }
   } catch (err) {
     return { ok: false, error: `工程文档无法序列化：${err.message}`, warnings };
   }

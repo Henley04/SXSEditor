@@ -5,6 +5,12 @@
  * VOCALOID5/6 的 .vpr 其实是 ZIP（中央目录里是 `Project/sequence.json`），
  * 而插件进程不允许带 node_modules，所以这里按 PKZIP 规范自己读中央目录。
  * 支持 stored(0) / deflate(8) 两种存储方式，这两者覆盖了 VOCALOID 的实际输出。
+ *
+ * 按需解压：`.vpr` 里除了工程 JSON，还常有 `Project/Audio/*.wav` 这类素材
+ * （带伴奏的工程必然有）。它们对宿主毫无用处，却动辄几十 MB —— 无差别解压
+ * 既白烧内存，也会被下面的体积上限连坐成"带伴奏就打不开"。所以 readZip
+ * 接受一个 `accept` 谓词：不接受的条目只从中央目录读出名字与声明大小，
+ * 记进 `skipped` 后原样放过，一个字节都不解压。
  */
 const zlib = require('zlib');
 
@@ -29,20 +35,31 @@ function findEndOfCentralDirectory(buffer) {
 
 /**
  * @param {Buffer} buffer
- * @returns {Map<string, Buffer>} 归一化成正斜杠的路径 → 内容
+ * @param {{accept?: (name: string, size: number) => boolean,
+ *          maxEntrySize?: number, maxTotalSize?: number, maxEntries?: number}} [options]
+ *   `accept` 返回 false 的条目不解压，只记进返回值的 `skipped`；
+ *   `size` 是中央目录声明的大小（写入器省略时为压缩后大小，仅作量级参考）。
+ * @returns {{files: Map<string, Buffer>, skipped: Array<{name: string, size: number}>}}
+ *   `files` 归一化成正斜杠的路径 → 内容
  */
-function readZip(buffer) {
+function readZip(buffer, options = {}) {
   if (!isZip(buffer)) throw new Error('不是 ZIP 容器');
   const eocd = findEndOfCentralDirectory(buffer);
   if (eocd < 0) throw new Error('ZIP 缺少中央目录（文件可能被截断）');
 
+  const accept = typeof options.accept === 'function' ? options.accept : null;
+  const maxEntrySize = Number(options.maxEntrySize) > 0 ? Number(options.maxEntrySize) : MAX_ENTRY_SIZE;
+  const maxTotalSize = Number(options.maxTotalSize) > 0 ? Number(options.maxTotalSize) : MAX_TOTAL_SIZE;
+  const maxEntries = Number(options.maxEntries) > 0 ? Number(options.maxEntries) : MAX_ENTRIES;
+
   const count = buffer.readUInt16LE(eocd + 10);
   const dirSize = buffer.readUInt32LE(eocd + 12);
   const dirOffset = buffer.readUInt32LE(eocd + 16);
-  if (count > MAX_ENTRIES) throw new Error('ZIP 条目数量异常');
+  if (count > maxEntries) throw new Error('ZIP 条目数量异常');
   if (dirOffset + dirSize > buffer.length) throw new Error('ZIP 中央目录越界');
 
   const files = new Map();
+  const skipped = [];
   let total = 0;
   let pos = dirOffset;
   for (let i = 0; i < count; i++) {
@@ -59,9 +76,18 @@ function readZip(buffer) {
     const name = buffer.toString('utf8', pos + 46, pos + 46 + nameLen).replace(/\\/g, '/');
     pos += 46 + nameLen + extraLen + commentLen;
 
-    if (uncompressedSize > MAX_ENTRY_SIZE) throw new Error(`ZIP 条目过大：${name}`);
-    total += uncompressedSize;
-    if (total > MAX_TOTAL_SIZE) throw new Error('ZIP 解压后体积超出上限');
+    // VOCALOID 的输出总会填 uncompressedSize；但 data descriptor（标志位 3）
+    // 允许写入器把它留空 —— 那种情况下压缩后大小是唯一的下界，用它做量级判断。
+    const declaredSize = uncompressedSize || compressedSize;
+
+    if (accept && !accept(name, declaredSize)) {
+      skipped.push({ name, size: declaredSize });
+      continue;
+    }
+
+    if (declaredSize > maxEntrySize) throw new Error(`ZIP 条目过大：${name}`);
+    total += declaredSize;
+    if (total > maxTotalSize) throw new Error('ZIP 解压后体积超出上限');
 
     if (localOffset + 30 > buffer.length || buffer.readUInt32LE(localOffset) !== LOCAL_SIG) {
       throw new Error(`ZIP 本地头损坏：${name}`);
@@ -77,13 +103,13 @@ function readZip(buffer) {
     if (method === 0) {
       data = Buffer.from(raw);
     } else if (method === 8) {
-      data = zlib.inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_SIZE });
+      data = zlib.inflateRawSync(raw, { maxOutputLength: maxEntrySize });
     } else {
       throw new Error(`ZIP 压缩方式不支持（${method}）：${name}`);
     }
     files.set(name, data);
   }
-  return files;
+  return { files, skipped };
 }
 
 let CRC_TABLE = null;

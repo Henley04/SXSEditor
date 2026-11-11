@@ -19,8 +19,17 @@ const { validateProjectDocument } = require('../../shared/projectFormat.js');
 const { writeFileAtomic } = require('../atomicWrite.js');
 const store = require('./PluginStateStore.js');
 
-/** 单次能打开的文件上限。工程文件远小于此；超过多半是选错了文件。 */
-const MAX_OPEN_BYTES = 64 * 1024 * 1024;
+/**
+ * 单次能打开的文件上限。
+ *
+ * 宿主自己的 `.sxsproj` 远小于此；但这个上限同时管着**插件接管的外部格式**，
+ * 而那些容器经常把素材一起塞进来：VOCALOID 的 `.vpr` 是 ZIP，带伴奏的工程
+ * 里就躺着一份 `Project/Audio/*.wav`（44.1kHz/16bit 立体声约 10MB 每分钟，
+ * 一首歌三四十 MB 是常态，24bit 或长曲目轻易上百 MB）。按"工程文件不该很大"
+ * 定的 64MB 会把这些完全正常的工程挡在门外，所以放宽到能装下一首十分钟的
+ * 高比特率伴奏。真正的护栏在插件侧：素材不需要解析就按条目跳过，不会被解压。
+ */
+const MAX_OPEN_BYTES = 256 * 1024 * 1024;
 
 /**
  * 单次能写出的字节上限。

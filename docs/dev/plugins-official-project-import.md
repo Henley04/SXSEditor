@@ -1,6 +1,6 @@
 # 官方工程导入插件（VOCALOID / Synthesizer V）
 
-> 插件 id：`official-project-import` · 版本 1.1.0 · 发布者 `SXSEditor Official`
+> 插件 id：`official-project-import` · 版本 1.1.1 · 发布者 `SXSEditor Official`
 >
 > 源码：`plugins/official-project-import/` · 随应用内置，首次启动自动安装
 
@@ -9,7 +9,7 @@
 | 扩展名 | 来源 | 容器 | 版本 | 能力 |
 |---|---|---|---|---|
 | `.vsqx` | VOCALOID 3 / 4 | XML（`vsq3` / `vsq4` 命名空间） | 3.x、4.x | 打开、保存 |
-| `.vpr` | VOCALOID 5 / 6 | ZIP，工程在 `Project/sequence.json` | 5.x、6.x | 打开、保存 |
+| `.vpr` | VOCALOID 5 / 6 | ZIP，工程在 `Project/sequence.json`，伴奏在 `Project/Audio/*.wav` | 5.x、6.x | 打开、保存 |
 | `.svp` | Synthesizer V / SV2 | JSON（可用 `\u0000` 串联多份，取 version 最大者） | 1.x / 2.x 工程 | 打开、保存 |
 
 三种格式都声明 `role: "both"`，既出现在「文件 → 打开工程」，也出现在「另存为」。
@@ -66,6 +66,33 @@
 | PIT + PBS（VOCALOID） | 音高曲线：`相对半音 = PIT × PBS / 8191`，叠加到音符基础音高 |
 | `pitchDelta`（SVP） | 音高曲线：`cent / 100` 半音，叠加到音符基础音高 |
 | 轨道颜色 | 歌手颜色（`0xAARRGGBB` → `#rrggbb`） |
+| VPR 音频轨（`type: 1`，`part.wav` + `part.region`） | 伴奏轨（`type: 'accompaniment'`），音频内嵌为 `embeddedAudioData.wavBase64` |
+
+### 3.1 VPR 的伴奏轨
+
+VOCALOID 5/6 的音频轨没有音符，只有一段素材：`part.pos`（tick）决定它在时间线
+上的位置，`part.wav.name` 指向包内 `Project/Audio/` 下的文件，`part.region`
+（毫秒）记录用了源文件的哪一段。映射关系：
+
+| VPR | 宿主 |
+|---|---|
+| `part.pos / 480` | `accompanimentStartTime`（拍） |
+| `part.wav.originalName` | `audioFileName`（轨道显示名，缺省用 `track.name`） |
+| `region.begin` / `region.end`（毫秒） | 导入前按毫秒裁剪音频（宿主没有"裁剪偏移"概念，不裁就会整体平移） |
+| 音频字节 | `embeddedAudioData.wavBase64`（与 `.sxsproj` 的"嵌入伴奏音频"同一形态，宿主解码出波形） |
+| `track.volume`（0.01dB 定点，与 `tempo` 的 `value/100` 同一套约定） | `accompanimentVolume`（线性增益 0–1，-80dB 以下归零） |
+| `track.isMuted` | `mute` |
+| WAV 头的声道数 | `numberOfChannels`、`audioDuration` |
+
+`.vpr` 是 ZIP，带伴奏的工程里那份 WAV 常有几十 MB（44.1kHz/16bit 立体声约
+10MB 每分钟）。因此**解压是按需的**：`readZip` 接受一个 `accept` 谓词，只有工程
+JSON（32MB 上限）与音频（单条 128MB、合计 192MB）会被解压，图片等素材直接跳过。
+超限的音频只丢伴奏并告警，绝不因此把整份工程判成"打不开" —— 之前正是 32MB 的
+单条目上限让一个正常工程完全打不开。
+
+伴奏音频随文档走 base64，所以宿主侧的文档校验要配合：`validateProjectDocument`
+对 `wavBase64` 不套用 10 万字符的字符串截断（截断等于把 WAV 剪成噪音），改由
+`PROJECT_DOC_LIMITS.embeddedAudioBytes`（256MB）单独预算，超限整份拒绝。
 
 歌词中的 `br` 是 Synthesizer V 的呼吸标记。宿主的声学模型把 `<AP>` 定义为
 可发声的吸气音素（`src/inference/phone_set.json`、用户指南与音素预处理注释一致），
@@ -113,6 +140,8 @@ SVP 的音符颤音参数在 `note.attributes`（缺省值回落到 `mainRef.voi
 | 音高曲线 | 是"音符基础音高 + 控制器偏移"的采样近似，不是逐采样还原 |
 | 重叠音符 | 按后一个音符的起点裁掉前一个的尾巴（编辑器假定音符不重叠） |
 | 非法/零长度音符 | 跳过，不阻断整份工程 |
+| VPR 伴奏体积 | 单条音频 128MB、合计 192MB；超限只跳过伴奏并告警，工程其余部分照常导入 |
+| 伴奏写回 | 伴奏音频不进外部格式（`.vpr` 的音频轨依赖容器里的原始素材）；保存时明确告警，需保留伴奏请另存为 `.sxsproj`（会内嵌音频） |
 | 写回外部格式 | 歌手库、音色与风格、组级颤音强度包络、颤音起始相位与渐出、音素属性、变速与变拍号、前导小节与弯音灵敏度曲线不写入；音符颤音主参数写回 `note.attributes`；逐条返回告警，并建议另存为宿主原生工程格式 |
 
 ## 5. 为什么是一个插件而不是两个
@@ -158,6 +187,11 @@ buildDocument / documentToScore：轨道↔歌手、part↔分片、音符清洗
 
 - 三种格式的 `read → write → read` 往返：音符、速度、拍号与音高曲线采样保持一致；
   写回产物分别是合法的 XML、ZIP 与 JSON 容器，不是空壳。
+
+`test/pluginVprAccompaniment.test.js` 专测 `.vpr` 的伴奏链路（在内存里现造 ZIP，
+不依赖外部素材）：音频真的落到 `type: 'accompaniment'` 的轨道上（位置、音量、
+声道、字节逐项对照）、`region` 按毫秒裁剪、静音与 -∞ 音量、超限音频只丢伴奏
+不阻断导入、缺文件时告警，以及写回时"伴奏不会写回"的显式告警。
 - `br` ↔ `<AP>` 双向转译对称，`<SP>` 静音与普通歌词不受影响；并用一份含呼吸
   音符的 SVP 走完整的字节往返。
 - manifest 的三个 `fileTypes` 都声明 `role: "both"` 与 `userPicked:write` 权限，

@@ -20,6 +20,7 @@ const {
   parseXml, serializeXml, node, child, children, textOf, numberOf, numberIn,
 } = require('./xml.js');
 const { isZip, readZip, writeZip } = require('./zip.js');
+const { parseWav, sliceWav } = require('./wav.js');
 const { TICKS_PER_BEAT, normalizeColor } = require('./score.js');
 
 const PITCH_MAX = 8191;
@@ -291,7 +292,7 @@ function parseVsqx(bytes, t) {
 }
 
 // ---------------------------------------------------------------------------
-// .vpr（ZIP 内的 Project/sequence.json）
+// .vpr（ZIP 内的 Project/sequence.json + Project/Audio/*.wav）
 
 function findSequenceEntry(files) {
   const preferred = ['Project/sequence.json', 'project/sequence.json'];
@@ -302,6 +303,174 @@ function findSequenceEntry(files) {
   return null;
 }
 
+/**
+ * `.vpr` 里什么都可能躺：工程 JSON、伴奏 WAV、封面图、缩略图。
+ *
+ * 解压是有选择的 —— 按需解压不只是省内存，更是"带伴奏的工程必须能打开"：
+ * 伴奏动辄几十 MB，无差别解压会被单条目/总体积上限连坐成"文件打不开"。
+ * 这里放行两类：工程 JSON（32MB 够任何真实工程）与音频素材（单条 128MB、
+ * 合计 192MB，够一首十分钟的 44.1k/16bit 立体声伴奏）。图片之类直接跳过。
+ */
+const AUDIO_ENTRY_RE = /\.(wav|wave|mp3|ogg|m4a|aac|flac|aif|aiff)$/i;
+const MAX_PROJECT_JSON_BYTES = 32 * 1024 * 1024;
+const MAX_AUDIO_ENTRY_BYTES = 128 * 1024 * 1024;
+const MAX_AUDIO_TOTAL_BYTES = 192 * 1024 * 1024;
+
+function isProjectEntry(name) {
+  return /\.json$/i.test(name) || /(^|\/)sequence\b/i.test(name);
+}
+
+/** 素材体积的人类可读形式，只用于告警，不需要精确。 */
+function megabyteText(bytes) {
+  return `${Math.max(1, Math.round(bytes / 1024 / 1024))} MB`;
+}
+
+/**
+ * 构造带预算的 accept 谓词。
+ *
+ * 超额音频不抛异常而是跳过：少一条伴奏总好过整份工程打不开，调用方会用
+ * `skipped` 里的条目给出准确告警。音频合计预算必须在这里累计，不能交给
+ * readZip 的总量上限 —— 那是抛错语义，一次超限就把整个导入判死刑。
+ */
+function makeVprEntryFilter() {
+  let audioBytes = 0;
+  return (name, size) => {
+    if (isProjectEntry(name)) return size <= MAX_PROJECT_JSON_BYTES;
+    if (!AUDIO_ENTRY_RE.test(name)) return false;
+    if (size > MAX_AUDIO_ENTRY_BYTES) return false;
+    if (audioBytes + size > MAX_AUDIO_TOTAL_BYTES) return false;
+    audioBytes += size;
+    return true;
+  };
+}
+
+/** 按文件名找音频条目：优先 `Project/Audio/`，其次包内任意同名（大小写不敏感）。 */
+function findAudioEntry(files, wanted) {
+  const name = String(wanted || '');
+  if (!name) return null;
+  if (files.has(`Project/Audio/${name}`)) return `Project/Audio/${name}`;
+  const lower = name.toLowerCase();
+  for (const key of files.keys()) {
+    if (key.slice(key.lastIndexOf('/') + 1).toLowerCase() === lower) return key;
+  }
+  return null;
+}
+
+/**
+ * 轨道音量 → 线性增益。
+ *
+ * VOCALOID 的定点约定与速度一致（value/100 = BPM），音量同理是 0.01 dB。
+ * 宿主的伴奏音量是 0–1 的线性增益、界面按百分比显示，所以这里换算后夹到
+ * [0,1]：源工程里推高的增益（> 0dB）会被压回 1，用户要更响可以再推。
+ */
+function trackVolumeGain(track) {
+  const events = Array.isArray(track && track.volume && track.volume.events) ? track.volume.events : [];
+  let value = null;
+  for (const ev of events) {
+    const number = Number(ev && ev.value);
+    if (!Number.isFinite(number)) continue;
+    if ((Number(ev.pos) || 0) <= 0) value = number;
+  }
+  if (value === null) {
+    const first = events.find((ev) => Number.isFinite(Number(ev && ev.value)));
+    if (first) value = Number(first.value);
+  }
+  if (value === null) return 1;
+  const gain = Math.pow(10, (value / 100) / 20);
+  if (!Number.isFinite(gain)) return 1;
+  // 低于 -80dB 一律按静音处理：VOCALOID 用很大的负数表示 -∞（拉到底的推子），
+  // 换算出来是 1e-50 这种"数学上不是 0、听感上已经是 0"的值，不如直接归零。
+  if (gain < 1e-4) return 0;
+  return Math.min(1, gain);
+}
+
+/**
+ * 音频轨 → 宿主的伴奏轨。
+ *
+ * 一个 part 就是一段音频素材：`part.pos`（tick）决定它在时间线上的位置，
+ * `part.wav.name` 指向包内 `Project/Audio/` 下的文件，`part.region`
+ * （毫秒）记录用了源文件的哪一段 —— 宿主没有"裁剪偏移"概念，所以按 region
+ * 把音频切好再交出去，否则伴奏会整体平移。
+ */
+function collectVprAccompaniments(raw, files, skipped, warnings, t) {
+  const out = [];
+  const tracks = Array.isArray(raw.tracks) ? raw.tracks : [];
+  let seq = 0;
+
+  for (const track of tracks) {
+    if (!track || typeof track !== 'object') continue;
+    const parts = Array.isArray(track.parts) ? track.parts : [];
+    for (const part of parts) {
+      const wav = part && part.wav;
+      if (!wav || typeof wav !== 'object' || !wav.name) continue;
+
+      const wanted = String(wav.name);
+      const displayName = String(part.name || wav.originalName || track.name || wanted);
+      const entry = findAudioEntry(files, wanted);
+      if (!entry) {
+        const dropped = skipped.find((item) => item.name.toLowerCase().endsWith(wanted.toLowerCase()));
+        if (dropped) {
+          // 两种情况都会落到这里：单条超限，或累计超出音频预算。上限值按触发的那条给，
+          // 否则用户会拿着一句"超过单条上限"去看一个其实合规的单条文件。
+          const limit = dropped.size > MAX_AUDIO_ENTRY_BYTES ? MAX_AUDIO_ENTRY_BYTES : MAX_AUDIO_TOTAL_BYTES;
+          warnings.push(t(
+            `伴奏「${displayName}」有 ${megabyteText(dropped.size)}，超过音频上限 ${megabyteText(limit)}，已跳过；其余轨道照常导入。`,
+            `The backing track "${displayName}" is ${megabyteText(dropped.size)}, over the ${megabyteText(limit)} audio limit; it was skipped, other tracks were imported.`,
+          ));
+        } else {
+          warnings.push(t(
+            `工程内含伴奏「${displayName}」，但包内找不到对应的音频文件（${wanted}），已跳过。`,
+            `The project references the backing track "${displayName}" but the archive has no ${wanted}; it was skipped.`,
+          ));
+        }
+        continue;
+      }
+
+      const source = files.get(entry);
+      const info = parseWav(source);
+      const region = part.region && typeof part.region === 'object' ? part.region : null;
+      let audio = source;
+      if (info.ok && region) {
+        const beginMs = Number(region.begin) || 0;
+        const endMs = Number(region.end);
+        const fullMs = info.duration * 1000;
+        const usableEnd = Number.isFinite(endMs) ? Math.min(endMs, fullMs) : fullMs;
+        if (beginMs > 0 || usableEnd < fullMs - 1) {
+          audio = sliceWav(source, info, beginMs, usableEnd);
+          if (beginMs > 0) {
+            warnings.push(t(
+              `伴奏「${displayName}」在源工程里从 ${(beginMs / 1000).toFixed(2)}s 处截取，已按截取后的音频导入。`,
+              `The backing track "${displayName}" starts at ${(beginMs / 1000).toFixed(2)}s in the source file; the trimmed audio was imported.`,
+            ));
+          }
+        }
+      }
+      const sliced = audio === source ? info : parseWav(audio);
+      if (!info.ok) {
+        warnings.push(t(
+          `伴奏「${displayName}」不是标准 WAV（可能是压缩格式），已按原样交给宿主解码。`,
+          `The backing track "${displayName}" is not a plain WAV (possibly compressed); the raw file was handed to the host for decoding.`,
+        ));
+      }
+
+      seq++;
+      out.push({
+        id: `import-accompaniment-${seq}`,
+        trackName: displayName.slice(0, 60),
+        startBeat: (Number(part.pos) || 0) / TICKS_PER_BEAT,
+        mute: track.isMuted === true,
+        volume: trackVolumeGain(track),
+        audioFileName: String(wav.originalName || wanted).slice(0, 120),
+        duration: sliced.ok ? sliced.duration : null,
+        sampleRate: sliced.ok ? sliced.sampleRate : null,
+        channels: sliced.ok ? sliced.channels : null,
+        wavBuffer: audio,
+      });
+    }
+  }
+  return out;
+}
+
 function parseVpr(bytes, t) {
   if (!isZip(bytes)) {
     throw new Error(t(
@@ -309,13 +478,23 @@ function parseVpr(bytes, t) {
       'Not a VOCALOID5/6 VPR project (expected a ZIP container)',
     ));
   }
-  const files = readZip(bytes);
+  const { files, skipped } = readZip(bytes, {
+    accept: makeVprEntryFilter(),
+    maxEntrySize: MAX_AUDIO_ENTRY_BYTES,
+    maxTotalSize: MAX_PROJECT_JSON_BYTES + MAX_AUDIO_TOTAL_BYTES,
+  });
   const entry = findSequenceEntry(files);
   if (!entry) {
-    throw new Error(t(
-      'VPR 包内没有 Project/sequence.json',
-      'The VPR archive has no Project/sequence.json',
-    ));
+    const oversize = skipped.find((item) => isProjectEntry(item.name));
+    throw new Error(oversize
+      ? t(
+        `VPR 的工程文件 ${oversize.name} 有 ${megabyteText(oversize.size)}，超过上限 ${megabyteText(MAX_PROJECT_JSON_BYTES)}`,
+        `The VPR project file ${oversize.name} is ${megabyteText(oversize.size)}, over the ${megabyteText(MAX_PROJECT_JSON_BYTES)} limit`,
+      )
+      : t(
+        'VPR 包内没有 Project/sequence.json',
+        'The VPR archive has no Project/sequence.json',
+      ));
   }
 
   let raw;
@@ -400,11 +579,16 @@ function parseVpr(bytes, t) {
     }
   });
 
+  // 音频轨不走 notes 通道：`type: 1` 的轨道没有音符，只有 part.wav + region，
+  // 由 collectVprAccompaniments 单独收集成宿主的伴奏轨。
+  const accompaniments = collectVprAccompaniments(raw, files, skipped, warnings, t);
+
   return {
     format: 'vpr',
     bpm,
     timeSignature,
     tracks,
+    accompaniments,
     warnings,
     meta: collectVprMeta(raw),
   };

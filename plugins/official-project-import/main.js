@@ -100,8 +100,10 @@ function makeRead(format) {
       throw err;
     }
     const document = buildDocument(score);
+    const accompanimentCount = document.singers.filter((s) => s && s.type === 'accompaniment').length;
 
-    if (!document.fragments.length) {
+    // 只有伴奏没有音符也是合法工程（源工程可能只有一条音频轨），不能当成空工程拒掉。
+    if (!document.fragments.length && !accompanimentCount) {
       throw failure(ctx, msg(
         ctx,
         '工程里没有可导入的音符（可能只有音频轨，或音符为空）',
@@ -118,8 +120,9 @@ function makeRead(format) {
       ? `，其中 ${score.vibratoImported} 个音符带颤音参数`
       : '';
     ctx.log.info(
-      `导入 ${format.id} ${name}：${document.singers.length} 轨 / ${document.fragments.length} 段 / `
+      `导入 ${format.id} ${name}：${document.singers.length - accompanimentCount} 轨 / ${document.fragments.length} 段 / `
       + `${document.fragments.reduce((sum, f) => sum + f.notes.length, 0)} 个音符`
+      + `${accompanimentCount ? ` / ${accompanimentCount} 条伴奏` : ''}`
       + `${vibratoNote}，${score.warnings.length} 条告警`,
     );
 
@@ -166,6 +169,14 @@ function makeWrite(format) {
       warnings.push(msg(ctx,
         `${score.orphanCount} 个分片没有对应的歌手轨道，已归入一条 Untitled 轨道。`,
         `${score.orphanCount} fragment(s) have no singer track and were placed on an Untitled track.`,
+      ));
+    }
+    if (score.accompanimentCount > 0) {
+      // 伴奏是导入时真金白银搬进来的音频，写回时却无处安放 —— 这一条必须说，
+      // 否则用户以为"存回去还在"，下次从外部软件打开才发现伴奏没了。
+      warnings.push(msg(ctx,
+        `伴奏轨（${score.accompanimentCount} 条）不会写回 ${format.label}：该格式的工程里没有宿主伴奏轨的等价表示，音频不会被写入。需要保留伴奏请另存为 .sxsproj。`,
+        `${score.accompanimentCount} accompaniment track(s) are not written back to ${format.label}: the format has no equivalent for a host accompaniment track, so the audio is not written. Save as .sxsproj to keep it.`,
       ));
     }
 

@@ -26,6 +26,8 @@ const BUILTIN_ID = 'official-project-import';
 // 与 manifest 的 engines.app >= 2.0.0 对齐；用真实版本而不是 '0.0.0'，
 // 否则校验会在第一步判死，后面的断言全部测不到真正的安装链路。
 const APP_VERSION = '2.0.2';
+// 包内副本的版本号：断言跟着清单走，升版本不该顺手改一堆测试字面量。
+const BUNDLED_VERSION = JSON.parse(fs.readFileSync(path.join(PLUGIN_SRC, 'manifest.json'), 'utf8')).version;
 
 describe('builtinPlugins — 内置官方插件默认安装', function () {
   this.timeout(30000);
@@ -253,7 +255,7 @@ describe('builtinPlugins — 内置插件按版本升级', function () {
     expect(result.upgraded).to.equal(true);
 
     const updated = installedManifest();
-    expect(updated.version).to.equal('1.1.0');
+    expect(updated.version).to.equal(BUNDLED_VERSION);
     expect(updated.contributes.fileTypes.every((ft) => ft.role === 'both')).to.equal(true);
     // 旧副本缺 codec.write；升级后必须真的有了，而不只是清单里的 role 变了。
     expect(fs.readFileSync(path.join(installDir(), 'main.js'), 'utf8')).to.contain('codec.write');
@@ -281,7 +283,7 @@ describe('builtinPlugins — 内置插件按版本升级', function () {
     const before = upgrades().length;
     const result = ensureFrom(PLUGIN_SRC);
     expect(result.ok, result.error).to.equal(true);
-    expect(result.upgraded, '包内 1.1.0 高于磁盘 0.9.0，必须升级').to.equal(true);
+    expect(result.upgraded, `包内 ${BUNDLED_VERSION} 高于磁盘 0.9.0，必须升级`).to.equal(true);
     expect(upgrades()).to.have.length(before + 1);
 
     const state = stateOf();
@@ -297,7 +299,7 @@ describe('builtinPlugins — 内置插件按版本升级', function () {
     expect(upgradeLog.length).to.be.greaterThan(0);
     const last = upgradeLog[upgradeLog.length - 1].detail;
     expect(last.source).to.equal('builtin');
-    expect(last.to).to.equal('1.1.0');
+    expect(last.to).to.equal(BUNDLED_VERSION);
     expect(last.from).to.not.equal(last.to);
   });
 
@@ -316,7 +318,7 @@ describe('builtinPlugins — 内置插件按版本升级', function () {
     const result = ensureFrom(sourceWith('0.5.0', 'open'));
     expect(result.ok).to.equal(true);
     expect(result.installed).to.equal(false);
-    expect(installedManifest().version).to.equal('1.1.0');
+    expect(installedManifest().version).to.equal(BUNDLED_VERSION);
     expect(upgrades()).to.have.length(before);
   });
 

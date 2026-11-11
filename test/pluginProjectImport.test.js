@@ -197,7 +197,7 @@ describe('official-project-import — manifest', () => {
       expect(ft.role, `${ft.ext}.role`).to.equal('both');
     }
     expect(manifest.permissions.fs).to.include('userPicked:write');
-    expect(manifest.version).to.equal('1.1.0');
+    expect(manifest.version).to.equal('1.1.1');
   });
 });
 

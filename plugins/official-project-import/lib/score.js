@@ -193,6 +193,46 @@ function buildAnchors(part, notes, fragmentStart, fragmentDuration) {
 }
 
 /**
+ * 伴奏轨 → 宿主 singer（`type: 'accompaniment'`）。
+ *
+ * 宿主把伴奏音频以 base64 内嵌在工程里（`embeddedAudioData`），这也是
+ * `.sxsproj` 在用户勾选"嵌入伴奏音频"时的落盘形态 —— 宿主装载侧本来就认它，
+ * 所以插件只需要把字节摆在这个位置，解码与波形由宿主完成。
+ *
+ * 音频字节在这里转 base64：插件进程不写盘，宿主 `codec.read` 也只接受文档，
+ * 没有第二条能传二进制的通道。体积代价是 4/3，由宿主侧的文档校验单独预算。
+ *
+ * @param {{id?:string, trackName?:string, startBeat?:number, mute?:boolean,
+ *          volume?:number, audioFileName?:string, duration?:number,
+ *          sampleRate?:number, channels?:number, wavBuffer?:Buffer}} acc
+ * @param {number} index
+ * @returns {object}
+ */
+function buildAccompanimentSinger(acc, index) {
+  const name = String(acc.trackName || acc.audioFileName || `Accompaniment ${index + 1}`).slice(0, 60);
+  const audioFileName = String(acc.audioFileName || `${name}.wav`).slice(0, 120);
+  const wavBase64 = Buffer.isBuffer(acc.wavBuffer) ? acc.wavBuffer.toString('base64') : null;
+  const duration = Number.isFinite(acc.duration) ? acc.duration : null;
+  const singer = {
+    id: acc.id || `import-accompaniment-${index + 1}`,
+    type: 'accompaniment',
+    trackName: name,
+    singerName: name,
+    audioFileName,
+    audioDuration: duration,
+    numberOfChannels: Number.isFinite(acc.channels) ? acc.channels : 1,
+    accompanimentStartTime: Math.max(0, roundTime(Number(acc.startBeat) || 0)),
+    accompanimentVolume: Number.isFinite(acc.volume) ? clamp(acc.volume, 0, 1) : 1,
+    mute: acc.mute === true,
+    embeddedAudioData: null,
+  };
+  if (wavBase64) {
+    singer.embeddedAudioData = { wavBase64, audioFileName, audioDuration: duration };
+  }
+  return singer;
+}
+
+/**
  * @param {object} score 见文件头
  * @returns {object} 宿主工程文档
  */
@@ -254,6 +294,11 @@ function buildDocument(score) {
     singers,
     fragments,
   };
+  // 伴奏轨接在歌手轨后面：顺序与源工程一致（音频轨通常排在最后），也让
+  // 导入后第一条被选中的仍是人声。
+  for (const [index, acc] of (Array.isArray(score.accompaniments) ? score.accompaniments : []).entries()) {
+    document.singers.push(buildAccompanimentSinger(acc, index));
+  }
   // 把源工程元数据放进文档级扩展域。宿主校验会用 cloneJson 完整保留 ext
   // 子树（深度 12、单条 512KB），保存时再交回给 writer 合并，尽量让源
   // 工程在外部软件里仍可用。没有元数据的格式不写这个字段。
@@ -376,8 +421,16 @@ function documentToScore(document) {
   });
 
   const tracks = [];
+  let accompanimentCount = 0;
   for (const s of singers) {
     if (!s || typeof s !== 'object') continue;
+    // 伴奏轨在外部格式里没有等价物（VOCALOID 5/6 的音频轨另说，但它依赖容器里的
+    // 原始音频，写回会造出一个引用不存在素材的工程）。这里直接略过，由调用方
+    // 在告警里说清楚"伴奏不会写回"。
+    if (s.type === 'accompaniment') {
+      accompanimentCount++;
+      continue;
+    }
     tracks.push({
       name: String(s.trackName || s.singerName || s.id || 'Track').slice(0, 60),
       color: s.color,
@@ -396,6 +449,7 @@ function documentToScore(document) {
     },
     tracks,
     orphanCount: orphans.length,
+    accompanimentCount,
   };
 }
 
