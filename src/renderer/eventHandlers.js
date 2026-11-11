@@ -6,7 +6,7 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, resynthesizePlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
 import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
@@ -294,7 +294,8 @@ dom.btnPlay.addEventListener('click', async () => {
   // 只看 currentAudioData 非空是不够的 —— 分片被拖到别的歌手轨道、音符/音高
   // 曲线/音色文件改过之后，这份音频仍然是"改动前"的，直接续播就是播错声音。
   // 判定交给 hasReusablePlaybackAudio()（签名对比，见 renderer/audioSignature.js）。
-  // stopPlayback / 自然结束时 currentAudioData 会被置 null，下次点击 Play 会重新合成。
+  // 停止只复位播放位置，不再丢弃渲染结果 —— 再按 Play 会直接续播；输入改过
+  // 时签名失配，仍会重新合成。想在同输入下再要一版，用 Retake。
   if (hasReusablePlaybackAudio()) {
     await startAudioPlayback(state.playbackPauseOffset);
   } else {
@@ -309,6 +310,13 @@ dom.btnPause.addEventListener('click', async () => {
 dom.btnStop.addEventListener('click', () => {
   stopPlayback();
   setTimeDisplay(formatTime(0));
+});
+
+// 重新合成（AI Retake）：同输入重跑一遍，拿不同噪声下的另一版演唱。
+// 与 Stop + Play 的区别在于它主动丢弃缓存，不依赖运行期随机性 —— 否则
+// 主进程 mel 缓存会直接命中，用户点十次也听不到任何变化。
+dom.btnRetake.addEventListener('click', () => {
+  void resynthesizePlayback();
 });
 
 // Project save/load/export

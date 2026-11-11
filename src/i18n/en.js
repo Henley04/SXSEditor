@@ -13,6 +13,8 @@ export default {
     pause: 'Pause',
     continue: 'Continue',
     stop: 'Stop',
+    retake: 'Retake',
+    retakeHint: 'Retake: generate another take of this performance with the same settings (bypasses cached results)',
     save: 'Save',
     load: 'Load',
     unsavedChangesConfirm: 'This project has unsaved changes. Loading another project will discard them. Continue?',

@@ -199,6 +199,10 @@ let _streamingAccEndSec = 0;            // Furthest accompaniment end in playhea
 // 每次 playAll 自增，旧会话发现自己不是最新一代就直接退出。
 let _playGeneration = 0;
 
+// 「重新合成」（AI Retake）的一次性 nonce。非 0 时注入推理选项，
+// 使主进程 mel 缓存键与渲染层播放签名同时失效；保持不变则连续 Play 不重推。
+let _retakeNonce = 0;
+
 // ==================== 伴奏实时控制 ====================
 // 伴奏此前被 _buildPlaybackChannels() 预混进人声缓冲，音量在混音那一刻就固化了，
 // 于是拖动音量滑块必须重新合成/重新播放才听得到变化（DAW 里这是即时生效的）。
@@ -470,6 +474,20 @@ export async function playAll() {
     // 模型加载中（LOADING）不能中断：取消会让主进程作废正在初始化的实例。
     if (getTransportState() === TRANSPORT.LOADING) return;
     _abandonActiveSession();
+  }
+  // 空工程直接提示，不进入「合成中」。
+  // 必须放在 setTransport(SYNTHESIZING) 与 loadAudioSettings() 之前：否则没有
+  // 可播放内容时，界面会先切到「合成中 0%」，再卡在设置读取那一步，用户既看不到
+  // 提示也退不出来。Play 按钮有前置检查挡着，Retake 没有，会一路走到这里。
+  // 这里只做"完全没内容"的粗筛（静音/独奏的精确判定在后面，需要 trackAudibility）。
+  {
+    const quickList = trackManager.getFragments();
+    const hasNotes = quickList.some((f) => f && f.notes && f.notes.length > 0);
+    const hasAcc = trackManager.getSingers().some((s) => s && s.type === 'accompaniment');
+    if (!hasNotes && !hasAcc) {
+      showAlertDialog(t('main.noFragmentsToPlay'));
+      return;
+    }
   }
   // 重入保护：防止连续调用导致前一次 finally 提前把 isSynthesizing 置 false，
   // 使后续进度回调失效（进度百分比偶发不显示的根因之一）。
@@ -1090,6 +1108,10 @@ export async function loadAudioSettings() {
 
 export function getPreviewInferenceOptions() {
   return {
+    // 模型精度参与缓存键：切精度后必须重推，否则命中上一精度的 mel。
+    modelPrecision: state.audioSettings?.modelPrecision || 'fp32',
+    // 非 0 表示用户点了「重新合成」，强制缓存失配（见 resynthesizePlayback）。
+    ...(_retakeNonce ? { retakeNonce: _retakeNonce } : {}),
     nSteps: state.audioSettings?.previewDiffSteps ?? state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.7,
@@ -1113,6 +1135,8 @@ export function getPreviewInferenceOptions() {
 
 export function getExportInferenceOptions() {
   return {
+    // 同上：导出缓存键也要区分精度，切精度后导出不能复用旧 mel。
+    modelPrecision: state.audioSettings?.modelPrecision || 'fp32',
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.7,
@@ -1502,6 +1526,12 @@ export function pausePlayback() {
 }
 
 export function stopPlayback() {
+  // 合成中被取消 vs 播放中被停止，是两种语义，收尾不同：
+  //   · 合成中取消：手上的音频可能只写了一半，必须丢弃，不能让下次 Play 复用。
+  //   · 播放中停止：渲染结果已经完整，只是用户不想继续听。丢弃它会让下一次
+  //     Play 重新跑一遍 encoder+diffusion+vocoder —— 这是"按了停止就得重推"的
+  //     根因，长工程上代价是几十秒。
+  const wasSynthesizing = state.isSynthesizing;
   // 解除推理等待冻结（等待在途 suspend 落地后再 resume，避免冻结泄漏）
   if (_scheduler) _scheduler.deactivate();
   if (state.isSynthesizing) {
@@ -1538,12 +1568,40 @@ export function stopPlayback() {
   state.isPlaying = false;
   state.playbackPauseOffset = 0;
   stopPlayheadAnimation();
-  state.currentAudioData = null;
-  state.currentAudioSignature = null;
-  state.currentAudioBuffer = null;
+  // 只有"合成被取消"才丢弃渲染结果。播放中停止保留 currentAudioData /
+  // currentAudioSignature / currentAudioBuffer：下次 Play 由
+  // hasReusablePlaybackAudio() 用签名判断能否直接续播；输入改过签名就对不上，
+  // 仍然会重新合成，不会播错音频。
+  if (wasSynthesizing) {
+    state.currentAudioData = null;
+    state.currentAudioSignature = null;
+    state.currentAudioBuffer = null;
+  }
   setTimeDisplay(formatTime(0));
   setTransport(TRANSPORT.IDLE);
   clearTransportStatus();
+}
+
+/**
+ * 主动重新合成（对应 Synthesizer V 的 AI Retake）。
+ *
+ * 与 stopPlayback 的区别：停止只停播放、保留已渲染结果；本函数明确要求
+ * "丢掉这份结果，用同样的输入再跑一遍"。用途是同一份标注在不同随机噪声下
+ * 会得到略有差异的演唱，用户想换一版时不必改任何参数。
+ *
+ * 实现上给缓存键注入一次性 nonce：主进程的 mel 缓存与渲染层的播放签名都会
+ * 因此失配，从而强制走完整推理。nonce 常驻到下一次 retake，所以连续 Play
+ * 不会每次都重推。
+ */
+export function resynthesizePlayback() {
+  // 先停：正在播放时直接重推会让新旧两条音轨叠在一起；正在合成时这里等价于
+  // 取消当前那轮，再从同一份输入重新跑一遍。
+  stopPlayback();
+  state.currentAudioSignature = null;
+  state.currentAudioBuffer = null;
+  state.currentAudioData = null;
+  _retakeNonce = Date.now();
+  return playAll();
 }
 
 /**

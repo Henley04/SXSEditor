@@ -22,6 +22,12 @@
           <button id="btn-stop" class="transport-btn" data-icon="stop"
                   data-i18n-title="main.stop" data-i18n-aria-label="main.stop"
                   aria-label="停止" disabled></button>
+          <!-- 重新合成（AI Retake）：丢弃当前渲染结果，用同一份输入重跑一遍。
+               与 Stop 的区别是 Stop 只停播放、保留结果；本按钮是主动重来。
+               放在 Stop 右侧，语义上属于"对当前结果再操作一次"。 -->
+          <button id="btn-retake" class="transport-btn" data-icon="refresh"
+                  data-i18n-title="main.retakeHint" data-i18n-aria-label="main.retake"
+                  aria-label="重新合成" disabled></button>
           <!-- 播放时间码：audioPlayback / eventHandlers / 插件阻滞浮层都往这个
                节点写文本（playhead rAF、拖拽 playhead、插件 progress）。工具栏
                改版时它被误删过一次，结果每帧抛 TypeError 打断播放头动画

@@ -57,12 +57,15 @@ function _hasAudio() {
 /**
  * 派生并应用三个按钮的可用状态。
  *
- * | 状态 | Play | Pause | Stop |
- * |---|---|---|---|
- * | idle（无缓存音频） | 可点（合成并播放） | 禁用 | 禁用 |
- * | loading / synthesizing | 可点（= 取消） | 禁用 | 可点 |
- * | playing | 禁用 | 可点 | 可点 |
- * | paused | 可点（继续） | 禁用 | 可点 |
+ * | 状态 | Play | Pause | Stop | Retake |
+ * |---|---|---|---|---|
+ * | idle（无缓存音频） | 可点（合成并播放） | 禁用 | 禁用 | 可点 |
+ * | loading / synthesizing | 可点（= 取消） | 禁用 | 可点 | 禁用 |
+ * | playing | 禁用 | 可点 | 可点 | 可点 |
+ * | paused | 可点（继续） | 禁用 | 可点 | 可点 |
+ *
+ * Retake 在忙态禁用：它内部先取消再重推，若允许在合成中点，会和 Play 的
+ * "取消"语义撞车，用户分不清点哪个才是真的要取消。
  */
 function _applyButtonState() {
     const busy = _isBusy();
@@ -94,6 +97,16 @@ function _applyButtonState() {
         const stopLabel = t('main.stop');
         dom.btnStop.title = stopLabel;
         dom.btnStop.setAttribute('aria-label', stopLabel);
+    }
+    if (dom.btnRetake) {
+        // 与 Stop 不同：Stop 需要"有东西可停"，Retake 在 idle 下也有意义
+        // （重跑一遍拿不同噪声下的另一版演唱），因此只跟忙态互斥。
+        dom.btnRetake.disabled = busy;
+        const retakeLabel = t('main.retake');
+        dom.btnRetake.title = t('main.retakeHint');
+        dom.btnRetake.setAttribute('aria-label', retakeLabel);
+        // 图标固定为 refresh；setLabel 内部按 data-icon 判等，重复调用不重建。
+        setLabel(dom.btnRetake, '', { icon: 'refresh' });
     }
 }
 

@@ -78,6 +78,7 @@ export const dom = {
   btnPlay: document.getElementById('btn-play'),
   btnPause: document.getElementById('btn-pause'),
   btnStop: document.getElementById('btn-stop'),
+  btnRetake: document.getElementById('btn-retake'),
   // 传输控件右侧的进度区（推理 / 模型加载共用）
   transportStatus: document.getElementById('transport-status'),
   transportStatusText: document.getElementById('transport-status-text'),

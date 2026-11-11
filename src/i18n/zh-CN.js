@@ -13,6 +13,8 @@ export default {
     pause: '暂停',
     continue: '继续',
     stop: '停止',
+    retake: '重新合成',
+    retakeHint: '重新合成：用当前参数再生成一版演唱（不复用缓存结果）',
     save: '保存',
     load: '加载',
     unsavedChangesConfirm: '当前工程有未保存的修改。继续加载将丢失这些修改，是否继续？',
