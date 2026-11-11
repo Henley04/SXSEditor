@@ -2805,6 +2805,17 @@ class OnnxSVSPipeline {
 
         for (let w = 0; w < numSegs; w++) {
             throwIfCancelled(abortSignal);
+            // 上一窗口已产出非有限值时立即中止：换窗口不会换掉那个坏引擎，
+            // 继续跑只会把 NaN 一窗窗拼进 melOut，最后在 vocoder 才报错。
+            if (this._diffusion.isDiffStepBlacklisted()) {
+                const err = new Error(
+                    `${tag} static-shape segmented synthesis aborted before segment ${w + 1}/${numSegs}: `
+                    + 'diff_step produced non-finite output in an earlier window'
+                );
+                err.code = 'DIFFUSION_STEP_NAN';
+                err.windowIndex = w;
+                throw err;
+            }
             const { segStart, segEnd, segFrames } = wins[w];
 
             // 该窗口覆盖的 token 区间（mel2token 为 [0, tokenCount-1] 的绝对 token 下标）
@@ -4187,6 +4198,9 @@ class OnnxSVSPipeline {
         }
         // Reset per-call F0 cache so a stale F0 from a previous synthesis cannot leak into SiFiGAN vocoder input
         this._currentF0Hz = null;
+        // 每轮合成重置"扩散已产出非有限值"标记：它属于单次任务的状态，
+        // 跨任务继承会让上一轮失败把这一轮（可能已经换到 DML）也判死。
+        this._diffusion.resetBlacklist();
         // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
         this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});

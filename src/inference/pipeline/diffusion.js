@@ -7,7 +7,7 @@ const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
 const { resolveQDrift, buildQDriftCtx, readQDriftEnabled } = require('./qdrift');
-const { summarizeXt, formatXtStats } = require('./diffusionStats.js');
+const { summarizeXt, formatXtStats, findNonFiniteIndex } = require('./diffusionStats.js');
 
 // One fallback notice per loaded diffStep session, not once per streaming chunk.
 // WeakSet follows session lifetime without retaining disposed sessions.
@@ -954,6 +954,40 @@ class Diffusion {
                     xt.data[i] += delta[i];
                 }
 
+                // NaN/Inf 早停：一旦某一步产出非有限值，后续所有步都会在 NaN 上
+                // 继续积分，最终整段 mel 全废。原实现只在 32 步全跑完后统计一次
+                // （见下方 summarizeXt），只打一行日志就继续把 NaN 送进 vocoder，
+                // 用户拿到的是坏音频或一句 "Vocoder input mel is non-finite"，
+                // 且无法知道是第几步、哪个 EP、多长序列坏掉的。
+                // 这里在每步累加后立即扫描（early-exit，命中即停），抛出带 step /
+                // ep / seqLen 的结构化错误，并顺手把该模型拉黑到 DML/CPU，
+                // 使用户重试一次就换到能跑的后端。
+                {
+                    const badIndex = findNonFiniteIndex(xt.data);
+                    if (badIndex >= 0) {
+                        const badVal = xt.data[badIndex];
+                        this.lastXtStats = {
+                            invalid: 1,
+                            nan: badVal !== badVal ? 1 : 0,
+                            inf: badVal === badVal ? 1 : 0,
+                        };
+                        this._blacklistDiffStepOnVendorEp(
+                            sessions,
+                            `step ${step + 1}/${totalSteps} non-finite xt (index=${badIndex})`,
+                        );
+                        const nanErr = new Error(
+                            `${diagTag}diffusion produced non-finite xt at step ${step + 1}/${totalSteps} `
+                            + `(ep=${this._diffStepEp || 'unknown'}, seqLen=${seqLen}, frames=${totalFrames}, `
+                            + `ptFrameCount=${ptFrameCount}, firstIndex=${badIndex})`
+                        );
+                        nanErr.code = 'DIFFUSION_STEP_NAN';
+                        nanErr.step = step;
+                        nanErr.totalSteps = totalSteps;
+                        nanErr.firstIndex = badIndex;
+                        throw nanErr;
+                    }
+                }
+
                 const currentProgress = progressStart + (step + 1) * progressPerStep;
                 onProgress(Math.min(Math.round(currentProgress), progressCap));
                 // GPU 排空：此处仅 setImmediate 让出事件循环一轮，不做墙钟等待
@@ -1044,6 +1078,26 @@ class Diffusion {
         } catch (_) {
             return false;
         }
+    }
+
+    /**
+     * 本会话是否已产出过非有限值。
+     *
+     * 供静态分段 / 多流式在开新窗口前检查：一旦某个窗口坏了，后面的窗口
+     * 只会拿到同样的坏引擎、同样的 NaN，继续拼下去没有意义。此前只写标志
+     * 不读，注释里承诺的"立即停止后续窗口"实际没有实现。
+     */
+    isDiffStepBlacklisted() {
+        return this._diffStepBlacklisted === true;
+    }
+
+    /**
+     * 清空"本会话已产出非有限值"标记。每次合成任务入口调用一次：
+     * 标志是"这一轮坏了"的语义，不能跨任务继承，否则用户换到 DML 后
+     * 第一次分段就会因为上一轮的残留标志被误判为失败。
+     */
+    resetBlacklist() {
+        this._diffStepBlacklisted = false;
     }
 
     /**

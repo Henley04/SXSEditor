@@ -60,4 +60,25 @@ function formatXtStats(stats) {
     return `NaN=${s.nan}, Inf=${s.inf}, total=${s.total}, min=${f(s.min)}, max=${f(s.max)}, mean=${f(s.mean)}, std=${f(s.std)}`;
 }
 
-module.exports = { summarizeXt, formatXtStats };
+/**
+ * 找出第一个非有限值（NaN / ±Infinity）的下标，全部有限时返回 -1。
+ *
+ * 扩散每一步累加后都要调用它：一旦某步产出非有限值，后面所有步都在 NaN 上
+ * 继续积分，最终整段 mel 全废。用 early-exit 线性扫描而不是先做完整统计，
+ * 命中即刻返回，正常路径的开销只是一次顺序读。
+ *
+ * @param {ArrayLike<number>} data
+ * @returns {number} 首个非法值的下标；无非法值时 -1
+ */
+function findNonFiniteIndex(data) {
+    if (!data || typeof data.length !== 'number') return -1;
+    for (let i = 0; i < data.length; i++) {
+        const v = data[i];
+        // v !== v 是 NaN 的标准判据（比 Number.isNaN 少一次类型检查），
+        // ±Infinity 单独比较。三者任一命中即为非法。
+        if (v !== v || v === Infinity || v === -Infinity) return i;
+    }
+    return -1;
+}
+
+module.exports = { summarizeXt, formatXtStats, findNonFiniteIndex };

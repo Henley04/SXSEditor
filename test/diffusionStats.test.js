@@ -7,7 +7,7 @@
  * 这里锁住计数与文案，避免同类误报再次出现。
  */
 const { expect } = require('chai');
-const { summarizeXt, formatXtStats } = require('../src/inference/pipeline/diffusionStats.js');
+const { summarizeXt, formatXtStats, findNonFiniteIndex } = require('../src/inference/pipeline/diffusionStats.js');
 
 describe('diffusionStats — 扩散输出统计', () => {
     it('全有限值：计数、极值、均值正确', () => {
@@ -53,5 +53,44 @@ describe('diffusionStats — 扩散输出统计', () => {
         expect(stats.total).to.equal(0);
         expect(stats.invalid).to.equal(0);
         expect(formatXtStats(stats)).to.contain('total=0');
+    });
+});
+
+describe('findNonFiniteIndex — 扩散逐步早停的判定', () => {
+    it('全有限值时返回 -1（正常路径不应误报）', () => {
+        expect(findNonFiniteIndex(new Float32Array([0, 1, -2.5, 1e30]))).to.equal(-1);
+        expect(findNonFiniteIndex([0, 1, 2])).to.equal(-1);
+    });
+
+    it('定位第一个 NaN', () => {
+        expect(findNonFiniteIndex([1, 2, NaN, 4])).to.equal(2);
+    });
+
+    it('定位第一个 +Infinity / -Infinity', () => {
+        expect(findNonFiniteIndex([1, Infinity, 3])).to.equal(1);
+        expect(findNonFiniteIndex([1, 2, -Infinity])).to.equal(2);
+    });
+
+    it('首个元素就非法时返回 0（early-exit 不跳过下标 0）', () => {
+        expect(findNonFiniteIndex([NaN, 1, 2])).to.equal(0);
+    });
+
+    it('NaN 优先于后续 Inf（返回最早出现的那个）', () => {
+        expect(findNonFiniteIndex([NaN, Infinity])).to.equal(0);
+        expect(findNonFiniteIndex([Infinity, NaN])).to.equal(0);
+    });
+
+    it('空输入 / 非数组安全返回 -1', () => {
+        expect(findNonFiniteIndex([])).to.equal(-1);
+        expect(findNonFiniteIndex(null)).to.equal(-1);
+        expect(findNonFiniteIndex(undefined)).to.equal(-1);
+    });
+
+    it('不改写输入', () => {
+        const arr = [1, NaN, 3];
+        findNonFiniteIndex(arr);
+        expect(arr[0]).to.equal(1);
+        expect(Number.isNaN(arr[1])).to.equal(true);
+        expect(arr[2]).to.equal(3);
     });
 });

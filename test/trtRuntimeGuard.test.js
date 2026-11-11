@@ -232,22 +232,40 @@ describe('TRT-RTX 运行期故障守卫', () => {
             return xt;
         }
 
+        /** 同上，但把早停抛出的错误捕获下来（NaN 场景现在不会再正常返回）。 */
+        async function runLoopCatching(diffusion, diffStep) {
+            try {
+                return { xt: await runLoop(diffusion, diffStep), error: null };
+            } catch (error) {
+                return { xt: null, error };
+            }
+        }
+
         beforeEach(() => winmlProvider.__resetForTest());
         afterEach(() => winmlProvider.__resetForTest());
 
-        it('WinML diff_step 产出 NaN 后被拉黑，下次加载跳过 vendor EP', async () => {
+        it('WinML diff_step 产出 NaN 后立即中止并拉黑，下次加载跳过 vendor EP', async () => {
             const diffusion = new Diffusion();
             const path = 'C:/models/fp16/diff_step_dml.onnx';
-            const xt = await runLoop(diffusion, makeDiffStep({ modelPath: path, provider: 'windowsml', fill: NaN }));
-            expect(Number.isNaN(xt.data[0])).to.equal(true);
+            const { error } = await runLoopCatching(
+                diffusion, makeDiffStep({ modelPath: path, provider: 'windowsml', fill: NaN }));
+            // 早停：第 1 步就抛结构化错误，而不是跑完 totalSteps 再把 NaN 送进 vocoder
+            expect(error, '应当抛出 DIFFUSION_STEP_NAN').to.be.an('error');
+            expect(error.code).to.equal('DIFFUSION_STEP_NAN');
+            expect(error.step).to.equal(0);
+            expect(error.totalSteps).to.equal(2);
+            expect(error.message).to.contain('non-finite');
+            // 拉黑必须在抛错之前完成：否则用户重试拿到的还是同一个坏引擎
             expect(winmlProvider.isRuntimeBlocked(path)).to.equal(true);
         });
 
         it('原生（非 vendor EP）会话不会被误拉黑', async () => {
             const diffusion = new Diffusion();
             const path = 'C:/models/fp16/diff_step_dml.onnx';
-            const xt = await runLoop(diffusion, makeDiffStep({ modelPath: path, provider: undefined, fill: NaN }));
-            expect(Number.isNaN(xt.data[0])).to.equal(true);
+            const { error } = await runLoopCatching(
+                diffusion, makeDiffStep({ modelPath: path, provider: undefined, fill: NaN }));
+            // 早停对任何 EP 都生效（坏数据不该继续积分），只是不拉黑非 vendor 会话
+            expect(error && error.code).to.equal('DIFFUSION_STEP_NAN');
             expect(winmlProvider.isRuntimeBlocked(path)).to.equal(false);
         });
 
