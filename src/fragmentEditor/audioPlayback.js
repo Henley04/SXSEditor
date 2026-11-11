@@ -33,6 +33,7 @@ import {
   getFragmentAudioDataSignature, setFragmentAudioDataSignature,
   getPipelineInitialized,
   getWavFileBuffer,
+  getSingerAnnotation,
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
@@ -41,7 +42,8 @@ import {
 import { getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render } from './canvasRenderer.js';
 import { firstNoteStart } from '../shared/activeNotes.js';
 // 哈希算法与主进程合成缓存键、主窗口播放签名共用一份（src/shared/hashSignature.js）。
-import { hashNumberArray } from '../shared/hashSignature.js';
+import { hashNumberArray, hashString } from '../shared/hashSignature.js';
+import { computePromptCondSignature } from '../shared/promptCondSignature.js';
 import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
@@ -910,11 +912,21 @@ export function computeFragmentAudioSignature() {
     refHash = _hashArrayFNV(refBytes);
   }
 
+  // prompt cond 由 singerData + midiNotes + f0Data 三者共同决定；使用与服务端
+  // 缓存键相同的签名实现，避免任何一份标注变化后仍复用旧 fragmentAudioData。
+  const singerAnn = getSingerAnnotation() || {};
+  const promptHash = hashString(computePromptCondSignature(
+    singerAnn.singerData,
+    singerAnn.midiNotes,
+    singerAnn.f0Data,
+    undefined
+  ));
+
   // 音高来源也必须进签名：manual 空曲线（平直 F0）与 score（f0 条件全 0）都
   // 产出 pitchCurveF0=null、f0Hash 都是 0，只靠曲线哈希区分不出来 —— 切模式后
   // 会命中上一模式的音频，听起来像"切换没生效"。
   const pitchControl = currentPitchControl();
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}`;
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_p${promptHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}`;
 }
 
 export async function playFragment() {
@@ -1121,6 +1133,9 @@ export async function playFragment() {
         pitchCurveF0: pitchCurveF0Serializable,
         pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: previewOpts.nSteps,
@@ -1286,6 +1301,9 @@ export async function synthesizeFragmentInBackground(opts = {}) {
         pitchCurveF0: pitchCurveF0 || null,
         pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: previewOpts.nSteps,
@@ -1368,6 +1386,9 @@ export async function exportFragment() {
         pitchCurveF0: pitchCurveF0Serializable,
         pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: exportOpts.nSteps,

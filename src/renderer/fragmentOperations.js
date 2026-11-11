@@ -26,6 +26,11 @@ export function openFragmentEditor(fragment) {
       project,
       wavBuffer,
       backend: singer?.backend ?? { type: 'sxs' },
+      singerAnnotation: singer ? {
+        singerData: singer.singerData || null,
+        midiNotes: singer.midiNotes || null,
+        f0Data: singer.f0Data || null,
+      } : null,
     });
   } else {
     showAlertDialog(t('main.fragmentEditorNotImplemented'));
@@ -57,7 +62,15 @@ function _syncFragmentToEditor(fragmentId, bounds, routing) {
     payload.singerId = nextId ?? null;
     payload.color = singer ? singer.color : undefined;
     payload.voice = singer
-      ? { wavBuffer: singer.wavBuffer || null, backend: singer.backend ?? { type: 'sxs' } }
+      ? {
+        wavBuffer: singer.wavBuffer || null,
+        backend: singer.backend ?? { type: 'sxs' },
+        singerAnnotation: {
+          singerData: singer.singerData || null,
+          midiNotes: singer.midiNotes || null,
+          f0Data: singer.f0Data || null,
+        },
+      }
       : null;
   }
   window.electronAPI.updateFragmentBounds(fragmentId, payload);

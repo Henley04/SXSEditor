@@ -24,6 +24,14 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     const tEnc0 = performance.now();
 
+    // Static-shape encoders/preflow are fixed [1, NPU_STATIC_SEQ_LEN]. If prompt
+    // tokens do not fit alongside the target, fall back to zero-filled prompt cond.
+    if (promptSeq && promptSeq.tokenCount > 0 && ptFrameCount > 0
+        && useStaticShapes && promptSeq.tokenCount + tokenCount > NPU_STATIC_SEQ_LEN) {
+        console.warn(`[WebNN] prompt ${promptSeq.tokenCount}tok + target ${tokenCount}tok > static ${NPU_STATIC_SEQ_LEN}; prompt cond will be zero-filled`);
+        promptSeq = null;
+    }
+
     // P1 fix: When promptSeq is provided, merge prompt + target token sequences
     // so the prompt section of cond has full encoder features (text+pitch+type+preflow+f0).
     const hasPrompt = promptSeq && ptFrameCount > 0 && promptSeq.tokenCount > 0;
@@ -38,15 +46,15 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     if (hasPrompt) {
         for (let i = 0; i < ptTokenCount; i++) {
-            phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i]);
-            pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
-            typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
+            phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i] || 0);
+            pitchIds[i] = BigInt(promptSeq.notePitchSeq[i] || 0);
+            typeIds[i] = BigInt(promptSeq.noteTypeSeq[i] || 0);
         }
         if (!scoreMode) {
             // score 模式下 prompt 侧 f0 同样置 0 —— 官方 control="score" 把
             // gt_f0 / pt_f0 一起 zeros_like，参考音频的音高不参与条件。
             for (let i = 0; i < ptFrameCount; i++) {
-                f0IdsArr[i] = BigInt(promptSeq.f0Ids[i]);
+                f0IdsArr[i] = BigInt(i < promptSeq.f0Ids.length ? promptSeq.f0Ids[i] : 0);
             }
         }
     }
@@ -146,18 +154,23 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const combinedMel2token = new Int32Array(combinedFrames);
     if (hasPrompt) {
         for (let f = 0; f < ptFrameCount; f++) {
-            combinedMel2token[f] = promptSeq.mel2token[f];
+            const raw = f < promptSeq.mel2token.length ? (promptSeq.mel2token[f] | 0) : 0;
+            combinedMel2token[f] = Math.max(0, Math.min(ptTokenCount - 1, raw));
         }
     }
     for (let f = 0; f < totalFrames; f++) {
-        combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+        const raw = sequences.mel2token[f] | 0;
+        combinedMel2token[ptFrameCount + f] = ptTokenCount + Math.max(0, Math.min(tokenCount - 1, raw));
     }
 
-    // Expand and combine with f0: all frames (prompt + target) have real encoder features
+    // Expand and combine with f0: all frames (prompt + target) have real encoder
+    // features when promptSeq is available. Without promptSeq, keep the prompt
+    // section at zero (old behavior) instead of expanding PAD/f0-bin0 embeddings.
     const tExpand = performance.now();
     const totalCondFrames = combinedFrames;
     const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-    for (let f = 0; f < combinedFrames; f++) {
+    const firstCondFrame = hasPrompt ? 0 : ptFrameCount;
+    for (let f = firstCondFrame; f < combinedFrames; f++) {
         const tokenIdx = combinedMel2token[f];
         for (let d = 0; d < EMBED_DIM; d++) {
             const combined = processedTokenEmb[tokenIdx * EMBED_DIM + d] + f0Emb[f * EMBED_DIM + d];

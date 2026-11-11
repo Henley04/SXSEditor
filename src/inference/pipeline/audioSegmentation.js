@@ -2,6 +2,7 @@ const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVER
 // 哈希算法与渲染层签名共用一份（src/shared/hashSignature.js）。
 // 这里保留 hashArray 方法名：调用点遍布本文件与 index.js，改名没有收益。
 const { hashNumberArray } = require('../../shared/hashSignature.js');
+const { computePromptCondSignature } = require('../../shared/promptCondSignature.js');
 
 // Only rests >= 1.5 seconds are excluded from inference; 150 ms of rest
 // context is kept on both sides of the split so consonant releases and the
@@ -382,6 +383,7 @@ class AudioSegmentation {
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
+        const refSingerData = options.refSingerData || null;
         const totalSteps = options.nSteps || 32;
         const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.7;
@@ -451,11 +453,20 @@ class AudioSegmentation {
             }
         }
 
+        // prompt cond 由 refSingerData + refMidiNotes + refF0Data 三者共同决定；
+        // 三者任一变化都必须让缓存失效（统一口径见 shared/promptCondSignature.js）。
+        const promptSignature = computePromptCondSignature(
+            refSingerData,
+            options.refMidiNotes || null,
+            options.refF0Data || null,
+            options.maxPromptFrames
+        );
+
         // 音高来源：score 时 pitchCurveF0 为 null、f0Hash 也是 0，与"manual 空曲线"
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
         const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
     }
 
     /**
