@@ -13,6 +13,7 @@ const { expect } = require('chai');
 const ort = require('onnxruntime-node');
 const { TextProcessing } = require('../src/inference/pipeline/textProcessing');
 const { Preprocessing } = require('../src/inference/pipeline/preprocessing');
+const { AudioSegmentation } = require('../src/inference/pipeline/audioSegmentation');
 const { EMBED_DIM, COND_DIM, MEL_DIM } = require('../src/inference/pipeline/constants');
 
 function makeSingerData(overrides = {}) {
@@ -153,6 +154,71 @@ describe('prompt cond alignment', () => {
       const explicitZero = prep.buildPromptSequence(sd, midi, null, makeMel(1500), 1500, { maxPromptFrames: 0 });
       expect(explicitZero.ptFrameCount).to.equal(1500);
     });
+
+    it('applies f0Shift to prompt note_pitch but not to prompt f0', () => {
+      const base = prep.buildPromptSequence(
+        makeSingerData({ f0: '' }), makeMidiNotes(), null, makeMel(100), 100, {}
+      );
+      const shifted = prep.buildPromptSequence(
+        makeSingerData({ f0: '' }), makeMidiNotes(), null, makeMel(100), 100, { f0Shift: 12 }
+      );
+      expect(base.promptSeq).to.be.an('object');
+      expect(shifted.promptSeq).to.be.an('object');
+      for (let i = 0; i < base.promptSeq.notePitchSeq.length; i++) {
+        const p = base.promptSeq.notePitchSeq[i];
+        expect(shifted.promptSeq.notePitchSeq[i]).to.equal(p > 0 ? Math.min(255, p + 12) : p);
+      }
+      // prompt f0 来自参考/音符时值，不随 note_pitch 的 f0Shift 偏移
+      expect(Array.from(shifted.promptSeq.f0Ids)).to.deep.equal(Array.from(base.promptSeq.f0Ids));
+    });
+
+    it('skips prompt cond when singerData.duration and midiNotes lengths mismatch', () => {
+      const out = prep.buildPromptSequence(
+        makeSingerData({ duration: '0.5' }), makeMidiNotes(), null, makeMel(100), 100, {}
+      );
+      expect(out.promptSeq).to.equal(null);
+    });
+  });
+
+  describe('cache key prompt signature', () => {
+    const seg = new AudioSegmentation();
+    const notes = [{ lyric: 'zh_a1', pitch: 60, start: 0, duration: 1 }];
+    const baseOptions = () => ({
+      refSingerData: makeSingerData(),
+      refMidiNotes: makeMidiNotes(),
+      refF0Data: Array.from({ length: 100 }, (_, i) => ({ time: i / 50, f0: 220 })),
+      nSteps: 32,
+      cfg: 3,
+      cfgRescale: 0.7,
+    });
+    const key = (opts) => seg.computeMelCacheKey(notes, 120, opts, () => 0);
+
+    it('changes when midiNotes content changes', () => {
+      const a = baseOptions();
+      const b = baseOptions();
+      b.refMidiNotes = b.refMidiNotes.map((n, i) => (i === 0 ? { ...n, lyric: 'zh_a3' } : n));
+      expect(key(a)).to.not.equal(key(b));
+    });
+
+    it('changes when refF0Data changes', () => {
+      const a = baseOptions();
+      const b = baseOptions();
+      b.refF0Data = b.refF0Data.map((f, i) => (i === 0 ? { ...f, f0: 440 } : f));
+      expect(key(a)).to.not.equal(key(b));
+    });
+
+    it('changes when refSingerData changes', () => {
+      const a = baseOptions();
+      const b = baseOptions();
+      b.refSingerData = { ...b.refSingerData, text: 'zh_a3 zh_a2 zh_a3 zh_a4' };
+      expect(key(a)).to.not.equal(key(b));
+    });
+
+    it('changes when maxPromptFrames changes', () => {
+      const a = baseOptions();
+      const b = { ...baseOptions(), maxPromptFrames: 250 };
+      expect(key(a)).to.not.equal(key(b));
+    });
   });
 
   describe('runEncoder prompt merge', () => {
@@ -182,7 +248,9 @@ describe('prompt cond alignment', () => {
             capture.f0 = ids;
             const d = new Float32Array(n * EMBED_DIM);
             for (let i = 0; i < n; i++) {
-              d.fill(ids[i] > 10 ? 2 : 0, i * EMBED_DIM, (i + 1) * EMBED_DIM);
+              // 真实 f0_encoder 是 Embedding：bin 0 也有非零 embedding，
+              // 不能把 0 当成"没有条件"。
+              d.fill(ids[i] === 0 ? 1 : 2, i * EMBED_DIM, (i + 1) * EMBED_DIM);
             }
             return { embeddings: new ort.Tensor('float32', d, [1, n, EMBED_DIM]) };
           },
@@ -234,10 +302,10 @@ describe('prompt cond alignment', () => {
       expect(capture.f0).to.deep.equal([5, 6, 17, 18, 19, 20]);
       expect(capture.preflowDims).to.deep.equal([1, 6, EMBED_DIM]);
       expect(capture.condDims).to.deep.equal([1, 6, EMBED_DIM]);
-      // prompt frame 0 -> prompt token 0 (text=1) + f0 bin 5 (mock=0) = 1
-      expect(capture.cond[0]).to.be.closeTo(1, 1e-6);
-      // prompt frame 1 -> prompt token 1 (text=2)
-      expect(capture.cond[EMBED_DIM]).to.be.closeTo(2, 1e-6);
+      // prompt frame 0 -> prompt token 0 (text=1) + f0 bin 5 (mock=2) = 3
+      expect(capture.cond[0]).to.be.closeTo(3, 1e-6);
+      // prompt frame 1 -> prompt token 1 (text=2) + f0 bin 6 (mock=2) = 4
+      expect(capture.cond[EMBED_DIM]).to.be.closeTo(4, 1e-6);
       // target frame 0 -> target token 3 (text=4) + target f0 (mock=2) = 6
       expect(capture.cond[2 * EMBED_DIM]).to.be.closeTo(6, 1e-6);
     });
@@ -260,9 +328,10 @@ describe('prompt cond alignment', () => {
       await prep.runEncoder(makeSessions(capture), seq, 3, 4, false, 2, false, true, makePromptSeq());
 
       expect(capture.f0).to.deep.equal([0, 0, 0, 0, 0, 0]);
-      expect(capture.cond[0]).to.be.closeTo(1, 1e-6);
-      // target frame 0 -> target token 3 (text=4) + f0 0 = 4
-      expect(capture.cond[2 * EMBED_DIM]).to.be.closeTo(4, 1e-6);
+      // score: f0 bin 0 仍有 embedding（mock=1）
+      expect(capture.cond[0]).to.be.closeTo(2, 1e-6);
+      // target frame 0 -> target token 3 (text=4) + f0 bin0 (mock=1) = 5
+      expect(capture.cond[2 * EMBED_DIM]).to.be.closeTo(5, 1e-6);
     });
   });
 });

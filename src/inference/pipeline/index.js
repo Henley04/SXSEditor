@@ -2280,14 +2280,14 @@ class OnnxSVSPipeline {
      * 从 .sxssinger 的 MIDI/歌词/F0 标注构建 prompt token 序列，并把参考 mel
      * 裁到同一时间窗。无标注/无参考音频时返回 null，保持旧的 prompt cond=0 行为。
      */
-    _buildPromptCond(options, ptMelData, ptFrameCount) {
+    _buildPromptCond(options, ptMelData, ptFrameCount, f0Shift = 0) {
         return this._preprocessing.buildPromptSequence(
             options.refSingerData || null,
             options.refMidiNotes || null,
             options.refF0Data || null,
             ptMelData,
             ptFrameCount,
-            { maxPromptFrames: options.maxPromptFrames }
+            { maxPromptFrames: options.maxPromptFrames, f0Shift }
         );
     }
 
@@ -3306,11 +3306,14 @@ class OnnxSVSPipeline {
         const webnnOnProgress = (p) => {
             onProgress(Math.round(progressStart + (p / 100) * progressRange));
         };
+        // 与单段/多流路径口径一致：先按实际 ptFrameCount 裁剪，再把同一份
+        // promptSeq 传给两个 segment，避免 preflow 看到未引用的尾部 token。
+        const promptSeq = this._finalizePromptSeq(this._currentPromptSeq, ptFrameCount);
         const results = await this._runWebNNSynthesisBatch([
             {
                 sequences: seqA, tokenCount: seqA.tokenCount, totalFrames: framesA,
                 ptMelData, ptFrameCount,
-                promptSeq: this._currentPromptSeq,
+                promptSeq,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
@@ -3320,7 +3323,7 @@ class OnnxSVSPipeline {
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
                 ptMelData, ptFrameCount,
-                promptSeq: this._currentPromptSeq,
+                promptSeq,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
@@ -3704,7 +3707,7 @@ class OnnxSVSPipeline {
             }
             // 用该分片歌手自己的 .sxssinger 标注构建 prompt cond；没有标注时保持
             // promptSeq=null（旧行为：prompt 段 cond 全 0）。
-            const promptInfo = this._buildPromptCond(fragOpts, ptMelData, ptFrameCount);
+            const promptInfo = this._buildPromptCond(fragOpts, ptMelData, ptFrameCount, localSegShifts ? 0 : f0Shift);
             let promptSeq = promptInfo.promptSeq;
             ptMelData = promptInfo.ptMelData;
             ptFrameCount = promptInfo.ptFrameCount;
@@ -4395,7 +4398,7 @@ class OnnxSVSPipeline {
             }
             // 用 .sxssinger 的歌词/MIDI/F0 构建 prompt token 序列，并把参考 mel
             // 裁到同一时间窗。无标注时 promptSeq=null，保持旧的 cond=0 行为。
-            const promptInfo = this._buildPromptCond(options, ptMelData, ptFrameCount);
+            const promptInfo = this._buildPromptCond(options, ptMelData, ptFrameCount, f0Shift);
             promptSeq = promptInfo.promptSeq;
             ptMelData = promptInfo.ptMelData;
             ptFrameCount = promptInfo.ptFrameCount;
@@ -4494,9 +4497,6 @@ class OnnxSVSPipeline {
 
             promptSeq = this._finalizePromptSeq(promptSeq, ptFrameCount);
             this._currentPromptSeq = promptSeq;
-            if (promptSeq) {
-                console.log(`[OnnxSVSPipeline] Prompt cond aligned: ${ptFrameCount}f, ${promptSeq.tokenCount}tok`);
-            }
 
             console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
 

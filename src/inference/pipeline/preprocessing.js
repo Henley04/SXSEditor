@@ -861,8 +861,9 @@ class Preprocessing {
      * @param {Array|null} refF0Data - singer.f0Data（[{time, f0}]，50Hz，相对裁剪后音频）
      * @param {Float32Array|null} ptMelData - 完整参考音频的 mel
      * @param {number} ptFrameCount - 参考 mel 帧数
-     * @param {{maxPromptFrames?: number, promptFramesCap?: number}} [opts]
-     *        0/undefined = 使用完整参考音频；>0 = 从第 0 帧起截断到该帧数
+     * @param {{maxPromptFrames?: number, promptFramesCap?: number, f0Shift?: number}} [opts]
+     *        0/undefined = 使用完整参考音频；>0 = 从第 0 帧起截断到该帧数；
+     *        f0Shift = 与 target 相同的 note_pitch 半音偏移（prompt f0 不偏移）
      * @returns {{promptSeq: Object|null, ptMelData: Float32Array|null, ptFrameCount: number}}
      */
     buildPromptSequence(refSingerData, refMidiNotes, refF0Data, ptMelData, ptFrameCount, opts = {}) {
@@ -941,7 +942,16 @@ class Preprocessing {
         if (!hasAnyLyric) return unchanged;
 
         // bpm=60 → notesToSequences 的 beat 单位就是秒，mel2token 帧数 = 窗口时长 * 50
+        // 注意：这里用 f0Shift=0 生成基础序列，随后只偏移 note_pitch。上游
+        // infer() 对拼接后的 note_pitch 做 += f0_shift，但 prompt 的 f0_course
+        // 仍由未偏移的 pt_f0 量化；两者不能一起偏移。
         const seq = this.notesToSequences(clipped, 60, null, null, 0, 0);
+        const f0Shift = Number.isFinite(opts.f0Shift) ? Math.round(opts.f0Shift) : 0;
+        const promptNotePitchSeq = new Int32Array(seq.notePitchSeq.length);
+        for (let i = 0; i < seq.notePitchSeq.length; i++) {
+            const p = seq.notePitchSeq[i];
+            promptNotePitchSeq[i] = p > 0 ? Math.max(0, Math.min(255, p + f0Shift)) : p;
+        }
         // notesToSequences 对总时长做 floor，可能比 promptFrames 少 1 帧；以
         // promptFrames 为准补齐/裁剪，保证与参考 mel 等长。
         const mel2token = new Int32Array(promptFrames);
@@ -983,7 +993,7 @@ class Preprocessing {
 
         const promptSeq = {
             noteTextSeq: seq.noteTextSeq.subarray(0, tokenCount),
-            notePitchSeq: seq.notePitchSeq.subarray(0, tokenCount),
+            notePitchSeq: promptNotePitchSeq.subarray(0, tokenCount),
             noteTypeSeq: seq.noteTypeSeq.subarray(0, tokenCount),
             f0Ids: f0Ids.length === promptFrames ? f0Ids : this._padInt32(f0Ids, promptFrames),
             mel2token,
@@ -1020,8 +1030,8 @@ class Preprocessing {
 
     /** 解析 .sxssinger 的标注为 {startSec, durSec, lyric, pitch, noteType, isSlur}。 */
     _promptNotesFromSingerData(sd, refMidiNotes) {
-        const splitNums = (s) => (typeof s === 'string' ? s.trim().split(/\s+/).map(Number) : []);
-        const splitToks = (s) => (typeof s === 'string' ? s.trim().split(/\s+/) : []);
+        const splitNums = (s) => (typeof s === 'string' && s.trim() ? s.trim().split(/\s+/).map(Number) : []);
+        const splitToks = (s) => (typeof s === 'string' && s.trim() ? s.trim().split(/\s+/) : []);
         const sdDur = splitNums(sd.duration);
         const sdText = splitToks(sd.text);
         const sdPitch = splitNums(sd.note_pitch);
@@ -1030,21 +1040,23 @@ class Preprocessing {
         const notes = [];
 
         if (midi.length > 0) {
-            // midiNotes 的 start/duration 是拍；用 singerData.duration（秒）反推
-            // BPM，既避免逐音符 toFixed(2) 的累计漂移，又能保留 note 间隙。
-            const beats = midi.map(n => this._finiteOr(n && n.duration, 0));
-            let bpm = 120;
-            if (sdDur.length === midi.length) {
-                let totalBeats = 0, totalSec = 0;
-                for (let i = 0; i < midi.length; i++) {
-                    totalBeats += beats[i];
-                    totalSec += sdDur[i];
-                }
-                if (totalBeats > 0 && totalSec > 0) bpm = totalBeats * 60 / totalSec;
+            // midiNotes 的 start/duration 是拍；singerData.duration 是秒。
+            // 两者必须一一对应，否则无法可靠换算出原始音频时间轴 —— 静默按
+            // bpm=120 猜会让 prompt token 和参考 mel 错位，宁可退回 cond=0。
+            if (sdDur.length !== midi.length) {
+                console.warn(`[PromptCond] singerData.duration (${sdDur.length}) != midiNotes (${midi.length}); skip prompt cond to avoid misalignment`);
+                return [];
             }
+            const beats = midi.map(n => this._finiteOr(n && n.duration, 0));
+            let totalBeats = 0, totalSec = 0;
+            for (let i = 0; i < midi.length; i++) {
+                totalBeats += beats[i];
+                totalSec += sdDur[i];
+            }
+            const bpm = totalBeats > 0 && totalSec > 0 ? totalBeats * 60 / totalSec : 120;
             for (let i = 0; i < midi.length; i++) {
                 const n = midi[i] || {};
-                const durSec = sdDur.length === midi.length ? sdDur[i] : beats[i] * 60 / bpm;
+                const durSec = sdDur[i];
                 if (!(durSec > 0)) continue;
                 notes.push({
                     startSec: this._finiteOr(n.start, 0) * 60 / bpm,

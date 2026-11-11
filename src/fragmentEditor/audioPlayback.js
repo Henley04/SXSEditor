@@ -42,7 +42,8 @@ import {
 import { getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render } from './canvasRenderer.js';
 import { firstNoteStart } from '../shared/activeNotes.js';
 // 哈希算法与主进程合成缓存键、主窗口播放签名共用一份（src/shared/hashSignature.js）。
-import { hashNumberArray } from '../shared/hashSignature.js';
+import { hashNumberArray, hashString } from '../shared/hashSignature.js';
+import { computePromptCondSignature } from '../shared/promptCondSignature.js';
 import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
@@ -911,23 +912,15 @@ export function computeFragmentAudioSignature() {
     refHash = _hashArrayFNV(refBytes);
   }
 
-  // prompt 标注（歌词/MIDI/F0）会改变 prompt cond，必须进签名；否则改完
-  // .sxssinger 标注后仍会复用旧的 fragmentAudioData。
+  // prompt cond 由 singerData + midiNotes + f0Data 三者共同决定；使用与服务端
+  // 缓存键相同的签名实现，避免任何一份标注变化后仍复用旧 fragmentAudioData。
   const singerAnn = getSingerAnnotation() || {};
-  const promptSig = singerAnn.singerData
-    ? [
-      singerAnn.singerData.text || '',
-      singerAnn.singerData.note_pitch || '',
-      singerAnn.singerData.duration || '',
-      singerAnn.singerData.note_type || '',
-      singerAnn.singerData.f0 || '',
-      singerAnn.singerData.trimOffsetSec !== undefined ? singerAnn.singerData.trimOffsetSec : '',
-    ].join('|')
-    : '';
-  let promptHash = 0;
-  for (let i = 0; i < promptSig.length; i++) {
-    promptHash = ((promptHash << 5) - promptHash + promptSig.charCodeAt(i)) | 0;
-  }
+  const promptHash = hashString(computePromptCondSignature(
+    singerAnn.singerData,
+    singerAnn.midiNotes,
+    singerAnn.f0Data,
+    undefined
+  ));
 
   // 音高来源也必须进签名：manual 空曲线（平直 F0）与 score（f0 条件全 0）都
   // 产出 pitchCurveF0=null、f0Hash 都是 0，只靠曲线哈希区分不出来 —— 切模式后

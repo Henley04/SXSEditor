@@ -2,6 +2,7 @@ const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVER
 // 哈希算法与渲染层签名共用一份（src/shared/hashSignature.js）。
 // 这里保留 hashArray 方法名：调用点遍布本文件与 index.js，改名没有收益。
 const { hashNumberArray } = require('../../shared/hashSignature.js');
+const { computePromptCondSignature } = require('../../shared/promptCondSignature.js');
 
 // Only rests >= 1.5 seconds are excluded from inference; 150 ms of rest
 // context is kept on both sides of the split so consonant releases and the
@@ -452,32 +453,20 @@ class AudioSegmentation {
             }
         }
 
-        // prompt 标注（歌词/MIDI/F0）决定 prompt cond；同一段参考音频换标注后
-        // 必须重算，否则会命中旧的 prompt cond。
-        let promptHash = 0;
-        if (refSingerData && typeof refSingerData === 'object') {
-            const s = [
-                refSingerData.text || '',
-                refSingerData.note_pitch || '',
-                refSingerData.duration || '',
-                refSingerData.note_type || '',
-                refSingerData.f0 || '',
-                refSingerData.trimOffsetSec !== undefined ? refSingerData.trimOffsetSec : '',
-            ].join('|');
-            for (let i = 0; i < s.length; i++) {
-                promptHash = ((promptHash << 5) - promptHash + s.charCodeAt(i)) | 0;
-            }
-        }
-        // prompt 截断长度也会改变 cond（0/undefined = 完整参考音频；>0 = 从第 0 帧截断）
-        const promptFramesCap = Number.isFinite(options.maxPromptFrames) && options.maxPromptFrames > 0
-            ? Math.floor(options.maxPromptFrames)
-            : 0;
+        // prompt cond 由 refSingerData + refMidiNotes + refF0Data 三者共同决定；
+        // 三者任一变化都必须让缓存失效（统一口径见 shared/promptCondSignature.js）。
+        const promptSignature = computePromptCondSignature(
+            refSingerData,
+            options.refMidiNotes || null,
+            options.refF0Data || null,
+            options.maxPromptFrames
+        );
 
         // 音高来源：score 时 pitchCurveF0 为 null、f0Hash 也是 0，与"manual 空曲线"
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
         const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptHash}_pf${promptFramesCap}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}`;
     }
 
     /**

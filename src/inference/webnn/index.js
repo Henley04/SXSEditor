@@ -319,7 +319,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             }
         }
         for (let f = 0; f < totalFrames; f++) {
-            combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+            const raw = sequences.mel2token[f] | 0;
+            combinedMel2token[ptFrameCount + f] = ptTokenCount + Math.max(0, Math.min(tokenCount - 1, raw));
         }
 
         const totalCondFrames = combinedFrames;
