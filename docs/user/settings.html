@@ -187,9 +187,9 @@
         <tbody>
           <tr>
             <td><span data-lang="en">Diffusion Steps</span><span data-lang="zh">扩散步数</span></td>
-            <td><span data-lang="en">16</span><span data-lang="zh">16</span></td>
+            <td><span data-lang="en">32</span><span data-lang="zh">32</span></td>
             <td><span data-lang="en">4–64 / step 4</span><span data-lang="zh">4–64 / 步进 4</span></td>
-            <td><span data-lang="en">Fewer steps = faster, lower quality. Recommended preview: 8–16.</span><span data-lang="zh">步数越少越快但音质下降。预览推荐：8–16。</span></td>
+            <td><span data-lang="en">Fewer steps = faster, lower quality. Default 32, same as export.</span><span data-lang="zh">步数越少越快但音质下降。默认 32 步，与导出一致。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">CFG Strength</span><span data-lang="zh">CFG 引导强度</span></td>
@@ -199,13 +199,13 @@
           </tr>
           <tr>
             <td><span data-lang="en">CFG Rescale</span><span data-lang="zh">CFG Rescale 系数</span></td>
-            <td><span data-lang="en">0.70</span><span data-lang="zh">0.70</span></td>
+            <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Mitigates over-guidance artifacts. Recommended 0.5–0.9.</span><span data-lang="zh">缓解过度引导伪影。推荐 0.5–0.9。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
-            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
             <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
             <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。</span></td>
           </tr>
@@ -292,13 +292,13 @@
           </tr>
           <tr>
             <td><span data-lang="en">CFG Rescale</span><span data-lang="zh">CFG Rescale 系数</span></td>
-            <td><span data-lang="en">0.70</span><span data-lang="zh">0.70</span></td>
+            <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Same as preview.</span><span data-lang="zh">同预览。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
-            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
             <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
             <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below. The export dialog also lets you override this per export.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。导出对话框也支持每次导出单独覆盖。</span></td>
           </tr>
@@ -309,8 +309,8 @@
         <span data-lang="en">Diffusion Sampler</span>
         <span data-lang="zh">扩散求解器</span>
       </h3>
-      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity field ODE. The <strong>sampler</strong> decides how each denoising step combines model evaluations into the state update. SXSEditor exposes four samplers, selectable independently for preview and export. <strong>STORK-2</strong> is the default; Euler and Heun remain available as lighter alternatives.</p>
-      <p data-lang="zh">扩散模型通过积分 flow-matching 速度场 ODE 迭代去噪 mel 频谱。<strong>求解器</strong>决定每个去噪步如何将模型推理组合为状态更新。SXSEditor 提供四种求解器，预览与导出可独立选择。默认使用 <strong>STORK-2</strong>；Euler 与 Heun 作为更轻量的备选仍然可选。</p>
+      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity field ODE. The <strong>sampler</strong> decides how each denoising step combines model evaluations into the state update. SXSEditor exposes four samplers, selectable independently for preview and export. <strong>Euler</strong> is the default, matching the official sampling contract; Heun, Extrapolated Euler and STORK-2 remain selectable.</p>
+      <p data-lang="zh">扩散模型通过积分 flow-matching 速度场 ODE 迭代去噪 mel 频谱。<strong>求解器</strong>决定每个去噪步如何将模型推理组合为状态更新。SXSEditor 提供四种求解器，预览与导出可独立选择。默认使用对齐官方采样合约的 <strong>Euler</strong>；Heun、Extrapolated Euler 与 STORK-2 仍可选择。</p>
       <table class="doc-table">
         <thead>
           <tr>
@@ -321,9 +321,9 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>Euler</strong></span><span data-lang="zh"><strong>Euler</strong></span></td>
+            <td><span data-lang="en"><strong>Euler</strong> (default)</span><span data-lang="zh"><strong>Euler</strong>（默认）</span></td>
             <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
-            <td><span data-lang="en">First-order explicit Euler, midpoint time evaluation. The original baseline implementation; fastest and most predictable.</span><span data-lang="zh">一阶显式欧拉法，中点时间评估。原始基线实现，最快且最稳定。</span></td>
+            <td><span data-lang="en">First-order explicit Euler, midpoint time evaluation. The original baseline implementation and the official sampling contract; fastest and most predictable.</span><span data-lang="zh">一阶显式欧拉法，中点时间评估。原始基线实现，也是官方采样合约；最快且最稳定。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en"><strong>Heun</strong></span><span data-lang="zh"><strong>Heun</strong></span></td>
@@ -336,7 +336,7 @@
             <td><span data-lang="en">Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity to linearly extrapolate the next velocity — 1 inference/step. Not the full stabilized Runge-Kutta formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Includes numerical-stability guards (amplitude / sign-flip / NaN) that fall back to Euler when extrapolation is unsafe.</span><span data-lang="zh">受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度线性外推下一步速度——每步 1 次推理。并非论文完整的 stabilized Runge-Kutta 格式；收益为启发式，速度场缓变时效果最佳。含数值稳定性保护（幅度 / 符号翻转 / NaN），外推不安全时退化为 Euler。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en"><strong>STORK-2</strong> (default)</span><span data-lang="zh"><strong>STORK-2</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>STORK-2</strong></span><span data-lang="zh"><strong>STORK-2</strong></span></td>
             <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
             <td><span data-lang="en">Paper-faithful implementation of STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE — only 1 model inference per step despite the 8 sub-stages. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost (8 full-array passes) than Euler.</span><span data-lang="zh">STORK-2 论文原版实现（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE——尽管 8 个 sub-stage，每步仅 1 次模型推理。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍。代价：每步代数运算开销高于 Euler（8 趟全数组遍历）。</span></td>
           </tr>
@@ -423,11 +423,11 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>Constant</strong></span><span data-lang="zh"><strong>恒定</strong></span></td>
-            <td><span data-lang="en">Same CFG strength throughout all diffusion steps.</span><span data-lang="zh">所有扩散步使用相同的 CFG 强度。</span></td>
+            <td><span data-lang="en"><strong>Constant</strong> (default)</span><span data-lang="zh"><strong>恒定</strong>（默认）</span></td>
+            <td><span data-lang="en">Same CFG strength throughout all diffusion steps — the official schedule.</span><span data-lang="zh">所有扩散步使用相同的 CFG 强度，与官方一致。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en"><strong>Linear</strong> (default)</span><span data-lang="zh"><strong>线性</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>Linear</strong></span><span data-lang="zh"><strong>线性</strong></span></td>
             <td><span data-lang="en">CFG strength ramps from high to low across steps.</span><span data-lang="zh">CFG 强度从高到低线性渐变。</span></td>
           </tr>
           <tr>
