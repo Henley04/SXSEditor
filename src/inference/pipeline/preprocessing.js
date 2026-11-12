@@ -3,6 +3,7 @@ const { lazyOrt: ort } = require('../ortRuntime.js');
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
 const { isRestNote } = require('./audioSegmentation');
+const { resolveChineseContextReadings, CJK_SINGLE } = require('./zhG2pContext');
 const durationStats = require('./durationStats');
 
 /**
@@ -202,6 +203,25 @@ class Preprocessing {
 
         let durSum = 0;
 
+        // 整句上下文 G2P：把连续的中文单字歌词拼成句子一次性转写，对齐官方
+        // 预处理 g2pM(sent) 的多音字消歧。逐字 pinyin(char, multiple) 只能按
+        // 常用度取首读音，会把「银行」读成 yin2 xing2、「音乐」读成 yin1 le4。
+        // contextReadings 以 note 索引给出消歧后的读音；命中失败或非单字歌词
+        // 一律回退到 _lookupPhonemeId 的原有逐字 / 显式标注路径。
+        const contextReadings = resolveChineseContextReadings(
+            notes.map((n) => (n && n.lyric) || ''),
+        );
+        const lookupLyric = (phIdx, lyricText) => {
+            if (CJK_SINGLE.test(lyricText)) {
+                const syllable = contextReadings.get(phIdx);
+                if (syllable) {
+                    const ctxId = this.textProcessing._zhSyllableToPhonemeId(syllable);
+                    if (ctxId !== null && ctxId !== undefined) return ctxId;
+                }
+            }
+            return this.textProcessing._lookupPhonemeId(lyricText);
+        };
+
         for (let phIdx = 0; phIdx < notes.length; phIdx++) {
             const note = notes[phIdx];
             const rawLyric = note.lyric || '';
@@ -313,7 +333,7 @@ class Preprocessing {
                             noteTypes.push(noteType);
                         }
                     } else {
-                        const phId = this.textProcessing._lookupPhonemeId(lyric);
+                        const phId = lookupLyric(phIdx, lyric);
                         phLocations.push([dur, 1, durationRatios, [phId]]);
                         newPhonemes.push(phId);
                         note2origin.push(phIdx);
@@ -338,7 +358,7 @@ class Preprocessing {
                         noteTypes.push(noteType);
                     }
                 } else {
-                    const phId = this.textProcessing._lookupPhonemeId(lyric);
+                    const phId = lookupLyric(phIdx, lyric);
                     phLocations.push([dur, 1, durationRatios, [phId]]);
                     newPhonemes.push(phId);
                     note2origin.push(phIdx);
@@ -367,7 +387,7 @@ class Preprocessing {
                     noteTypes.push(noteType);
                 }
             } else {
-                const phId = this.textProcessing._lookupPhonemeId(lyric);
+                const phId = lookupLyric(phIdx, lyric);
                 phLocations.push([dur, 1, durationRatios, [phId]]);
                 newPhonemes.push(phId);
                 note2origin.push(phIdx);
@@ -1163,6 +1183,14 @@ class Preprocessing {
             // SiFiGAN vocoder 与分块边界选择都还要用它。
             f0IdsArr.fill(0n);
         } else {
+            // manual 对应官方 control="melody"：官方把 gt_note_pitch /
+            // pt_note_pitch 置 None（全 0），只保留 F0 条件；score 与 melody
+            // 两种音高条件互斥。此前这里无条件下发 note_pitch，导致 manual
+            // 变成 note_pitch + F0 双条件，偏离训练时的条件分布。
+            // 只清送入 note_pitch_encoder 的局部 pitchIds（含 prompt 段）；
+            // sequences.notePitchSeq 仍供 autoShift 参考中位数与分块边界
+            // F0 斜率统计使用，不能就地改写。
+            pitchIds.fill(0n);
             if (hasPrompt) {
                 for (let i = 0; i < ptFrameCount; i++) {
                     f0IdsArr[i] = BigInt(i < promptSeq.f0Ids.length ? promptSeq.f0Ids[i] : 0);

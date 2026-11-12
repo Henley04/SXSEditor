@@ -560,6 +560,13 @@ class TextProcessing {
         if (zhAlt && this.phone2idx[zhAlt] !== undefined) {
             return this.phone2idx[zhAlt];
         }
+        // 官方 g2p.py 对 ? . ! , 等标点直接删除、其余非中英文字符落 <SP>。
+        // 纯标点 / 符号歌词统一按静音处理，不要落到 <UNK>（训练分布外的
+        // embedding 会让模型在这个音节唱出未知音素）。含字母或数字的
+        // 乱码 / 拼错的音素名不在此列，仍走 <UNK> 并告警，守卫不放宽。
+        if (/^[\p{P}\p{S}\s]+$/u.test(trimmed)) {
+            return this.phone2idx['<SP>'] || 1;
+        }
         // 同一个字在整首歌里会出现几十次，同一条告警只报一次，免得刷满日志
         this._unkWarned = this._unkWarned || new Set();
         if (!this._unkWarned.has(trimmed)) {
@@ -700,6 +707,36 @@ class TextProcessing {
             if (this.phone2idx[direct] !== undefined) return direct;
             const alt = this._nearestToneVariant(`zh_${alias}5`);
             if (alt && this.phone2idx[alt] !== undefined) return alt;
+        }
+        return null;
+    }
+
+    /**
+     * 把「整句上下文消歧得到的带声调拼音」映射成词表音素 ID。
+     *
+     * 与 _charToZhPhoneme 的三层兜底完全一致（精确命中 → 同音节换声调 →
+     * 音节别名），区别只是读音已经由整句上下文定好，不再逐字取 multiple 首读音。
+     * 命中失败返回 null，调用方回退到 _lookupPhonemeId 的原有逐字逻辑。
+     *
+     * @param {string} syllable - 带声调拼音，如 'hang2' / 'yue4' / 'zhe0'
+     * @returns {number|null}
+     */
+    _zhSyllableToPhonemeId(syllable) {
+        if (typeof syllable !== 'string' || !syllable) return null;
+        const key = 'zh_' + this._normalizeZhSyllable(syllable);
+        // 1) 精确命中
+        if (this.phone2idx[key] !== undefined) return this.phone2idx[key];
+        // 2) 同音节换声调
+        const alt = this._nearestToneVariant(key);
+        if (alt && this.phone2idx[alt] !== undefined) return this.phone2idx[alt];
+        // 3) 音节别名（ng / n 这类成音节鼻音）
+        const m = key.match(/^zh_(.+?)([1-5])$/);
+        if (m && ZH_SYLLABLE_ALIASES[m[1]]) {
+            const alias = ZH_SYLLABLE_ALIASES[m[1]];
+            const direct = `zh_${alias}${m[2]}`;
+            if (this.phone2idx[direct] !== undefined) return this.phone2idx[direct];
+            const aliasAlt = this._nearestToneVariant(`zh_${alias}5`);
+            if (aliasAlt && this.phone2idx[aliasAlt] !== undefined) return this.phone2idx[aliasAlt];
         }
         return null;
     }

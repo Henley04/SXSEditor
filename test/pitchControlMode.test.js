@@ -130,7 +130,12 @@ describe('runEncoder 在 score 模式下把 f0 条件清零', () => {
     });
     return {
       noteTextEncoder: mk('embeddings'),
-      notePitchEncoder: mk('embeddings'),
+      notePitchEncoder: {
+        run: async (feeds) => {
+          capture.pitch = Array.from(feeds.input_ids.data, (v) => Number(v));
+          return { embeddings: emb(feeds.input_ids.dims[1]) };
+        },
+      },
       noteTypeEncoder: mk('embeddings'),
       f0Encoder: {
         run: async (feeds) => {
@@ -164,21 +169,30 @@ describe('runEncoder 在 score 模式下把 f0 条件清零', () => {
     };
   }
 
-  it('score：f0 输入全 0，音高序列照常保留', async () => {
+  it('score：f0 输入全 0，note_pitch 条件照常保留', async () => {
     const capture = {};
     const prep = new Preprocessing(new TextProcessing());
     const seq = makeSequences([17, 18, 19, 20]);
     await prep.runEncoder(makeSessions(capture), seq, seq.tokenCount, 4, false, 0, false, true);
     expect(capture.f0).to.deep.equal([0, 0, 0, 0]);
+    // score 对应官方 control="score"：只给 note_pitch，f0 全 0
+    expect(capture.pitch).to.deep.equal([0, 60, 62]);
     // sequences.f0Ids 不能被就地改写：SiFiGAN vocoder 还要用真实 f0
     expect(Array.from(seq.f0Ids)).to.deep.equal([17, 18, 19, 20]);
+    expect(Array.from(seq.notePitchSeq)).to.deep.equal([0, 60, 62]);
   });
 
-  it('manual：f0 输入按曲线原样下发', async () => {
+  it('manual：f0 输入按曲线原样下发，note_pitch 条件全 0（对齐官方 melody）', async () => {
     const capture = {};
     const prep = new Preprocessing(new TextProcessing());
     const seq = makeSequences([17, 18, 19, 20]);
     await prep.runEncoder(makeSessions(capture), seq, seq.tokenCount, 4, false, 0, false, false);
     expect(capture.f0).to.deep.equal([17, 18, 19, 20]);
+    // manual 对应官方 control="melody"：gt_note_pitch/pt_note_pitch 置 None（全 0），
+    // 只保留 F0；此前无条件下发 note_pitch 会造成 note_pitch + F0 双条件。
+    expect(capture.pitch).to.deep.equal([0, 0, 0]);
+    // 只清送入 encoder 的局部数组，不改写上游序列：autoShift 中位数与分块
+    // 边界 F0 斜率仍要读 notePitchSeq。
+    expect(Array.from(seq.notePitchSeq)).to.deep.equal([0, 60, 62]);
   });
 });
