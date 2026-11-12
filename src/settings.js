@@ -378,10 +378,10 @@ function applySavedSettingsToUI(currentSetting) {
     updateDeviceModeUI(deviceMode);
 
     // Diffusion sliders
-    const pSteps = currentSetting.previewDiffSteps ?? 16;
+    const pSteps = currentSetting.previewDiffSteps ?? 32;
     const pCfg = currentSetting.previewCfgStrength ?? 3.0;
-    const pRescale = currentSetting.previewCfgRescale ?? 0.7;
-    const pSampler = currentSetting.previewSampler || 'stork2';
+    const pRescale = currentSetting.previewCfgRescale ?? 0.75;
+    const pSampler = currentSetting.previewSampler || 'euler';
     previewDiffStepsSlider.value = pSteps;
     previewDiffStepsValue.textContent = pSteps;
     if (previewSamplerSelect) previewSamplerSelect.value = pSampler;
@@ -391,7 +391,7 @@ function applySavedSettingsToUI(currentSetting) {
     previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
 
     // CFG schedule (preview)
-    const pSchedMode = currentSetting.previewCfgScheduleMode || currentSetting.cfgScheduleMode || 'linear';
+    const pSchedMode = currentSetting.previewCfgScheduleMode || currentSetting.cfgScheduleMode || 'constant';
     if (previewCfgScheduleModeSelect) previewCfgScheduleModeSelect.value = pSchedMode;
     const pSchedStart = Number.isFinite(currentSetting.previewCfgStrengthStart)
         ? currentSetting.previewCfgStrengthStart
@@ -429,8 +429,8 @@ function applySavedSettingsToUI(currentSetting) {
 
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
-    const eRescale = currentSetting.exportCfgRescale ?? 0.7;
-    const eSampler = currentSetting.exportSampler || 'stork2';
+    const eRescale = currentSetting.exportCfgRescale ?? 0.75;
+    const eSampler = currentSetting.exportSampler || 'euler';
     exportDiffStepsSlider.value = eSteps;
     exportDiffStepsValue.textContent = eSteps;
     if (exportSamplerSelect) exportSamplerSelect.value = eSampler;
@@ -440,7 +440,7 @@ function applySavedSettingsToUI(currentSetting) {
     exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
 
     // CFG schedule (export)
-    const eSchedMode = currentSetting.exportCfgScheduleMode || currentSetting.cfgScheduleMode || 'linear';
+    const eSchedMode = currentSetting.exportCfgScheduleMode || currentSetting.cfgScheduleMode || 'constant';
     if (exportCfgScheduleModeSelect) exportCfgScheduleModeSelect.value = eSchedMode;
     const eSchedStart = Number.isFinite(currentSetting.exportCfgStrengthStart)
         ? currentSetting.exportCfgStrengthStart
@@ -1516,8 +1516,8 @@ function collectSettings() {
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
-        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'stork2',
-        previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'linear',
+        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'euler',
+        previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'constant',
         previewCfgStrengthStart: previewCfgStrengthStartInput ? (() => {
             const v = parseFloat(previewCfgStrengthStartInput.value);
             return Number.isFinite(v) ? Math.max(0, Math.min(10, v)) : null;
@@ -1532,8 +1532,8 @@ function collectSettings() {
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
-        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'stork2',
-        exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'linear',
+        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'euler',
+        exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'constant',
         exportCfgStrengthStart: exportCfgStrengthStartInput ? (() => {
             const v = parseFloat(exportCfgStrengthStartInput.value);
             return Number.isFinite(v) ? Math.max(0, Math.min(10, v)) : null;

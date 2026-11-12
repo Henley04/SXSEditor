@@ -539,7 +539,7 @@ class Diffusion {
      * Task 7 (Welford): combine uses single-pass Welford online variance
      *   instead of three-pass sum/Var/rescale.
      *
-     * @param {string} [samplerName='stork2'] - 求解器名称，见 samplers/index.js
+     * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js（默认 DEFAULT_SOLVER）
      */
     async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false, progressCap = 90, diagTag = '') {
         const _diffT0 = performance.now();

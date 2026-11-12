@@ -26,7 +26,7 @@ const ENUM_SETTINGS = {
 };
 
 const NUMERIC_SETTINGS = {
-  previewDiffSteps: [4, 64, 16], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
+  previewDiffSteps: [4, 64, 32], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
   previewDiffStepChunkFrames: [100, 2000, 500], previewDiffStepOverlapFrames: [0, 200, 50],
   exportDiffSteps: [4, 64, 32], exportCfgStrength: [0, 10, 3], exportCfgRescale: [0, 1, 0.75], exportSampleRate: [24000, 96000, 48000],
   audioSampleRate: [8000, 192000, 48000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
@@ -220,11 +220,11 @@ function loadSettings() {
   // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
   // cfgStrengthStart: null 时回退到 cfgStrength * 0.5（linear/cosine 从 0.5×cfg 上升到 cfg）
   // cfgScheduleKeyframes: null 或 [{step, value}, ...]（custom 模式分段线性插值）
-  // 默认 'linear'：早期低 CFG 稳定结构，后期高 CFG 锐化细节。
+  // 默认 'constant'：官方全程恒定 CFG、无调度；任何非恒定调度都偏离官方采样合约。
   // 顶层键为通用默认；preview*/export* 镜像键分别覆盖预览/导出路径。
   const _validScheduleModes = ['constant', 'linear', 'cosine', 'custom'];
   if (!_validScheduleModes.includes(_settingsCache.cfgScheduleMode)) {
-    _settingsCache.cfgScheduleMode = 'linear';
+    _settingsCache.cfgScheduleMode = 'constant';
   }
   if (_settingsCache.cfgStrengthStart !== null && !Number.isFinite(_settingsCache.cfgStrengthStart)) {
     _settingsCache.cfgStrengthStart = null;
@@ -234,7 +234,7 @@ function loadSettings() {
   }
   // 预览镜像键
   if (!_validScheduleModes.includes(_settingsCache.previewCfgScheduleMode)) {
-    _settingsCache.previewCfgScheduleMode = 'linear';
+    _settingsCache.previewCfgScheduleMode = 'constant';
   }
   if (_settingsCache.previewCfgStrengthStart !== null && !Number.isFinite(_settingsCache.previewCfgStrengthStart)) {
     _settingsCache.previewCfgStrengthStart = null;
@@ -244,7 +244,7 @@ function loadSettings() {
   }
   // 导出镜像键
   if (!_validScheduleModes.includes(_settingsCache.exportCfgScheduleMode)) {
-    _settingsCache.exportCfgScheduleMode = 'linear';
+    _settingsCache.exportCfgScheduleMode = 'constant';
   }
   if (_settingsCache.exportCfgStrengthStart !== null && !Number.isFinite(_settingsCache.exportCfgStrengthStart)) {
     _settingsCache.exportCfgStrengthStart = null;

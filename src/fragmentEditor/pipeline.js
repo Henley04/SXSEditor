@@ -177,11 +177,11 @@ export function initPipeline() {
 export function getFragmentPreviewInferenceOptions() {
   const settings = getFragmentAudioSettings();
   return {
-    nSteps: settings?.previewDiffSteps ?? 16,
+    nSteps: settings?.previewDiffSteps ?? 32,
     cfg: settings?.previewCfgStrength ?? 3.0,
-    cfgRescale: settings?.previewCfgRescale ?? 0.7,
+    cfgRescale: settings?.previewCfgRescale ?? 0.75,
     // 兜底采样器与主窗口/管线默认值（samplers/index.js DEFAULT_SOLVER）保持一致。
-    sampler: settings?.previewSampler ?? 'stork2',
+    sampler: settings?.previewSampler ?? 'euler',
     qdrift: resolveQDriftDefault(settings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
@@ -196,8 +196,8 @@ export function getFragmentExportInferenceOptions() {
   return {
     nSteps: settings?.exportDiffSteps ?? 32,
     cfg: settings?.exportCfgStrength ?? 3.0,
-    cfgRescale: settings?.exportCfgRescale ?? 0.7,
-    sampler: settings?.exportSampler ?? 'stork2',
+    cfgRescale: settings?.exportCfgRescale ?? 0.75,
+    sampler: settings?.exportSampler ?? 'euler',
     qdrift: resolveQDriftDefault(settings, 'exportEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,

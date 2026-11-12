@@ -48,7 +48,10 @@ const SOLVERS = {
     },
 };
 
-const DEFAULT_SOLVER = 'stork2';
+// 官方 flow_matching.py:284-307 用标准 Euler，全程恒定 CFG、无调度。此前默认
+// STORK-2（STORK 论文的 RKC 递推）偏离官方采样合约；对齐官方把默认改为 Euler。
+// STORK-2 / Heun / Extrapolated Euler 仍可手动选择，行为不变。
+const DEFAULT_SOLVER = 'euler';
 const VALID_SOLVERS = Object.keys(SOLVERS);
 
 // 旧名称兼容映射（用户已保存的 settings 可能含 'stork'）

@@ -1027,8 +1027,8 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts，动态阈值新增 dynamicThresholdOpts，协作式取消新增 abortSignal）
       const callArgs = stub.firstCall.args;
       expect(callArgs[callArgs.length - 6]).to.equal(onChunkMel);
-      // 倒数第五个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
-      expect(callArgs[callArgs.length - 5]).to.equal('stork2');
+      // 倒数第五个为 samplerName，缺省用 DEFAULT_SOLVER（对齐官方 Euler）
+      expect(callArgs[callArgs.length - 5]).to.equal('euler');
       // M10: pitchCurveF0 与 cfgScheduleOpts 透传
       expect(callArgs[callArgs.length - 4]).to.equal(pitchCurveF0);
       expect(callArgs[callArgs.length - 3]).to.equal(cfgScheduleOpts);

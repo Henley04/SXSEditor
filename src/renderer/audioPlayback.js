@@ -1116,8 +1116,8 @@ export function getPreviewInferenceOptions() {
     ...(_retakeNonce ? { retakeNonce: _retakeNonce } : {}),
     nSteps: state.audioSettings?.previewDiffSteps ?? state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.7,
-    sampler: state.audioSettings?.previewSampler ?? state.audioSettings?.exportSampler ?? 'stork2',
+    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
+    sampler: state.audioSettings?.previewSampler ?? state.audioSettings?.exportSampler ?? 'euler',
     // Q-Drift 漂移校正（预览开关；未显式设置时按模型精度推断）
     qdrift: resolveQDriftDefault(state.audioSettings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
@@ -1126,7 +1126,7 @@ export function getPreviewInferenceOptions() {
     diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
     // Task 11: CFG schedule (preview mirrors). Falls back to top-level keys.
-    cfgScheduleMode: state.audioSettings?.previewCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgScheduleMode: state.audioSettings?.previewCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'constant',
     cfgStrengthStart: state.audioSettings?.previewCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
     cfgScheduleKeyframes: state.audioSettings?.previewCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
     // Dynamic thresholding (preview path)
@@ -1141,14 +1141,14 @@ export function getExportInferenceOptions() {
     modelPrecision: state.audioSettings?.modelPrecision || 'fp32',
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.7,
-    sampler: state.audioSettings?.exportSampler ?? 'stork2',
+    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.75,
+    sampler: state.audioSettings?.exportSampler ?? 'euler',
     // Q-Drift 漂移校正（导出开关；未显式设置时按模型精度推断）
     qdrift: resolveQDriftDefault(state.audioSettings, 'exportEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     // Task 11: CFG schedule (export mirrors). Falls back to top-level keys.
-    cfgScheduleMode: state.audioSettings?.exportCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgScheduleMode: state.audioSettings?.exportCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'constant',
     cfgStrengthStart: state.audioSettings?.exportCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
     cfgScheduleKeyframes: state.audioSettings?.exportCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
     // Dynamic thresholding (export path)

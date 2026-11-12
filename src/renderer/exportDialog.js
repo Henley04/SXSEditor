@@ -100,8 +100,8 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.7,
-      exportSampler: settings.exportSampler || 'stork2',
+      exportCfgRescale: settings.exportCfgRescale ?? 0.75,
+      exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : false,
       outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
       outputBitDepth: [16, 24, 32].includes(settings.exportBitDepth) ? settings.exportBitDepth : 32,
@@ -112,11 +112,11 @@ export async function openExportDialog() {
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
       releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder === true,
       // Task 11/17/18: new settings keys
-      exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'constant',
       exportCfgStrengthStart: Number.isFinite(settings.exportCfgStrengthStart) ? settings.exportCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
       exportCfgScheduleKeyframes: Array.isArray(settings.exportCfgScheduleKeyframes) ? settings.exportCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
       // M5: preview CFG schedule mirrors (fall back to top-level cfg* keys)
-      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'constant',
       previewCfgStrengthStart: Number.isFinite(settings.previewCfgStrengthStart) ? settings.previewCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
       previewCfgScheduleKeyframes: Array.isArray(settings.previewCfgScheduleKeyframes) ? settings.previewCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
       // Dynamic thresholding (export path)
@@ -393,7 +393,7 @@ function buildParamsSection(form) {
     value: form.exportCfgRescale,
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
-    warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
+    warning: (v) => (v < 0.5 || v > 0.75) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
   });
   section.appendChild(rescaleField);
 

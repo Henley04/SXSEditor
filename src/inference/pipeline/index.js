@@ -3535,7 +3535,7 @@ class OnnxSVSPipeline {
         this._melPostprocessOptions = normalizeMelPostprocessOptions(firstOpts.melPostprocess);
         // Task 11: CFG 强度曲线调度（取首片段配置，多片段必须一致）
         this._currentCfgScheduleOpts = {
-            mode: firstOpts.cfgScheduleMode || 'linear',
+            mode: firstOpts.cfgScheduleMode || 'constant',
             cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
             keyframes: firstOpts.cfgScheduleKeyframes ?? null,
         };
@@ -4280,7 +4280,7 @@ class OnnxSVSPipeline {
         this._currentQDriftEnabled = options.qdrift === true;
         // Task 11: CFG 强度曲线调度（透传到 _runDiffusionLoop → diffusion.js）
         this._currentCfgScheduleOpts = {
-            mode: options.cfgScheduleMode || 'linear',
+            mode: options.cfgScheduleMode || 'constant',
             cfgStrengthStart: options.cfgStrengthStart ?? null,
             keyframes: options.cfgScheduleKeyframes ?? null,
         };

@@ -21,7 +21,10 @@ const MEL_VAR = 8.14;
 const F0_BIN = 361;
 const F0_MIN = 32.7031956625;
 const CFG_STRENGTH = 3.0;
-const CFG_RESCALE = 0.7;
+// 官方 flow_matching.py:262 rescale_cfg = 0.75（infer() 未覆盖）。此前 0.7
+// 与官方不一致；统一为 0.75。注意 Q-Drift 合约里的 0.7 是量化校正表的标定
+// 值，属于另一套参数，不随此默认值改动（见 qdrift/）。
+const CFG_RESCALE = 0.75;
 const DEFAULT_DIFF_STEPS = 32;
 const LONG_AUDIO_THRESHOLD_SEC = 20;
 const SEGMENT_MIN_SEC = 8;

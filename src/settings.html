@@ -300,9 +300,9 @@
                 <div class="settings-subgroup">
                     <p class="subgroup-label" data-i18n="settings.subgroupBasic">基础参数</p>
                     <div class="setting-group">
-                        <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">16</span></label>
-                        <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
-                        <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
+                        <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">32</span></label>
+                        <input type="range" id="previewDiffSteps" min="4" max="64" value="32" step="4">
+                        <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。默认 32 步，与导出一致。</p>
                     </div>
                     <div class="setting-group">
                         <label for="previewSampler"><span data-i18n="settings.sampler">求解器</span></label>
@@ -320,8 +320,8 @@
                         <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
                     </div>
                     <div class="setting-group">
-                        <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.70</span></label>
-                        <input type="range" id="previewCfgRescale" min="0" max="1" value="0.70" step="0.05">
+                        <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
+                        <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
                         <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
                     </div>
                 </div>
@@ -337,7 +337,7 @@
                         </select>
                         <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。</p>
                     </div>
-                    <div class="setting-group" id="previewCfgStrengthStartGroup">
+                    <div class="setting-group hidden" id="previewCfgStrengthStartGroup">
                         <label for="previewCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
                         <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动"
                                data-i18n-placeholder="settings.autoPlaceholder">
@@ -434,8 +434,8 @@
                         <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。导出时建议保持较高值以确保音质。</p>
                     </div>
                     <div class="setting-group">
-                        <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.70</span></label>
-                        <input type="range" id="exportCfgRescale" min="0" max="1" value="0.70" step="0.05">
+                        <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
+                        <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
                         <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
                     </div>
                 </div>
@@ -451,7 +451,7 @@
                         </select>
                         <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。</p>
                     </div>
-                    <div class="setting-group" id="exportCfgStrengthStartGroup">
+                    <div class="setting-group hidden" id="exportCfgStrengthStartGroup">
                         <label for="exportCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
                         <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动"
                                data-i18n-placeholder="settings.autoPlaceholder">

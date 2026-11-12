@@ -386,7 +386,7 @@ class AudioSegmentation {
         const refSingerData = options.refSingerData || null;
         const totalSteps = options.nSteps || 32;
         const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
-        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.7;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.75;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
         const language = options.language || null;
