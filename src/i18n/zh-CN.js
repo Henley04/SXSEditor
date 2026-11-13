@@ -264,6 +264,7 @@ export default {
     pitchCurveAuto: '自动',
     pitchCurveManual: '手动',
     pitchCurveMixed: '混合',
+    pitchCurveScore: '乐谱',
     exportLegacyProject: '导出旧版兼容工程',
     legacyProjectSaved: '已导出旧版兼容工程（1.1.0）：{path}',
     newFragment: '新分片',

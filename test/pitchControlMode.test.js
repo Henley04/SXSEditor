@@ -15,6 +15,7 @@ const {
   PITCH_MODE_AUTO, PITCH_MODE_MANUAL, PITCH_MODE_SCORE,
   normalizePitchMode, resolvePitchMode, isScoreMode,
   fragmentHasPitchContent, fragmentPitchMode,
+  pitchCurveBadgeKind, PITCH_BADGE_MIXED,
 } = require('../src/shared/pitchControl.js');
 const { AudioSegmentation } = require('../src/inference/pipeline/audioSegmentation.js');
 const { Preprocessing } = require('../src/inference/pipeline/preprocessing.js');
@@ -194,5 +195,56 @@ describe('runEncoder 在 score 模式下把 f0 条件清零', () => {
     // 只清送入 encoder 的局部数组，不改写上游序列：autoShift 中位数与分块
     // 边界 F0 斜率仍要读 notePitchSeq。
     expect(Array.from(seq.notePitchSeq)).to.deep.equal([0, 60, 62]);
+  });
+});
+
+describe('pitchCurveBadgeKind（分片卡片徽标）', () => {
+  const frag = (extra = {}) => ({
+    pitchMode: undefined,
+    pitchCurve: {
+      enabled: true,
+      anchorPoints: [],
+      brushSegments: [],
+      bakedSegments: [],
+      auto: { enabled: false },
+    },
+    ...extra,
+  });
+
+  it('显式 score 优先于残留曲线：VPR 导入后切成 score 必须显示乐谱', () => {
+    // 从 VPR/VSQX 导入的分片带着 anchorPoints，用户切成 score 后曲线不再参与推理。
+    // 修复前徽标只看内容，永远显示"手动"，与 resolvePitchMode 的结论相反。
+    const f = frag({ pitchMode: PITCH_MODE_SCORE });
+    f.pitchCurve.anchorPoints = [{ time: 0, pitch: 60 }, { time: 1, pitch: 62 }];
+    expect(pitchCurveBadgeKind(f)).to.equal(PITCH_MODE_SCORE);
+    expect(fragmentPitchMode(f, () => false)).to.equal(PITCH_MODE_SCORE);
+  });
+
+  it('显式 score 且完全没有曲线字段时也要画乐谱', () => {
+    expect(pitchCurveBadgeKind({ pitchMode: PITCH_MODE_SCORE })).to.equal(PITCH_MODE_SCORE);
+    expect(pitchCurveBadgeKind({ pitchMode: PITCH_MODE_SCORE, pitchCurve: null })).to.equal(PITCH_MODE_SCORE);
+  });
+
+  it('自动层 + 手绘 = 混合；只有自动层 = 自动', () => {
+    const mixed = frag({ pitchMode: PITCH_MODE_MANUAL });
+    mixed.pitchCurve.auto.enabled = true;
+    mixed.pitchCurve.anchorPoints = [{ time: 0, pitch: 60 }];
+    expect(pitchCurveBadgeKind(mixed)).to.equal(PITCH_BADGE_MIXED);
+
+    const auto = frag({ pitchMode: PITCH_MODE_AUTO });
+    auto.pitchCurve.auto.enabled = true;
+    expect(pitchCurveBadgeKind(auto)).to.equal(PITCH_MODE_AUTO);
+  });
+
+  it('只有手绘 = 手动；显式 manual + 空曲线也画手动（平直 F0，与 score 不同）', () => {
+    const drawn = frag({ pitchMode: PITCH_MODE_MANUAL });
+    drawn.pitchCurve.anchorPoints = [{ time: 0, pitch: 60 }];
+    expect(pitchCurveBadgeKind(drawn)).to.equal(PITCH_MODE_MANUAL);
+    expect(pitchCurveBadgeKind(frag({ pitchMode: PITCH_MODE_MANUAL }))).to.equal(PITCH_MODE_MANUAL);
+  });
+
+  it('auto + 无任何内容 → 不画徽标（不给旧工程添视觉噪音）', () => {
+    expect(pitchCurveBadgeKind(frag())).to.equal(null);
+    expect(pitchCurveBadgeKind(null)).to.equal(null);
   });
 });

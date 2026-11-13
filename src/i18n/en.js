@@ -266,6 +266,7 @@ export default {
     pitchCurveAuto: 'Auto',
     pitchCurveManual: 'Manual',
     pitchCurveMixed: 'Mixed',
+    pitchCurveScore: 'Score',
     exportLegacyProject: 'Export legacy-compatible project',
     legacyProjectSaved: 'Exported legacy-compatible project (1.1.0): {path}',
     newFragment: 'New Fragment',

@@ -19,7 +19,13 @@
  */
 
 const TIME_EPSILON = 1e-6;
-const MAX_ANCHORS = 2000;
+// 锚点上限只用来防止异常工程把内存打爆，不该决定正常工程的曲线精度。
+// 原值 2000 在 471 拍的工程上把采样步长顶到 0.236 拍（≈114 ms @124 BPM），
+// VOCALOID 的 PIT 通常每 4–10 tick（480 tick/拍）一个点，细节被抹平。
+// 放宽到 20000 后，实际精度由 MIN_ANCHOR_STEP 决定：<=1250 拍的工程一律
+// 按 1/16 拍采样（471 拍约 7500 点，序列化约 400 KB，可接受）；超长工程
+// 才退化为等距抽稀。
+const MAX_ANCHORS = 20000;
 const MIN_ANCHOR_STEP = 1 / 16;
 const MAX_PITCH = 127;
 

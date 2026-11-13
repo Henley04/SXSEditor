@@ -16,6 +16,7 @@ import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFil
 import { createIcon } from '../icons/iconHelper.js';
 import { describeTrackBackend, ensurePluginCatalog, hasPluginCatalog } from './pluginBackend.js';
 import { isPluginTrack } from '../editor/trackManager.js';
+import { pitchCurveBadgeKind, PITCH_BADGE_MIXED } from '../shared/pitchControl.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
 
 export function getBeatWidth() {
@@ -1447,22 +1448,26 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * 分片卡片上的音高曲线状态徽标。
- *   · 自动开启 + 无手动内容  → "自动"（浅色）
- *   · 自动开启 + 有手动内容  → "混合"（强调色）
- *   · 仅手动                 → "手动"
- * 未开启自动且无手动内容时不画（v2.0.2 的旧工程不会多出任何视觉元素）。
+ * 分片卡片上的音高状态徽标。
+ *   · 显式 score              → "乐谱"（曲线不参与推理，灰色）
+ *   · 自动开启 + 无手动内容   → "自动"（强调色）
+ *   · 自动开启 + 有手动内容   → "混合"（强调色）
+ *   · 仅手动（含显式 manual） → "手动"（灰色）
+ * 既无自动层也无手绘内容、且不是显式选择时不画（v2.0.2 的旧工程不会多出视觉元素）。
+ *
+ * 判定本身在 shared/pitchControl.js —— 显式 score 必须优先于残留的
+ * anchorPoints，否则从 VPR 导入后切成 score，徽标仍显示"手动"。
  */
 function _drawPitchCurveBadge(ctx, fragment, x, y, maxWidth, c) {
-  const pc = fragment && fragment.pitchCurve;
-  if (!pc) return;
-  const autoOn = !!(pc.auto && pc.auto.enabled);
-  const manualCount = (pc.anchorPoints?.length || 0)
-    + (pc.brushSegments?.length || 0)
-    + (pc.bakedSegments?.length || 0);
-  if (!autoOn && manualCount === 0) return;
+  const kind = pitchCurveBadgeKind(fragment);
+  if (!kind) return;
 
-  const label = autoOn ? (manualCount > 0 ? t('main.pitchCurveMixed') : t('main.pitchCurveAuto')) : t('main.pitchCurveManual');
+  const label = kind === PITCH_BADGE_MIXED ? t('main.pitchCurveMixed')
+    : kind === 'score' ? t('main.pitchCurveScore')
+      : kind === 'auto' ? t('main.pitchCurveAuto')
+        : t('main.pitchCurveManual');
+  // 自动层与混合是"曲线在工作"，用强调色；纯手动/乐谱是中性状态，用弱色。
+  const useAccent = kind === 'auto' || kind === PITCH_BADGE_MIXED;
   ctx.font = '9px sans-serif';
   const w = Math.min(maxWidth, ctx.measureText(label).width + 8);
   if (w < 16) return;
@@ -1471,7 +1476,7 @@ function _drawPitchCurveBadge(ctx, fragment, x, y, maxWidth, c) {
   if (bx + w > maxWidth) return;
 
   ctx.save();
-  ctx.fillStyle = autoOn ? (c.accent || '#5b8def') : (c.fgMuted || '#8888a8');
+  ctx.fillStyle = useAccent ? (c.accent || '#5b8def') : (c.fgMuted || '#8888a8');
   ctx.globalAlpha = 0.85;
   if (typeof ctx.roundRect === 'function') {
     ctx.beginPath();

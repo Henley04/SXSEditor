@@ -87,3 +87,38 @@ export function fragmentPitchMode(fragment, hasF0PostprocessEffect) {
     fragmentHasPitchContent(fragment, hasF0PostprocessEffect),
   );
 }
+
+/** 分片卡片徽标的种类（渲染层再映射成文案）。'mixed' = 自动层 + 手绘内容并存。 */
+export const PITCH_BADGE_MIXED = 'mixed';
+
+/**
+ * 分片卡片上音高徽标该显示什么 —— 纯判定，不含文案。
+ *
+ * 关键：**显式 score 优先于曲线内容**。分片里可能留着从 VPR/VSQX 导入的
+ * anchorPoints，但用户一旦把模式切成 score，这些曲线就不参与推理了；
+ * 此前徽标只看 `auto.enabled` 和手绘点数，于是永远显示"手动"，和实际
+ * 下发管线（resolvePitchMode 走 score）相反，用户以为切换没生效。
+ *
+ * @param {object} fragment 分片
+ * @returns {'score'|'manual'|'auto'|'mixed'|null} null = 不画徽标
+ */
+export function pitchCurveBadgeKind(fragment) {
+  if (!fragment) return null;
+  const mode = normalizePitchMode(fragment.pitchMode);
+  if (mode === PITCH_MODE_SCORE) return PITCH_MODE_SCORE;
+
+  const pc = fragment.pitchCurve;
+  if (!pc) return mode === PITCH_MODE_MANUAL ? PITCH_MODE_MANUAL : null;
+
+  const autoOn = !!(pc.auto && pc.auto.enabled);
+  const manualCount = (Array.isArray(pc.anchorPoints) ? pc.anchorPoints.length : 0)
+    + (Array.isArray(pc.brushSegments) ? pc.brushSegments.length : 0)
+    + (Array.isArray(pc.bakedSegments) ? pc.bakedSegments.length : 0);
+  if (!autoOn && manualCount === 0) {
+    // 显式 manual + 空曲线 = 平直 F0（旧"平直"行为），与 score 的听感不同，
+    // 必须画出来，否则用户看不出这两种"都没有点"的状态有何区别。
+    return mode === PITCH_MODE_MANUAL ? PITCH_MODE_MANUAL : null;
+  }
+  if (autoOn) return manualCount > 0 ? PITCH_BADGE_MIXED : PITCH_MODE_AUTO;
+  return PITCH_MODE_MANUAL;
+}
