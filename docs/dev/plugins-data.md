@@ -59,6 +59,7 @@ module.exports = {
 | `ext` | `.` + 1–16 位 `[a-z0-9]` | 必须带点；大小写不敏感（宿主统一小写） |
 | `role` | `open` / `save` / `both` | 决定出现在"打开"还是"保存"对话框，也决定你能否被 `codec.write` 调到 |
 | `label` | 字符串或 `{ en, 'zh-CN' }` | 对话框过滤器里显示的名字 |
+| `companionExts` | `['.wav', ...]` | 可选。声明"这个工程会引用同目录的素材文件"（见 §3.1） |
 
 **不能注册的扩展名**：`.sxsproj`、`.sxs`、`.sxssinger`、`.sxsp`。工程与歌手文件走宿主的
 格式版本协商（`version` / `minReader` / `features`），被插件顶掉就等于绕过了版本检查。
@@ -69,7 +70,7 @@ module.exports = {
 ## 3. `codec.read` 的契约
 
 ```js
-codec.read(ctx, { ext, path, name, size, bytes }) → { document } | { error } | { cancelled: true }
+codec.read(ctx, { ext, path, name, size, bytes, files }) → { document, warnings? } | { error } | { cancelled: true }
 ```
 
 | 入参 | 说明 |
@@ -77,6 +78,34 @@ codec.read(ctx, { ext, path, name, size, bytes }) → { document } | { error } |
 | `ext` | 小写扩展名（和你在 manifest 里写的一致） |
 | `path` / `name` / `size` | 原始路径、文件名、字节数（仅供提示，别用它去读盘） |
 | `bytes` | `Uint8Array`，完整文件内容（上限 64 MiB，超过宿主直接拒绝，不会调你） |
+| `files` | 仅当 `fileTypes` 里声明了 `companionExts` 才有：同目录白名单素材的 `[{ name, bytes }]`（见 §3.1） |
+
+### 3.1 相对路径引用的素材（`companionExts`）
+
+有些格式（SVP 的 instrumental track）不内嵌音频，而是用相对路径指向工程
+**同目录**的 wav。插件进程没有工程目录的读权限，所以由宿主代读：在
+`fileTypes` 条目里声明 `"companionExts": [".wav"]`，打开该格式时宿主会扫一遍
+主文件所在目录，把命中的素材作为 `files` 一并传进 `codec.read`。
+
+不声明就**完全不会扫描**——打开一个普通工程不该顺手把用户目录翻一遍。
+
+| 宿主只收 | 原因 |
+|---|---|
+| 主文件同目录、纯文件名的文件 | 跨目录引用等于让插件读任意位置 |
+| `companionExts` 里列出的扩展名 | 最小权限；不按内容猜 |
+| 普通文件（跳过符号链接、隐藏文件、主文件自身） | 同目录一个指向别处的链接就能把"只读同目录"变成读任意路径 |
+| 最多 16 个、合计 256MB | 与保存侧旁挂文件的上限对称 |
+
+被跳过的文件不会让打开失败，原因进 `warnings`；素材缺失时由你决定是告警
+跳过还是直接报错（插件比宿主更清楚这条轨能不能没有音频）。
+
+```js
+async read(ctx, { bytes, files }) {
+  const raw = JSON.parse(new TextDecoder().decode(bytes));
+  const wav = new Map((files || []).map((f) => [f.name.toLowerCase(), f.bytes]));
+  // raw.tracks[].audio.filename → wav.get(basename.toLowerCase())
+}
+```
 
 返回值里 `document` 是**宿主的工程文档形状**：
 
@@ -90,6 +119,10 @@ codec.read(ctx, { ext, path, name, size, bytes }) → { document } | { error } |
   }],
 }
 ```
+
+`warnings` 可选：读的时候丢掉/修掉的东西（某条伴奏的音频找不到、某段曲线宿主
+承载不了）在这里逐条说，宿主会和校验告警合并后弹给用户。返回 `{ document }`
+也合法——但"静默跳过"不是好习惯，用户看到的是"歌里少了一段"。
 
 - `notes[].start` / `duration` 以**拍**为单位，`pitch` 是 MIDI 音高（0–127）。
 - `singers[].id` 与 `fragments[].singerId` 要能对上；对不上时宿主保留分片并给一条

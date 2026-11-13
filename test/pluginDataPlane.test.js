@@ -137,6 +137,37 @@ describe('PluginDataPlane — 打开插件格式', () => {
     expect(Buffer.from(calls[0].params.bytes).toString('utf8')).to.equal(fs.readFileSync(file, 'utf8'));
   });
 
+  it('声明 companionExts 时，同目录白名单素材随 codec.read 一起传入', async () => {
+    const wav = path.join(dir, 'backing.wav');
+    fs.writeFileSync(wav, Buffer.from('RIFFfake'));
+    const withCompanion = { ...entry, companionExts: ['.wav'] };
+    const { plane, calls } = makePlane({ entries: [withCompanion] });
+    const r = await plane.openDocument(file);
+    expect(r.ok).to.equal(true);
+    expect(calls[0].params.files).to.have.lengthOf(1);
+    expect(calls[0].params.files[0].name).to.equal('backing.wav');
+    expect(Buffer.from(calls[0].params.files[0].bytes).toString('latin1')).to.equal('RIFFfake');
+  });
+
+  it('未声明 companionExts 时不扫描目录（普通工程不该被翻目录）', async () => {
+    fs.writeFileSync(path.join(dir, 'backing.wav'), Buffer.from('RIFFfake'));
+    const { plane, calls } = makePlane();
+    const r = await plane.openDocument(file);
+    expect(r.ok).to.equal(true);
+    expect(calls[0].params.files).to.deep.equal([]);
+  });
+
+  it('伴生文件只收白名单扩展名、纯文件名，跳过隐藏文件与子目录', async () => {
+    fs.writeFileSync(path.join(dir, 'backing.wav'), Buffer.from('a'));
+    fs.writeFileSync(path.join(dir, 'cover.png'), Buffer.from('b'));
+    fs.writeFileSync(path.join(dir, '.hidden.wav'), Buffer.from('c'));
+    fs.mkdirSync(path.join(dir, 'sub.wav'));
+    const withCompanion = { ...entry, companionExts: ['.wav'] };
+    const { plane, calls } = makePlane({ entries: [withCompanion] });
+    await plane.openDocument(file);
+    expect(calls[0].params.files.map((f) => f.name)).to.deep.equal(['backing.wav']);
+  });
+
   it('插件抛错 → 错误码透传，不变成 500', async () => {
     const { plane } = makePlane({
       call: async () => { throw Object.assign(new Error('不是 SV2'), { code: 'INVALID_REQUEST' }); },

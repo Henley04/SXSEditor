@@ -304,11 +304,36 @@ function validateFileTypes(list) {
       label = localizedTitle(ft.label, `fileTypes('${ext}').label`);
       if (!label.ok) return fail(label.error);
     }
+    // 有些工程格式把素材放在**工程文件同目录**，用相对路径引用（SVP 的
+    // instrumental track 就是 `audio.filename: "../backing.wav"`）。codec.read
+    // 只收得到主文件字节，插件进程又没有工程目录的读权限，于是"能写回去、
+    // 重新打开却读不回来"。这里让格式显式声明伴生文件扩展名白名单，由宿主
+    // 读取并一并送入 —— 权限与限额都留在宿主侧，插件不获得目录遍历能力。
+    // 不声明就完全不扫描，老插件行为不变。
+    let companionExts = [];
+    if (ft.companionExts !== undefined) {
+      if (!Array.isArray(ft.companionExts)) {
+        return fail(`fileTypes('${ext}').companionExts 必须是数组`);
+      }
+      const seenCompanion = new Set();
+      for (const rawExt of ft.companionExts.slice(0, 8)) {
+        const value = String(rawExt || '').trim().toLowerCase();
+        if (!/^\.[a-z0-9]{1,16}$/.test(value)) {
+          return fail(`fileTypes('${ext}').companionExts 含非法扩展名：${JSON.stringify(rawExt)}`);
+        }
+        if (value === ext || RESERVED_FILE_EXTS.has(value)) {
+          return fail(`fileTypes('${ext}').companionExts 不能包含工程格式本身：${value}`);
+        }
+        seenCompanion.add(value);
+      }
+      companionExts = [...seenCompanion];
+    }
     out.push({
       ext,
       role,
       filters,
       label: label.value || (filters[0] ? { en: filters[0] } : null),
+      companionExts,
     });
   }
   return { ok: true, value: out };

@@ -189,6 +189,32 @@ describe('pluginManifest', function () {
     expect(r.error).to.match(/sxsproj/);
   });
 
+  it('fileTypes.companionExts 接受素材扩展名并去重', function () {
+    const r = validateManifest(goodManifest({
+      contributes: {
+        commands: [],
+        panels: [],
+        fileTypes: [{ ext: '.svp', role: 'both', companionExts: ['.wav', '.WAV'] }],
+      },
+    }), ctx);
+    expect(r.ok, r.error).to.equal(true);
+    expect(r.value.contributes.fileTypes[0].companionExts).to.deep.equal(['.wav']);
+  });
+
+  it('fileTypes.companionExts 拒绝非法扩展名与把工程格式当素材', function () {
+    const bad = validateManifest(goodManifest({
+      contributes: { commands: [], panels: [], fileTypes: [{ ext: '.svp', role: 'both', companionExts: ['wav'] }] },
+    }), ctx);
+    expect(bad.ok).to.equal(false);
+    expect(bad.error).to.match(/companionExts/);
+
+    const self = validateManifest(goodManifest({
+      contributes: { commands: [], panels: [], fileTypes: [{ ext: '.svp', role: 'both', companionExts: ['.svp'] }] },
+    }), ctx);
+    expect(self.ok).to.equal(false);
+    expect(self.error).to.match(/不能包含工程格式本身/);
+  });
+
   it('拒绝把菜单挂到 plugins 之外的位置', function () {
     const r = validateManifest(goodManifest({
       contributes: {

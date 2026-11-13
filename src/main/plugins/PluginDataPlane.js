@@ -48,6 +48,19 @@ const MAX_WRITE_BYTES = 256 * 1024 * 1024;
 const MAX_SIDECAR_FILES = 16;
 
 /**
+ * 一次打开最多附带几个伴生文件、以及它们的总字节上限。
+ *
+ * 与保存侧 `MAX_SIDECAR_FILES` 对齐：写的时候最多带 16 个，读的时候不该把
+ * 更多东西塞进 IPC。总字节单独设限，避免"16 个都刚好卡在单文件上限"叠成
+ * 4GB 的结构化克隆 —— 主文件本身最多 256MB，伴生文件不该比它还夸张。
+ */
+const MAX_COMPANION_FILES = 16;
+const MAX_COMPANION_TOTAL_BYTES = 256 * 1024 * 1024;
+
+/** 伴生文件名允许的字符：纯文件名，不含路径分隔符、点开头与 Windows 保留字。 */
+const COMPANION_NAME_RE = /^[^\\/:*?"<>|.][^\\/:*?"<>|]{0,119}$/;
+
+/**
  * 双语文案。
  *
  * 这些 message 会经渲染层弹给用户看（`main.projectPluginOpenFailed` 的 {reason}），
@@ -140,6 +153,7 @@ class PluginDataPlane {
         role: entry.role,
         label: entry.label || null,
         filters: entry.filters || [],
+        companionExts: Array.isArray(entry.companionExts) ? entry.companionExts : [],
       };
     }
     return null;
@@ -256,12 +270,25 @@ class PluginDataPlane {
       return { ok: false, code: FILE_ERR.NOT_FOUND, message: tr(`读取失败：${err.message}`, `Read failed: ${err.message}`) };
     }
 
+    // 相对路径引用的工程格式（SVP 的 instrumental track 等）把音频放在主文件
+    // 同目录。codec.read 只收得到主文件字节，插件进程又没有工程目录的读权限，
+    // 所以由宿主按格式声明的白名单把这些伴生文件一并读好送进去。这一步失败
+    // 不能让"打开工程"失败：主文件是用户真正选中的目标，伴生素材是附加品。
+    const companions = await this._readCompanionFiles(filePath, target.companionExts);
+
     let result;
     try {
       result = await this.call(
         target.pluginId,
         'codec.read',
-        { ext, path: filePath, name: path.basename(filePath), size: stat.size, bytes },
+        {
+          ext,
+          path: filePath,
+          name: path.basename(filePath),
+          size: stat.size,
+          bytes,
+          files: companions.files,
+        },
         TIMEOUTS.command,
       );
     } catch (err) {
@@ -309,8 +336,80 @@ class PluginDataPlane {
       pluginId: target.pluginId,
       ext,
       document: checked.document,
-      warnings: checked.warnings,
+      warnings: [...companions.warnings, ...checked.warnings],
     };
+  }
+
+  /**
+   * 读取主文件同目录的伴生文件（相对路径引用格式的素材）。
+   *
+   * 只在该格式在 manifest 里声明了 `companionExts` 时才扫描；不声明的格式连
+   * readdir 都不会发生 —— 打开一个普通的 .sv2 不该顺手把用户目录翻一遍。
+   *
+   * 安全约束与保存侧 `_writeSidecarFiles` 对称：只读同目录、只收白名单扩展名、
+   * 只认纯文件名、跳过隐藏文件/符号链接/主文件自身、数量与总字节双重上限、
+   * 每个目标再走一次 `isPathAllowed`。符号链接必须挡：同目录里一个指向别处的
+   * 链接会让"只读同目录"变成读任意位置。
+   *
+   * @returns {Promise<{files: Array<{name:string, bytes:Buffer}>, warnings: string[]}>}
+   */
+  async _readCompanionFiles(mainPath, companionExts) {
+    const out = { files: [], warnings: [] };
+    const exts = new Set(Array.isArray(companionExts) ? companionExts : []);
+    if (!exts.size) return out;
+
+    const dir = path.dirname(mainPath);
+    let names;
+    try {
+      names = await fs.promises.readdir(dir);
+    } catch (err) {
+      // 目录不可读不是致命错误：插件会按"素材缺失"给出自己的告警。
+      this.logger.warn(`伴生文件目录不可读：${err.message}`);
+      return out;
+    }
+
+    const { isPathAllowed } = require('../security');
+    const mainBase = path.basename(mainPath).toLowerCase();
+    let total = 0;
+
+    for (const name of names) {
+      if (out.files.length >= MAX_COMPANION_FILES) {
+        out.warnings.push(tr(
+          `同目录伴生文件超过 ${MAX_COMPANION_FILES} 个，其余未读取`,
+          `More than ${MAX_COMPANION_FILES} companion files in the folder; the rest were not read`,
+        ));
+        break;
+      }
+      if (!COMPANION_NAME_RE.test(name)) continue;
+      if (!exts.has(path.extname(name).toLowerCase())) continue;
+      if (name.toLowerCase() === mainBase) continue;
+
+      const target = path.join(dir, name);
+      if (!isPathAllowed(target)) continue;
+      let stat;
+      try {
+        stat = await fs.promises.lstat(target);
+      } catch (_) {
+        continue;
+      }
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      if (stat.size > MAX_OPEN_BYTES || total + stat.size > MAX_COMPANION_TOTAL_BYTES) {
+        out.warnings.push(tr(
+          `伴生文件 ${name} 超过大小上限，已跳过`,
+          `Companion file ${name} exceeds the size limit and was skipped`,
+        ));
+        continue;
+      }
+      let bytes;
+      try {
+        bytes = await fs.promises.readFile(target);
+      } catch (_) {
+        continue;
+      }
+      out.files.push({ name, bytes });
+      total += bytes.length;
+    }
+    return out;
   }
 
   /**

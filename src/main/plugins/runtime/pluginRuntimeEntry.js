@@ -503,8 +503,10 @@ async function handleRequest(msg) {
       }
       case 'codec.read': {
         // 打开插件格式的文件（M4）。字节由宿主读好后送进来 —— 插件进程没有、
-        // 也不需要任意路径的读权限，`params.path` 只是给插件做"同目录找伴生文件"
-        // 之类的判断用的提示，真正可信的是 bytes。
+        // 也不需要任意路径的读权限，`params.path` 只是提示，真正可信的是 bytes。
+        // `files` 是宿主按 manifest 的 companionExts 声明读取的同目录伴生文件
+        // （相对路径引用格式的素材，如 SVP instrumental track 的 wav）。格式没
+        // 声明时是空数组；老插件忽略这个参数即可，不需要改代码。
         const codecs = (moduleExports && moduleExports.codecs) || {};
         const codec = codecs[params.ext];
         if (!codec || typeof codec.read !== 'function') {
@@ -516,6 +518,7 @@ async function handleRequest(msg) {
           name: params.name,
           size: params.size,
           bytes: params.bytes,
+          files: Array.isArray(params.files) ? params.files : [],
         });
         break;
       }
