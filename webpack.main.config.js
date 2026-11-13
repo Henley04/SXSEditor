@@ -1,5 +1,6 @@
 const CopyPlugin = require('copy-webpack-plugin');
 const path = require('node:path');
+const { BUILTIN_PLUGIN_IDS } = require('./src/shared/builtinPluginIds.js');
 
 module.exports = {
   entry: './src/main.js',
@@ -202,18 +203,20 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/build-info.json'),
           noErrorOnMissing: true,
         },
-        {
-          // 内置官方插件源码：随包分发到 bundled-plugins/，启动时由
-          // builtinPlugins.js 复制到用户插件目录再走标准安装链路。
-          // 单独放在 .webpack/main/bundled-plugins/ 而不是 main/ 子树下，
-          // 是为了避开上面 `src/main → .webpack/main/main` 的整目录拷贝：
-          // 两者目标不同、不会互相覆盖，也不需要额外的 ignore 规则。
-          // 运行时用 app.getAppPath() + 该相对路径定位，packagerConfig.ignore
-          // 的白名单已包含 .webpack，因此会一并进入 app.asar。
-          from: path.resolve(__dirname, 'plugins/official-project-import'),
-          to: path.resolve(__dirname, '.webpack/main/bundled-plugins/official-project-import'),
+        // 随应用分发的内置插件源码：整份清单都拷到 bundled-plugins/<id>/，
+        // 启动时由 builtinPlugins.js 逐份复制到用户插件目录再走标准安装链路。
+        // 清单只有一份（src/shared/builtinPluginIds.js），打包与启动共用，避免
+        // 加了插件却只在一侧生效 —— 那种故障只会在全新安装的机器上暴露。
+        // 单独放在 .webpack/main/bundled-plugins/ 而不是 main/ 子树下，
+        // 是为了避开上面 `src/main → .webpack/main/main` 的整目录拷贝：
+        // 两者目标不同、不会互相覆盖，也不需要额外的 ignore 规则。
+        // 运行时用 app.getAppPath() + 该相对路径定位，packagerConfig.ignore
+        // 的白名单已包含 .webpack，因此会一并进入 app.asar。
+        ...BUILTIN_PLUGIN_IDS.map((id) => ({
+          from: path.resolve(__dirname, 'plugins', id),
+          to: path.resolve(__dirname, '.webpack/main/bundled-plugins', id),
           noErrorOnMissing: true,
-        },
+        })),
       ],
     }),
   ],

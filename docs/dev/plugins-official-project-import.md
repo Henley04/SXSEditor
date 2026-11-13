@@ -32,22 +32,30 @@
 
 ## 2. 内置安装与停用
 
-本插件随应用分发，**无需手动安装**：
+本插件随应用分发，**无需手动安装**。随包分发的内置插件共两个，id 清单只有一份
+（`src/shared/builtinPluginIds.js`）：`official-project-import`（本插件）与
+`example-sv2`（`.sv2` 示例工程格式的双向读写，见 [`plugins-data.md`](plugins-data.md) §9）。
+打包拷贝（`webpack.main.config.js` 的 CopyPlugin）、启动安装
+（`src/main/plugins/builtinPlugins.js`）和完整性守卫
+（`test/copyWebpackClosure.test.js`）都从这份清单取 id：新增内置插件只改一处，
+不会出现「包里有源码但启动不装」或「装了但打包没拷」这类只在全新安装机器上
+暴露的故障。
 
-1. 打包后源码位于 `.webpack/main/bundled-plugins/official-project-import/`。
-2. 首次启动、插件服务加载之前，宿主把该目录复制到用户插件目录并走标准安装链路
-   （`src/main/plugins/builtinPlugins.js`），来源记为 `builtin`。随包分发没有独立的
-   插件签名文件，安装记录如实标为未签名，不显示为验签通过。
+1. 打包后源码位于 `.webpack/main/bundled-plugins/<id>/`。
+2. 首次启动、插件服务加载之前，宿主按清单逐个把目录复制到用户插件目录并走标准
+   安装链路（`src/main/plugins/builtinPlugins.js`），来源记为 `builtin`。单个插件
+   安装失败不拖挂其它插件，也不阻断启动。随包分发没有独立的插件签名文件，
+   安装记录如实标为未签名，不显示为验签通过。
 3. 插件管理器显示「内置」徽标，不提供卸载入口；服务层同样拒绝卸载，避免命令行
    与自动化入口绕过。需要关闭其贡献点时，在管理器中停用即可。
 4. 默认不覆盖用户选择：已安装（含用户停用、或自行安装了其它版本）时保持原状；
    目录被移除而注册表仍在时重新补齐，但保留此前的停用状态。唯一例外是按版本
    升级：仅当注册记录存在、目录完好、来源为 `builtin`，且包内清单版本严格高于
    用户目录里的版本时，才用包内副本覆盖（`src/main/plugins/builtinPlugins.js`
-   的 `needsUpgrade`）。这用于修掉早期内置副本缺少 `.svp` 保存能力所导致的
-   「没有插件能保存该格式」误报。升级保留停用状态、设置、签名历史与首次安装
-   时间，并写一条带 `from` / `to` 的 `upgrade` 审计；用户自行安装的同名插件、
-   版本相同或更高者一律不覆盖。
+   的 `needsUpgrade`）。这用于修掉早期内置副本缺少 `.svp` 保存能力、以及早期
+   `example-sv2` 缺少伴奏写回能力所导致的「没有插件能保存该格式」误报。升级
+   保留停用状态、设置、签名历史与首次安装时间，并写一条带 `from` / `to` 的
+   `upgrade` 审计；用户自行安装的同名插件、版本相同或更高者一律不覆盖。
 
 在插件管理器的「已安装」页可以看到「内置」徽标，签名栏显示为未签名、来源为内置，
 这是随应用分发的真实状态。手动制作签名包分发是另一条路径，见 §8。
@@ -333,5 +341,6 @@ node scripts/package-plugin.js plugins/official-project-import `
 ```
 
 私钥在仓库之外，不入库。签名与信任的机制见 `docs/dev/plugins-signing.md`。
-打包后的内置源码落点为 `.webpack/main/bundled-plugins/official-project-import/`，
-由 `test/copyWebpackClosure.test.js` 守卫其完整性。
+打包后的内置源码落点为 `.webpack/main/bundled-plugins/<id>/`，`id` 取自
+`src/shared/builtinPluginIds.js`；`test/copyWebpackClosure.test.js` 按这份清单
+逐个守卫整目录的完整性与入口相对依赖自洽。

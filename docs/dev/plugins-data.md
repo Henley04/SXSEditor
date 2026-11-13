@@ -32,7 +32,8 @@ module.exports = {
 ```
 
 装好之后，**文件 → 打开工程**的对话框里会多出「SV2 工程」一项，选中即打开；
-用户双击 `.sv2`（运行中的实例）也会路由到这里。
+用户双击 `.sv2`（运行中的实例）也会路由到这里。本文以 `.sv2` 作教学示例；该示例
+插件本身已随应用分发（见 §9），普通用户无需手动安装。
 
 ## 1. 两件事必须分开：声明 ≠ 权限
 
@@ -408,9 +409,20 @@ module.exports = {
   元数据走 `ext` 原样保留、音素声明成只读、写不进去的东西（音素微调、颤音）
   显式告警而不是静默丢弃。
 
-打包装给别人：
+> **它现在随应用分发**：`example-sv2` 与 `official-project-import` 同在内置清单
+> `src/shared/builtinPluginIds.js` 里，首次启动自动安装到用户插件目录（来源记为
+> `builtin`），因此 `.sv2` 开箱即可打开与保存，伴奏的内嵌 / 相对路径写回也一并在。
+> 内置副本按版本升级时保留用户的停用状态、设置与签名历史；用户自行安装的同名
+> 插件一律不覆盖。安装与升级策略见
+> [`plugins-official-project-import.md`](plugins-official-project-import.md) §2。
+>
+> `.sv2` 是本项目为演示数据面自造的示例 JSON 格式，**不是** Synthesizer V 2 的
+> 官方工程文件。随包分发只为让示例格式开箱可用，不代表宿主能打开真实的 SV2 工程；
+> 真实的 Synthesizer V 工程（`.svp`）由 `official-project-import` 处理。
+
+打包装给别人（只用于另做第三方分发包；随应用分发的用户不需要这一步）：
 
 ```bash
 npm run plugin:pack -- plugins/example-sv2 -o dist-plugins
-# → dist-plugins/example-sv2-1.0.0.sxsp
+# → dist-plugins/example-sv2-1.1.0.sxsp（版本号随 manifest.version）
 ```

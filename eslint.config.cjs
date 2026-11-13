@@ -92,6 +92,8 @@ module.exports = [
             'src/shared/pluginDisposable.js',
             'src/shared/pluginProtocol.js',
             'src/shared/pluginManifest.js',
+            // 随包分发的内置插件 id 清单（CJS，webpack 配置 / 主进程 / 单测共用）
+            'src/shared/builtinPluginIds.js',
             // 插件级部署依赖（manifest.dependencies）的校验与解析（CJS 纯函数）
             'src/shared/pluginDependencies.js',
             // 内置推理管线是否需要初始化的唯一真源（CJS 纯函数，主进程与两个渲染层共用）
