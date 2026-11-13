@@ -135,10 +135,11 @@ function registerSettingsIpc() {
     }
   });
 
-  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async (_event, options = {}) => {
     if (process.platform !== 'win32') return [];
     try {
-      return await require('../inference/winml/winmlProvider').listCompatibleProviders();
+      return await require('../inference/winml/winmlProvider')
+        .listCompatibleProviders({ forceRefresh: options?.forceRefresh === true });
     } catch (err) {
       console.warn('[Main] Windows ML provider discovery failed:', err.message);
       return [];

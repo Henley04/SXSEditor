@@ -8,6 +8,7 @@ const { getOrt } = require('../ortRuntime.js');
 
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, DIFF_STEP_MAX_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
+const sessionValidationCache = require('./sessionValidationCache');
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -98,6 +99,9 @@ class OnnxSVSPipeline {
         this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
         this._modelPrecision = options.modelPrecision || null;
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
+        // dummy 校验结果持久化目录（userData）。worker_threads 里没有 electron.app，
+        // 由 svsIpc 经 pipelineOptions 注入；主进程场景可以直接解析 userData。
+        if (options.userDataDir) sessionValidationCache.configureCacheDir(options.userDataDir);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
         this._japaneseVocalization = options.japaneseVocalization || 'hybrid';
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);

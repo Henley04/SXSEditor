@@ -27,6 +27,7 @@ const path = require('node:path');
 
 const ortBridge = require('./ortBridge');
 const winmlCatalog = require('./winmlCatalog');
+const detectionCache = require('./winmlDetectionCache');
 
 // Models that already failed at RUNTIME on a WinML vendor EP, keyed by model
 // file name. Creation can succeed (the validation dummy usually has a length
@@ -228,12 +229,24 @@ async function getReadyEpLibraries() {
         return [];
     }
 
+    // 跨重启缓存：上一次启动已解析出的可注册 EP 库。libraryPath 仍存在、
+    // 门控键与运行环境（Electron / OS build / 架构）一致时直接复用，跳过
+    // catalog 初始化与逐个 DLL 的可加载性探测 —— 这是管线初始化最慢的一段。
+    const persisted = detectionCache.getCachedReadyEps(key);
+    if (persisted) {
+        _readyEpLibrariesCache = persisted.map(e => ({ ...e }));
+        _readyEpLibrariesCacheKey = key;
+        console.log(`[WinML][ready] persistent-cache eps=${persisted.map(e => e.name).join(',')}`);
+        return persisted.map(e => ({ ...e }));
+    }
+
     const started = Date.now();
     console.log('[WinML][ready] start');
     _readyEpLibrariesPromise = _resolveReadyEpLibraries()
         .then((eps) => {
             _readyEpLibrariesCache = eps.map(e => ({ ...e }));
             _readyEpLibrariesCacheKey = key;
+            if (eps.length > 0) detectionCache.setCachedReadyEps(key, eps);
             console.log(`[WinML][ready] done ms=${Date.now() - started} eps=${eps.map(e => e.name).join(',') || 'none'}`);
             return _readyEpLibrariesCache.map(e => ({ ...e }));
         })

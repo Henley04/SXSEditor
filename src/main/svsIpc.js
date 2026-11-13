@@ -99,6 +99,16 @@ async function _createPipeline(languageOverride) {
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
 
+  // dummy 校验结果缓存目录（跨重启复用，避免每次启动重跑一遍校验推理）。
+  // worker_threads 内拿不到 electron.app，这里解析后随 pipelineOptions / workerData 下发。
+  let userDataDir = null;
+  try {
+    const electron = require('electron');
+    if (electron && electron.app && typeof electron.app.getPath === 'function') {
+      userDataDir = electron.app.getPath('userData');
+    }
+  } catch (_) { /* 非 Electron 环境（测试 / CLI 片段） */ }
+
   const pipelineOptions = {
     deviceId,
     deviceMode,
@@ -108,6 +118,7 @@ async function _createPipeline(languageOverride) {
     languageOverride,
     inferenceProvider,
     japaneseVocalization,
+    userDataDir,
   };
 
   // WebNN contexts exist only in Chromium renderer processes. A Node
@@ -174,6 +185,7 @@ async function _createPipeline(languageOverride) {
       // 主进程硬件检测结果（WebNN + PnP 回退），供 worker 内 winmlProvider 使用
       npuAvailable: globalThis.__SXS_NPU_AVAILABLE__ === true,
       openvinoNpuSafe: globalThis.__SXS_OPENVINO_NPU_SAFE__ === true,
+      ...(userDataDir ? { userDataDir } : {}),
       ...(winmlEps ? { winmlEps } : {}),
       ...(settings.winmlBootstrapDllPath ? { winmlBootstrapDllPath: settings.winmlBootstrapDllPath } : {}),
       settingsSnapshot: settings,

@@ -222,7 +222,7 @@ const _fullElectronAPI = {
   // Used by the Settings → About page (license / papers / acknowledgments).
   openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, url),
   getDMLDevices: (options = {}) => invokeHeavy('settings:getDMLDevices', options),
-  getWinmlProviders: () => invokeHeavy('settings:getWinmlProviders'),
+  getWinmlProviders: (options = {}) => invokeHeavy('settings:getWinmlProviders', options),
   getHardwareStatus: () => invokeHeavy('settings:getHardwareStatus'),
   getCurrentHardware: () => invokeHeavy('settings:getCurrentHardware'),
   getVocoderChunkFramesInfo: () => invokeHeavy('settings:getVocoderChunkFramesInfo'),
