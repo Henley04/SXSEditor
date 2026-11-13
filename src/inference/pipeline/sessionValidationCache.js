@@ -82,6 +82,24 @@ function buildModelKey(modelPath, sessionKey, useStaticShapes) {
 }
 
 /**
+ * 组装 EP 维度键。
+ *
+ * @param {{provider:string, device?:string, runtime?:string|null}} q
+ *   provider: EP 名（'dml' / 'NvTensorRTRTXExecutionProvider' / 'cpu'）
+ *   device:   硬件身份。用 **GPU 名称**而不是 deviceId —— deviceId 只是
+ *             枚举索引，换卡后仍是 0，会让新卡误命中旧卡的校验记录。
+ *   runtime:  EP 运行时版本指纹（见 winmlProvider.getTrtRuntimeFingerprint）。
+ *             只有 TRT 这类"每次启动重新编译 engine"的 EP 需要；其它 EP 传空，
+ *             键里也不会多出空段，保证与旧记录格式一致。
+ */
+function buildValidationEpKey({ provider, device, runtime } = {}) {
+  const p = String(provider || 'unknown');
+  const d = String(device || 'auto');
+  const r = runtime ? String(runtime) : '';
+  return r ? `${p}@${d}@${r}` : `${p}@${d}`;
+}
+
+/**
  * 查询该 (EP, 模型) 是否已有成功的校验记录。
  * @param {{epKey:string, modelPath:string, sessionKey:string, useStaticShapes?:boolean}} q
  * @returns {Promise<object|null>} 命中时返回记录，否则 null
@@ -172,6 +190,11 @@ function flush() {
   return _store.flush();
 }
 
+/** 同步落盘：before-quit 等退出路径用，避免 debounce 未触发就丢结果。 */
+function flushSync() {
+  return _store.flushSync();
+}
+
 /** 清空磁盘与内存缓存。 */
 function clearValidationCache() {
   _versionDirCache.clear();
@@ -189,9 +212,11 @@ function _resetForTest(dir) {
 module.exports = {
   configureCacheDir,
   buildModelKey,
+  buildValidationEpKey,
   getValidationRecord,
   recordValidation,
   flush,
+  flushSync,
   clearValidationCache,
   _resetForTest,
 };

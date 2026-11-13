@@ -231,6 +231,7 @@ const _fullElectronAPI = {
   saveSettings: (settings) => invokeHeavy('settings:saveSettings', settings),
   checkModels: () => invokeHeavy('settings:check-models'),
   runTrtRtxDiagnostic: () => invokeHeavy('settings:run-trtrtx-diagnostic'),
+  clearInferenceCaches: () => invokeHeavy(IPC_CHANNELS.SETTINGS_CLEAR_INFERENCE_CACHE),
   getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_VERSION),
   getAudioDevices: () => invokeHeavy('audio:getDevices'),
   audioPlay: (audioData, options) => invokeHeavy('audio:play', { audioData, options }),

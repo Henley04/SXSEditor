@@ -297,6 +297,7 @@ const ortIntraOpNumThreadsValue = document.getElementById('ortIntraOpNumThreadsV
 const ortInterOpNumThreadsSlider = document.getElementById('ortInterOpNumThreads');
 const ortInterOpNumThreadsValue = document.getElementById('ortInterOpNumThreadsValue');
 const ortLogSeverityLevelSelect = document.getElementById('ortLogSeverityLevel');
+const clearInferenceCacheBtn = document.getElementById('clearInferenceCacheBtn');
 
 const updateChannelSelect = document.getElementById('updateChannelSelect');
 const autoCheckUpdatesCheckbox = document.getElementById('autoCheckUpdates');
@@ -1974,6 +1975,21 @@ if (ortInterOpNumThreadsSlider) {
 }
 if (ortLogSeverityLevelSelect) {
     ortLogSeverityLevelSelect.addEventListener('change', () => applySettings());
+}
+
+if (clearInferenceCacheBtn) {
+    clearInferenceCacheBtn.addEventListener('click', async () => {
+        clearInferenceCacheBtn.disabled = true;
+        try {
+            const result = await window.electronAPI.clearInferenceCaches();
+            const trtCount = result && typeof result.trtEngines === 'number' ? result.trtEngines : 0;
+            showToast(t('settings.clearInferenceCacheDone', { count: trtCount }), 'success');
+        } catch (err) {
+            showToast(t('settings.clearInferenceCacheFailed', { error: (err && err.message) || String(err) }), 'error');
+        } finally {
+            clearInferenceCacheBtn.disabled = false;
+        }
+    });
 }
 
 midiExtractToolSelect.addEventListener('change', () => {

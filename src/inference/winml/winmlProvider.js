@@ -260,6 +260,72 @@ function _msixVersionOf(libraryPath) {
     return m ? m[1] + '.' + m[2] : '0';
 }
 
+/**
+ * 读取 provider DLL 的文件版本（PE 版本资源里的 FileVersion）。
+ *
+ * 只在 TRT 会话首次创建时执行一次并缓存：PowerShell 冷启动约 200-400ms，
+ * 放在每次模型加载里不可接受。读不到就返回 null，由调用方回退到文件的
+ * size/mtime 指纹 —— 版本号拿不到不能影响缓存本身的可用性。
+ */
+function _readDllFileVersion(dllPath) {
+    const override = String(process.env.SXS_TRT_VERSION || '').trim();
+    if (override) return `env:${override.slice(0, 40)}`;
+    if (process.platform !== 'win32' || !dllPath) return null;
+    try {
+        const { execFileSync } = require('node:child_process');
+        const escaped = String(dllPath).replace(/'/g, "''");
+        const out = execFileSync('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `(Get-Item -LiteralPath '${escaped}').VersionInfo.FileVersion`,
+        ], { timeout: 2500, windowsHide: true, encoding: 'utf8' });
+        const version = String(out || '').trim().split(/\r?\n/)[0].trim();
+        return version ? version.slice(0, 40) : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+let _trtRuntimeFingerprintPromise = null;
+
+/**
+ * TensorRT-RTX 运行时身份指纹，用于持久化 dummy 校验的缓存键。
+ *
+ * 为什么需要：TRT 的 engine 每次启动都会重新加载/编译，上一次会话校验通过
+ * 不能证明本次 engine 健康。但"同一个 TRT 运行时 + 同一个 GPU + 同一个模型"
+ * 在版本不变时重编译出坏 engine 的概率极低，可以安全复用校验记录。反过来，
+ * TRT 运行时（EP 包 / provider DLL）一升级，旧记录必须立即失效 —— 这正是
+ * 这个指纹的作用。GPU 名称由调用方另外并入缓存键。
+ *
+ * 组成：EP 包 MSIX 版本 + provider DLL 的 FileVersion（取不到时用 size/mtime）。
+ * 拿不到指纹时返回一个"每次启动都不同"的值：宁可每次重新校验，也不误命中
+ * 一个无法判断版本的旧记录。同一进程内仍是稳定的（promise 缓存）。
+ *
+ * @returns {Promise<string>}
+ */
+function getTrtRuntimeFingerprint() {
+    if (_trtRuntimeFingerprintPromise) return _trtRuntimeFingerprintPromise;
+    const unresolved = `unresolved-${Date.now().toString(36)}-${process.pid}`;
+    _trtRuntimeFingerprintPromise = (async () => {
+        try {
+            const eps = await getReadyEpLibraries();
+            const trt = (eps || []).find((e) => String((e && e.name) || '').includes('NvTensor'));
+            if (!trt || !trt.libraryPath) return unresolved;
+            const lib = String(trt.libraryPath);
+            const msix = _msixVersionOf(lib);
+            const fileVersion = _readDllFileVersion(lib);
+            let stamp = 'nostat';
+            try {
+                const stat = fs.statSync(lib);
+                stamp = `${stat.size}-${Math.round(stat.mtimeMs)}`;
+            } catch (_) { /* 文件消失：保留 nostat，下次启动会重新探测 */ }
+            return `trt-rtx@${msix || 'na'}+${fileVersion || stamp}`;
+        } catch (_) {
+            return unresolved;
+        }
+    })();
+    return _trtRuntimeFingerprintPromise;
+}
+
 function _compareMsixVersion(a, b) {
     const va = String(a).split('.').map(Number);
     const vb = String(b).split('.').map(Number);
@@ -640,7 +706,6 @@ async function tryCreateWinMLSession(modelPath, useStaticShapes, allowOpenVINO =
  */
 function clearTRTEngineCache() {
     const os = require('node:os');
-    const crypto = require('node:crypto');
     let removed = 0;
     // TRT-RTX EP stores cache in subdirectories of these roots:
     //  - %LOCALAPPDATA% (most common on Windows)
@@ -700,6 +765,8 @@ function resetEpState() {
     _readyEpLibrariesPromise = null;
     _readyEpLibrariesCache = null;
     _readyEpLibrariesCacheKey = null;
+    // EP 包可能在运行期被更新（应用内升级 / MSIX 刷新），下次解析重新读版本。
+    _trtRuntimeFingerprintPromise = null;
 }
 
 module.exports = {
@@ -710,6 +777,7 @@ module.exports = {
     tryCreateWinMLSession,
     reportRuntimeFailure,
     isRuntimeBlocked,
+    getTrtRuntimeFingerprint,
     clearTRTEngineCache,
     resetEpState,
     listCompatibleProviders: (...a) => winmlCatalog.listCompatibleProviders(...a),

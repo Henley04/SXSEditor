@@ -140,13 +140,21 @@ function createJsonFileCache(fileName, options = {}) {
       } catch (_) { /* 文件不存在 / 损坏：直接用本地状态覆盖 */ }
     }
     const payload = JSON.stringify({ format, data: state.data });
+    // 序号在"捕获 payload"时就分配，而不是在异步回调里：否则 flushSync 先落盘、
+    // 异步回调后才拿到更大的序号，会把更新的数据覆盖回旧快照。
+    writeSeq += 1;
+    const seq = writeSeq;
     writeChain = writeChain.then(async () => {
       let tmp = null;
       try {
         await fs.promises.mkdir(dir, { recursive: true });
-        writeSeq += 1;
-        tmp = `${file}.${process.pid}.${writeSeq}.tmp`;
+        tmp = `${file}.${process.pid}.${seq}.tmp`;
         await fs.promises.writeFile(tmp, payload, 'utf8');
+        // 期间有更新的同步写（flushSync）落地：本次 payload 已过期，放弃 rename。
+        if (seq !== writeSeq) {
+          try { await fs.promises.unlink(tmp); } catch (_e) { /* 已被清理 */ }
+          return;
+        }
         await fs.promises.rename(tmp, file);
       } catch (_) {
         if (tmp) {
@@ -155,6 +163,46 @@ function createJsonFileCache(fileName, options = {}) {
       }
     });
     return writeChain;
+  }
+
+  /**
+   * 同步落盘，供 before-quit 这类无法等待 Promise 的退出路径使用。
+   *
+   * 写入默认有 400ms debounce 且 timer 调了 unref()，如果"校验完就退出"
+   * （CLI / 测试 / 用户快速关闭窗口），这次结果会直接丢掉。退出时同步写一次，
+   * 保证下次启动能命中。与异步 flush() 共用状态，重复调用是幂等的。
+   *
+   * @returns {boolean} 是否真的写了文件
+   */
+  function flushSync() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!dirty) return false;
+    const dir = getDir();
+    const file = getFilePath();
+    if (!dir || !file || !state) return false;
+    dirty = false;
+    if (mergeFn) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (parsed && parsed.format === format && parsed.data && typeof parsed.data === 'object') {
+          state.data = mergeFn(parsed.data, state.data);
+        }
+      } catch (_) { /* 文件不存在 / 损坏：直接用本地状态覆盖 */ }
+    }
+    const payload = JSON.stringify({ format, data: state.data });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      writeSeq += 1;
+      const tmp = `${file}.${process.pid}.${writeSeq}.sync.tmp`;
+      fs.writeFileSync(tmp, payload, 'utf8');
+      fs.renameSync(tmp, file);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /** 清空内存与磁盘缓存（用户手动重建 / 测试用）。 */
@@ -191,6 +239,7 @@ function createJsonFileCache(fileName, options = {}) {
     load,
     update,
     flush,
+    flushSync,
     clear,
     resetMemory,
   };

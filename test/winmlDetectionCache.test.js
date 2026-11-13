@@ -16,13 +16,25 @@ const CACHE_FILE = 'winml-detection-cache.json';
 
 describe('winmlDetectionCache — EP 探测结果跨重启缓存', function () {
   let dir;
+  let savedTrustDirs;
+  let savedLocalAppData;
 
   beforeEach(function () {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sxs-winml-cache-'));
+    // 生产环境的 libraryPath 白名单只认系统/应用/用户目录；测试把临时目录
+    // 显式加进可信根，避免为了测试而放宽生产策略。
+    savedTrustDirs = process.env.SXS_EP_TRUST_DIRS;
+    savedLocalAppData = process.env.LOCALAPPDATA;
+    process.env.SXS_EP_TRUST_DIRS = dir;
+    delete process.env.LOCALAPPDATA;
     cache._resetForTest(dir);
   });
 
   afterEach(function () {
+    if (savedTrustDirs === undefined) delete process.env.SXS_EP_TRUST_DIRS;
+    else process.env.SXS_EP_TRUST_DIRS = savedTrustDirs;
+    if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = savedLocalAppData;
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -108,5 +120,20 @@ describe('winmlDetectionCache — EP 探测结果跨重启缓存', function () {
     expect(cache.getCachedProviders()).to.equal(null);
     expect(cache.getCachedBootstrapPath()).to.equal(null);
     expect(cache.getCachedReadyEps('on|auto|ortnode')).to.equal(null);
+  });
+
+  it('libraryPath 只接受可信根内的 .dll 绝对路径', function () {
+    const trusted = path.join(dir, 'ExecutionProvider', 'onnxruntime_providers_nv.dll');
+    fs.mkdirSync(path.dirname(trusted), { recursive: true });
+    fs.writeFileSync(trusted, 'x');
+    expect(cache._isTrustedEpLibraryPath(trusted)).to.equal(true);
+
+    // 相对路径、非 DLL、以及可信根之外的绝对路径都不接受 ——
+    // 命中失败只会让调用方重新探测，不会报错。
+    expect(cache._isTrustedEpLibraryPath('onnxruntime_providers_nv.dll')).to.equal(false);
+    expect(cache._isTrustedEpLibraryPath(path.join(dir, 'notes.txt'))).to.equal(false);
+    const outside = path.join(os.tmpdir(), 'sxs-outside', 'evil.dll');
+    expect(cache._isTrustedEpLibraryPath(outside)).to.equal(false);
+    expect(cache._isTrustedEpLibraryPath('\\\\server\\share\\evil.dll')).to.equal(false);
   });
 });

@@ -499,6 +499,13 @@
       <p data-lang="en">Both English Phoneme Migration and Hybrid Phonemes use the same base multilingual model — the only difference is how each kana is mapped (English-only ARPAbet vs. ARPAbet/Cantonese per-kana selection). Hybrid mode is recommended for more natural-sounding Japanese. The phoneme boundary editor (per-note timing/volume) works the same in all modes.</p>
       <p data-lang="zh">英语音素迁移与混合音素均使用同一基础多语言模型——唯一区别在于每个假名的映射方式（纯 ARPAbet vs. ARPAbet/粤语按假名逐个挑选）。推荐使用混合音素以获得更自然的日语发音。音素边界编辑器（逐音符时长/音量调整）在所有模式下工作方式相同。</p>
 
+      <h3>
+        <span data-lang="en">Inference cache</span>
+        <span data-lang="zh">推理缓存</span>
+      </h3>
+      <p data-lang="en">On first load each model runs a dummy inference to verify the execution provider can execute it, and the WinML EP probe results are cached as well. Both are reused across restarts to avoid tens of seconds of repeated validation. They live in the app data directory (<code>session-validation-cache.json</code> and <code>winml-detection-cache.json</code> under the userData folder) and are invalidated automatically when the model files, GPU, or TRT runtime change. If inference misbehaves after a driver/GPU change, click <strong>Clear inference cache</strong> in <em>Settings → ORT Advanced</em> and restart the app. This also removes TensorRT engine caches, so the next model load recompiles the engines and takes longer.</p>
+      <p data-lang="zh">模型首次加载时会跑一次 dummy 推理校验执行提供者能否运行该模型，WinML EP 的探测结果也会一并缓存。两者都会跨重启复用，避免每次启动重复付出数十秒的校验成本。缓存位于应用数据目录（userData 下的 <code>session-validation-cache.json</code> 与 <code>winml-detection-cache.json</code>），模型文件、显卡或 TRT 运行时变化时会自动失效。若更换驱动/显卡后推理异常，可在<strong>设置 → ORT 高级设置</strong>点<strong>清除推理缓存</strong>并重启应用。该操作会同时删除 TensorRT engine 缓存，下次加载需要重新编译，耗时更长。</p>
+
       <h2>
         <span data-lang="en">Audio</span>
         <span data-lang="zh">音频</span>

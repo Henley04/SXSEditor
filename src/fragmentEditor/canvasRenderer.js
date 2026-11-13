@@ -2332,6 +2332,11 @@ function renderPianoKeys(c) {
 // 画布宽度与曲线版本决定；不缓存时每帧都要重排 + 去重（锚点多时为数万点）。
 // 缩放会改变可见窗 → 自然 miss；minAnchorSpacing 把锚点并入量压到像素级，
 // 保证 miss 的那一帧也不会被 F0 导入的密集锚点拖慢。
+//
+// 契约（必须遵守）：每一条修改锚点/笔刷/bakedSegments 的路径都要让
+// getPitchCurveVersion() 递增（state.js 的 bumpPitchCurveVersion 已覆盖
+// revision 变更、undo/redo、粘贴、导入等入口）。否则缓存键不变，画布会
+// 继续用旧采样点渲染出"改了却没反应"的假象。新增修改路径时先确认这一点。
 let _pitchSampleTimesCache = null;
 
 function _getPitchCurveSampleTimes(startBeat, endBeat, w, pitchCurve) {

@@ -129,4 +129,61 @@ describe('sessionValidationCache — dummy 校验结果持久化', function () {
     expect(before).to.equal(null);
     globalThis.__SXS_USER_DATA_DIR__ = savedGlobal;
   });
+
+  it('flushSync：debounce 未触发时也能同步落盘（退出路径）', async function () {
+    cache._resetForTest(root);
+    const modelPath = writeModel(fp16Dir, 'flush.onnx', 48);
+    const epKey = cache.buildValidationEpKey({ provider: 'cpu' });
+    await cache.recordValidation({ epKey, modelPath, sessionKey: SESSION_KEY });
+    // 不等 400ms debounce，直接走退出路径的同步写
+    expect(cache.flushSync()).to.equal(true);
+    // 模拟重启：丢掉内存状态后从磁盘读
+    cache._resetForTest(root);
+    expect(await cache.getValidationRecord({ epKey, modelPath, sessionKey: SESSION_KEY }))
+      .to.be.an('object');
+  });
+
+  it('buildValidationEpKey：TRT 运行时指纹参与键，非 TRT 不带空段', function () {
+    expect(cache.buildValidationEpKey({
+      provider: 'NvTensorRTRTXExecutionProvider',
+      device: 'NVIDIA GeForce RTX 4090',
+      runtime: 'trt-rtx@2.30.49.0+10.13.2.1',
+    })).to.equal('NvTensorRTRTXExecutionProvider@NVIDIA GeForce RTX 4090@trt-rtx@2.30.49.0+10.13.2.1');
+
+    expect(cache.buildValidationEpKey({
+      provider: 'dml', device: 'NVIDIA GeForce RTX 4090', runtime: null,
+    })).to.equal('dml@NVIDIA GeForce RTX 4090');
+
+    // device / runtime 都缺省时要有稳定键，不能出现 'undefined' / 尾随 '@'
+    expect(cache.buildValidationEpKey({ provider: 'cpu' })).to.equal('cpu@auto');
+  });
+
+  it('TRT 运行时升级后同一模型必须重新校验', async function () {
+    cache._resetForTest(fp16Dir);
+    const modelPath = writeModel(fp16Dir, 'diff_step.onnx', 64);
+    const base = { provider: 'NvTensorRTRTXExecutionProvider', device: 'NVIDIA GeForce RTX 4090' };
+    const oldKey = cache.buildValidationEpKey({ ...base, runtime: 'trt-rtx@2.30.49.0+10.13.2.1' });
+    const newKey = cache.buildValidationEpKey({ ...base, runtime: 'trt-rtx@2.31.0.0+10.13.2.1' });
+
+    await cache.recordValidation({ epKey: oldKey, modelPath, sessionKey: SESSION_KEY });
+    expect(await cache.getValidationRecord({ epKey: oldKey, modelPath, sessionKey: SESSION_KEY }))
+      .to.be.an('object');
+    expect(await cache.getValidationRecord({ epKey: newKey, modelPath, sessionKey: SESSION_KEY }))
+      .to.equal(null);
+  });
+
+  it('换显卡（GPU 名变化）后旧校验记录不适用', async function () {
+    cache._resetForTest(fp16Dir);
+    const modelPath = writeModel(fp16Dir, 'vocoder.onnx', 64);
+    const oldKey = cache.buildValidationEpKey({ provider: 'dml', device: 'NVIDIA RTX 3060' });
+    const newKey = cache.buildValidationEpKey({ provider: 'dml', device: 'NVIDIA RTX 4090' });
+
+    await cache.recordValidation({ epKey: oldKey, modelPath, sessionKey: 'vocoder' });
+    expect(await cache.getValidationRecord({
+      epKey: oldKey, modelPath, sessionKey: 'vocoder',
+    })).to.be.an('object');
+    expect(await cache.getValidationRecord({
+      epKey: newKey, modelPath, sessionKey: 'vocoder',
+    })).to.equal(null);
+  });
 });

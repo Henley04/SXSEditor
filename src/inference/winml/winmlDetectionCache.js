@@ -19,6 +19,7 @@
 
 const fs = require('node:fs');
 const os = require('node:os');
+const path = require('node:path');
 const { createJsonFileCache } = require('../persistentCache');
 
 const PROVIDERS_TTL_MS = 12 * 60 * 60 * 1000;   // 12h
@@ -111,8 +112,61 @@ function setCachedProviders(list) {
 }
 
 /**
+ * EP 库路径的可信根。
+ *
+ * 缓存文件在可写的 userData 里，而里面的 libraryPath 会被直接注册成 EP 并
+ * LoadLibrary。能写 userData 基本已有用户级权限，但没必要让一个被同步工具/
+ * 旧版本残留污染的 JSON 决定"加载哪个 DLL"。因此只接受系统、应用、用户目录
+ * 下的路径；自定义安装位置可用 SXS_EP_TRUST_DIRS（path.delimiter 分隔）追加。
+ */
+function _trustedEpRoots() {
+  const list = [];
+  const push = (value) => {
+    if (typeof value !== 'string' || !value) return;
+    try {
+      const resolved = path.resolve(value);
+      list.push(process.platform === 'win32' ? resolved.toLowerCase() : resolved);
+    } catch (_) { /* 非法路径忽略 */ }
+  };
+  push(process.env.LOCALAPPDATA);
+  push(process.env.APPDATA);
+  push(process.env.ProgramData);
+  push(process.env.ProgramFiles);
+  push(process.env['ProgramFiles(x86)']);
+  push(os.homedir());
+  push(process.resourcesPath);
+  try { push(path.dirname(process.execPath)); } catch (_) { /* 非 Electron 环境 */ }
+  for (const extra of String(process.env.SXS_EP_TRUST_DIRS || '').split(path.delimiter)) {
+    push(extra);
+  }
+  return [...new Set(list)];
+}
+
+/**
+ * 缓存里的 libraryPath 是否可信。
+ * 不满足就当缓存未命中 —— 调用方走完整探测重新解析，不会因此报错。
+ */
+function _isTrustedEpLibraryPath(candidate) {
+  if (typeof candidate !== 'string' || !candidate) return false;
+  if (candidate.includes('\0')) return false;
+  if (!candidate.toLowerCase().endsWith('.dll')) return false;
+  if (!path.isAbsolute(candidate)) return false;
+  let resolved;
+  try {
+    resolved = path.resolve(candidate);
+  } catch (_) {
+    return false;
+  }
+  const roots = _trustedEpRoots();
+  // 无法判定（极少见：既没有系统目录也没有 homedir）时保持旧行为。
+  if (roots.length === 0) return true;
+  const probe = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  return roots.some((root) => probe === root || probe.startsWith(root.endsWith(path.sep) ? root : root + path.sep));
+}
+
+/**
  * 已解析的可注册 EP 库（libraryPath）缓存。
- * 缓存命中要求：指纹一致、未过期、且每个 libraryPath 仍然存在。
+ * 缓存命中要求：指纹一致、未过期、且每个 libraryPath 仍存在。
  * @param {string} gateKey 后端门控键（DML/WinML 切换后不应复用）
  * @returns {Array<{name:string, libraryPath:string}>|null}
  */
@@ -124,6 +178,7 @@ function getCachedReadyEps(gateKey) {
   if (Date.now() - (entry.savedAt || 0) > READY_EPS_TTL_MS) return null;
   for (const item of entry.list) {
     if (!item || typeof item.name !== 'string' || typeof item.libraryPath !== 'string') return null;
+    if (!_isTrustedEpLibraryPath(item.libraryPath)) return null;
     try {
       if (!fs.statSync(item.libraryPath).isFile()) return null;
     } catch (_) {
@@ -150,6 +205,11 @@ async function flush() {
   return _store.flush();
 }
 
+/** 同步落盘：before-quit 等退出路径用。 */
+function flushSync() {
+  return _store.flushSync();
+}
+
 async function clear() {
   return _store.clear();
 }
@@ -171,6 +231,8 @@ module.exports = {
   getFingerprint,
   fingerprintKey,
   flush,
+  flushSync,
   clear,
+  _isTrustedEpLibraryPath,
   _resetForTest,
 };
