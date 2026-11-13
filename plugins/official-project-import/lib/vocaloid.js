@@ -395,7 +395,7 @@ function shallowScalars(value, omit = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
   for (const [key, item] of Object.entries(value).slice(0, 24)) {
     if (omit.includes(key)) continue;
-    const kept = smallMeta(item);
+    const kept = compactMeta(item);
     if (kept !== undefined) out[key] = kept;
   }
   return out;
@@ -663,18 +663,45 @@ function smallMeta(value) {
   return undefined;
 }
 
+/**
+ * VPR 的控制器（`volume` / `pan` 等）是 `{ events: [{ pos, value }] }`。
+ * smallMeta 会把里面的数组整个丢掉，只剩一个空 `{}` —— 写回成空壳等于
+ * "看起来保存了，内容其实损坏了"，正是有损写回最该避免的形态。
+ * 这里只保留首个事件的标量，体量可控且足以让外部软件读到有效控制器。
+ */
+function controllerSnapshot(value) {
+  const events = value && !Array.isArray(value) && Array.isArray(value.events)
+    ? value.events : null;
+  if (!events) return undefined;
+  const first = events.find((e) => e && typeof e === 'object' && Number.isFinite(Number(e.value)));
+  if (!first) return undefined;
+  return { events: [{ pos: Number(first.pos) || 0, value: Number(first.value) }] };
+}
+
+/** 标量 / 控制器快照 / 空壳过滤三合一的元数据精简。 */
+function compactMeta(value) {
+  const ctrl = controllerSnapshot(value);
+  if (ctrl) return ctrl;
+  const kept = smallMeta(value);
+  // 空对象写回目标格式后既没有信息又可能被外部软件当成损坏数据，宁可不写。
+  if (kept && typeof kept === 'object' && !Array.isArray(kept) && !Object.keys(kept).length) {
+    return undefined;
+  }
+  return kept;
+}
+
 function collectVprMeta(raw) {
   const rootExtras = {};
   for (const [key, value] of Object.entries(raw)) {
     if (['version', 'masterTrack', 'tracks'].includes(key)) continue;
-    const kept = smallMeta(value);
+    const kept = compactMeta(value);
     if (kept !== undefined) rootExtras[key] = kept;
   }
   const master = raw.masterTrack || {};
   const masterExtras = {};
   for (const [key, value] of Object.entries(master)) {
     if (['tempo', 'timeSig'].includes(key)) continue;
-    const kept = smallMeta(value);
+    const kept = compactMeta(value);
     if (kept !== undefined) masterExtras[key] = kept;
   }
   // 人声轨与音频轨分开存：写回时人声轨按 documentToScore 的轨道顺序逐条对齐，
@@ -687,7 +714,7 @@ function collectVprMeta(raw) {
     for (const [key, value] of Object.entries(track || {})) {
       // color 必须留下：它能读进宿主 singer.color，写回时也要还原。
       if (['parts', 'name'].includes(key)) continue;
-      const kept = smallMeta(value);
+      const kept = compactMeta(value);
       if (kept !== undefined) out[key] = kept;
     }
     const parts = Array.isArray(track && track.parts) ? track.parts : [];
@@ -702,7 +729,7 @@ function collectVprMeta(raw) {
     format: 'vpr',
     rootExtras,
     masterExtras,
-    version: smallMeta(raw.version) || { major: 5, minor: 0, revision: 0 },
+    version: compactMeta(raw.version) || { major: 5, minor: 0, revision: 0 },
     // tracks 保留为「人声轨元数据」的旧键名，兼容早期版本写进 .sxsproj 的 ext。
     tracks: vocalTracks,
     vocalTracks,

@@ -80,6 +80,7 @@ function makeVprWithAudio(options = {}) {
     audioTrackName = 'Audio',
     wavExtras = {},
     audioPartExtras = {},
+    vocalTrackExtras = {},
   } = options;
 
   const sequence = {
@@ -96,6 +97,7 @@ function makeVprWithAudio(options = {}) {
         type: 0,
         name: 'Vocal',
         color: trackColor,
+        ...vocalTrackExtras,
         parts: [{ pos: 0, duration: 1920, notes: [{ pos: 0, duration: 480, number: 60, lyric: 'la' }] }],
       },
       {
@@ -289,6 +291,16 @@ describe('official-project-import — VPR 伴奏写回（read → write → read
     expect(saved.raw.tracks[0].color).to.equal(0xff3366cc);
     expect(saved.raw.tracks[0].type).to.equal(0);
     expect(saved.raw.tracks[1].type).to.equal(1);
+  });
+
+  it('控制器类元数据（volume.events）按首个标量事件写回，不留下空壳 {}', async () => {
+    const { document } = await readVprZip(makeVprWithAudio({
+      vocalTrackExtras: { volume: { events: [{ pos: 0, value: -300 }] }, isMuted: false },
+    }));
+    const saved = await writeVprZip(document);
+    expect(saved.raw.tracks[0].volume).to.deep.equal({ events: [{ pos: 0, value: -300 }] });
+    // 有损写回最忌讳"看起来保存了、其实内容是空对象"
+    expect(JSON.stringify(saved.raw)).to.not.match(/"(?:volume|pan)"\s*:\s*\{\}/);
   });
 
   it('region 裁剪写回后不二次平移：音频长度与重新导入的时长一致', async () => {
