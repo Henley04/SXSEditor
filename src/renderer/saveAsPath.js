@@ -60,3 +60,36 @@ export function isExternalFormat(filePath) {
   const ext = extensionOf(filePath);
   return ext !== '' && !BUILTIN_EXTENSIONS.includes(ext);
 }
+
+/**
+ * 内置插件能把伴奏音频写回容器里的外部格式。
+ *
+ * `official-project-import` 从 1.2.0 起会把伴奏重建为 VPR 的 `type: 1`
+ * 音频轨，并把 WAV 字节写进 `Project/Audio/`。这份清单是宿主与随包内置插件
+ * 之间的能力约定：插件新增可写回伴奏的格式时，这里必须同步，否则界面会对着
+ * 一个明明能保留伴奏的格式弹出「伴奏将丢失」的误导性确认。
+ */
+const ACCOMPANIMENT_WRITEBACK_EXTS = new Set(['vpr']);
+
+/**
+ * 保存为该格式时伴奏音频会丢失，需要在写盘前提醒用户。
+ * .sxsproj 是内置格式（本来就会内嵌音频），不在判定范围内。
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+export function formatDropsAccompaniment(filePath) {
+  return isExternalFormat(filePath) && !ACCOMPANIMENT_WRITEBACK_EXTS.has(extensionOf(filePath));
+}
+
+/**
+ * 保存为该格式时必须把伴奏音频字节交给插件，否则无法写回。
+ *
+ * 插件不接触文件系统：只有 `embeddedAudioData.wavBase64` 能穿过 codec.write。
+ * 因此即便用户在保存选项里取消勾选「嵌入伴奏音频」，写回这类容器时也要强制
+ * 嵌入 —— 这不是覆盖用户偏好，而是格式本身的必要条件（对 .sxsproj 的偏好不变）。
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+export function requiresAccompanimentAudio(filePath) {
+  return ACCOMPANIMENT_WRITEBACK_EXTS.has(extensionOf(filePath));
+}

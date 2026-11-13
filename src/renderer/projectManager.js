@@ -12,7 +12,10 @@ import { createPluginBackendSection } from './pluginTrackDialog.js';
 import { ensurePluginCatalog, findTrackKind, describeTrackBackend } from './pluginBackend.js';
 import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
 import { shouldNotifyAutoSaveFailure, resetAutoSaveNotification } from './autoSaveNotification.js';
-import { extensionOf, normalizeSavePath, isExternalFormat } from './saveAsPath.js';
+import {
+  extensionOf, normalizeSavePath,
+  formatDropsAccompaniment, requiresAccompanimentAudio,
+} from './saveAsPath.js';
 
 // 保存纪元：每次 markDirty 自增。异步写盘完成后只有纪元未变（期间没有新编辑）
 // 才允许 markClean，否则会把写盘期间产生的新改动误标为"已保存"。
@@ -1030,9 +1033,13 @@ async function _writeProjectTo(filePath, opts = {}) {
   const viaPlugin = ext !== '' && !BUILTIN_PROJECT_EXTENSIONS.includes(ext);
   // 未显式指定时按"会不会丢音频"决定：自动保存与就地 Ctrl+S 都不经过保存
   // 选项对话框，这条默认值是它们唯一的依据。
-  const embedAccompanimentAudio = opts.embedAccompanimentAudio === undefined
-    ? needsAccompanimentEmbed()
-    : !!opts.embedAccompanimentAudio;
+  // 能写回伴奏的外部格式（.vpr）是例外：插件只收得到文档里的内嵌音频字节，
+  // 没有它 regenerate 不出音频轨，所以即便用户取消勾选也必须嵌入。
+  // 对 .sxsproj 的用户选择不受影响。
+  const embedAccompanimentAudio = requiresAccompanimentAudio(filePath)
+    || (opts.embedAccompanimentAudio === undefined
+      ? needsAccompanimentEmbed()
+      : !!opts.embedAccompanimentAudio);
 
   if (!viaPlugin) {
     const data = await serializeProject(opts.embedSingerFiles, embedAccompanimentAudio);
@@ -1102,7 +1109,7 @@ export async function saveProjectAs() {
         // 扩展名并进来，但只单列、绝不并入第一项。第一项代表宿主原生格式
         // "SXSEditor Project (*.sxsproj)"；一旦把 .vpr/.svp 等并进去，用户
         // 看到的就是"工程文件的后缀名包括了所有支持打开的后缀"，默认落点也
-        // 会变成有损的外部格式（伴奏不写回）。插件装/卸的知识仍只在主进程。
+        // 会变成有损的外部格式。插件装/卸的知识仍只在主进程。
         includePluginFormats: true,
         extendFirstFilter: false,
         defaultPath: state.currentProjectFilePath || undefined,
@@ -1113,10 +1120,10 @@ export async function saveProjectAs() {
         // 之后也打不开；统一补宿主默认格式。已有扩展名（含用户主动选的外部
         // 格式）一律原样保留。
         const filePath = normalizeSavePath(result.filePath);
-        // 外部格式（.vpr/.svp/.vsqx/.sv2）不写伴奏音频，插件只在 codec.write
-        // 里留一条"伴奏不会写回"的告警 —— 那是**保存之后**才看得到的，用户
-        // 往往先发现伴奏没了。这里在写盘前把后果讲清楚，并给出无损选项。
-        if (isExternalFormat(filePath)
+        // 只有「装不下伴奏」的外部格式（.svp/.vsqx/.sv2 等）才在写盘前提醒：
+        // 插件的 "伴奏不会写回" 告警是**保存之后**才看得到的，用户往往先发现
+        // 伴奏没了。.vpr 从内置插件 1.2.0 起能把伴奏重建进容器，不再误报。
+        if (formatDropsAccompaniment(filePath)
           && trackManager.getSingers().some((s) => s && s.type === 'accompaniment')) {
           const proceed = await showConfirmDialog(
             t('main.saveExternalFormatDropsAccompaniment', { ext: extensionOf(filePath).toUpperCase() }),

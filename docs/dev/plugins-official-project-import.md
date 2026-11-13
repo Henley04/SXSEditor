@@ -1,6 +1,6 @@
 # 官方工程导入插件（VOCALOID / Synthesizer V）
 
-> 插件 id：`official-project-import` · 版本 1.1.1 · 发布者 `SXSEditor Official`
+> 插件 id：`official-project-import` · 版本 1.2.0 · 发布者 `SXSEditor Official`
 >
 > 源码：`plugins/official-project-import/` · 随应用内置，首次启动自动安装
 
@@ -13,7 +13,13 @@
 | `.svp` | Synthesizer V / SV2 | JSON（可用 `\u0000` 串联多份，取 version 最大者） | 1.x / 2.x 工程 | 打开、保存 |
 
 三种格式都声明 `role: "both"`，既出现在「文件 → 打开工程」，也出现在「另存为」。
-**写回外部工程格式是有损的**：歌手库、音色与风格、组级颤音强度包络、颤音起始
+**凡是能读进宿主工程文档的数据，写回时都要能存回去**：音符、歌词、音高曲线、
+速度、拍号、轨道名与颜色、分片名与起点，以及 VPR 的伴奏轨（含音频字节、
+`wav.name` / `originalName`、轨道 `type` / `isMuted` / `volume`、part 的 `pos` /
+`name` / `region`）都会在另存为同格式时还原。`.vsqx` / `.svp` 没有内嵌音频容器，
+宿主里新建的伴奏轨无法写回，会逐条告警。
+
+**写回外部工程格式仍是有损的**：歌手库、音色与风格、组级颤音强度包络、颤音起始
 相位与渐出、音素属性、变速与变拍号在宿主中没有等价字段，不会写入；插件会逐条
 返回告警，并建议另存为宿主原生工程格式以完整保留编辑结果。音符颤音的深度、频率、
 起点、时长与渐入可以双向转换，写回时还原为 SVP 的 `note.attributes`。插件不会
@@ -94,6 +100,34 @@ JSON（32MB 上限）与音频（单条 128MB、合计 192MB）会被解压，�
 对 `wavBase64` 不套用 10 万字符的字符串截断（截断等于把 WAV 剪成噪音），改由
 `PROJECT_DOC_LIMITS.embeddedAudioBytes`（256MB）单独预算，超限整份拒绝。
 
+### 3.2 VPR 伴奏的写回
+
+1.2.0 起伴奏是双向的。源工程里宿主模型没有独立字段的结构（`type`、
+`wav.name` / `originalName`、`region`、轨道名与 part 的其余标量）在导入时
+收进**伴奏轨自己的** `ext.official-project-import.vpr`，随轨道穿过编辑器状态；
+不放在文档级 `ext`，才能在用户增删、重排伴奏轨之后仍然对得上。写回时
+`documentToScore` 把伴奏轨连同 `wavBase64` 一起交给 `encodeVpr`：
+
+| 写回内容 | 来源 |
+|---|---|
+| `Project/Audio/<wav.name>` 的 WAV 字节 | `embeddedAudioData.wavBase64`（宿主保存 VPR 时强制嵌入，插件不接触文件系统） |
+| 音频轨 `type: 1` / `name` / `isMuted` | 源轨道快照 + 宿主 `mute` |
+| `volume.events[0].value` | 宿主 `accompanimentVolume` 线性增益反算为 0.01dB 定点（`0` → `-100000` 表示 -∞） |
+| `part.pos` | 宿主 `accompanimentStartTime`（拍 × 480） |
+| `part.wav.originalName` | 宿主 `audioFileName` |
+| `part.region` | 重建为 `{ begin: 0, end: 裁剪后时长(ms) }` |
+
+`region` 必须重建而不是原样照搬：导入时已经按 `region` 把 WAV 裁好（宿主没有
+裁剪偏移概念），字节本身就是裁剪后的片段。原样写回会让外部软件二次裁剪，
+伴奏再次平移。裁剪已烘焙进音频，因此原始入点偏移不作为宿主可编辑数据保留，
+插件会为此单独告警。没有音频字节的伴奏不会生成引用不存在素材的空轨，同样
+告警。多条伴奏的包内文件名会安全化并去重，防止路径穿越与同名覆盖。
+
+宿主侧的 `src/renderer/saveAsPath.js` 维护一份「能写回伴奏的格式」清单
+（当前只有 `vpr`）：另存为这些格式时不再弹「伴奏将丢失」确认，且保存时强制
+嵌入伴奏字节；`.svp` / `.vsqx` / `.sv2` 仍按旧行为在写盘前提醒。插件新增
+可写回伴奏的格式时必须同步这份清单。
+
 歌词中的 `br` 是 Synthesizer V 的呼吸标记。宿主的声学模型把 `<AP>` 定义为
 可发声的吸气音素（`src/inference/phone_set.json`、用户指南与音素预处理注释一致），
 与表示静音的 `<SP>` 不是同一概念。因此导入时把 `br` 转译为 `<AP>`，写回时还原为
@@ -141,7 +175,8 @@ SVP 的音符颤音参数在 `note.attributes`（缺省值回落到 `mainRef.voi
 | 重叠音符 | 按后一个音符的起点裁掉前一个的尾巴（编辑器假定音符不重叠） |
 | 非法/零长度音符 | 跳过，不阻断整份工程 |
 | VPR 伴奏体积 | 单条音频 128MB、合计 192MB；超限只跳过伴奏并告警，工程其余部分照常导入 |
-| 伴奏写回 | 伴奏音频不进外部格式（`.vpr` 的音频轨依赖容器里的原始素材）；保存时明确告警，需保留伴奏请另存为 `.sxsproj`（会内嵌音频） |
+| 伴奏写回 | `.vpr` 的伴奏音频与音频轨结构写回 ZIP 容器（见 §3.2）；`.vsqx` / `.svp` / `.sv2` 没有内嵌音频容器，伴奏不写回并告警，需保留请另存为 `.sxsproj`。源 `region` 裁剪已烘焙进音频，写回按全长重建，原始入点偏移不保留（会告警） |
+| 宿主新建的伴奏轨 | 没有源工程结构快照时按宿主当前设置生成全新的 VPR 音频轨，并告警说明；没有音频字节的伴奏不生成空引用 |
 | 写回外部格式 | 歌手库、音色与风格、组级颤音强度包络、颤音起始相位与渐出、音素属性、变速与变拍号、前导小节与弯音灵敏度曲线不写入；音符颤音主参数写回 `note.attributes`；逐条返回告警，并建议另存为宿主原生工程格式 |
 
 ## 5. 为什么是一个插件而不是两个
@@ -188,10 +223,12 @@ buildDocument / documentToScore：轨道↔歌手、part↔分片、音符清洗
 - 三种格式的 `read → write → read` 往返：音符、速度、拍号与音高曲线采样保持一致；
   写回产物分别是合法的 XML、ZIP 与 JSON 容器，不是空壳。
 
-`test/pluginVprAccompaniment.test.js` 专测 `.vpr` 的伴奏链路（在内存里现造 ZIP，
-不依赖外部素材）：音频真的落到 `type: 'accompaniment'` 的轨道上（位置、音量、
-声道、字节逐项对照）、`region` 按毫秒裁剪、静音与 -∞ 音量、超限音频只丢伴奏
-不阻断导入、缺文件时告警，以及写回时"伴奏不会写回"的显式告警。
+`test/pluginVprAccompaniment.test.js` 专测 `.vpr` 的伴奏双向链路（在内存里现造
+ZIP，不依赖外部素材）：音频真的落到 `type: 'accompaniment'` 的轨道上（位置、
+音量、声道、字节逐项对照）、`region` 按毫秒裁剪、静音与 -∞ 音量、超限音频只丢
+伴奏不阻断导入、缺文件时告警；写回侧断言 ZIP 音频条目与字节、音频轨全部标量键、
+人声轨 `color` / `type`、`region` 重建后不二次平移、宿主新建伴奏轨也能写回、
+路径穿越安全化与同名去重、缺音频字节时不写空引用、`.svp` / `.vsqx` 仍明确告警。
 - `br` ↔ `<AP>` 双向转译对称，`<SP>` 静音与普通歌词不受影响；并用一份含呼吸
   音符的 SVP 走完整的字节往返。
 - manifest 的三个 `fileTypes` 都声明 `role: "both"` 与 `userPicked:write` 权限，

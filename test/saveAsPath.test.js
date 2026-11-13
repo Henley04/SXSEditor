@@ -93,3 +93,26 @@ describe('saveAsPath — isExternalFormat', () => {
     expect(mod.isExternalFormat('/tmp/song')).to.equal(false);
   });
 });
+
+describe('saveAsPath — 伴奏音频写回能力', () => {
+  it('VPR 能写回伴奏，不弹"伴奏将丢失"确认，且保存时必须嵌入音频字节', () => {
+    expect(mod.formatDropsAccompaniment('/tmp/song.vpr')).to.equal(false);
+    expect(mod.formatDropsAccompaniment('/tmp/song.VPR')).to.equal(false);
+    expect(mod.requiresAccompanimentAudio('/tmp/song.vpr')).to.equal(true);
+  });
+
+  it('SVP / VSQX / SV2 无内嵌音频容器，仍需写盘前确认', () => {
+    for (const ext of ['svp', 'vsqx', 'sv2']) {
+      expect(mod.formatDropsAccompaniment(`/tmp/song.${ext}`), ext).to.equal(true);
+      expect(mod.requiresAccompanimentAudio(`/tmp/song.${ext}`), ext).to.equal(false);
+    }
+  });
+
+  it('宿主原生格式既不弹确认，也不因外部格式规则强制嵌入', () => {
+    for (const ext of ['sxsproj', 'sxs']) {
+      expect(mod.formatDropsAccompaniment(`/tmp/song.${ext}`), ext).to.equal(false);
+      expect(mod.requiresAccompanimentAudio(`/tmp/song.${ext}`), ext).to.equal(false);
+    }
+    expect(mod.formatDropsAccompaniment('/tmp/song')).to.equal(false);
+  });
+});

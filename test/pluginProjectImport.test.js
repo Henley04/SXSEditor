@@ -197,7 +197,9 @@ describe('official-project-import — manifest', () => {
       expect(ft.role, `${ft.ext}.role`).to.equal('both');
     }
     expect(manifest.permissions.fs).to.include('userPicked:write');
-    expect(manifest.version).to.equal('1.1.1');
+    // 1.2.0 起 VPR 伴奏可写回；版本号必须升，否则 builtinPlugins 的
+    // needsUpgrade 判定不成立，老用户升级 App 后拿不到新能力。
+    expect(manifest.version).to.equal('1.2.0');
   });
 });
 

@@ -385,12 +385,48 @@ function trackVolumeGain(track) {
 }
 
 /**
+ * 只留标量/浅对象，供源工程结构快照使用。
+ *
+ * 复用 collectVprMeta 的 smallMeta（函数声明会提升）：快照要能穿过宿主文档校验
+ * 的 ext 预算，所以绝不能把整份 part 或原始 WAV 字节塞进去。
+ */
+function shallowScalars(value, omit = []) {
+  const out = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  for (const [key, item] of Object.entries(value).slice(0, 24)) {
+    if (omit.includes(key)) continue;
+    const kept = smallMeta(item);
+    if (kept !== undefined) out[key] = kept;
+  }
+  return out;
+}
+
+/** 音频 part 的结构快照：宿主模型里没有独立字段的键都在这里带回。 */
+function audioPartSnapshot(part) {
+  const wav = part && part.wav && typeof part.wav === 'object' ? part.wav : {};
+  const region = part && part.region && typeof part.region === 'object' ? part.region : null;
+  return {
+    part: shallowScalars(part, ['wav', 'region']),
+    wav: shallowScalars(wav),
+    region: region
+      ? {
+        begin: Number(region.begin) || 0,
+        ...(Number.isFinite(Number(region.end)) ? { end: Number(region.end) } : {}),
+      }
+      : null,
+  };
+}
+
+/**
  * 音频轨 → 宿主的伴奏轨。
  *
  * 一个 part 就是一段音频素材：`part.pos`（tick）决定它在时间线上的位置，
  * `part.wav.name` 指向包内 `Project/Audio/` 下的文件，`part.region`
  * （毫秒）记录用了源文件的哪一段 —— 宿主没有"裁剪偏移"概念，所以按 region
  * 把音频切好再交出去，否则伴奏会整体平移。
+ *
+ * 轨道名、`wav.name` / `originalName`、`region`、轨道 `type` 等源结构一并通过
+ * `vpr` 快照交给 score.js 挂到伴奏轨的 ext 上，写回时才能原样重建。
  */
 function collectVprAccompaniments(raw, files, skipped, warnings, t) {
   const out = [];
@@ -465,6 +501,10 @@ function collectVprAccompaniments(raw, files, skipped, warnings, t) {
         sampleRate: sliced.ok ? sliced.sampleRate : null,
         channels: sliced.ok ? sliced.channels : null,
         wavBuffer: audio,
+        vpr: {
+          track: shallowScalars(track, ['parts']),
+          ...audioPartSnapshot(part),
+        },
       });
     }
   }
@@ -637,21 +677,36 @@ function collectVprMeta(raw) {
     const kept = smallMeta(value);
     if (kept !== undefined) masterExtras[key] = kept;
   }
-  const tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).slice(0, 64).map((track) => {
+  // 人声轨与音频轨分开存：写回时人声轨按 documentToScore 的轨道顺序逐条对齐，
+  // 音频轨按伴奏轨重建。混在一起时，源工程里夹在中间的音频轨会把后面人声轨
+  // 的元数据顶错位（m.tracks[ti] 取到的是别人的 type / color）。
+  const vocalTracks = [];
+  const audioTracks = [];
+  for (const track of (Array.isArray(raw.tracks) ? raw.tracks : []).slice(0, 64)) {
     const out = {};
     for (const [key, value] of Object.entries(track || {})) {
-      if (['parts', 'name', 'color'].includes(key)) continue;
+      // color 必须留下：它能读进宿主 singer.color，写回时也要还原。
+      if (['parts', 'name'].includes(key)) continue;
       const kept = smallMeta(value);
       if (kept !== undefined) out[key] = kept;
     }
-    return out;
-  });
+    const parts = Array.isArray(track && track.parts) ? track.parts : [];
+    const audioParts = parts.filter((p) => p && p.wav && typeof p.wav === 'object' && p.wav.name);
+    if (audioParts.length) {
+      audioTracks.push({ track: out, parts: audioParts.slice(0, 16).map(audioPartSnapshot) });
+    } else {
+      vocalTracks.push(out);
+    }
+  }
   return {
     format: 'vpr',
     rootExtras,
     masterExtras,
     version: smallMeta(raw.version) || { major: 5, minor: 0, revision: 0 },
-    tracks,
+    // tracks 保留为「人声轨元数据」的旧键名，兼容早期版本写进 .sxsproj 的 ext。
+    tracks: vocalTracks,
+    vocalTracks,
+    audioTracks,
   };
 }
 
@@ -751,16 +806,122 @@ function encodeVsqx(score, meta) {
   return Buffer.from(serializeXml(root), 'utf8');
 }
 
+/** 宿主歌手颜色 `#rrggbb` → VPR 的 0xAARRGGBB；无法识别时返回 undefined。 */
+function colorToVprNumber(value) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(value || '').trim());
+  if (!m) return undefined;
+  return ((0xff000000 | parseInt(m[1], 16)) >>> 0);
+}
+
+/** 包内音频文件名：只取 basename，去掉路径分隔符与非法字符，保留扩展名。 */
+function safeAudioName(raw, index) {
+  let name = String(raw || '').split(/[\\/]/).pop() || '';
+  name = name.replace(/[^\w.\-()\u4e00-\u9fa5 ]/g, '_').replace(/^\.+/, '').trim();
+  if (!name) name = `accompaniment-${index + 1}.wav`;
+  if (!/\.[a-z0-9]{1,5}$/i.test(name)) name += '.wav';
+  return name.slice(0, 120);
+}
+
+/** 宿主线性增益 → VOCALOID 的 0.01dB 定点；0 用 -100000 表示 -∞。 */
+function gainToVprVolume(gain) {
+  if (!Number.isFinite(gain) || gain <= 0) return -100000;
+  return Math.round(20 * Math.log10(gain) * 100);
+}
+
+/**
+ * 伴奏轨 → VPR 音频轨（`type: 1`）+ `Project/Audio/` 素材。
+ *
+ * 源轨道/part 的结构从伴奏轨 ext 的 vpr 快照取回；缺失时（宿主新建的伴奏轨、
+ * 跨格式另存、旧版本导入的工程）按当前宿主字段生成一份全新的音频轨。
+ * 没有内嵌音频字节的伴奏不会生成引用不存在素材的空轨，由调用方告警。
+ *
+ * region 需要特别处理：导入时按 region 裁剪过 WAV（宿主没有裁剪偏移概念），
+ * 字节已经是裁剪后的片段。若把原 region 原样写回，外部软件会二次裁剪，
+ * 伴奏再次平移 —— 因此写回的是「0 → 裁剪后时长」的全长 region。
+ */
+function encodeVprAccompaniments(score, meta) {
+  const audioTracks = [];
+  const audioEntries = [];
+  const usedNames = new Set();
+  const fallback = Array.isArray(meta.audioTracks) ? meta.audioTracks : [];
+  const stats = { written: 0, dropped: 0, trimmed: 0, created: 0 };
+
+  const accompaniments = Array.isArray(score.accompaniments) ? score.accompaniments : [];
+  accompaniments.forEach((acc, index) => {
+    let wav = null;
+    if (acc && typeof acc.wavBase64 === 'string' && acc.wavBase64) {
+      try {
+        wav = Buffer.from(acc.wavBase64, 'base64');
+      } catch (_) {
+        wav = null;
+      }
+    }
+    if (!wav || !wav.length) {
+      stats.dropped += 1;
+      return;
+    }
+
+    const snap = (acc && acc.vpr && typeof acc.vpr === 'object') ? acc.vpr : null;
+    if (!snap) stats.created += 1;
+    const fallbackTrack = fallback[index] || {};
+    const srcTrack = (snap && snap.track) || fallbackTrack.track || {};
+    const srcPart = (snap && snap.part) || (fallbackTrack.parts || [])[0]?.part || {};
+    const srcWav = (snap && snap.wav) || (fallbackTrack.parts || [])[0]?.wav || {};
+    const srcRegion = (snap && snap.region) || (fallbackTrack.parts || [])[0]?.region || null;
+
+    let wavName = safeAudioName(srcWav.name || acc.audioFileName, index);
+    if (usedNames.has(wavName.toLowerCase())) {
+      const ext = /(\.[a-z0-9]{1,5})$/i.exec(wavName);
+      const stem = ext ? wavName.slice(0, -ext[0].length) : wavName;
+      const suffix = ext ? ext[0] : '.wav';
+      let seq = 2;
+      while (usedNames.has(`${stem}-${seq}${suffix}`.toLowerCase())) seq++;
+      wavName = `${stem}-${seq}${suffix}`;
+    }
+    usedNames.add(wavName.toLowerCase());
+
+    const durationMs = Number.isFinite(acc.audioDuration) && acc.audioDuration > 0
+      ? Math.round(acc.audioDuration * 1000)
+      : (parseWav(wav).ok ? Math.round(parseWav(wav).duration * 1000) : 0);
+    if (srcRegion && Number(srcRegion.begin) > 0) stats.trimmed += 1;
+
+    const part = {
+      ...srcPart,
+      name: String(acc.trackName || srcPart.name || 'Accompaniment').slice(0, 120),
+      pos: Math.round((Number(acc.startTime) || 0) * TICKS_PER_BEAT),
+      wav: {
+        ...srcWav,
+        name: wavName,
+        originalName: String(acc.audioFileName || srcWav.originalName || wavName).slice(0, 120),
+      },
+      region: { begin: 0, ...(durationMs > 0 ? { end: durationMs } : {}) },
+    };
+    audioTracks.push({
+      ...srcTrack,
+      type: 1,
+      name: String(srcTrack.name || acc.trackName || 'Audio').slice(0, 120),
+      isMuted: acc.mute === true,
+      volume: { events: [{ pos: 0, value: gainToVprVolume(Number(acc.volume)) }] },
+      parts: [part],
+    });
+    audioEntries.push({ name: `Project/Audio/${wavName}`, data: wav });
+    stats.written += 1;
+  });
+
+  return { audioTracks, audioEntries, stats };
+}
+
 /**
  * @param {object} score documentToScore 的输出
  * @param {object} meta parseVpr 收集、经 document.ext 带回的快照
- * @returns {Buffer} .vpr 文件字节（ZIP 内 Project/sequence.json）
+ * @returns {Buffer} .vpr 文件字节（ZIP 内 Project/sequence.json + Project/Audio/*）
  */
 function encodeVpr(score, meta) {
   const m = meta && meta.format === 'vpr' ? meta : {};
   const ts = score.timeSignature;
+  const trackMetas = Array.isArray(m.vocalTracks || m.tracks) ? (m.vocalTracks || m.tracks) : [];
   const tracks = (Array.isArray(score.tracks) ? score.tracks : []).map((track, ti) => {
-    const trackMeta = (m.tracks || [])[ti] || {};
+    const trackMeta = trackMetas[ti] || {};
     const parts = (Array.isArray(track.parts) ? track.parts : []).map((part) => {
       const startBeat = Number(part.startBeat) || 0;
       const notes = (Array.isArray(part.notes) ? part.notes : []).map((n) => ({
@@ -781,12 +942,22 @@ function encodeVpr(score, meta) {
         ],
       };
     });
+    const hostColor = colorToVprNumber(track.color);
     return {
       ...trackMeta,
       name: track.name,
+      ...(hostColor !== undefined || trackMeta.color !== undefined
+        ? { color: hostColor !== undefined ? hostColor : trackMeta.color }
+        : {}),
       parts,
     };
   });
+
+  // 音频轨接在人声轨后面，与解析时的顺序约定一致（音频轨通常排最后）。
+  const { audioTracks, audioEntries, stats } = encodeVprAccompaniments(score, m);
+  tracks.push(...audioTracks);
+  // codec.write 的返回值只有 bytes，统计借 score 这个内部对象回传给 writer 生成告警。
+  score.vprWriteStats = stats;
 
   const raw = {
     ...(m.rootExtras || {}),
@@ -799,7 +970,10 @@ function encodeVpr(score, meta) {
     tracks,
   };
   return writeZip(
-    [{ name: 'Project/sequence.json', data: JSON.stringify(raw, null, 2) }],
+    [
+      { name: 'Project/sequence.json', data: JSON.stringify(raw, null, 2) },
+      ...audioEntries,
+    ],
     { method: 'deflate' },
   );
 }

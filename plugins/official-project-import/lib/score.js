@@ -202,9 +202,16 @@ function buildAnchors(part, notes, fragmentStart, fragmentDuration) {
  * 音频字节在这里转 base64：插件进程不写盘，宿主 `codec.read` 也只接受文档，
  * 没有第二条能传二进制的通道。体积代价是 4/3，由宿主侧的文档校验单独预算。
  *
+ * 源工程里"能打开但宿主模型没有独立字段"的结构（VPR 音频轨的 `type`、
+ * `part.wav.name` / `originalName`、`region`、轨道名与其余标量）收进轨道级
+ * `ext`，随伴奏轨一起穿过编辑器状态。写回时由 documentToScore 取回，重建
+ * 音频轨与 ZIP 素材 —— 挂在轨道上而不是文档级 ext，才能在用户增删、重排
+ * 伴奏轨之后仍然对得上。
+ *
  * @param {{id?:string, trackName?:string, startBeat?:number, mute?:boolean,
  *          volume?:number, audioFileName?:string, duration?:number,
- *          sampleRate?:number, channels?:number, wavBuffer?:Buffer}} acc
+ *          sampleRate?:number, channels?:number, wavBuffer?:Buffer,
+ *          vpr?:object}} acc
  * @param {number} index
  * @returns {object}
  */
@@ -228,6 +235,9 @@ function buildAccompanimentSinger(acc, index) {
   };
   if (wavBase64) {
     singer.embeddedAudioData = { wavBase64, audioFileName, audioDuration: duration };
+  }
+  if (acc.vpr && typeof acc.vpr === 'object' && !Array.isArray(acc.vpr)) {
+    singer.ext = { [PLUGIN_ID]: { vpr: acc.vpr } };
   }
   return singer;
 }
@@ -379,6 +389,9 @@ function readSourceMeta(document, format) {
  * 三个 writer 才能共用同一份映射，不必各自实现一遍「分片怎么拼回轨道」。
  *
  * 没有对应歌手的分片不会丢：单独收进一条 Untitled 轨道，并由调用方显式告警。
+ * 伴奏轨同样原样交给 writer（含内嵌音频字节与随轨携带的源结构快照）：
+ * 支持音频轨的格式由 writer 写回，不支持的格式由调用方按格式告警，绝不在这里
+ * 提前丢掉 —— 那是"能打开却存不回去"的根源。
  */
 function documentToScore(document) {
   const singers = Array.isArray(document.singers) ? document.singers : [];
@@ -421,14 +434,29 @@ function documentToScore(document) {
   });
 
   const tracks = [];
-  let accompanimentCount = 0;
+  const accompaniments = [];
   for (const s of singers) {
     if (!s || typeof s !== 'object') continue;
-    // 伴奏轨在外部格式里没有等价物（VOCALOID 5/6 的音频轨另说，但它依赖容器里的
-    // 原始音频，写回会造出一个引用不存在素材的工程）。这里直接略过，由调用方
-    // 在告警里说清楚"伴奏不会写回"。
     if (s.type === 'accompaniment') {
-      accompanimentCount++;
+      const bag = s.embeddedAudioData && typeof s.embeddedAudioData === 'object'
+        ? s.embeddedAudioData : {};
+      const wavBase64 = typeof bag.wavBase64 === 'string' && bag.wavBase64 ? bag.wavBase64 : null;
+      const ext = s.ext && s.ext[PLUGIN_ID];
+      const vpr = ext && ext.vpr && typeof ext.vpr === 'object' && !Array.isArray(ext.vpr)
+        ? ext.vpr : null;
+      accompaniments.push({
+        id: s.id,
+        trackName: s.trackName || s.singerName || '',
+        audioFileName: s.audioFileName || '',
+        audioDuration: Number.isFinite(Number(s.audioDuration)) ? Number(s.audioDuration) : null,
+        numberOfChannels: Number.isFinite(Number(s.numberOfChannels)) ? Number(s.numberOfChannels) : 1,
+        startTime: Math.max(0, Number(s.accompanimentStartTime) || 0),
+        volume: Number.isFinite(Number(s.accompanimentVolume))
+          ? clamp(Number(s.accompanimentVolume), 0, 1) : 1,
+        mute: s.mute === true,
+        wavBase64,
+        vpr,
+      });
       continue;
     }
     tracks.push({
@@ -448,8 +476,9 @@ function documentToScore(document) {
       denominator: clamp(Math.round(Number(ts[1]) || 4), 2, 32),
     },
     tracks,
+    accompaniments,
     orphanCount: orphans.length,
-    accompanimentCount,
+    accompanimentCount: accompaniments.length,
   };
 }
 

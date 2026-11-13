@@ -12,6 +12,10 @@
  * 可以双向转换；能精简保存的元数据经 document.ext 带回并合并进生成的文件，
  * 其余部分逐条告警。需要完整保留编辑结果时应另存为宿主原生格式，插件不会把
  * 有损写回伪装成无损。
+ *
+ * VPR 的伴奏是「能打开就能存回去」的：音频字节与源音频轨结构随伴奏轨的 ext
+ * 携带，codec.write 重建 `type: 1` 音频轨并把 WAV 写进 `Project/Audio/`。
+ * VSQX / SVP 没有内嵌音频容器，宿主里新建的伴奏轨无法写回，仍逐条告警。
  */
 
 const {
@@ -171,15 +175,6 @@ function makeWrite(format) {
         `${score.orphanCount} fragment(s) have no singer track and were placed on an Untitled track.`,
       ));
     }
-    if (score.accompanimentCount > 0) {
-      // 伴奏是导入时真金白银搬进来的音频，写回时却无处安放 —— 这一条必须说，
-      // 否则用户以为"存回去还在"，下次从外部软件打开才发现伴奏没了。
-      warnings.push(msg(ctx,
-        `伴奏轨（${score.accompanimentCount} 条）不会写回 ${format.label}：该格式的工程里没有宿主伴奏轨的等价表示，音频不会被写入。需要保留伴奏请另存为 .sxsproj。`,
-        `${score.accompanimentCount} accompaniment track(s) are not written back to ${format.label}: the format has no equivalent for a host accompaniment track, so the audio is not written. Save as .sxsproj to keep it.`,
-      ));
-    }
-
     let bytes;
     try {
       bytes = format.encode(score, meta);
@@ -190,14 +185,47 @@ function makeWrite(format) {
       throw failure(ctx, msg(ctx, '编码器没有产出有效字节', 'The encoder produced no valid bytes'));
     }
 
+    // 伴奏写回结果放在编码之后生成：有没有真的写进去由 encoder 的统计说了算，
+    // 不能凭文档里有没有伴奏轨猜。VPR 支持音频轨，其余格式没有等价容器。
+    const accCount = Number(score.accompanimentCount) || 0;
+    if (accCount > 0) {
+      if (format.id === 'vpr') {
+        const st = score.vprWriteStats || { written: 0, dropped: 0, trimmed: 0, created: 0 };
+        if (st.written > 0 && st.created > 0) {
+          warnings.push(msg(ctx,
+            `${st.created} 条伴奏按新建 VPR 音频轨写回（无源工程结构快照）：文件名、位置、音量与静音状态按宿主当前设置生成。`,
+            `${st.created} accompaniment track(s) were written back as fresh VPR audio tracks (no source-structure snapshot); names, positions, volume and mute state come from the current host settings.`,
+          ));
+        }
+        if (st.dropped > 0) {
+          warnings.push(msg(ctx,
+            `${st.dropped} 条伴奏没有可写入的音频数据（伴奏文件缺失或未能解码），无法写回 VPR：工程里只会保留人声轨。请重新载入伴奏音频，或另存为 .sxsproj。`,
+            `${st.dropped} accompaniment track(s) have no writable audio data (missing or undecodable file) and were not written back to VPR: only vocal tracks are kept. Reload the accompaniment audio, or save as .sxsproj.`,
+          ));
+        }
+        if (st.trimmed > 0) {
+          warnings.push(msg(ctx,
+            `${st.trimmed} 条伴奏在源工程里带 region 裁剪，导入时已把裁剪烘焙进音频；写回按全长重建 region，避免再次平移。原始入点偏移不作为宿主可编辑数据保留。`,
+            `${st.trimmed} accompaniment track(s) had a source region trim that was baked into the audio on import; the region is rebuilt as full length on write-back to avoid a second offset. The original in-point is not kept as host-editable data.`,
+          ));
+        }
+      } else {
+        warnings.push(msg(ctx,
+          `伴奏轨（${accCount} 条）不会写回 ${format.label}：该格式的工程里没有宿主伴奏轨的等价表示，音频不会被写入。需要保留伴奏请另存为 .sxsproj。`,
+          `${accCount} accompaniment track(s) are not written back to ${format.label}: the format has no equivalent for a host accompaniment track, so the audio is not written. Save as .sxsproj to keep it.`,
+        ));
+      }
+    }
+
     stats.write += 1;
     stats.lastFile = name;
     stats.lastFormat = format.id;
 
     await ctx.ui.status('state', statusText(ctx, '保存', name));
+    const writtenAudio = score.vprWriteStats ? score.vprWriteStats.written : 0;
     ctx.log.info(
-      `保存 ${format.id} ${name}：${score.tracks.length} 轨 / ${document.fragments.length} 段，`
-      + `${warnings.length} 条告警`,
+      `保存 ${format.id} ${name}：${score.tracks.length} 轨 / ${document.fragments.length} 段`
+      + `${writtenAudio ? ` / ${writtenAudio} 条伴奏` : ''}，${warnings.length} 条告警`,
     );
     const warningText = summarizeWarnings(ctx, warnings);
     if (warningText) {
