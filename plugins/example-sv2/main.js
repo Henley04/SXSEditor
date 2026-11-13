@@ -95,12 +95,65 @@ function msg(ctx, zh, en) {
 }
 
 /**
+ * 读 WAV 头，拿时长/声道/采样率。
+ *
+ * 不是完整的 WAV 解析器：只需要够填伴奏轨的显示字段。任何一步不对就返回
+ * null，调用方退回文件里声明的 duration —— 头坏了不该让整条伴奏进不来。
+ * @param {Buffer} bytes
+ * @returns {{duration:number, sampleRate:number, channels:number}|null}
+ */
+function wavInfo(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 44) return null;
+  if (bytes.toString('latin1', 0, 4) !== 'RIFF' || bytes.toString('latin1', 8, 12) !== 'WAVE') return null;
+  let pos = 12;
+  let sampleRate = 0;
+  let channels = 0;
+  let bits = 0;
+  let dataSize = 0;
+  while (pos + 8 <= bytes.length) {
+    const id = bytes.toString('latin1', pos, pos + 4);
+    const size = bytes.readUInt32LE(pos + 4);
+    const body = pos + 8;
+    if (id === 'fmt ' && body + 16 <= bytes.length) {
+      channels = bytes.readUInt16LE(body + 2);
+      sampleRate = bytes.readUInt32LE(body + 4);
+      bits = bytes.readUInt16LE(body + 14);
+    } else if (id === 'data') {
+      // 流式 WAV 常把 data 长度写成 0 或 0xFFFFFFFF，此时按剩余字节算
+      dataSize = size === 0 || size === 0xFFFFFFFF ? bytes.length - body : Math.min(size, bytes.length - body);
+      break;
+    }
+    pos = body + size + (size % 2);
+  }
+  if (!sampleRate || !channels || !bits) return null;
+  return {
+    duration: dataSize / (sampleRate * channels * (bits / 8)),
+    sampleRate,
+    channels,
+  };
+}
+
+/** 文件名只留 basename，去掉路径分隔符与 `..`，避免引用逃出工程目录。 */
+function safeAudioName(raw, fallback) {
+  const base = String(raw || '').split(/[\\/]/).pop() || '';
+  const cleaned = base.replace(/[\\:*?"<>|]/g, '_').replace(/^\.+/, '').trim();
+  if (!cleaned || cleaned.includes('..')) return fallback;
+  return cleaned.slice(0, 120);
+}
+
+/**
  * 把 SV2 文本翻成工程文档。
  *
  * 容错取向：坏音符跳过、空轨道保留 —— 用户手上是一个真实文件，"打不开"比
  * "少两个音符"难受得多。真正无法继续的只有一种：文件根本不是 SV2。
+ *
+ * `files` 是宿主从工程同目录读到的伴生音频（按插件 manifest 的
+ * `companionExts` 声明才扫描）。伴奏两种承载方式：
+ *   embedded —— WAV 以 base64 存在 `audio.data`，单文件自包含；
+ *   file     —— `audio.name` 指向同目录 wav，工程文件本身很小。
  */
-function translate(raw, fileName) {
+function translate(ctx, raw, fileName, files) {
+  const warnings = [];
   const tracks = Array.isArray(raw.tracks) ? raw.tracks : [];
   const singers = [];
   const fragments = [];
@@ -188,7 +241,68 @@ function translate(raw, fileName) {
 
   // 写在这里是为了让示例读起来完整；宿主不认识这个字段，也不会读它
   document.source = { format: FORMAT_ID, file: fileName };
-  return document;
+
+  // 伴奏：宿主里是 `type: 'accompaniment'` 的"歌手"，没有音符分片。
+  // 与 VPR 不同，SV2 是自造格式，音频可以内嵌也可以旁挂，读的时候两种都认。
+  const available = new Map();
+  for (const f of Array.isArray(files) ? files : []) {
+    const key = String((f && f.name) || '').split(/[\\/]/).pop().toLowerCase();
+    if (key) available.set(key, f.bytes);
+  }
+  const accompRaw = Array.isArray(raw.accompaniments) ? raw.accompaniments : [];
+  accompRaw.slice(0, 64).forEach((item, index) => {
+    if (!item || typeof item !== 'object') return;
+    const audio = item.audio && typeof item.audio === 'object' ? item.audio : {};
+    const mode = audio.mode === 'file' ? 'file' : 'embedded';
+    const name = safeAudioName(audio.name || `accompaniment-${index + 1}.wav`, `accompaniment-${index + 1}.wav`);
+    let bytes = null;
+    if (mode === 'embedded') {
+      const data = typeof audio.data === 'string' ? audio.data : '';
+      if (data) {
+        try {
+          bytes = Buffer.from(data, 'base64');
+        } catch (_) {
+          bytes = null;
+        }
+      }
+      if (!bytes || !bytes.length) {
+        warnings.push(msg(ctx, `伴奏「${name}」没有可解码的内嵌音频，已跳过`, `Accompaniment "${name}" has no decodable embedded audio and was skipped`));
+        return;
+      }
+    } else {
+      bytes = available.get(name.toLowerCase()) || null;
+      if (!bytes) {
+        warnings.push(msg(ctx, `伴奏「${name}」引用的音频不在工程同目录，已跳过`, `Accompaniment "${name}" references a file that is not next to the .sv2, skipped`));
+        return;
+      }
+    }
+    const info = wavInfo(bytes);
+    const declared = toNumber(audio.duration, NaN);
+    const duration = info ? info.duration : (Number.isFinite(declared) && declared > 0 ? declared : null);
+    const singer = {
+      id: `sv2-accompaniment-${index + 1}`,
+      type: 'accompaniment',
+      trackName: name.slice(0, 60),
+      singerName: name.slice(0, 60),
+      audioFileName: name,
+      audioDuration: duration,
+      numberOfChannels: info ? info.channels : 1,
+      accompanimentStartTime: Math.max(0, roundTime(toNumber(item.start, 0))),
+      accompanimentVolume: Math.min(1, Math.max(0, toNumber(item.volume, 1))),
+      mute: item.mute === true,
+      embeddedAudioData: {
+        wavBase64: bytes.toString('base64'),
+        audioFileName: name,
+        audioDuration: duration,
+      },
+      // 写回沿用源文件的承载方式：内嵌的保持内嵌，旁挂的保持旁挂。
+      // 用户新建的伴奏没有这个标记，默认内嵌（单文件自包含，最不容易丢）。
+      ext: { [EXT_ID]: { audioMode: mode } },
+    };
+    singers.push(singer);
+  });
+
+  return { document, warnings };
 }
 
 /**
@@ -256,7 +370,9 @@ function encode(ctx, document) {
     return { name, start: roundTime(trackStart), notes };
   };
 
-  const tracks = singers.map((s) => buildTrack(
+  // 伴奏在宿主里也是 singer，但它没有人声轨道：不能进 tracks，否则
+  // 外部软件会看到一条永远没有音符的空轨。
+  const tracks = singers.filter((s) => !s || s.type !== 'accompaniment').map((s) => buildTrack(
     String(s.trackName || s.singerName || s.id).slice(0, 60),
     grouped.get(s.id) || [],
   ));
@@ -276,6 +392,58 @@ function encode(ctx, document) {
   };
   if (ext.meta && typeof ext.meta === 'object') raw.meta = ext.meta;
   raw.tracks = tracks;
+
+  // 伴奏写回：有没有音频字节由文档说了算，不看 singer 存不存在 —— 一条
+  // "看得见但没音频"的伴奏轨写出去只会变成引用不存在文件的空引用。
+  const accompOut = [];
+  const files = [];
+  const usedNames = new Set();
+  let skippedAccomp = 0;
+  for (const s of singers) {
+    if (!s || s.type !== 'accompaniment') continue;
+    const b64 = s.embeddedAudioData && s.embeddedAudioData.wavBase64;
+    const bytes = typeof b64 === 'string' && b64 ? Buffer.from(b64, 'base64') : null;
+    if (!bytes || !bytes.length) {
+      skippedAccomp++;
+      continue;
+    }
+    const mode = s.ext && s.ext[EXT_ID] && s.ext[EXT_ID].audioMode === 'file' ? 'file' : 'embedded';
+    const preferred = safeAudioName(
+      s.audioFileName || s.trackName || `accompaniment-${accompOut.length + 1}.wav`,
+      `accompaniment-${accompOut.length + 1}.wav`,
+    );
+    // 多条伴奏可能引用同名文件：改名而不是覆盖，覆盖会让前一条的音频静默消失
+    let fname = preferred;
+    const dot = preferred.lastIndexOf('.');
+    const stem = dot > 0 ? preferred.slice(0, dot) : preferred;
+    const extPart = dot > 0 ? preferred.slice(dot) : '';
+    for (let n = 2; usedNames.has(fname.toLowerCase()); n++) fname = `${stem}-${n}${extPart}`;
+    usedNames.add(fname.toLowerCase());
+
+    const info = wavInfo(bytes);
+    const declared = toNumber(s.audioDuration, NaN);
+    const duration = info ? info.duration : (Number.isFinite(declared) && declared > 0 ? declared : null);
+    const audio = { mode, name: fname };
+    if (duration !== null) audio.duration = Number(duration.toFixed(6));
+    if (mode === 'file') files.push({ name: fname, bytes });
+    else audio.data = bytes.toString('base64');
+
+    accompOut.push({
+      name: String(s.trackName || s.singerName || fname).slice(0, 60),
+      start: roundTime(toNumber(s.accompanimentStartTime, 0)),
+      volume: Math.min(1, Math.max(0, toNumber(s.accompanimentVolume, 1))),
+      mute: s.mute === true,
+      audio,
+    });
+  }
+  if (accompOut.length) raw.accompaniments = accompOut;
+  if (skippedAccomp > 0) {
+    warnings.push(msg(
+      ctx,
+      `${skippedAccomp} 条伴奏没有可写入的音频数据，未写进 SV2（重新载入伴奏音频，或另存为 .sxsproj）`,
+      `${skippedAccomp} accompaniment track(s) had no writable audio and were not written to SV2 (reload the audio, or save as .sxsproj)`,
+    ));
+  }
 
   // 写不进去的东西必须让用户知道。静默丢弃会在下次打开时表现为"我的调整没了"，
   // 而用户已经保存过一次，连回退的线索都没有。
@@ -297,6 +465,7 @@ function encode(ctx, document) {
   return {
     bytes: Buffer.from(JSON.stringify(raw, null, 2), 'utf8'),
     warnings,
+    files,
   };
 }
 
@@ -313,7 +482,7 @@ module.exports = {
    */
   codecs: {
     '.sv2': {
-      async read(ctx, { name, bytes }) {
+      async read(ctx, { name, bytes, files }) {
         let text;
         try {
           text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -343,21 +512,21 @@ module.exports = {
           );
         }
 
-        const document = translate(raw, name);
+        const { document, warnings } = translate(ctx, raw, name, files);
         stats.read += 1;
         stats.lastFile = name;
         await ctx.ui.status('state', statusText(name));
         ctx.log.info(`解码 ${name}：${document.singers.length} 轨 / ${document.fragments.length} 段`);
-        return { document };
+        return { document, warnings };
       },
 
       async write(ctx, { name, document }) {
-        const { bytes, warnings } = encode(ctx, document);
+        const { bytes, warnings, files } = encode(ctx, document);
         stats.written += 1;
         stats.lastFile = name;
         await ctx.ui.status('state', statusText(name));
-        ctx.log.info(`编码 ${name}：${bytes.length} 字节，${warnings.length} 条告警`);
-        return { bytes, warnings };
+        ctx.log.info(`编码 ${name}：${bytes.length} 字节，${files.length} 个旁挂音频，${warnings.length} 条告警`);
+        return files.length ? { bytes, warnings, files } : { bytes, warnings };
       },
     },
   },

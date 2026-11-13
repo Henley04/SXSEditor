@@ -20,9 +20,15 @@
  *  - 宿主用「音符颤音」表达正弦颤音（深度、频率、起点、时长、渐入），换算见
  *    lib/vibrato.js；组级包络、起始相位与渐出没有对应设置，导入时逐类告警，
  *    写回时尽量沿用原值。
+ *  - 伴奏是 **instrumental track**：track 的 mainRef 或 groups[] 里的 ref 带
+ *    `isInstrumental: true` 与 `audio: { filename, duration }`，filename 是相对
+ *    工程文件所在目录的路径，duration 单位为秒（见 OpenUtau 的 SVP.cs 与真实
+ *    instrumental.svp）。SVP 本身是纯 JSON，音频不内嵌 —— 所以写回时把 WAV
+ *    作为 codec.write 的旁挂文件放到工程同目录，用相对文件名引用。
  */
 
 const { BLICK_PER_BEAT, normalizeColor, roundTime } = require('./score.js');
+const { parseWav } = require('./wav.js');
 const {
   svpToHostVibrato, hostToSvpAttributes,
   hasNonTrivialVibratoEnv, collectNoteAttributes,
@@ -112,11 +118,144 @@ function groupNotes(group, ref, bpm, stats) {
   });
 }
 
+/** SVP 的 dB → 宿主线性增益；缺失或非有限值按 1（0dB）处理。 */
+function gainFromDb(value) {
+  const db = Number(value);
+  if (!Number.isFinite(db)) return 1;
+  return Math.max(0, Math.min(4, 10 ** (db / 20)));
+}
+
+/** 宿主线性增益 → SVP 的 dB；0 用 -120 近似 -∞。 */
+function gainToDb(value) {
+  const g = Number(value);
+  if (!Number.isFinite(g) || g <= 0) return -120;
+  return Math.round(20 * Math.log10(g) * 100) / 100;
+}
+
+/** 只保留体量可控的标量/浅对象，用于伴奏轨结构快照。 */
+function snapValue(value) {
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+    return typeof value === 'number' && !Number.isFinite(value) ? null : value;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value).slice(0, 16)) {
+      if (item === null || ['string', 'number', 'boolean'].includes(typeof item)) {
+        out[key] = item;
+      } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const inner = {};
+        for (const [k, v] of Object.entries(item).slice(0, 8)) {
+          if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) inner[k] = v;
+        }
+        if (Object.keys(inner).length) out[key] = inner;
+      }
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+  return undefined;
+}
+
+/** 包内/旁挂音频文件名：只取 basename，去掉路径分隔符与非法字符。 */
+function safeAudioName(raw, index) {
+  let name = String(raw || '').split(/[\\/]/).pop() || '';
+  name = name.replace(/[^\w.\-()\u4e00-\u9fa5 ]/g, '_').replace(/^\.+/, '').trim();
+  if (!name) name = `accompaniment-${index + 1}.wav`;
+  if (!/\.[a-z0-9]{1,5}$/i.test(name)) name += '.wav';
+  return name.slice(0, 120);
+}
+
+/**
+ * 收集一条 track 里所有 instrumental ref（`mainRef` 与 `groups[]`）。
+ * OpenUtau 的 SVP.cs 遍历的就是这两处，这里保持一致。
+ */
+function instrumentalRefs(track) {
+  const refs = [];
+  if (track.mainRef && track.mainRef.isInstrumental === true) refs.push(track.mainRef);
+  for (const ref of Array.isArray(track.groups) ? track.groups : []) {
+    if (ref && ref.isInstrumental === true) refs.push(ref);
+  }
+  return refs;
+}
+
+/**
+ * instrumental ref → 宿主伴奏轨。
+ *
+ * `audio.filename` 可能是 `../sine.wav` 这类相对路径。宿主只把工程文件**同目录**
+ * 的伴生文件送进来（`codec.read` 的 `files`），所以这里按 basename 匹配；
+ * 目录穿越的路径既读不到也不接受 —— 插件没有目录遍历能力，越界引用只能跳过。
+ * 匹配不到时明确告警，不生成引用不存在素材的空轨。
+ */
+function collectSvpAccompaniments(tracksRaw, files, warnings, t) {
+  const byName = new Map();
+  for (const item of Array.isArray(files) ? files : []) {
+    if (!item || typeof item.name !== 'string') continue;
+    const bytes = item.bytes;
+    if (Buffer.isBuffer(bytes) && bytes.length) byName.set(item.name.toLowerCase(), bytes);
+    else if (bytes && bytes.length && typeof bytes !== 'string') {
+      byName.set(item.name.toLowerCase(), Buffer.from(bytes));
+    }
+  }
+
+  const out = [];
+  let seq = 0;
+  for (const track of tracksRaw) {
+    if (!track || typeof track !== 'object') continue;
+    for (const ref of instrumentalRefs(track)) {
+      const audio = ref.audio && typeof ref.audio === 'object' ? ref.audio : {};
+      const rawName = String(audio.filename || '').trim();
+      if (!rawName) continue;
+      const base = rawName.split(/[\\/]/).pop();
+      const wav = byName.get(base.toLowerCase());
+      const displayName = String(track.name || base.replace(/\.[^.]+$/, '') || `Accompaniment ${seq + 1}`);
+      if (!wav) {
+        warnings.push(t(
+          `伴奏「${displayName}」引用的音频 ${rawName} 不在工程文件同目录，已跳过；请把音频放在 .svp 旁边再打开。`,
+          `The backing track "${displayName}" references ${rawName}, which is not next to the .svp file; it was skipped. Place the audio beside the .svp and reopen.`,
+        ));
+        continue;
+      }
+      const info = parseWav(wav);
+      const beginBlick = Number(ref.blickAbsoluteBegin) > 0
+        ? Number(ref.blickAbsoluteBegin) : (Number(ref.blickOffset) || 0);
+      const mixer = track.mixer && typeof track.mixer === 'object' ? track.mixer : {};
+      seq += 1;
+      out.push({
+        id: `import-accompaniment-${seq}`,
+        trackName: displayName.slice(0, 60),
+        startBeat: Math.max(0, beginBlick / BLICK_PER_BEAT),
+        mute: mixer.mute === true,
+        volume: gainFromDb(mixer.gainDecibel),
+        audioFileName: base.slice(0, 120),
+        duration: info.ok ? info.duration : (Number.isFinite(Number(audio.duration)) ? Number(audio.duration) : null),
+        sampleRate: info.ok ? info.sampleRate : null,
+        channels: info.ok ? info.channels : null,
+        wavBuffer: wav,
+        // 结构快照挂在伴奏轨自己身上，增删/重排之后仍然对得上。
+        svp: {
+          groupID: typeof ref.groupID === 'string' ? ref.groupID : `instrumental-ref-${seq}`,
+          refExtras: snapValue(Object.fromEntries(
+            Object.entries(ref).filter(([k]) => !['isInstrumental', 'audio', 'groupID', 'blickOffset', 'blickAbsoluteBegin'].includes(k)),
+          )) || {},
+          audioExtras: snapValue(Object.fromEntries(
+            Object.entries(audio).filter(([k]) => !['filename', 'duration'].includes(k)),
+          )) || {},
+          track: snapValue(Object.fromEntries(
+            Object.entries(track).filter(([k]) => !['mainRef', 'mainGroup', 'groups', 'name', 'dispOrder', 'mixer'].includes(k)),
+          )) || {},
+          displayName,
+        },
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * @param {Buffer} bytes
  * @param {(zh:string, en:string)=>string} t
+ * @param {Array<{name:string, bytes:Buffer}>} [files] 同目录伴生文件（宿主读入）
  */
-function parseSvp(bytes, t) {
+function parseSvp(bytes, t, files) {
   const raw = pickProject(bytes);
   if (!raw) throw new Error(t(
     '不是有效的 Synthesizer V 工程（缺少 tracks / time）',
@@ -162,13 +301,21 @@ function parseSvp(bytes, t) {
   const vibratoStats = { imported: 0, lossy: {} };
   let vibratoEnvGroups = 0;
   const tracks = [];
+  // instrumental ref 不是音符组：它没有对应的 library.uuid，若照常走 group 查找
+  // 会误报「音符组找不到」。这些轨道的音频由 collectSvpAccompaniments 单独接管，
+  // 这里只保留承载人声的轨道进 tracks，保证 collectSvpMeta 的下标与 tracks 对齐。
+  const vocalTracksRaw = [];
 
   tracksRaw.forEach((track, index) => {
     if (!track || typeof track !== 'object') return;
 
     const refs = [];
-    if (track.mainGroup && track.mainRef) refs.push({ ref: track.mainRef, group: track.mainGroup });
+    const isInstrumentalRef = (ref) => ref && ref.isInstrumental === true;
+    if (track.mainGroup && track.mainRef && !isInstrumentalRef(track.mainRef)) {
+      refs.push({ ref: track.mainRef, group: track.mainGroup });
+    }
     for (const ref of Array.isArray(track.groups) ? track.groups : []) {
+      if (isInstrumentalRef(ref)) continue;
       const group = ref && groupsByUuid.get(ref.groupID);
       if (!group) {
         warnings.push(t(
@@ -201,6 +348,7 @@ function parseSvp(bytes, t) {
     }
 
     if (!parts.length) return;
+    vocalTracksRaw.push(track);
     tracks.push({
       name: String(track.name || `Track ${index + 1}`),
       color: normalizeColor(track.dispColor),
@@ -238,9 +386,10 @@ function parseSvp(bytes, t) {
     bpm,
     timeSignature,
     tracks,
+    accompaniments: collectSvpAccompaniments(tracksRaw, files, warnings, t),
     warnings,
     vibratoImported: vibratoStats.imported,
-    meta: collectSvpMeta(raw, tracksRaw),
+    meta: collectSvpMeta(raw, vocalTracksRaw),
   };
 }
 
@@ -325,9 +474,92 @@ function collectSvpMeta(raw, tracksRaw) {
 }
 
 /**
+ * 伴奏轨 → SVP instrumental track + 旁挂 WAV。
+ *
+ * SVP 是纯 JSON，音频不内嵌：`audio.filename` 用相对文件名引用工程同目录的
+ * 素材，WAV 字节通过 codec.write 的 `files` 交宿主写到那个目录。文件名安全化
+ * 并去重，避免路径穿越与同名覆盖；没有音频数据的伴奏不生成引用不存在素材的
+ * 空轨（由 main.js 按 dropped 统计告警）。
+ */
+function encodeSvpAccompaniments(score, vocalTrackCount) {
+  const tracks = [];
+  const files = [];
+  const used = new Set();
+  const stats = { written: 0, dropped: 0, created: 0 };
+
+  const accompaniments = Array.isArray(score.accompaniments) ? score.accompaniments : [];
+  accompaniments.forEach((acc, index) => {
+    let wav = null;
+    if (acc && typeof acc.wavBase64 === 'string' && acc.wavBase64) {
+      try {
+        wav = Buffer.from(acc.wavBase64, 'base64');
+      } catch (_) {
+        wav = null;
+      }
+    }
+    if (!wav || !wav.length) {
+      stats.dropped += 1;
+      return;
+    }
+
+    const snap = acc && acc.svp && typeof acc.svp === 'object' && !Array.isArray(acc.svp)
+      ? acc.svp : null;
+    if (!snap) stats.created += 1;
+
+    let wavName = safeAudioName((snap && snap.audioFileName) || acc.audioFileName, index);
+    if (used.has(wavName.toLowerCase())) {
+      const ext = /(\.[a-z0-9]{1,5})$/i.exec(wavName);
+      const stem = ext ? wavName.slice(0, -ext[0].length) : wavName;
+      const suffix = ext ? ext[0] : '.wav';
+      let seq = 2;
+      while (used.has(`${stem}-${seq}${suffix}`.toLowerCase())) seq += 1;
+      wavName = `${stem}-${seq}${suffix}`;
+    }
+    used.add(wavName.toLowerCase());
+
+    const info = parseWav(wav);
+    const duration = Number.isFinite(acc.audioDuration) && acc.audioDuration > 0
+      ? acc.audioDuration : (info.ok ? info.duration : 0);
+    const beginBlick = Math.round(Math.max(0, Number(acc.startTime) || 0) * BLICK_PER_BEAT);
+
+    const ref = {
+      ...(snap && snap.refExtras && typeof snap.refExtras === 'object' ? snap.refExtras : {}),
+      groupID: (snap && typeof snap.groupID === 'string' && snap.groupID)
+        || `instrumental-ref-${index + 1}`,
+      blickOffset: beginBlick,
+      blickAbsoluteBegin: beginBlick,
+      isInstrumental: true,
+      audio: {
+        ...(snap && snap.audioExtras && typeof snap.audioExtras === 'object' ? snap.audioExtras : {}),
+        filename: wavName,
+        duration,
+      },
+    };
+    tracks.push({
+      ...(snap && snap.track && typeof snap.track === 'object' ? snap.track : {}),
+      name: String(acc.trackName || (snap && snap.displayName) || 'Audio').slice(0, 60),
+      dispOrder: vocalTrackCount + index,
+      renderEnabled: false,
+      mixer: {
+        gainDecibel: gainToDb(Number(acc.volume)),
+        pan: 0,
+        mute: acc.mute === true,
+        solo: false,
+        display: true,
+      },
+      groups: [ref],
+    });
+    files.push({ name: wavName, bytes: wav });
+    stats.written += 1;
+  });
+
+  return { tracks, files, stats };
+}
+
+/**
  * @param {object} score documentToScore 的输出
  * @param {object} meta collectSvpMeta 的快照（经 document.ext 带回，可能缺失）
- * @returns {Buffer} .svp 文件字节
+ * @returns {{bytes: Buffer, files: Array<{name:string, bytes:Buffer}>}} .svp 字节与伴生素材
  */
 function encodeSvp(score, meta) {
   const m = meta && meta.format === 'svp' ? meta : {};
@@ -416,6 +648,11 @@ function encodeSvp(score, meta) {
     }
   }
 
+  // instrumental track 接在人声轨后面；dispOrder 从人声轨条数续起，保证
+  // parseSvp 排序后顺序不变。统计借 score 回传给 writer 生成告警（与 VPR 同构）。
+  const acc = encodeSvpAccompaniments(score, tracks.length);
+  score.svpWriteStats = acc.stats;
+
   const raw = {
     ...(m.rootExtras || {}),
     version: Number(m.version) || 200,
@@ -428,9 +665,12 @@ function encodeSvp(score, meta) {
       tempo: [{ position: 0, bpm: score.bpm }],
     },
     library,
-    tracks,
+    tracks: [...tracks, ...acc.tracks],
   };
-  return Buffer.from(JSON.stringify(raw, null, 2), 'utf8');
+  return {
+    bytes: Buffer.from(JSON.stringify(raw, null, 2), 'utf8'),
+    files: acc.files,
+  };
 }
 
 module.exports = { parseSvp, encodeSvp, collectSvpMeta };

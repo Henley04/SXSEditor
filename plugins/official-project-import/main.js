@@ -88,7 +88,7 @@ function saveWarnings(ctx, formatId) {
  * 解析出的源工程元数据随文档扩展域一并返回，供后续写回合并。
  */
 function makeRead(format) {
-  return async function read(ctx, { name, bytes }) {
+  return async function read(ctx, { name, bytes, files }) {
     const translatable = (zh, en) => msg(ctx, zh, en);
     if (!bytes || !bytes.length) {
       throw failure(ctx, msg(ctx, '文件是空的', 'The file is empty'));
@@ -96,7 +96,9 @@ function makeRead(format) {
 
     let score;
     try {
-      score = format.parse(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), translatable);
+      // files 是宿主按 manifest.companionExts 读入的同目录伴生文件；只有 SVP 的
+      // 解析器用到（instrumental track 的相对路径引用），其余格式忽略第三个参数。
+      score = format.parse(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), translatable, files);
     } catch (err) {
       if (!err || !err.code) {
         if (err) err.code = 'INVALID_REQUEST';
@@ -175,18 +177,24 @@ function makeWrite(format) {
         `${score.orphanCount} fragment(s) have no singer track and were placed on an Untitled track.`,
       ));
     }
-    let bytes;
+    let encoded;
     try {
-      bytes = format.encode(score, meta);
+      encoded = format.encode(score, meta);
     } catch (err) {
       throw failure(ctx, msg(ctx, `生成 ${format.label} 文件失败：${err.message}`, `Failed to build the ${format.label} file: ${err.message}`));
     }
+    // 编码器可以只返回字节（VSQX / VPR 把音频内嵌进容器），也可以返回
+    // { bytes, files }（SVP 用相对路径引用同目录素材，WAV 走宿主旁挂写出）。
+    const isBytes = Buffer.isBuffer(encoded) || encoded instanceof Uint8Array;
+    const bytes = isBytes ? encoded : encoded && encoded.bytes;
+    const sidecarFiles = !isBytes && Array.isArray(encoded && encoded.files) ? encoded.files : [];
     if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) {
       throw failure(ctx, msg(ctx, '编码器没有产出有效字节', 'The encoder produced no valid bytes'));
     }
 
     // 伴奏写回结果放在编码之后生成：有没有真的写进去由 encoder 的统计说了算，
-    // 不能凭文档里有没有伴奏轨猜。VPR 支持音频轨，其余格式没有等价容器。
+    // 不能凭文档里有没有伴奏轨猜。VPR 内嵌音频轨，SVP 用相对路径旁挂 WAV，
+    // VSQX（VOCALOID3/4 的 XML）两者都没有，只能如实告警。
     const accCount = Number(score.accompanimentCount) || 0;
     if (accCount > 0) {
       if (format.id === 'vpr') {
@@ -209,6 +217,26 @@ function makeWrite(format) {
             `${st.trimmed} accompaniment track(s) had a source region trim that was baked into the audio on import; the region is rebuilt as full length on write-back to avoid a second offset. The original in-point is not kept as host-editable data.`,
           ));
         }
+      } else if (format.id === 'svp') {
+        const st = score.svpWriteStats || { written: 0, dropped: 0, created: 0 };
+        if (st.written > 0) {
+          warnings.push(msg(ctx,
+            `${st.written} 条伴奏已写回为 SVP instrumental track，音频以相对路径引用同目录的 WAV 文件：移动 .svp 时请把这些 WAV 一起带上，否则外部软件会找不到伴奏。`,
+            `${st.written} accompaniment track(s) were written back as SVP instrumental tracks whose audio is referenced by relative path to WAV files beside the .svp: keep those WAV files together when moving the project, or the audio will be missing.`,
+          ));
+        }
+        if (st.created > 0) {
+          warnings.push(msg(ctx,
+            `${st.created} 条伴奏按新建 instrumental track 写回（无源工程结构快照）：文件名、位置、音量与静音状态按宿主当前设置生成。`,
+            `${st.created} accompaniment track(s) were written back as fresh instrumental tracks (no source-structure snapshot); names, positions, volume and mute state come from the current host settings.`,
+          ));
+        }
+        if (st.dropped > 0) {
+          warnings.push(msg(ctx,
+            `${st.dropped} 条伴奏没有可写入的音频数据（伴奏文件缺失或未能解码），无法写回 SVP：工程里只会保留人声轨。请重新载入伴奏音频，或另存为 .sxsproj。`,
+            `${st.dropped} accompaniment track(s) have no writable audio data (missing or undecodable file) and were not written back to SVP: only vocal tracks are kept. Reload the accompaniment audio, or save as .sxsproj.`,
+          ));
+        }
       } else {
         warnings.push(msg(ctx,
           `伴奏轨（${accCount} 条）不会写回 ${format.label}：该格式的工程里没有宿主伴奏轨的等价表示，音频不会被写入。需要保留伴奏请另存为 .sxsproj。`,
@@ -222,10 +250,11 @@ function makeWrite(format) {
     stats.lastFormat = format.id;
 
     await ctx.ui.status('state', statusText(ctx, '保存', name));
-    const writtenAudio = score.vprWriteStats ? score.vprWriteStats.written : 0;
+    const writtenAudio = (score.vprWriteStats || score.svpWriteStats || {}).written || 0;
     ctx.log.info(
       `保存 ${format.id} ${name}：${score.tracks.length} 轨 / ${document.fragments.length} 段`
-      + `${writtenAudio ? ` / ${writtenAudio} 条伴奏` : ''}，${warnings.length} 条告警`,
+      + `${writtenAudio ? ` / ${writtenAudio} 条伴奏` : ''}`
+      + `${sidecarFiles.length ? ` / ${sidecarFiles.length} 个旁挂音频` : ''}，${warnings.length} 条告警`,
     );
     const warningText = summarizeWarnings(ctx, warnings);
     if (warningText) {
@@ -237,10 +266,10 @@ function makeWrite(format) {
       }
     }
 
-    // 宿主把 bytes 原子写盘；插件不接触路径。ext 里只放源工程元数据，
-    // 不回写宿主插件标识以外的东西。
+    // 宿主把 bytes 原子写盘；files 里的旁挂素材由宿主写到主文件同目录。
+    // 插件不接触路径，也不回写宿主插件标识以外的东西。
     void PLUGIN_ID;
-    return { bytes, warnings };
+    return sidecarFiles.length ? { bytes, warnings, files: sidecarFiles } : { bytes, warnings };
   };
 }
 

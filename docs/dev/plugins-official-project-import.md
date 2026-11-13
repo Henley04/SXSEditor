@@ -1,6 +1,6 @@
 # 官方工程导入插件（VOCALOID / Synthesizer V）
 
-> 插件 id：`official-project-import` · 版本 1.2.0 · 发布者 `SXSEditor Official`
+> 插件 id：`official-project-import` · 版本 1.3.0 · 发布者 `SXSEditor Official`
 >
 > 源码：`plugins/official-project-import/` · 随应用内置，首次启动自动安装
 
@@ -10,14 +10,14 @@
 |---|---|---|---|---|
 | `.vsqx` | VOCALOID 3 / 4 | XML（`vsq3` / `vsq4` 命名空间） | 3.x、4.x | 打开、保存 |
 | `.vpr` | VOCALOID 5 / 6 | ZIP，工程在 `Project/sequence.json`，伴奏在 `Project/Audio/*.wav` | 5.x、6.x | 打开、保存 |
-| `.svp` | Synthesizer V / SV2 | JSON（可用 `\u0000` 串联多份，取 version 最大者） | 1.x / 2.x 工程 | 打开、保存 |
+| `.svp` | Synthesizer V / SV2 | JSON（可用 `\u0000` 串联多份，取 version 最大者）；伴奏为同目录 WAV 的相对路径引用 | 1.x / 2.x 工程 | 打开、保存 |
 
 三种格式都声明 `role: "both"`，既出现在「文件 → 打开工程」，也出现在「另存为」。
 **凡是能读进宿主工程文档的数据，写回时都要能存回去**：音符、歌词、音高曲线、
-速度、拍号、轨道名与颜色、分片名与起点，以及 VPR 的伴奏轨（含音频字节、
-`wav.name` / `originalName`、轨道 `type` / `isMuted` / `volume`、part 的 `pos` /
-`name` / `region`）都会在另存为同格式时还原。`.vsqx` / `.svp` 没有内嵌音频容器，
-宿主里新建的伴奏轨无法写回，会逐条告警。
+速度、拍号、轨道名与颜色、分片名与起点，以及伴奏轨都会在另存为同格式时还原。
+两种容器各用各的办法：`.vpr` 把音频与音频轨结构写回 ZIP（`Project/Audio/`），
+`.svp` 用标准 instrumental track 的相对路径引用 + 同目录旁挂 WAV。`.vsqx`
+（VOCALOID 3/4 的 XML）没有音频容器，宿主里的伴奏轨无法写回，会逐条告警。
 
 **写回外部工程格式仍是有损的**：歌手库、音色与风格、组级颤音强度包络、颤音起始
 相位与渐出、音素属性、变速与变拍号在宿主中没有等价字段，不会写入；插件会逐条
@@ -128,9 +128,41 @@ JSON（32MB 上限）与音频（单条 128MB、合计 192MB）会被解压，�
 "看起来保存了、内容其实已损坏"比明确的有损告警更糟。
 
 宿主侧的 `src/renderer/saveAsPath.js` 维护一份「能写回伴奏的格式」清单
-（当前只有 `vpr`）：另存为这些格式时不再弹「伴奏将丢失」确认，且保存时强制
-嵌入伴奏字节；`.svp` / `.vsqx` / `.sv2` 仍按旧行为在写盘前提醒。插件新增
-可写回伴奏的格式时必须同步这份清单。
+（当前 `vpr` / `svp` / `sv2`）：另存为这些格式时不再弹「伴奏将丢失」确认，且
+保存时强制嵌入伴奏字节；`.vsqx` 仍按旧行为在写盘前提醒。插件新增可写回伴奏的
+格式时必须同步这份清单。
+
+### 3.3 SVP 的伴奏（instrumental track）
+
+Synthesizer V 的 `.svp` 是纯 JSON，没有内嵌音频的位置，伴奏用一条
+**instrumental track** 引用工程同目录的 WAV：
+
+```json
+{
+  "name": "Backing",
+  "groups": [{
+    "groupID": "…", "blickOffset": 1411200000, "isInstrumental": true,
+    "audio": { "filename": "backing.wav", "duration": 0.5 }
+  }]
+}
+```
+
+`isInstrumental: true` 的 ref 上没有音符组，`audio.filename` 相对 `.svp` 所在
+目录解析（与 OpenUtau 的 `SVP.cs` 一致；同样结构也可能挂在 `mainRef` 上，读取时
+两处都看）。`blickOffset` 是 705600000 blick/拍下的起点，`audio.duration` 是秒。
+
+| 方向 | 行为 |
+|---|---|
+| 读 | 宿主按 manifest 的 `companionExts: [".wav"]` 把同目录 WAV 读好传进 `codec.read`；插件按 `filename` 的 basename 匹配，解析 WAV 头填时长/声道，生成 `type: 'accompaniment'` 的歌手 |
+| 读（缺失） | 音频不在同目录时告警跳过，不生成引用不存在文件的伴奏轨；只按 basename 匹配，`../elsewhere/x.wav` 不会被带出目录 |
+| 写 | 生成 `groups[].isInstrumental` + `audio.filename`（纯文件名，不含路径），WAV 通过 `codec.write` 的 `files` 由宿主写进主文件同目录 |
+| 写（缺字节） | 不写 instrumental track，逐条告警 —— 空引用比明确的有损更糟 |
+| 写（多条同名） | 文件名安全化并按 `-2` / `-3` 去重，不互相覆盖 |
+
+写回后工程**依赖同目录的 WAV**：移动 `.svp` 时要把这些文件一起带走，否则外部
+软件会找不到伴奏。这条依赖在保存告警里明说，不把它包装成"一个文件搞定"。
+源格式的结构快照（轨道 `name` / `dispColor` / `mixer` 等标量）收在伴奏轨自己的
+`ext.official-project-import.svp` 里，用户增删、重排伴奏轨后仍能对上。
 
 歌词中的 `br` 是 Synthesizer V 的呼吸标记。宿主的声学模型把 `<AP>` 定义为
 可发声的吸气音素（`src/inference/phone_set.json`、用户指南与音素预处理注释一致），
@@ -179,8 +211,8 @@ SVP 的音符颤音参数在 `note.attributes`（缺省值回落到 `mainRef.voi
 | 重叠音符 | 按后一个音符的起点裁掉前一个的尾巴（编辑器假定音符不重叠） |
 | 非法/零长度音符 | 跳过，不阻断整份工程 |
 | VPR 伴奏体积 | 单条音频 128MB、合计 192MB；超限只跳过伴奏并告警，工程其余部分照常导入 |
-| 伴奏写回 | `.vpr` 的伴奏音频与音频轨结构写回 ZIP 容器（见 §3.2）；`.vsqx` / `.svp` / `.sv2` 没有内嵌音频容器，伴奏不写回并告警，需保留请另存为 `.sxsproj`。源 `region` 裁剪已烘焙进音频，写回按全长重建，原始入点偏移不保留（会告警） |
-| 宿主新建的伴奏轨 | 没有源工程结构快照时按宿主当前设置生成全新的 VPR 音频轨，并告警说明；没有音频字节的伴奏不生成空引用 |
+| 伴奏写回 | `.vpr` 的伴奏音频与音频轨结构写回 ZIP 容器（见 §3.2）；`.svp` 写回为 instrumental track + 同目录旁挂 WAV（见 §3.3），工程从此依赖这些 WAV，移动时要一起带走。`.vsqx` 没有音频容器，伴奏不写回并告警，需保留请另存为 `.sxsproj`。源 `region` 裁剪已烘焙进音频，写回按全长重建，原始入点偏移不保留（会告警） |
+| 宿主新建的伴奏轨 | 没有源工程结构快照时按宿主当前设置生成全新的 VPR 音频轨 / SVP instrumental track，并告警说明；没有音频字节的伴奏不生成空引用 |
 | 写回外部格式 | 歌手库、音色与风格、组级颤音强度包络、颤音起始相位与渐出、音素属性、变速与变拍号、前导小节与弯音灵敏度曲线不写入；音符颤音主参数写回 `note.attributes`；逐条返回告警，并建议另存为宿主原生工程格式 |
 
 ## 5. 为什么是一个插件而不是两个
@@ -232,7 +264,15 @@ ZIP，不依赖外部素材）：音频真的落到 `type: 'accompaniment'` 的�
 音量、声道、字节逐项对照）、`region` 按毫秒裁剪、静音与 -∞ 音量、超限音频只丢
 伴奏不阻断导入、缺文件时告警；写回侧断言 ZIP 音频条目与字节、音频轨全部标量键、
 人声轨 `color` / `type`、`region` 重建后不二次平移、宿主新建伴奏轨也能写回、
-路径穿越安全化与同名去重、缺音频字节时不写空引用、`.svp` / `.vsqx` 仍明确告警。
+路径穿越安全化与同名去重、缺音频字节时不写空引用、`.vsqx` 仍明确告警。
+
+`test/pluginSvpAccompaniment.test.js` 专测 `.svp` 的 instrumental track：同目录
+WAV 进入伴奏轨（位置、音量、时长、声道、字节逐项对照）、instrumental ref 不被
+误当成缺失的音符组、`mainRef` 上的 instrumental 也能导入、只有伴奏没有音符的
+工程能打开、`read → write → read` 闭环（标准 `groups[].isInstrumental` +
+`audio.filename`，WAV 走 `files` 旁挂且字节一致）、缺 WAV 时告警不写空引用、
+`../` 路径只按 basename 匹配且写回只留文件名、多条同名伴奏去重、写回告警明确
+说明相对路径依赖。
 - `br` ↔ `<AP>` 双向转译对称，`<SP>` 静音与普通歌词不受影响；并用一份含呼吸
   音符的 SVP 走完整的字节往返。
 - manifest 的三个 `fileTypes` 都声明 `role: "both"` 与 `userPicked:write` 权限，

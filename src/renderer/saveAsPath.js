@@ -65,11 +65,13 @@ export function isExternalFormat(filePath) {
  * 内置插件能把伴奏音频写回容器里的外部格式。
  *
  * `official-project-import` 从 1.2.0 起会把伴奏重建为 VPR 的 `type: 1`
- * 音频轨，并把 WAV 字节写进 `Project/Audio/`。这份清单是宿主与随包内置插件
- * 之间的能力约定：插件新增可写回伴奏的格式时，这里必须同步，否则界面会对着
- * 一个明明能保留伴奏的格式弹出「伴奏将丢失」的误导性确认。
+ * 音频轨，并把 WAV 字节写进 `Project/Audio/`；从 1.3.0 起 .svp 用标准
+ * instrumental track 的相对路径引用 + 旁挂 WAV 写回。`.sv2` 由示例插件
+ * 接管，音频可内嵌也可旁挂。这份清单是宿主与插件之间的能力约定：插件
+ * 新增可写回伴奏的格式时，这里必须同步，否则界面会对着一个明明能保留
+ * 伴奏的格式弹出「伴奏将丢失」的误导性确认。
  */
-const ACCOMPANIMENT_WRITEBACK_EXTS = new Set(['vpr']);
+const ACCOMPANIMENT_WRITEBACK_EXTS = new Set(['vpr', 'svp', 'sv2']);
 
 /**
  * 保存为该格式时伴奏音频会丢失，需要在写盘前提醒用户。

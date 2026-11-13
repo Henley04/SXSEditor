@@ -376,13 +376,26 @@ describe('official-project-import — VPR 伴奏写回（read → write → read
     expect(saved.warnings.join('\n')).to.match(/没有可写入的音频|no writable audio/i);
   });
 
-  it('另存为 .svp / .vsqx 时伴奏仍明确告警不会写回（格式无音频容器）', async () => {
+  it('跨格式另存为 .svp 时伴奏写回为 instrumental track + 旁挂 WAV', async () => {
     const { document } = await readVprZip(makeVprWithAudio());
-    for (const ext of ['.svp', '.vsqx']) {
-      const { ctx } = makeContext();
-      const saved = await plugin.codecs[ext].write(ctx, { name: `cross${ext}`, document });
-      expect(saved.warnings.join('\n'), ext).to.match(/伴奏.*不会写回|accompaniment track\(s\) are not written back/);
-    }
+    const { ctx } = makeContext();
+    const saved = await plugin.codecs['.svp'].write(ctx, { name: 'cross.svp', document });
+    expect(saved.files).to.have.length(1);
+    expect(saved.files[0].name).to.match(/\.wav$/);
+    const raw = JSON.parse(Buffer.from(saved.bytes).toString('utf8'));
+    const inst = raw.tracks.find((t) => (t.groups || []).some((g) => g.isInstrumental));
+    expect(inst, '应生成 instrumental track').to.exist;
+    expect(inst.groups[0].audio.filename).to.equal(saved.files[0].name);
+    // 源是 VPR，没有 SVP 结构快照：按新建轨写回并告警，不伪装成无损
+    expect(saved.warnings.join('\n')).to.match(/新建 instrumental track|fresh instrumental tracks/);
+    expect(saved.warnings.join('\n')).to.not.match(/不会写回|not written back/);
+  });
+
+  it('另存为 .vsqx 时伴奏仍明确告警不会写回（VOCALOID3/4 XML 无音频轨）', async () => {
+    const { document } = await readVprZip(makeVprWithAudio());
+    const { ctx } = makeContext();
+    const saved = await plugin.codecs['.vsqx'].write(ctx, { name: 'cross.vsqx', document });
+    expect(saved.warnings.join('\n')).to.match(/伴奏.*不会写回|accompaniment track\(s\) are not written back/);
   });
 
   it('文档级 ext 丢失时元数据告警未沿用，伴奏结构仍随轨快照写回', async () => {

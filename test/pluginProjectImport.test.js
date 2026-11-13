@@ -197,9 +197,12 @@ describe('official-project-import — manifest', () => {
       expect(ft.role, `${ft.ext}.role`).to.equal('both');
     }
     expect(manifest.permissions.fs).to.include('userPicked:write');
-    // 1.2.0 起 VPR 伴奏可写回；版本号必须升，否则 builtinPlugins 的
+    // 1.3.0 起 SVP 伴奏也可用相对路径写回；版本号必须升，否则 builtinPlugins 的
     // needsUpgrade 判定不成立，老用户升级 App 后拿不到新能力。
-    expect(manifest.version).to.equal('1.2.0');
+    expect(manifest.version).to.equal('1.3.0');
+    // .svp 必须声明伴生文件白名单：宿主靠它才知道打开时要读同目录的 WAV。
+    const svp = manifest.contributes.fileTypes.find((ft) => ft.ext === '.svp');
+    expect(svp.companionExts).to.deep.equal(['.wav']);
   });
 });
 

@@ -2,8 +2,8 @@
   "apiVersion": 2,
   "id": "example-sv2",
   "name": "Example: SV2 Project",
-  "version": "1.0.0",
-  "description": "数据面示例：声明接管 .sv2 文件（read/write 双向转换），并提供一个 .pcm 导出器演示成品导出。",
+  "version": "1.1.0",
+  "description": "数据面示例：声明接管 .sv2 文件（read/write 双向转换，伴奏可内嵌音频或按相对路径旁挂），并提供一个 .pcm 导出器演示成品导出。",
   "author": "SXSEditor Dev",
   "main": "main.js",
   "engines": {
@@ -37,6 +37,9 @@
         },
         "filters": [
           "SV2 Project"
+        ],
+        "companionExts": [
+          ".wav"
         ]
       }
     ],

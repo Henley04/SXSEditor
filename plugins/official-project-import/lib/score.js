@@ -203,15 +203,15 @@ function buildAnchors(part, notes, fragmentStart, fragmentDuration) {
  * 没有第二条能传二进制的通道。体积代价是 4/3，由宿主侧的文档校验单独预算。
  *
  * 源工程里"能打开但宿主模型没有独立字段"的结构（VPR 音频轨的 `type`、
- * `part.wav.name` / `originalName`、`region`、轨道名与其余标量）收进轨道级
- * `ext`，随伴奏轨一起穿过编辑器状态。写回时由 documentToScore 取回，重建
- * 音频轨与 ZIP 素材 —— 挂在轨道上而不是文档级 ext，才能在用户增删、重排
- * 伴奏轨之后仍然对得上。
+ * `part.wav.name` / `originalName`、`region`；SVP instrumental ref 的
+ * `groupID`、`audio` 与轨道标量）收进轨道级 `ext`，随伴奏轨一起穿过编辑器
+ * 状态。写回时由 documentToScore 取回，重建音频轨与素材 —— 挂在轨道上而不是
+ * 文档级 ext，才能在用户增删、重排伴奏轨之后仍然对得上。
  *
  * @param {{id?:string, trackName?:string, startBeat?:number, mute?:boolean,
  *          volume?:number, audioFileName?:string, duration?:number,
  *          sampleRate?:number, channels?:number, wavBuffer?:Buffer,
- *          vpr?:object}} acc
+ *          vpr?:object, svp?:object}} acc
  * @param {number} index
  * @returns {object}
  */
@@ -236,8 +236,11 @@ function buildAccompanimentSinger(acc, index) {
   if (wavBase64) {
     singer.embeddedAudioData = { wavBase64, audioFileName, audioDuration: duration };
   }
-  if (acc.vpr && typeof acc.vpr === 'object' && !Array.isArray(acc.vpr)) {
-    singer.ext = { [PLUGIN_ID]: { vpr: acc.vpr } };
+  const source = {};
+  if (acc.vpr && typeof acc.vpr === 'object' && !Array.isArray(acc.vpr)) source.vpr = acc.vpr;
+  if (acc.svp && typeof acc.svp === 'object' && !Array.isArray(acc.svp)) source.svp = acc.svp;
+  if (Object.keys(source).length) {
+    singer.ext = { [PLUGIN_ID]: source };
   }
   return singer;
 }
@@ -441,9 +444,11 @@ function documentToScore(document) {
       const bag = s.embeddedAudioData && typeof s.embeddedAudioData === 'object'
         ? s.embeddedAudioData : {};
       const wavBase64 = typeof bag.wavBase64 === 'string' && bag.wavBase64 ? bag.wavBase64 : null;
-      const ext = s.ext && s.ext[PLUGIN_ID];
-      const vpr = ext && ext.vpr && typeof ext.vpr === 'object' && !Array.isArray(ext.vpr)
+      const ext = (s.ext && s.ext[PLUGIN_ID]) || {};
+      const vpr = ext.vpr && typeof ext.vpr === 'object' && !Array.isArray(ext.vpr)
         ? ext.vpr : null;
+      const svp = ext.svp && typeof ext.svp === 'object' && !Array.isArray(ext.svp)
+        ? ext.svp : null;
       accompaniments.push({
         id: s.id,
         trackName: s.trackName || s.singerName || '',
@@ -456,6 +461,7 @@ function documentToScore(document) {
         mute: s.mute === true,
         wavBase64,
         vpr,
+        svp,
       });
       continue;
     }
