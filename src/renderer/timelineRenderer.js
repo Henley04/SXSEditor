@@ -135,37 +135,82 @@ function _getFragmentPitchRange(notes, fragDuration) {
 // 较低（每像素覆盖 ≥ 一桶）时直接取桶；放大到每像素样本数少于桶大小时按像素
 // 直接扫描（本就便宜）。WeakMap 以 singer 对象为 key，轨道删除即随之回收；
 // audioBuffer 引用变化（重新加载音频）时自动失效重建。
+//
+// 初始化不再"一口气"同步扫完整个 PCM：一首 4 分钟 48kHz 伴奏约 1150 万样本，
+// 同步构建会让打开工程/首次绘制明显卡住。现在按片（约 26 万样本/片）在空闲
+// 回调里增量构建；构建完成前，未就绪的桶用跨步采样给出近似峰值（视觉上与精确
+// 值几乎无差），全部就绪后自动替换为精确值并补一帧重绘。
 const WAVEFORM_BUCKET_SIZE = 512;
+const WAVEFORM_BUILD_BUCKETS_PER_SLICE = 512; // 512 桶 × 512 样本 ≈ 26 万样本/片
 const _waveformPeakCache = new WeakMap();
+
+function _scheduleWaveformBuild(entry) {
+  if (entry.scheduled) return;
+  entry.scheduled = true;
+  const run = () => {
+    entry.scheduled = false;
+    _buildWaveformPeakSlice(entry);
+  };
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 120 });
+  } else {
+    const timer = setTimeout(run, 16);
+    // Node/jsdom 环境下别让增量构建的定时器拖住进程退出（浏览器返回 number，无 unref）
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  }
+}
+
+function _buildWaveformPeakSlice(entry) {
+  const { buf, peaks, bucketSize } = entry;
+  const bucketCount = peaks.length;
+  const end = Math.min(bucketCount, entry.builtBuckets + WAVEFORM_BUILD_BUCKETS_PER_SLICE);
+  const peakArr = peaks;
+  for (let b = entry.builtBuckets; b < end; b++) {
+    const start = b * bucketSize;
+    const stop = Math.min(start + bucketSize, buf.length);
+    let peak = 0;
+    for (let i = start; i < stop; i++) {
+      const v = buf[i] < 0 ? -buf[i] : buf[i];
+      if (v > peak) peak = v;
+    }
+    peakArr[b] = peak;
+  }
+  entry.builtBuckets = end;
+  if (end < bucketCount) {
+    _scheduleWaveformBuild(entry);
+    return;
+  }
+  // 精确峰值全部就绪：补一帧，把构建期间的近似波形换成真实波形。
+  try { renderFragmentTimeline(); } catch (_) { /* 时间线可能已销毁 */ }
+}
 
 function _getWaveformPeaks(singer) {
   const buf = singer.audioBuffer;
   if (!buf || buf.length === 0) return null;
   let entry = _waveformPeakCache.get(singer);
-  if (entry && entry.buf === buf) return entry;
-  const bucketCount = Math.ceil(buf.length / WAVEFORM_BUCKET_SIZE);
-  const peaks = new Float32Array(bucketCount);
-  for (let b = 0; b < bucketCount; b++) {
-    const start = b * WAVEFORM_BUCKET_SIZE;
-    const end = Math.min(start + WAVEFORM_BUCKET_SIZE, buf.length);
-    let peak = 0;
-    for (let i = start; i < end; i++) {
-      const v = buf[i] < 0 ? -buf[i] : buf[i];
-      if (v > peak) peak = v;
-    }
-    peaks[b] = peak;
+  if (entry && entry.buf === buf) {
+    if (entry.builtBuckets < entry.peaks.length) _scheduleWaveformBuild(entry);
+    return entry;
   }
-  entry = { buf, bucketSize: WAVEFORM_BUCKET_SIZE, peaks };
+  const bucketCount = Math.ceil(buf.length / WAVEFORM_BUCKET_SIZE);
+  entry = {
+    buf,
+    bucketSize: WAVEFORM_BUCKET_SIZE,
+    peaks: new Float32Array(bucketCount),
+    builtBuckets: 0,
+    scheduled: false,
+  };
   _waveformPeakCache.set(singer, entry);
+  _scheduleWaveformBuild(entry);
   return entry;
 }
 
-/** 取 [sampleStart, sampleEnd) 范围峰值：整桶查表，首尾残桶直接扫描。 */
+/** 取 [sampleStart, sampleEnd) 范围峰值：整桶查表，首尾残桶与未构建桶直接扫描。 */
 function _peakInRange(entry, buf, sampleStart, sampleEnd) {
   const { peaks, bucketSize } = entry;
   let peak = 0;
-  const scan = (from, to) => {
-    for (let i = from; i < to; i++) {
+  const scan = (from, to, stride = 1) => {
+    for (let i = from; i < to; i += stride) {
       const v = buf[i] < 0 ? -buf[i] : buf[i];
       if (v > peak) peak = v;
     }
@@ -178,8 +223,14 @@ function _peakInRange(entry, buf, sampleStart, sampleEnd) {
     return peak;
   }
   scan(sampleStart, (firstBucket + 1) * bucketSize);
+  // 未构建的桶：跨步采样给近似峰值（构建完成后同一位置会变成精确值）。
+  const approxStride = Math.max(8, bucketSize >> 4);
   for (let b = firstBucket + 1; b < lastBucket; b++) {
-    if (peaks[b] > peak) peak = peaks[b];
+    if (b < entry.builtBuckets) {
+      if (peaks[b] > peak) peak = peaks[b];
+    } else {
+      scan(b * bucketSize, (b + 1) * bucketSize, approxStride);
+    }
   }
   scan(lastBucket * bucketSize, sampleEnd);
   return peak;
@@ -545,8 +596,10 @@ export function renderFragmentTimeline() {
 
           // 放大状态下每像素只覆盖少量样本，直接扫描即可；缩小状态下使用
           // 预计算的桶峰值，避免每帧全量遍历 PCM。
+          // 不管当前是否用到桶都先触发一次增量构建（幂等）：等用户第一次
+          // 缩小到全曲视图时，峰值表通常已经建好，不再有初始化卡顿。
           const useBuckets = samplesPerPixel > WAVEFORM_BUCKET_SIZE;
-          const peakEntry = useBuckets ? _getWaveformPeaks(singer) : null;
+          const peakEntry = _getWaveformPeaks(singer);
 
           ctx.strokeStyle = c.fragmentText || '#fff';
           ctx.lineWidth = 1;
@@ -563,7 +616,7 @@ export function renderFragmentTimeline() {
             const sampleStart = Math.floor(px * samplesPerPixel);
             const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
             let peak;
-            if (peakEntry) {
+            if (peakEntry && useBuckets) {
               peak = _peakInRange(peakEntry, buf, sampleStart, sampleEnd);
             } else {
               peak = 0;

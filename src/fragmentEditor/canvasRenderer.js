@@ -2327,6 +2327,33 @@ function renderPianoKeys(c) {
   }
 }
 
+// 音高曲线采样时刻的跨帧缓存。
+// renderPitchCurve 在播放 / 悬停 / 滚动时每帧执行，而采样网格只由可见窗、
+// 画布宽度与曲线版本决定；不缓存时每帧都要重排 + 去重（锚点多时为数万点）。
+// 缩放会改变可见窗 → 自然 miss；minAnchorSpacing 把锚点并入量压到像素级，
+// 保证 miss 的那一帧也不会被 F0 导入的密集锚点拖慢。
+let _pitchSampleTimesCache = null;
+
+function _getPitchCurveSampleTimes(startBeat, endBeat, w, pitchCurve) {
+  const key = `${startBeat}|${endBeat}|${w}|${getPitchCurveVersion()}`;
+  if (_pitchSampleTimesCache && _pitchSampleTimesCache.key === key) {
+    return _pitchSampleTimesCache.times;
+  }
+  const beatsPerPixel = Math.max(1e-9, (endBeat - startBeat) / Math.max(1, w));
+  const times = buildPitchCurveSampleTimes({
+    startBeat,
+    endBeat,
+    width: w,
+    interval: PITCH_CURVE_SAMPLE_INTERVAL,
+    sortedAnchors: getSortedAnchorPoints(),
+    bakedSegments: pitchCurve.bakedSegments || [],
+    // 半像素内的多个锚点在画布上是同一竖线，只保留第一个即可。
+    minAnchorSpacing: beatsPerPixel * 0.5,
+  });
+  _pitchSampleTimesCache = { key, times };
+  return times;
+}
+
 function renderPitchCurve(c) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return;
@@ -2416,20 +2443,10 @@ function renderPitchCurve(c) {
    * 前后段曲线的位置看起来就像被缩放或跳变。把锚点时间并入采样点后，
    * 实线精确经过每个锚点，与锚点圆点严格对齐。
    *
-   * 结果按帧缓存：自动层与手动层共用同一份采样时刻，避免重复计算。
+   * 结果走模块级缓存：播放/悬停每帧都会重绘，同一视口只构建一次。
    */
-  let _sampleTimesCache = null;
   function curveSampleTimes() {
-    if (_sampleTimesCache) return _sampleTimesCache;
-    _sampleTimesCache = buildPitchCurveSampleTimes({
-      startBeat,
-      endBeat,
-      width: w,
-      interval: PITCH_CURVE_SAMPLE_INTERVAL,
-      sortedAnchors: getSortedAnchorPoints(),
-      bakedSegments: pitchCurve.bakedSegments || [],
-    });
-    return _sampleTimesCache;
+    return _getPitchCurveSampleTimes(startBeat, endBeat, w, pitchCurve);
   }
 
   /**
