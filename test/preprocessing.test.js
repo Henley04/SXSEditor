@@ -359,4 +359,107 @@ describe('inference/pipeline/preprocessing', () => {
       expect(Array.from(a.noteTextSeq)).to.deep.equal(Array.from(b.noteTextSeq));
     });
   });
+
+  // manual(F0 曲线) 模式的两条退化路径：帧对齐漂移、清音被强制浊音化。
+  describe('manual F0 curve - frame alignment & auto UV', () => {
+    const FPS = 50; // 24000 / 480
+    let p;
+    before(() => { p = new Preprocessing(new TextProcessing()); });
+
+    /** 阶梯曲线：第 i 个音符的绝对时间区间内 f0 = 200+i Hz，用于反推曲线落点。 */
+    const makeStairCurve = (count, beatLen, bpm) => {
+      const frames = Math.floor((count * beatLen / bpm) * 60 * FPS);
+      const curve = new Float32Array(frames);
+      for (let f = 0; f < frames; f++) {
+        const beat = (f / FPS / 60) * bpm;
+        curve[f] = 200 + Math.min(count - 1, Math.floor(beat / beatLen));
+      }
+      return curve;
+    };
+    const firstFramesOf = (f0Hz, count) => {
+      const first = new Map();
+      for (let f = 0; f < f0Hz.length; f++) {
+        const v = Math.round(f0Hz[f]);
+        if (v >= 200 && v < 200 + count && !first.has(v)) first.set(v, f);
+      }
+      return first;
+    };
+
+    it('非整除节奏 (12.5 帧/音符) 下 F0 边界不累积漂移，尾部曲线不丢失', () => {
+      const N = 60, bpm = 120, beatLen = 0.5;
+      const notes = Array.from({ length: N }, (_, i) => ({
+        start: i * beatLen, duration: beatLen, pitch: 60, lyric: 'a',
+      }));
+      const seq = p.notesToSequences(notes, bpm, null, makeStairCurve(N, beatLen, bpm));
+      const first = firstFramesOf(seq.f0Hz, N);
+      for (let i = 0; i < N; i += 10) {
+        const phonemeStart = Math.round((i * beatLen / bpm) * 60 * FPS);
+        const f0Start = first.get(200 + i);
+        // 旧实现在这里会累积到 5/10/15/20/25 帧 (100~500ms)
+        expect(f0Start, `note ${i}`).to.not.equal(undefined);
+        expect(Math.abs(f0Start - phonemeStart), `note ${i} drift`).to.be.at.most(2);
+      }
+      // 旧实现尾部曲线被截断 (末帧 257 而非 259)
+      expect(Math.round(seq.f0Hz[seq.f0Hz.length - 2])).to.equal(200 + N - 1);
+    });
+
+    it('整数节奏 (25 帧/音符) 下同样零漂移', () => {
+      const N = 60, bpm = 120, beatLen = 1;
+      const notes = Array.from({ length: N }, (_, i) => ({
+        start: i * beatLen, duration: beatLen, pitch: 60, lyric: 'a',
+      }));
+      const seq = p.notesToSequences(notes, bpm, null, makeStairCurve(N, beatLen, bpm));
+      const first = firstFramesOf(seq.f0Hz, N);
+      for (let i = 0; i < N; i += 10) {
+        expect(Math.abs(first.get(200 + i) - i * 25)).to.be.at.most(2);
+      }
+    });
+
+    it('曲线中的 0 清音帧保留为 f0Hz=0 / f0Ids=0，不再回退成音符频率', () => {
+      const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'a' }];
+      const curve = new Float32Array(50).fill(300);
+      for (let f = 20; f < 25; f++) curve[f] = 0;
+      const seq = p.notesToSequences(notes, 120, null, curve);
+      for (let f = 20; f < 25; f++) {
+        expect(seq.f0Hz[f]).to.equal(0);
+        expect(seq.f0Ids[f]).to.equal(0);
+      }
+      // 清音段之后必须恢复曲线，不能被 <SEP> 之类的占位 token 误判为清音
+      expect(seq.f0Hz[25]).to.equal(300);
+      expect(seq.f0Ids[25]).to.be.greaterThan(0);
+      expect(seq.f0Ids[40]).to.be.greaterThan(0);
+    });
+
+    it('中文清辅音声母段自动 unvoiced，韵母段仍跟随曲线', () => {
+      const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'zh_ba1' }];
+      const seq = p.notesToSequences(notes, 120, null, new Float32Array(50).fill(300));
+      let prefix = 0;
+      while (prefix < seq.f0Ids.length && seq.f0Ids[prefix] === 0) prefix++;
+      expect(prefix).to.be.within(2, 6);           // 声母 + 起音过渡
+      expect(seq.f0Ids[10]).to.be.greaterThan(0);  // 韵母
+      expect(seq.f0Ids[40]).to.be.greaterThan(0);
+    });
+
+    it('中文零声母音节不切声母段', () => {
+      const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'zh_a1' }];
+      const seq = p.notesToSequences(notes, 120, null, new Float32Array(50).fill(300));
+      let prefix = 0;
+      while (prefix < seq.f0Ids.length && seq.f0Ids[prefix] === 0) prefix++;
+      expect(prefix).to.be.at.most(2);             // 只剩起音过渡
+      expect(seq.f0Ids[10]).to.be.greaterThan(0);
+    });
+
+    it('英文清辅音段自动 unvoiced，元音段仍跟随曲线', () => {
+      const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'en_HH-AE1' }];
+      const seq = p.notesToSequences(notes, 120, null, new Float32Array(50).fill(300));
+      expect(seq.f0Ids[5]).to.equal(0);            // HH
+      expect(seq.f0Ids[30]).to.be.greaterThan(0);  // AE1 / SEP 延长
+    });
+
+    it('score（无曲线、无 envelope）不应用 UV 掩码，行为保持不变', () => {
+      const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'a' }];
+      const seq = p.notesToSequences(notes, 120, null, null);
+      for (const v of seq.f0Ids) expect(v).to.be.greaterThan(0);
+    });
+  });
 });

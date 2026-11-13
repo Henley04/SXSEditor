@@ -6,6 +6,35 @@ const { isRestNote } = require('./audioSegmentation');
 const { resolveChineseContextReadings, CJK_SINGLE } = require('./zhG2pContext');
 const durationStats = require('./durationStats');
 
+// ---- 自动清浊（UV）推导 ----
+// 锚点音高曲线只表达「这一刻唱多高」，清浊由音素结构独立推导（见 _buildUvMask），
+// 用户不需要、也无法在曲线里标注 0。中文音素是整音节 token（zh_ba1），声母/韵母
+// 未拆开，因此要按拼音再切出声母段。长声母必须排在短声母之前。
+const ZH_INITIALS = [
+    'zh', 'ch', 'sh', 'b', 'p', 'm', 'f', 'd', 't', 'n', 'l',
+    'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y', 'w',
+];
+// 清辅音声母（塞音/塞擦音/擦音）：官方真实 F0 在这些帧基本是 unvoiced。
+// 浊声母 m/n/l/r 与零声母（含 y/w 介音写法）保留音高，只在起音给 1 帧过渡。
+const ZH_UNVOICED_INITIALS = new Set([
+    'b', 'p', 'f', 'd', 't', 'g', 'k', 'h', 'j', 'q', 'x',
+    'zh', 'ch', 'sh', 'z', 'c', 's',
+]);
+const ZH_INITIAL_FRAME_RATIO = 0.12;   // 声母占音节时长的比例
+const ZH_INITIAL_MAX_FRAMES = 4;       // 上限 4 帧 = 80ms @ 50fps
+const UV_TAIL_FRAMES = 1;              // 有声音符收尾 1 帧交回模型（起音帧保留曲线）
+// 注意：
+//  · <SEP> 不能算清音：它只是英文词内音素分隔符，_buildMel2token 会给它
+//    分配相当比例的帧，而这些帧在官方真实 F0 里是元音延长（有声）。
+//  · <BOW>/<EOW> 也不算清音：它们各只占音符首尾 1 帧，且零声母音节
+//    （zh_a1 等）在起始帧本来就是直接起元音、有基频。把结构帧置 0 会让
+//    用户曲线在音符第一帧失效，也破坏了以首帧验证 segment offset 的既有测试。
+//    真正需要让位给模型的是辅音/声母段，由下面的音素类型与 initialFrames 处理。
+//  · <UNK> 保守保留，避免歌词解析异常时整段静音。
+const UV_SPECIAL_PHONES = new Set([
+    '<PAD>', '<SP>', '<AP>',
+]);
+
 /**
  * Pre-processing: note encoding, pitch encoding, F0 encoding, condition embedding
  */
@@ -45,6 +74,68 @@ class Preprocessing {
             return this._jpVowels.has(name.slice(3));
         }
         return false;
+    }
+
+    /**
+     * 从中文整音节音素名解析声母：zh_ba1 → 'b'，zh_ang4 → ''（零声母），
+     * 非中文音素返回 null。zh_lu:4（ü 写成冒号）这类变体同样命中 'l'。
+     */
+    _parseChineseInitial(phoneName) {
+        if (!phoneName || !phoneName.startsWith('zh_')) return null;
+        const m = /^zh_(.+?)([1-5])$/.exec(phoneName);
+        if (!m) return null;
+        for (const ini of ZH_INITIALS) {
+            if (m[1].startsWith(ini)) return ini;
+        }
+        return '';
+    }
+
+    /**
+     * 生成逐帧清浊掩码。1 = 该帧 F0 由音高曲线/音符频率决定；
+     * 0 = unvoiced（f0 bin 0），等价于把这一帧局部交回模型自己决定 —— 与
+     * score 模式的 f0 条件一致，辅音段因此不再被强行「唱」出一个音高。
+     *
+     * 掩码完全由 mel2token（逐帧 token 索引）+ 音素名 + 音符区间推导，
+     * 不读取曲线里的 0，用户画曲线时无需考虑清音。
+     */
+    _buildUvMask(mel2token, newPhonemes, noteRanges, totalFrames) {
+        const uv = new Uint8Array(totalFrames).fill(1);
+
+        // 1) 逐帧音素类型：结构 token / PAD / 英文与日文辅音全部清音。
+        //    中文整音节 token 在这里保留（要按音节内位置切声母，见下）。
+        for (let f = 0; f < totalFrames; f++) {
+            const tokenIdx = mel2token[f];
+            if (tokenIdx === 0) { uv[f] = 0; continue; }
+            const phoneId = newPhonemes[tokenIdx];
+            const name = phoneId === undefined ? null : this._idx2phone[phoneId];
+            if (!name || UV_SPECIAL_PHONES.has(name)) { uv[f] = 0; continue; }
+            if ((name.startsWith('en_') || name.startsWith('jp_')) && !this._isVowelByIdx(phoneId)) {
+                uv[f] = 0;
+            }
+        }
+
+        // 2) 音符级：休止整段清音；中文清辅音声母段；收尾过渡帧。
+        for (const r of noteRanges) {
+            const start = Math.max(0, r.startFrame);
+            const end = Math.min(totalFrames, r.endFrame);
+            if (start >= totalFrames || end <= start) continue;
+            const nf = end - start;
+            if (r.unvoiced) {
+                uv.fill(0, start, end);
+                continue;
+            }
+            if (r.initialFrames > 0) {
+                // 极短音符最多切掉 1/3，保证至少留下韵母段跟曲线
+                const n = Math.min(r.initialFrames, Math.floor(nf / 3));
+                if (n > 0) uv.fill(0, start, Math.min(end, start + n));
+            }
+            // 只切收尾 1 帧（对应官方 F0 里的收音/渐弱短清音段）；
+            // 极短音符不切，避免整段被判成清音。
+            if (UV_TAIL_FRAMES > 0 && nf > UV_TAIL_FRAMES + 1) {
+                uv.fill(0, Math.max(start, end - UV_TAIL_FRAMES), end);
+            }
+        }
+        return uv;
     }
 
     midiToFreq(pitch) {
@@ -405,66 +496,93 @@ class Preprocessing {
 
         const mel2token = this._buildMel2token(phLocations, newPhonemes.length, totalFrames);
 
+        // ---- F0 逐帧序列 ----
+        // 帧基准统一为「累积时长后 round」，与 _buildMel2token 里 phLocations 的 dur
+        // （:258，对齐官方 data_processor.preprocess）完全一致。旧实现用
+        // frameOffset += round(单音符时长) 逐音符累加，误差单调累积：120BPM 八分音符
+        // （12.5 帧）每音符多 0.5 帧，60 音符后 F0 领先音素 30 帧（600ms）且尾部曲线
+        // 因越界被丢弃 —— 这是 manual 模式后半段糊掉的主因。
+        const fps = SAMPLE_RATE / HOP_SIZE;
+        const noteRanges = new Array(notes.length);
+        let durSumBefore = 0;
+        for (let i = 0; i < notes.length; i++) {
+            const durationSec = noteDurations[i];
+            const startFrame = Math.round(durSumBefore * fps);
+            const endFrame = Math.max(startFrame, Math.min(totalFrames, Math.round((durSumBefore + durationSec) * fps)));
+            noteRanges[i] = { startFrame, endFrame, unvoiced: false, initialFrames: 0 };
+            durSumBefore += durationSec;
+        }
+
+        const hasPitchCurve = !!(pitchCurveF0 && pitchCurveF0.length > 0);
+        const hasEnvelope = !!(f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0);
+        const srcData = hasPitchCurve
+            ? (pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0))
+            : null;
+
         const f0Hz = new Float32Array(totalFrames);
-        if (pitchCurveF0 && pitchCurveF0.length > 0) {
-            const srcData = pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0);
-            let frameOffset = 0;
-            for (let i = 0; i < notes.length; i++) {
-                const note = notes[i];
-                const noteDurationSec = noteDurations[i];
-                const noteFrames = Math.round(noteDurationSec * SAMPLE_RATE / HOP_SIZE);
-                const noteStartSec = (note.start / bpm) * 60;
-                // 休止/换气帧强制 f0=0（清音），即使音高曲线在空隙内带有
-                // 插值出的正值，否则模型会把休止段当成浊音唱出来。
-                const noteUnvoiced = this.isUnvoicedNote(note) || !(note.pitch > 0);
-                const noteFreq = noteUnvoiced ? 0 : this.midiToFreq(note.pitch);
-                for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
-                    if (noteUnvoiced) {
-                        f0Hz[frameOffset + f] = 0;
-                        continue;
-                    }
-                    // 多 segment 路径：segmentNotes.start 是相对 segStart，需要加
-                    // pitchCurveOffsetSec (= segStartBeat 对应秒数) 才能正确索引
-                    // 绝对时间的 pitchCurveF0。否则 f0 严重错位 → vocoder mel/f0
-                    // 不匹配 → 电流声。单 segment 路径 offset=0，行为不变。
-                    const absTimeSec = noteStartSec + pitchCurveOffsetSec + f * HOP_SIZE / SAMPLE_RATE;
-                    const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
-                    if (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0) {
-                        f0Hz[frameOffset + f] = srcData[srcFrame];
-                    } else {
-                        f0Hz[frameOffset + f] = noteFreq;
-                    }
-                }
-                frameOffset += noteFrames;
+        for (let i = 0; i < notes.length; i++) {
+            const note = notes[i];
+            const range = noteRanges[i];
+            let effectivePitch = note.pitch;
+            // envelope 是「无曲线」路径的半音偏移；有曲线时曲线优先，行为保持原样。
+            if (!hasPitchCurve && hasEnvelope) {
+                effectivePitch += this.interpolateEnvelope(f0Envelope, note.start + note.duration / 2);
             }
-        } else {
-            let frameOffset = 0;
-            for (let i = 0; i < notes.length; i++) {
-                const note = notes[i];
-                let effectivePitch = note.pitch;
-                if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
-                    const noteCenterBeat = note.start + note.duration / 2;
-                    const semitoneShift = this.interpolateEnvelope(f0Envelope, noteCenterBeat);
-                    effectivePitch = note.pitch + semitoneShift;
-                }
-                // 休止（<SP>/空歌词/pitch<=0）与 <AP> 换气为清音，f0=0
-                const noteUnvoiced = this.isUnvoicedNote(note) || !(effectivePitch > 0);
-                const freq = noteUnvoiced ? 0 : this.midiToFreq(effectivePitch);
-                const noteFrames = Math.round(noteDurations[i] * SAMPLE_RATE / HOP_SIZE);
-                for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
-                    f0Hz[frameOffset + f] = freq;
-                }
-                frameOffset += noteFrames;
+            // 休止 / <AP> 换气 / 无有效音高：整段清音
+            const noteUnvoiced = this.isUnvoicedNote(note) || !(effectivePitch > 0);
+            range.unvoiced = noteUnvoiced;
+            if (noteUnvoiced) continue; // f0Hz 保持 0，uvMask 也会把这段置 0
+
+            const noteFreq = this.midiToFreq(effectivePitch);
+            if (!hasPitchCurve) {
+                for (let f = range.startFrame; f < range.endFrame; f++) f0Hz[f] = noteFreq;
+                continue;
+            }
+
+            const noteStartSec = (note.start / bpm) * 60;
+            for (let f = range.startFrame; f < range.endFrame; f++) {
+                // 多 segment 路径：segmentNotes.start 相对 segStart，需加
+                // pitchCurveOffsetSec 才是 pitchCurveF0 的绝对时间轴。
+                const relFrame = f - range.startFrame;
+                const absTimeSec = noteStartSec + pitchCurveOffsetSec + relFrame * HOP_SIZE / SAMPLE_RATE;
+                const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
+                // 曲线里的 0 是清音，必须保留：f0-import 导入的真实 F0 自带 0。
+                // 旧实现在这里回退 noteFreq，把辅音/声母强制浊音化，同时堵死了
+                // 唯一能携带清音信息的入口。越界同样按清音处理，不再填平直音高。
+                f0Hz[f] = (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0)
+                    ? srcData[srcFrame]
+                    : 0;
             }
         }
 
-        // 对 f0Hz 应用 f0Shift（半音偏移）。
-        // f0Hz 同时用于：
-        //   1. quantizeF0 → f0Ids（diffusion 条件，已在 quantizeF0 内部偏移 bin）
+        // 自动清浊只在 manual（有曲线内容）时接管。score 模式的 f0Ids 本来全 0、
+        // 默认 vocoder 也不读 f0Hz，保持原行为，避免动到已验证的高质量路径。
+        if (hasPitchCurve || hasEnvelope) {
+            // 中文整音节 token 的声母段：从音符对应的音素名推导，用户完全无感。
+            // 注意 newPhonemes[0] 是 <PAD>，note2origin[t] 对应 newPhonemes[t+1]。
+            for (let t = 0; t < note2origin.length; t++) {
+                const noteIdx = note2origin[t];
+                const range = noteRanges[noteIdx];
+                if (!range || range.initialFrames > 0) continue;
+                const initial = this._parseChineseInitial(this._idx2phone[newPhonemes[t + 1]]);
+                if (initial && ZH_UNVOICED_INITIALS.has(initial)) {
+                    const nf = range.endFrame - range.startFrame;
+                    range.initialFrames = Math.min(
+                        ZH_INITIAL_MAX_FRAMES,
+                        Math.max(1, Math.round(nf * ZH_INITIAL_FRAME_RATIO)),
+                    );
+                }
+            }
+            const uvMask = this._buildUvMask(mel2token, newPhonemes, noteRanges, totalFrames);
+            for (let f = 0; f < totalFrames; f++) {
+                if (uvMask[f] === 0) f0Hz[f] = 0;
+            }
+        }
+
+        // 对 f0Hz 应用 f0Shift（半音偏移）。f0Hz 同时用于：
+        //   1. quantizeF0 → f0Ids（diffusion 条件）
         //   2. SiFiGAN vocoder 的 f0 输入（_currentF0Hz → effectiveF0）
-        // 之前 f0Hz 未偏移导致 vocoder f0 与 diffusion mel（基于偏移后的音高）不匹配，
-        // autoShift 较大时产生口齿不清。现在统一在源头偏移 f0Hz，
-        // quantizeF0 的 bin 偏移改为基于已偏移的 f0Hz，避免双重偏移。
+        // 在源头统一偏移，quantizeF0 传 f0Shift=0，避免双重偏移。
         if (f0Shift !== 0) {
             const shiftFactor = Math.pow(2, f0Shift / 12);
             for (let i = 0; i < f0Hz.length; i++) {
