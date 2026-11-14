@@ -1,8 +1,8 @@
 'use strict';
 /**
- * Synthesizer V / SV2 工程（.svp）读取。
+ * Synthesizer V 工程（.svp）读写 —— SV1 / SV2 双世代。
  *
- * 结构依据开源实现 UtaFormatix（Apache-2.0）中的 SVP 实现与真实工程样本：
+ * 结构依据开源实现 UtaFormatix（Apache-2.0）、LibreSVIP 与真实工程样本：
  *  - 文件是 JSON 文本；SV 允许一个文件里用 "\u0000" 串联多份工程，
  *    解析时取 version 最大的那一份（与 UtaFormatix 行为一致）。
  *  - 时间单位是 blick：每拍 705600000（= 480 × 1470000），
@@ -10,9 +10,14 @@
  *  - time.meter[].index 是拍号生效的小节序号，time.tempo[].position 是 blick。
  *  - 音符在 group 内：onset/duration 是相对 group 起点（mainRef.blickOffset）的 blick，
  *    pitch 为 MIDI 音高，lyrics 为歌词。
- *  - 音高曲线是 group.parameters.pitchDelta.points，扁平数组 [blick, cent, ...]，
- *    blick 相对 group 起点，cent 是相对基础音高的偏移。
  *  - 附加 group 通过 track.groups[].groupID 到 project.library[].uuid 里取内容。
+ *
+ * 两个世代的音高/音素参数完全不同（详见 lib/svpSchema.js）：
+ *  - SV1：音高曲线是 group.parameters.pitchDelta.points（扁平 [blick, cent, ...]，
+ *    cent 相对基础音高）；音素时长在 note.attributes.dur（比例乘数）。
+ *  - SV2：音高表达板是 group.pitchControls（分段绝对 MIDI 音高）；音素时序在
+ *    note.attributes.phonemes[].leftOffset（秒，相对 onset）。两者导入宿主音高
+ *    曲线时都有损，写回时按目标世代重建各自的结构。
  *
  *  - 音符颤音参数在 note.attributes（tF0VbrStart / tF0VbrLeft / tF0VbrRight /
  *    dF0Vbr / fF0Vbr / pF0Vbr），缺省值可能来自 mainRef.voice；组级颤音强度
@@ -31,8 +36,12 @@ const { BLICK_PER_BEAT, normalizeColor, roundTime } = require('./score.js');
 const { parseWav } = require('./wav.js');
 const {
   svpToHostVibrato, hostToSvpAttributes,
-  hasNonTrivialVibratoEnv, collectNoteAttributes,
+  hasNonTrivialVibratoEnv,
 } = require('./vibrato.js');
+const {
+  SVP_GENERATION, detectGeneration, resolveWriteTarget, cloneBounded,
+  stripForGeneration, parsePitchControls, buildPitchControls,
+} = require('./svpSchema.js');
 
 function decodeUtf8(bytes) {
   let buf = Buffer.from(bytes);
@@ -263,6 +272,9 @@ function parseSvp(bytes, t, files) {
   ));
 
   const warnings = [];
+  // 世代靠特征字段探测，不看 version 数字；sourceVersion / NUL 容器事实一并记录，
+  // 随 sourceMeta 经 document.ext 带到写回端，让「沿用源版本」能原样回写。
+  const gen = detectGeneration(raw, bytes);
 
   const meters = Array.isArray(raw.time.meter) ? raw.time.meter.slice() : [];
   meters.sort((a, b) => (Number(a.index) || 0) - (Number(b.index) || 0));
@@ -300,11 +312,17 @@ function parseSvp(bytes, t, files) {
   // 颤音换算统计：导入了多少个音符、哪些字段有损、多少组用了组级包络。
   const vibratoStats = { imported: 0, lossy: {} };
   let vibratoEnvGroups = 0;
+  // SV2 音高表达板被折叠为宿主相对曲线的组数（有损，需告警）。
+  let pitchControlGroups = 0;
   const tracks = [];
   // instrumental ref 不是音符组：它没有对应的 library.uuid，若照常走 group 查找
   // 会误报「音符组找不到」。这些轨道的音频由 collectSvpAccompaniments 单独接管，
   // 这里只保留承载人声的轨道进 tracks，保证 collectSvpMeta 的下标与 tracks 对齐。
   const vocalTracksRaw = [];
+  // 与 tracks[i].parts 一一对应的源 {ref, group}。collectSvpMeta 按这份对齐表
+  // 收结构化快照，绝不自己再去 library 里 find —— 否则「引用找不到 / 空组被跳过」
+  // 会让 noteExtras 索引整体错位，正是丢键的根源。
+  const trackSources = [];
 
   tracksRaw.forEach((track, index) => {
     if (!track || typeof track !== 'object') return;
@@ -328,6 +346,7 @@ function parseSvp(bytes, t, files) {
     }
 
     const parts = [];
+    const partSources = [];
     for (const { ref, group } of refs) {
       const notes = groupNotes(group, ref, bpm, vibratoStats);
       if (!notes.length) continue;
@@ -337,7 +356,20 @@ function parseSvp(bytes, t, files) {
         (max, note) => Math.max(max, note.startBeat + note.durationBeat),
         startBeat,
       );
-      const pitchOffsets = toPitchOffsets(group.parameters && group.parameters.pitchDelta, Number(ref && ref.blickOffset) || 0);
+      // SV2 的 pitchControls 是分段绝对音高表达板，SV1 的 pitchDelta 是相对曲线。
+      // 按世代各取各的；SV2 有 pitchControls 时优先它（SV2 里 pitchDelta 通常不再写）。
+      let pitchOffsets;
+      if (gen.generation === SVP_GENERATION.SV2
+        && Array.isArray(group.pitchControls) && group.pitchControls.length) {
+        const pc = parsePitchControls(group, ref, notes, BLICK_PER_BEAT, roundTime);
+        pitchOffsets = pc.offsets;
+        if (pc.lossy) pitchControlGroups += 1;
+      } else {
+        pitchOffsets = toPitchOffsets(
+          group.parameters && group.parameters.pitchDelta,
+          Number(ref && ref.blickOffset) || 0,
+        );
+      }
       parts.push({
         name: group.name && group.name !== 'main' ? group.name : track.name,
         startBeat,
@@ -345,10 +377,12 @@ function parseSvp(bytes, t, files) {
         notes,
         pitchOffsets,
       });
+      partSources.push({ ref, group });
     }
 
     if (!parts.length) return;
     vocalTracksRaw.push(track);
+    trackSources.push(partSources);
     tracks.push({
       name: String(track.name || `Track ${index + 1}`),
       color: normalizeColor(track.dispColor),
@@ -380,6 +414,25 @@ function parseSvp(bytes, t, files) {
       `${vibratoEnvGroups} note group(s) use a time-varying vibrato depth envelope, which SXSEditor does not support; it was not imported.`,
     ));
   }
+  if (pitchControlGroups > 0) {
+    warnings.push(t(
+      `${pitchControlGroups} 个音符组的 SV2 音高表达板（pitchControls，分段绝对音高）已折叠为宿主音高曲线，分段结构有损；按源版本写回时重建为 SV2 表达板。`,
+      `${pitchControlGroups} SV2 pitch control board(s) (segmented absolute pitch) were folded into the host pitch curve; segment structure is lossy and is rebuilt on write-back to the same version.`,
+    ));
+  }
+  if (gen.generation === SVP_GENERATION.SV2 && gen.markers.length) {
+    // 宿主没有等价字段、合成也不消费的 SV2 专有参数，结构化保真回写而不是丢掉。
+    warnings.push(t(
+      '这是 SV2 工程：vocal modes、retakes、音素时序（leftOffset）、音符/引用 UUID、口型与效果器参数等在 SXSEditor 中没有可编辑等价物，将按原结构保真回写（另存为 SV1 兼容版本时会逐类告警并舍弃）。',
+      'This is an SV2 project: vocal modes, retakes, phoneme timing (leftOffset), note/ref UUIDs, mouth opening and effect parameters have no editable equivalent in SXSEditor; they are preserved structurally on write-back (and listed as losses when saving as SV1-compatible).',
+    ));
+  }
+  if (gen.chunkCount > 1) {
+    warnings.push(t(
+      `文件用 NUL 串联了 ${gen.chunkCount} 份工程，已取 version 最大的一份导入；写回只保留这一份，不伪造历史份。`,
+      `The file chains ${gen.chunkCount} projects with NUL; the one with the highest version was imported and only that one is written back (no fabricated history).`,
+    ));
+  }
 
   return {
     format: 'svp',
@@ -389,7 +442,7 @@ function parseSvp(bytes, t, files) {
     accompaniments: collectSvpAccompaniments(tracksRaw, files, warnings, t),
     warnings,
     vibratoImported: vibratoStats.imported,
-    meta: collectSvpMeta(raw, vocalTracksRaw),
+    meta: collectSvpMeta(raw, vocalTracksRaw, trackSources, gen),
   };
 }
 
@@ -397,80 +450,115 @@ function parseSvp(bytes, t, files) {
 // 写入
 //
 // 与 parseSvp 严格对称：read 认下来的音符、歌词、音高、速度、拍号与分片起点，
-// write 必须能原样吐回去。源工程里宿主没有等价字段的部分（音色库引用、渲染开关、
-// 组级参数与音素属性，以及宿主承载不了的颤音起始相位与渐出）由 collectSvpMeta
-// 收成一份精简快照，经 document.ext 带回，保存时合并进生成的工程；音符颤音的
-// 主参数由 note.vibrato 反向写回 note.attributes。带不回来的在 main.js 里逐条
-// 告警，绝不静默丢弃。
+// write 必须能原样吐回去。宿主没有等价字段、编辑器也不消费的 SV2 专有参数
+// （vocal modes / retakes / phonemes.leftOffset / uuid / mouthOpening / fxParams
+// / projectMixer …）不再走「精简标量快照」——那种做法会把嵌套对象与未知键悄悄
+// 丢掉，正是「能打开却存不回去」的根源。collectSvpMeta 现在按**原结构**有界
+// 深克隆收进 document.ext，encodeSvp 按目标世代合并回生成的工程；只有宿主有
+// 语义等价的（音符主字段、颤音主参数、pitchDelta / pitchControls）才用宿主
+// 当前值覆盖，其余原样保真。带不回来的在 main.js 里逐条告警，绝不静默丢弃。
 
-/** 只保留体量可控、深度可控的值，避免把整份原始工程塞进扩展域。 */
-function smallValue(value) {
-  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
-    return Number.isFinite(value) || typeof value !== 'number' ? value : null;
-  }
-  if (Array.isArray(value) && value.length <= 64
-    && value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
-    return value;
-  }
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const keys = Object.keys(value);
-    if (keys.length <= 16 && keys.every((key) => (
-      value[key] === null || ['string', 'number', 'boolean'].includes(typeof value[key])
-    ))) return value;
-  }
-  return undefined;
+/**
+ * SV2 升级路径里源工程没有 uuid 时补一个确定性的占位 UUID：十六进制编码
+ * 轨道/组/音符下标，保证 read → write → read 稳定；源工程自带 uuid 一律优先
+ * 原样保留（见 noteExtras / mainRef / groupRefs / libraryExtras）。
+ */
+function generatedUuid(parts) {
+  const h = parts.map((v) => Math.abs(Math.trunc(Number(v) || 0)).toString(16).padStart(4, '0'));
+  return `00000000-0000-4000-8000-${h.join('').slice(0, 12).padEnd(12, '0')}`;
 }
 
-/** 去掉音符与曲线后剩下的组级元数据（音色库、渲染设置等）。 */
-function stripGroup(group) {
-  const out = {};
-  if (!group || typeof group !== 'object') return out;
-  for (const [key, value] of Object.entries(group)) {
-    if (key === 'notes' || key === 'parameters') continue;
-    const kept = smallValue(value);
-    if (kept !== undefined) out[key] = kept;
-  }
-  return out;
-}
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-function collectSvpMeta(raw, tracksRaw) {
-  const rootExtras = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (['version', 'time', 'library', 'tracks'].includes(key)) continue;
-    const kept = smallValue(value);
-    if (kept !== undefined) rootExtras[key] = kept;
-  }
-
-  const library = Array.isArray(raw.library) ? raw.library : [];
-  const libraryExtras = library.slice(0, 64).map(stripGroup);
-  const tracks = [];
-  const groups = [];
-  for (const track of tracksRaw) {
-    const scalars = {};
-    for (const [key, value] of Object.entries(track || {})) {
-      if (key === 'mainGroup' || key === 'groups' || key === 'notes') continue;
-      const kept = smallValue(value);
-      if (kept !== undefined) scalars[key] = kept;
+/**
+ * 把源工程完整收成结构化快照（JSON-safe），随 document.ext 往返。
+ * 结构契约与 svpSchema.stripForGeneration 严格一致，两边必须同步修改。
+ *
+ * @param {object} raw pickProject 取出的源工程
+ * @param {object[]} tracksRaw 只有人声的轨道（与 score.tracks 对齐）
+ * @param {Array<Array<{ref:object,group:object}>>} trackSources 与 parts 一一对应
+ * @param {object} gen detectGeneration 的结果
+ */
+function collectSvpMeta(raw, tracksRaw, trackSources, gen) {
+  let truncated = false;
+  const take = (value) => {
+    const r = cloneBounded(value);
+    if (r.truncated) truncated = true;
+    return r.value;
+  };
+  const isObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  const omit = (obj, keys) => {
+    const out = {};
+    for (const [k, v] of Object.entries(isObject(obj) ? obj : {})) {
+      if (keys.includes(k) || DANGEROUS_KEYS.has(k)) continue;
+      out[k] = take(v);
     }
-    tracks.push(scalars);
+    return out;
+  };
 
-    // 每个组额外带一份精简的音符颤音属性快照：宿主承载不了的起始相位与渐出
-    // 等字段，写回 .svp 时用它还原，避免在宿主里调一次颤音就抹掉源工程参数。
-    const own = [];
-    const pushGroup = (source) => {
-      const saved = source ? stripGroup(source) : {};
-      const noteAttributes = collectNoteAttributes(source);
-      if (noteAttributes) saved.noteAttributes = noteAttributes;
-      own.push(saved);
+  // 顶层除容器四键之外的所有键：projectMixer / renderConfig / instantModeEnabled
+  // / uuid 等 SV2 顶层字段，以及任何未来新增的未知键，全部按原结构保留。
+  const rootExtras = omit(raw, ['version', 'time', 'library', 'tracks']);
+
+  const tracks = (Array.isArray(tracksRaw) ? tracksRaw : []).map((track, ti) => {
+    const src = isObject(track) ? track : {};
+    const sources = (Array.isArray(trackSources) && Array.isArray(trackSources[ti]))
+      ? trackSources[ti] : [];
+    return {
+      scalars: omit(src, ['mainGroup', 'groups', 'mainRef', 'mixer', 'notes']),
+      mixer: isObject(src.mixer) ? take(src.mixer) : {},
+      mainRef: take(isObject(src.mainRef) ? src.mainRef : {}),
+      // parts[1..] 对应 groups[] 里能找到 library group 的 ref；用对齐表取，
+      // 不重新遍历 track.groups（里面可能含被跳过或 instrumental 的 ref）。
+      groupRefs: sources.slice(1).map((s) => take(isObject(s && s.ref) ? s.ref : {})),
     };
-    if (track && track.mainGroup) pushGroup(track.mainGroup);
-    for (const ref of Array.isArray(track && track.groups) ? track.groups : []) {
-      const source = library.find((g) => g && g.uuid === (ref && ref.groupID));
-      pushGroup(source);
-    }
-    groups.push(own);
-  }
-  return { format: 'svp', version: Number(raw.version) || 200, rootExtras, libraryExtras, tracks, groups };
+  });
+
+  const groups = (Array.isArray(trackSources) ? trackSources : []).map((sources) => (
+    (Array.isArray(sources) ? sources : []).map(({ group }) => {
+      const g = isObject(group) ? group : {};
+      const params = isObject(g.parameters) ? g.parameters : {};
+      const notes = Array.isArray(g.notes) ? g.notes : [];
+      return {
+        saved: omit(g, ['notes', 'parameters']),
+        parameterExtras: omit(params, ['pitchDelta']),
+        // 源 pitchDelta 单独留一份：宿主没有生成音高曲线时原样写回，
+        // 不凭空造一条空曲线覆盖源工程的弯音。
+        sourcePitchDelta: params.pitchDelta !== undefined ? take(params.pitchDelta) : null,
+        // 每个音符除宿主映射的四个主字段外全部保留：uuid / takes /
+        // systemAttributes / instantMode / attributes（含 phonemes.leftOffset、
+        // dur、颤音相位与渐出）。
+        noteExtras: notes.map((note) => omit(note, ['onset', 'duration', 'pitch', 'lyrics'])),
+      };
+    })
+  ));
+
+  // library 里未被任何 track 引用的组：整块（含 notes / parameters）保真，
+  // 宿主根本没导入它们，写回时原样吐回去，绝不写成 notes:[] 的空壳。
+  const library = Array.isArray(raw.library) ? raw.library : [];
+  const libraryExtras = library.map((g) => {
+    const group = isObject(g) ? g : {};
+    return {
+      saved: omit(group, ['notes', 'parameters']),
+      parameters: take(isObject(group.parameters) ? group.parameters : {}),
+      notes: take(Array.isArray(group.notes) ? group.notes : []),
+    };
+  });
+
+  return {
+    format: 'svp',
+    generation: gen.generation,
+    sourceVersion: gen.sourceVersion,
+    version: gen.sourceVersion, // 兼容旧字段；写回版本统一由 resolveWriteTarget 决定
+    trailingNul: gen.trailingNul,
+    chunkCount: gen.chunkCount,
+    sv2Markers: gen.markers.slice(),
+    snapshotTruncated: truncated,
+    rootExtras,
+    tracks,
+    groups,
+    libraryExtras,
+  };
 }
 
 /**
@@ -558,39 +646,65 @@ function encodeSvpAccompaniments(score, vocalTrackCount) {
 
 /**
  * @param {object} score documentToScore 的输出
- * @param {object} meta collectSvpMeta 的快照（经 document.ext 带回，可能缺失）
- * @returns {{bytes: Buffer, files: Array<{name:string, bytes:Buffer}>}} .svp 字节与伴生素材
+ * @param {object|null} meta collectSvpMeta 的快照（经 document.ext 带回，可能缺失）
+ * @param {string} [targetVersion] 'keep' | 'sv2' | 'sv1'（另存为 .svp 时用户选择）
+ * @returns {{bytes: Buffer, files: Array<{name:string, bytes:Buffer}>, writeTarget: object}}
  */
-function encodeSvp(score, meta) {
-  const m = meta && meta.format === 'svp' ? meta : {};
+function encodeSvp(score, meta, targetVersion) {
+  const m = meta && meta.format === 'svp' ? meta : null;
+  const target = resolveWriteTarget(m, targetVersion);
+  const snap = stripForGeneration(m, target.generation);
+  const sv2 = target.generation === SVP_GENERATION.SV2;
   const blick = (beat) => Math.round((Number(beat) || 0) * BLICK_PER_BEAT);
   const cent = (semitones) => Math.round((Number(semitones) || 0) * 100);
+  const isObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
   const library = [];
+  const usedGroupUuids = new Set();
+
   const tracks = (Array.isArray(score.tracks) ? score.tracks : []).map((track, ti) => {
-    const trackMeta = (m.tracks || [])[ti] || {};
-    const groupMeta = (m.groups || [])[ti] || [];
+    const tm = snap.tracks[ti] || {};
+    const scalars = isObject(tm.scalars) ? tm.scalars : {};
+    const groupMeta = Array.isArray(snap.groups[ti]) ? snap.groups[ti] : [];
     const parts = Array.isArray(track.parts) ? track.parts : [];
 
     const makeGroup = (part, pi) => {
       const startBeat = Number(part.startBeat) || 0;
       const secPerBeat = 60 / (Number(score.bpm) > 0 ? Number(score.bpm) : 120);
-      // noteAttributes 是导入时保存的私有快照，不能 spread 进生成的组里。
-      // 它与音符按序尽力对齐：宿主的音符清洗会排序/裁掉重叠音符，对不上的
-      // 索引按「无原值」处理，只写宿主能表达的主参数，不伪造相位或渐出。
-      const { noteAttributes, ...saved } = groupMeta[pi] || {};
-      const original = Array.isArray(noteAttributes) ? noteAttributes : [];
+      const gm = groupMeta[pi] || {};
+      const saved = isObject(gm.saved) ? gm.saved : {};
+      const parameterExtras = isObject(gm.parameterExtras) ? gm.parameterExtras : {};
+      const noteExtras = Array.isArray(gm.noteExtras) ? gm.noteExtras : [];
+
+      // 宿主映射的四个主字段用当前值覆盖；源 note 的其余键（uuid / takes /
+      // systemAttributes / instantMode / attributes 全字段）按原结构铺回来。
+      // attributes 以源对象为底稿、再用宿主颤音换算结果覆盖主参数 —— 否则
+      // hostToSvpAttributes 只认颤音键，会把 phonemes[].leftOffset / dur /
+      // 相位 / 渐出过滤掉，那正是「能打开却存不回去」。
       const notes = (Array.isArray(part.notes) ? part.notes : []).map((n, ni) => {
+        const original = isObject(noteExtras[ni]) ? noteExtras[ni] : {};
+        const { attributes: originalAttributes, ...rest } = original;
         const durationSec = (Number(n && n.durationBeat) || 0) * secPerBeat;
-        const attributes = hostToSvpAttributes(n && n.vibrato, durationSec, original[ni]);
-        return {
+        const vibrato = hostToSvpAttributes(n && n.vibrato, durationSec, originalAttributes);
+        const mergedAttributes = {
+          ...(isObject(originalAttributes) ? originalAttributes : {}),
+          ...(vibrato || {}),
+        };
+        const note = {
+          ...rest,
           onset: blick((Number(n && n.startBeat) || 0) - startBeat),
           duration: Math.max(1, blick(Number(n && n.durationBeat) || 0)),
           pitch: Math.round(Number(n && n.pitch) || 60),
           lyrics: String((n && n.lyric) || 'la'),
-          ...(attributes ? { attributes } : {}),
         };
+        if (sv2) {
+          note.uuid = typeof rest.uuid === 'string' && rest.uuid
+            ? rest.uuid : generatedUuid([ti, pi, ni, 1]);
+        }
+        if (Object.keys(mergedAttributes).length) note.attributes = mergedAttributes;
+        return note;
       });
+
       const points = [];
       for (const offset of (Array.isArray(part.pitchOffsets) ? part.pitchOffsets : [])) {
         points.push(
@@ -598,54 +712,85 @@ function encodeSvp(score, meta) {
           cent(Number(offset.semitones) || 0),
         );
       }
-      return {
+
+      const uuid = typeof saved.uuid === 'string' && saved.uuid
+        ? saved.uuid : `import-group-${ti + 1}-${pi + 1}`;
+      usedGroupUuids.add(uuid);
+      const group = {
         ...saved,
-        name: 'main',
-        uuid: `import-group-${ti + 1}-${pi + 1}`,
-        notes,
-        parameters: { pitchDelta: { mode: 'cubic', points } },
+        name: saved.name !== undefined ? saved.name : 'main',
+        uuid,
       };
+      if (sv2) {
+        // SV2 用音高表达板；宿主有曲线数据时按当前编辑结果重建（分段结构有损，
+        // 已在导入时告警），否则原样沿用源表达板，绝不静默丢字段。SV2 不写
+        // pitchDelta，parameters 只放 mouthOpening / toneShift 等专有曲线。
+        const rebuilt = buildPitchControls(part, BLICK_PER_BEAT, roundTime);
+        if (rebuilt.length) group.pitchControls = rebuilt;
+        else if (saved.pitchControls !== undefined) group.pitchControls = saved.pitchControls;
+        group.parameters = { ...parameterExtras };
+      } else {
+        // SV1 用相对 pitchDelta；宿主没有曲线时沿用源 pitchDelta，不伪造空曲线。
+        const parameters = { ...parameterExtras };
+        if (points.length) parameters.pitchDelta = { mode: 'cubic', points };
+        else if (isObject(gm.sourcePitchDelta)) parameters.pitchDelta = gm.sourcePitchDelta;
+        else parameters.pitchDelta = { mode: 'cubic', points: [] };
+        group.parameters = parameters;
+      }
+      group.notes = notes;
+      return group;
     };
 
     const mainPart = parts[0] || { startBeat: 0, notes: [], pitchOffsets: [] };
     const mainGroup = makeGroup(mainPart, 0);
     const mainRef = {
-      ...(trackMeta.mainRef || {}),
+      ...(isObject(tm.mainRef) ? tm.mainRef : {}),
       groupID: mainGroup.uuid,
       blickOffset: blick(Number(mainPart.startBeat) || 0),
-      pitchOffset: Number((trackMeta.mainRef || {}).pitchOffset) || 0,
+      pitchOffset: Number(isObject(tm.mainRef) ? tm.mainRef.pitchOffset : 0) || 0,
     };
+    if (sv2 && !mainRef.uuid) mainRef.uuid = generatedUuid([ti, 0, 0, 2]);
 
+    const groupRefs = Array.isArray(tm.groupRefs) ? tm.groupRefs : [];
     const groups = [];
     for (let pi = 1; pi < parts.length; pi++) {
       const group = makeGroup(parts[pi], pi);
       library.push(group);
-      groups.push({
+      const ref = {
+        ...(isObject(groupRefs[pi - 1]) ? groupRefs[pi - 1] : {}),
         groupID: group.uuid,
         blickOffset: blick(Number(parts[pi].startBeat) || 0),
         pitchOffset: 0,
         isInstrumental: false,
-      });
+      };
+      if (sv2 && !ref.uuid) ref.uuid = generatedUuid([ti, pi, 0, 3]);
+      groups.push(ref);
     }
 
     return {
-      ...trackMeta,
+      ...scalars,
       name: track.name,
-      dispColor: trackMeta.dispColor !== undefined ? trackMeta.dispColor : (track.color || '0xFF3366CC'),
-      dispOrder: Number.isFinite(Number(trackMeta.dispOrder)) ? Number(trackMeta.dispOrder) : ti,
-      renderEnabled: trackMeta.renderEnabled !== false,
+      dispColor: scalars.dispColor !== undefined ? scalars.dispColor : (track.color || '0xFF3366CC'),
+      dispOrder: Number.isFinite(Number(scalars.dispOrder)) ? Number(scalars.dispOrder) : ti,
+      renderEnabled: scalars.renderEnabled !== false,
+      ...(isObject(tm.mixer) && Object.keys(tm.mixer).length ? { mixer: tm.mixer } : {}),
       mainRef,
       mainGroup,
       groups,
     };
   });
 
-  // 源工程的音色库条目若没有被新生成的组引用，作为元数据保留在 library 里：
-  // 它们不带音符，不会被 parseSvp 当成可导入的音符组，但外部软件仍能读到。
-  for (const extra of (m.libraryExtras || [])) {
-    if (extra && extra.uuid && !library.some((g) => g.uuid === extra.uuid)) {
-      library.push({ ...extra, notes: [], parameters: {} });
-    }
+  // 源 library 里未被任何重建组引用的条目整块回写：宿主没导入过它们，
+  // 写回时连 notes / parameters 一起原样吐回，不写成 notes:[] 的空壳。
+  for (const extra of (Array.isArray(snap.libraryExtras) ? snap.libraryExtras : [])) {
+    const s = extra && isObject(extra.saved) ? extra.saved : null;
+    if (!s) continue;
+    if (s.uuid && (usedGroupUuids.has(s.uuid) || library.some((g) => g.uuid === s.uuid))) continue;
+    library.push({
+      ...s,
+      ...(isObject(extra.parameters) ? { parameters: extra.parameters } : {}),
+      ...(Array.isArray(extra.notes) ? { notes: extra.notes } : {}),
+    });
   }
 
   // instrumental track 接在人声轨后面；dispOrder 从人声轨条数续起，保证
@@ -654,8 +799,8 @@ function encodeSvp(score, meta) {
   score.svpWriteStats = acc.stats;
 
   const raw = {
-    ...(m.rootExtras || {}),
-    version: Number(m.version) || 200,
+    ...(snap.rootExtras || {}),
+    version: target.version,
     time: {
       meter: [{
         index: 0,
@@ -667,9 +812,15 @@ function encodeSvp(score, meta) {
     library,
     tracks: [...tracks, ...acc.tracks],
   };
+  // NUL 是「一个文件里串联多份工程历史」的分隔机制，不是世代标志。容器按源
+  // 保真：源带尾 NUL 才写，绝不主动 append 伪造历史份（也不会把单份工程变成
+  // JSON.parse 读不了的内容）。
+  let text = JSON.stringify(raw, null, 2);
+  if (target.trailingNul) text += '\u0000';
   return {
-    bytes: Buffer.from(JSON.stringify(raw, null, 2), 'utf8'),
+    bytes: Buffer.from(text, 'utf8'),
     files: acc.files,
+    writeTarget: target,
   };
 }
 

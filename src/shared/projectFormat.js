@@ -372,7 +372,7 @@ export function validateProjectDocument(raw) {
   };
 
   // 扩展域的声明放在文档级：它跟着"这份文件"走，不跟着插件的安装状态走。
-  // 同一个插件处理 .sv2 和 .vsqx 时方言不同，schema 只能由 codec 在打开时给出。
+  // 同一个插件处理 .demo 和 .vsqx 时方言不同，schema 只能由 codec 在打开时给出。
   const extSchema = normalizeExtSchema(raw.extSchema, warnings);
   if (Object.keys(extSchema).length) document.extSchema = extSchema;
   const rootExt = normalizeExtData(raw.ext, warnings, 'ext');

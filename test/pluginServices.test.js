@@ -22,9 +22,9 @@ const { validateManifest } = require('../src/shared/pluginManifest');
 
 describe('pluginServices — 纯规则', function () {
   it('service id 必须带命名空间', function () {
-    expect(isServiceId('sv2.codec')).to.equal(true);
+    expect(isServiceId('demo.codec')).to.equal(true);
     expect(isServiceId('audio.vad.v2')).to.equal(true);
-    for (const bad of ['codec', 'sv2.', '.codec', 'SV2.Codec', 'a b.c', '']) {
+    for (const bad of ['codec', 'demo.', '.codec', 'Demo.Codec', 'a b.c', '']) {
       expect(isServiceId(bad), bad).to.equal(false);
     }
   });

@@ -60,7 +60,7 @@ const AUTHORIZABLE_EXTENSIONS = new Set([
 /**
  * 当前允许"自我授权"的扩展名 = 内置素材 + 插件声明的文件格式。
  *
- * 插件格式必须算进来，否则"用户从对话框选了一个 .sv2"会被 file:authorizePath
+ * 插件格式必须算进来，否则"用户从对话框选了一个 .demo"会被 file:authorizePath
  * 拒绝，紧接着 openDocument 又因为路径不在白名单而拒绝 —— 功能整个不可用。
  * 插件的扩展名来自注册表快照（fileAssociation 由 PluginService 注入），
  * 插件卸载后自动从这张表里消失。
@@ -197,7 +197,7 @@ function _isUnder(childPath, parentPath) {
 /**
  * 合并过滤器：插件格式既并进"所有支持的格式"那一项，也各自单列一项。
  *
- * 只并进第一项不够（用户想"只看 .sv2"时还得靠单项），只单列也不够（默认选中的
+ * 只并进第一项不够（用户想"只看 .demo"时还得靠单项），只单列也不够（默认选中的
  * "所有格式"里看不到插件文件，用户会以为文件没被识别）。
  *
  * 放在模块级而不是 registerDialogIpc 里的闭包：它是一段纯数据变换，单测要能
@@ -288,7 +288,7 @@ function registerDialogIpc() {
    * 插件声明的文件格式，追加到宿主自己的过滤器之后。
    *
    * 只有显式传 `includePluginFormats` 的对话框才合并：选音频、选模型文件那些
-   * 对话框如果也出现 `.sv2`，用户会以为选错了东西。顺序也固定成"宿主在前"——
+   * 对话框如果也出现 `.demo`，用户会以为选错了东西。顺序也固定成"宿主在前"——
    * `.sxsproj` 永远是默认选项，插件格式是"另开一个口子"。
    */
   const pluginFiltersFor = (role) => {
@@ -305,7 +305,7 @@ function registerDialogIpc() {
   /**
    * 合并过滤器：插件格式既并进"所有支持的格式"那一项，也各自单列一项。
    *
-   * 只并进第一项不够（用户想"只看 .sv2"时还得靠单项），只单列也不够（默认选中
+   * 只并进第一项不够（用户想"只看 .demo"时还得靠单项），只单列也不够（默认选中
    * 的"所有格式"里看不到插件文件，用户会以为文件没被识别）。
    *
    * @param {Array<{name:string, extensions:string[]}>} base 宿主自己的过滤器

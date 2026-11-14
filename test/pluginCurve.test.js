@@ -137,7 +137,7 @@ describe('pluginCurve — 声明修饰', () => {
 describe('pluginCurve — 从 ext 收集', () => {
   const warnings = [];
   const schema = normalizeExtSchema({
-    'example-sv2': {
+    'example-demo': {
       note: {
         tension: { kind: 'curve', label: '张力' },
         vibrato: { kind: 'curve', curve: { interp: 'step' } },
@@ -150,7 +150,7 @@ describe('pluginCurve — 从 ext 收集', () => {
 
   it('只收 kind=curve 且真的有数据的字段', () => {
     const curves = collectCurves(
-      { 'example-sv2': { tension: [[0, 0], [1, 1]], phonemes: ['l', 'a'], other: 3 } },
+      { 'example-demo': { tension: [[0, 0], [1, 1]], phonemes: ['l', 'a'], other: 3 } },
       schema,
       'note',
     );
@@ -161,15 +161,15 @@ describe('pluginCurve — 从 ext 收集', () => {
 
   it('字段级 interp 生效，且保留原始值以便原样回写', () => {
     const raw = [[0, 0], [1, 1]];
-    const curves = collectCurves({ 'example-sv2': { vibrato: raw } }, schema, 'note');
+    const curves = collectCurves({ 'example-demo': { vibrato: raw } }, schema, 'note');
     expect(curves[0].spec.interp).to.equal('step');
     expect(curves[0].value).to.equal(raw);
   });
 
   it('没声明 schema / 没数据 / 只有坏数据时返回空数组', () => {
     expect(collectCurves({}, schema, 'note')).to.deep.equal([]);
-    expect(collectCurves({ 'example-sv2': {} }, schema, 'note')).to.deep.equal([]);
-    expect(collectCurves({ 'example-sv2': { tension: [[0, 1]] } }, schema, 'note')).to.deep.equal([]);
+    expect(collectCurves({ 'example-demo': {} }, schema, 'note')).to.deep.equal([]);
+    expect(collectCurves({ 'example-demo': { tension: [[0, 1]] } }, schema, 'note')).to.deep.equal([]);
     expect(collectCurves({ 'x': { tension: [[0, 1], [1, 0]] } }, schema, 'note')).to.deep.equal([]);
   });
 
@@ -183,7 +183,7 @@ describe('pluginCurve — 从 ext 收集', () => {
   });
 
   it('未声明 editable 视为只读', () => {
-    const curves = collectCurves({ 'example-sv2': { tension: [[0, 0], [1, 1]] } }, schema, 'note');
+    const curves = collectCurves({ 'example-demo': { tension: [[0, 0], [1, 1]] } }, schema, 'note');
     expect(curves[0].editable).to.equal(false);
   });
 });

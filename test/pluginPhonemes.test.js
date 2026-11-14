@@ -101,7 +101,7 @@ describe('pluginPhonemes — 宿主命名空间判定', () => {
 
 describe('pluginPhonemes — 从 ext 反查音素字段', () => {
   const schema = normalizeExtSchema({
-    'com.example.sv2': {
+    'com.example.demo': {
       note: {
         phonemes: { kind: 'phonemes', editable: false, maxLength: 200 },
         tension: { kind: 'number', min: 0, max: 1 },
@@ -114,23 +114,23 @@ describe('pluginPhonemes — 从 ext 反查音素字段', () => {
 
   it('找得到声明为 phonemes 的字段', () => {
     const hit = readPhonemeField(
-      { 'com.example.sv2': { phonemes: ['l', 'a'], tension: 0.5 } },
+      { 'com.example.demo': { phonemes: ['l', 'a'], tension: 0.5 } },
       schema,
     );
     expect(hit).to.not.equal(null);
-    expect(hit.pluginId).to.equal('com.example.sv2');
+    expect(hit.pluginId).to.equal('com.example.demo');
     expect(hit.field).to.equal('phonemes');
     expect(hit.editable).to.equal(false);
     expect(hit.phonemes.map((p) => p.name)).to.deep.equal(['l', 'a']);
   });
 
   it('没有 schema 时不呈现（数据仍在，宿主只是不画）', () => {
-    expect(readPhonemeField({ 'com.example.sv2': { phonemes: ['l'] } }, null)).to.equal(null);
+    expect(readPhonemeField({ 'com.example.demo': { phonemes: ['l'] } }, null)).to.equal(null);
   });
 
   it('字段值不是音素形态时返回 null', () => {
-    expect(readPhonemeField({ 'com.example.sv2': { phonemes: [] } }, schema)).to.equal(null);
-    expect(readPhonemeField({ 'com.example.sv2': { phonemes: 42 } }, schema)).to.equal(null);
+    expect(readPhonemeField({ 'com.example.demo': { phonemes: [] } }, schema)).to.equal(null);
+    expect(readPhonemeField({ 'com.example.demo': { phonemes: 42 } }, schema)).to.equal(null);
   });
 
   it('未声明的插件即便带了数据也不呈现', () => {
@@ -147,7 +147,7 @@ describe('pluginPhonemes — 从 ext 反查音素字段', () => {
 
   it('把 host 标记一并带出，界面据此决定灰的程度', () => {
     const hit = readPhonemeField(
-      { 'com.example.sv2': { phonemes: ['en_AA1', 'tS'] } },
+      { 'com.example.demo': { phonemes: ['en_AA1', 'tS'] } },
       schema,
     );
     expect(hit.phonemes.map((p) => p.host)).to.deep.equal([true, false]);

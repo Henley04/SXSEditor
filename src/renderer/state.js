@@ -23,9 +23,9 @@ export const state = {
   projectImportSource: null,
   // 插件扩展域：声明（schema）与文档级数据（root）。
   //
-  // 刻意与 projectImportSource 分开：一份 .sxsproj 也可能带着从 .sv2 继承来的
+  // 刻意与 projectImportSource 分开：一份 .sxsproj 也可能带着从 .demo 继承来的
   // 扩展数据，它没有"来源插件"，但这些数据仍然必须跟着工程走 —— 否则
-  // `sv2 → 存成 sxsproj → 再导出 sv2` 这一趟就会把用户的元数据抹掉。
+  // `demo → 存成 sxsproj → 再导出 demo` 这一趟就会把用户的元数据抹掉。
   projectExt: { schema: null, root: null },
   // 最近一次插件格式保存时插件报的"没能完整写回"的条目。
   // 自动保存为了不打断编辑不弹窗，但警告不能凭空消失 —— 存在这里，

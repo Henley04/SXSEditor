@@ -7,7 +7,7 @@ const { _mergeFiltersWithPlugins } = require('../src/main/dialogIpc.js');
  *
  * 合并规则只有三条，但每一条都对应一个用户能感知的失效：
  *   · 不并入第一项 → 默认的"所有支持的格式"里看不到插件文件；
- *   · 不单列一项 → 用户没法"只看 .sv2"；
+ *   · 不单列一项 → 用户没法"只看 .demo"；
  *   · 重名不去重 → 装了同名格式的插件会出现两条一模一样的选项。
  */
 describe('dialogIpc — 插件格式合并进过滤器', () => {
@@ -15,7 +15,7 @@ describe('dialogIpc — 插件格式合并进过滤器', () => {
     { name: 'All supported formats', extensions: ['sxsproj', 'sxs'] },
     { name: 'SXSEditor Project', extensions: ['sxsproj', 'sxs'] },
   ];
-  const plugin = [{ name: 'SV2 Project', extensions: ['sv2'] }];
+  const plugin = [{ name: 'Demo Project', extensions: ['demo'] }];
 
   it('没有插件格式时原样返回（不引入空 filter）', () => {
     expect(_mergeFiltersWithPlugins(base, [])).to.deep.equal(base);
@@ -23,11 +23,11 @@ describe('dialogIpc — 插件格式合并进过滤器', () => {
 
   it('插件扩展名并入第一项，同时单列一项', () => {
     const out = _mergeFiltersWithPlugins(base, plugin);
-    expect(out[0].extensions).to.deep.equal(['sxsproj', 'sxs', 'sv2']);
+    expect(out[0].extensions).to.deep.equal(['sxsproj', 'sxs', 'demo']);
     expect(out.map((f) => f.name)).to.deep.equal([
-      'All supported formats', 'SXSEditor Project', 'SV2 Project',
+      'All supported formats', 'SXSEditor Project', 'Demo Project',
     ]);
-    expect(out[2].extensions).to.deep.equal(['sv2']);
+    expect(out[2].extensions).to.deep.equal(['demo']);
   });
 
   it('extendFirst=false 时不改动第一项', () => {
@@ -43,11 +43,11 @@ describe('dialogIpc — 插件格式合并进过滤器', () => {
 
   it('多个插件格式：扩展名去重后并入第一项', () => {
     const extra = [
-      { name: 'A', extensions: ['a', 'sv2'] },
-      { name: 'B', extensions: ['sv2', 'b'] },
+      { name: 'A', extensions: ['a', 'demo'] },
+      { name: 'B', extensions: ['demo', 'b'] },
     ];
     const out = _mergeFiltersWithPlugins(base, extra);
-    expect(out[0].extensions).to.deep.equal(['sxsproj', 'sxs', 'a', 'sv2', 'b']);
+    expect(out[0].extensions).to.deep.equal(['sxsproj', 'sxs', 'a', 'demo', 'b']);
     expect(out.map((f) => f.name)).to.deep.equal([
       'All supported formats', 'SXSEditor Project', 'A', 'B',
     ]);

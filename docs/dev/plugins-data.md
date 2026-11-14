@@ -13,7 +13,7 @@
 {
   "permissions": { "fs": ["userPicked:read"] },
   "contributes": {
-    "fileTypes": [{ "ext": ".sv2", "role": "open", "label": { "en": "SV2 Project", "zh-CN": "SV2 工程" } }]
+    "fileTypes": [{ "ext": ".demo", "role": "open", "label": { "en": "Demo Project", "zh-CN": "Demo 工程" } }]
   }
 }
 ```
@@ -21,7 +21,7 @@
 ```js
 module.exports = {
   codecs: {
-    '.sv2': {
+    '.demo': {
       async read(ctx, { name, bytes }) {
         const doc = JSON.parse(new TextDecoder().decode(bytes));
         return { document: toProjectDocument(doc) };
@@ -31,9 +31,11 @@ module.exports = {
 };
 ```
 
-装好之后，**文件 → 打开工程**的对话框里会多出「SV2 工程」一项，选中即打开；
-用户双击 `.sv2`（运行中的实例）也会路由到这里。本文以 `.sv2` 作教学示例；该示例
-插件本身已随应用分发（见 §9），普通用户无需手动安装。
+装好之后，**文件 → 打开工程**的对话框里会多出「Demo 工程」一项，选中即打开；
+用户双击 `.demo`（运行中的实例）也会路由到这里。本文以 `.demo` 作教学示例：它是
+**虚构的中性扩展名**，仅用于讲清数据面契约，不对应任何真实工程格式、不随应用
+分发，需要自己安装示例插件（见 §9）才能打开。真实的 Synthesizer V 工程一律是
+`.svp`，由内置的 `official-project-import` 处理。
 
 ## 1. 两件事必须分开：声明 ≠ 权限
 
@@ -52,7 +54,7 @@ module.exports = {
 ## 2. `fileTypes` 的字段
 
 ```json
-{ "ext": ".sv2", "role": "open", "label": { "en": "SV2 Project", "zh-CN": "SV2 工程" } }
+{ "ext": ".demo", "role": "open", "label": { "en": "Demo Project", "zh-CN": "Demo 工程" } }
 ```
 
 | 字段 | 取值 | 说明 |
@@ -142,7 +144,7 @@ async read(ctx, { bytes, files }) {
 
 ```js
 codecs: {
-  '.sv2': {
+  '.demo': {
     async read(ctx, { name, bytes }) { return { document } },
     async write(ctx, { name, document }) { return { bytes, warnings } },
   },
@@ -207,9 +209,9 @@ async write(ctx, { document }) {
 
 | 场景 | 结果 |
 |---|---|
-| 打开 `a.sv2` → Ctrl+S | 插件写回 `a.sv2`（写盘前原文件转成 `a.sv2.bak`） |
-| 打开 `a.sv2` → 另存为 `b.sxsproj` | 宿主写 JSON，之后 Ctrl+S 走 JSON |
-| 新建工程 → 另存为 `c.sv2` | 插件编码，文件里没有 `ext`（本来就没有来源数据） |
+| 打开 `a.demo` → Ctrl+S | 插件写回 `a.demo`（写盘前原文件转成 `a.demo.bak`） |
+| 打开 `a.demo` → 另存为 `b.sxsproj` | 宿主写 JSON，之后 Ctrl+S 走 JSON |
+| 新建工程 → 另存为 `c.demo` | 插件编码，文件里没有 `ext`（本来就没有来源数据） |
 
 ## 5. 宿主看不懂的数据：`ext`
 
@@ -222,7 +224,7 @@ async write(ctx, { document }) {
 ```js
 // 声明：这份文档里有哪些扩展字段、能不能改、参不参与渲染
 document.extSchema = {
-  'example-sv2': {
+  'example-demo': {
     note: {
       phonemes: { kind: 'phonemes', editable: false, maxLength: 200 },
     },
@@ -232,9 +234,9 @@ document.extSchema = {
 };
 
 // 数据：任意层都能带
-document.ext = { 'example-sv2': { meta: { author: '…' } } };
-fragment.ext = { 'example-sv2': { style: 'soft' } };
-note.ext     = { 'example-sv2': { phonemes: ['l', 'a'] } };
+document.ext = { 'example-demo': { meta: { author: '…' } } };
+fragment.ext = { 'example-demo': { style: 'soft' } };
+note.ext     = { 'example-demo': { phonemes: ['l', 'a'] } };
 ```
 
 `kind` 是宿主唯一认识的东西，一共六种：
@@ -293,7 +295,7 @@ note.ext     = { 'example-sv2': { phonemes: ['l', 'a'] } };
 
 ```js
 note.ext = {
-  'example-sv2': {
+  'example-demo': {
     // [[t, v], ...]，t ∈ [0,1] 是音符内的位置，v 是你的量纲
     dynamics: [[0, 0.15], [0.5, 1], [1, 0.3]],
   },
@@ -384,13 +386,13 @@ module.exports = {
 
 | 情况 | 用户看到 |
 |---|---|
-| 没有插件能以该扩展名保存 | 「没有插件能以 .sv2 格式保存」 |
+| 没有插件能以该扩展名保存 | 「没有插件能以 .demo 格式保存」 |
 | 缺少 `fs:userPicked:write` | 「插件 … 缺少权限」 |
 | 返回了无法收敛成字节的东西 | 「插件没有返回可写入的字节」 |
 | `warnings` 非空 | 「文件已保存，但有 N 项内容未能完整写入：…」 |
 
 `message` 会原样出现在提示框里，**请按 `ctx.plugin.locale` 给出对应语言的文案**
-（示例插件 `example-sv2` 的 `msg()` 就是这么做的）。宿主只负责自己那半句。
+（内置插件 `official-project-import` 的 `msg()` 就是这么做的）。宿主只负责自己那半句。
 
 ## 8. 还没做的部分（写在这里免得踩空）
 
@@ -402,27 +404,27 @@ module.exports = {
 
 ## 9. 完整示例
 
-见 [`plugins/example-sv2/`](../../plugins/example-sv2/)：
+真正可运行、且随应用分发的 `codec.read` / `codec.write` 双向实现是内置插件
+[`plugins/official-project-import/`](../../plugins/official-project-import/)：
+它用 `role: "both"` + `userPicked:read/write` 权限打开并写回 `.vpr` / `.svp`
+/ `.vsqx`。读它比读任何虚构示例更有用：
 
-- `manifest.json`：`fileTypes` 的 `role: "both"` + `userPicked:read/write` 权限；
-- `main.js`：`read` 与 `write` 严格对称，演示三件事 ——
-  元数据走 `ext` 原样保留、音素声明成只读、写不进去的东西（音素微调、颤音）
-  显式告警而不是静默丢弃。
+- `manifest.json`：三种 `fileTypes` 的声明、`companionExts`（同目录 WAV）与
+  `role: "both"`；
+- `main.js`：`makeRead` / `makeWrite` 严格对称，把伴生 `files` 交给解析器、
+  把编码器返回的 `bytes` / `files` 透传回宿主；
+- `lib/*.js`：元数据走 `ext` 原样保留，写不进去的东西（音素微调、颤音相位、
+  SV2 专有参数）显式告警或结构化保真回写，而不是静默丢弃。
 
-> **它现在随应用分发**：`example-sv2` 与 `official-project-import` 同在内置清单
-> `src/shared/builtinPluginIds.js` 里，首次启动自动安装到用户插件目录（来源记为
-> `builtin`），因此 `.sv2` 开箱即可打开与保存，伴奏的内嵌 / 相对路径写回也一并在。
-> 内置副本按版本升级时保留用户的停用状态、设置与签名历史；用户自行安装的同名
-> 插件一律不覆盖。安装与升级策略见
-> [`plugins-official-project-import.md`](plugins-official-project-import.md) §2。
->
-> `.sv2` 是本项目为演示数据面自造的示例 JSON 格式，**不是** Synthesizer V 2 的
-> 官方工程文件。随包分发只为让示例格式开箱可用，不代表宿主能打开真实的 SV2 工程；
-> 真实的 Synthesizer V 工程（`.svp`）由 `official-project-import` 处理。
+本文出现的 `.demo` / `example-demo` / `com.example.demo` 一律是**虚构的教学占位名**，
+用于讲清数据面契约，不代表仓库里有对应插件或格式，也不占用任何真实扩展名。
+真实格式请认准：Synthesizer V（SV1 与 SV2 都是 `.svp`，由 `official-project-import`
+按工程内版本号分派读写）、VOCALOID5/6（`.vpr`）、VOCALOID3/4（`.vsqx`）。
 
-打包装给别人（只用于另做第三方分发包；随应用分发的用户不需要这一步）：
+想动手写第三方插件，可以从仓库里其它示例起步（如 `plugins/example-hello`），
+按 §1–§8 声明 `fileTypes` 与 `codecs`，再打包：
 
 ```bash
-npm run plugin:pack -- plugins/example-sv2 -o dist-plugins
-# → dist-plugins/example-sv2-1.1.0.sxsp（版本号随 manifest.version）
+npm run plugin:pack -- plugins/example-hello -o dist-plugins
+# → dist-plugins/example-hello-<version>.sxsp（版本号随 manifest.version）
 ```

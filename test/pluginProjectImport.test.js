@@ -197,9 +197,10 @@ describe('official-project-import — manifest', () => {
       expect(ft.role, `${ft.ext}.role`).to.equal('both');
     }
     expect(manifest.permissions.fs).to.include('userPicked:write');
-    // 1.3.0 起 SVP 伴奏也可用相对路径写回；版本号必须升，否则 builtinPlugins 的
-    // needsUpgrade 判定不成立，老用户升级 App 后拿不到新能力。
-    expect(manifest.version).to.equal('1.3.0');
+    // 1.4.0 起 .svp 按 SV1/SV2 双世代 schema 读写、另存为可选版本；版本号必须
+    // 升，否则 builtinPlugins 的 needsUpgrade 判定不成立，老用户升级 App 后拿不到
+    // 新能力（1.3.0 起 SVP 伴奏已能用相对路径写回）。
+    expect(manifest.version).to.equal('1.4.0');
     // .svp 必须声明伴生文件白名单：宿主靠它才知道打开时要读同目录的 WAV。
     const svp = manifest.contributes.fileTypes.find((ft) => ft.ext === '.svp');
     expect(svp.companionExts).to.deep.equal(['.wav']);

@@ -366,7 +366,7 @@ async function cmdMethods(opts) {
 async function cmdCall(opts) {
   const method = opts._[0];
   if (!method) {
-    process.stderr.write('[ARG ERROR] plugin call 需要方法名，例如 example-sv2.stats\n');
+    process.stderr.write('[ARG ERROR] plugin call 需要方法名，例如 example-demo.stats\n');
     return 2;
   }
   if (!/^[a-z0-9][a-z0-9._-]*\.[a-z0-9][a-z0-9._-]*$/i.test(method)) {

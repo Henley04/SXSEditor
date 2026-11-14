@@ -559,7 +559,7 @@ async function validatePluginBackends() {
  *
  * 从 serializeProject 拆出来是为了给插件保存用：`.sxsproj` 要的是 JSON 字符串，
  * 而 codec.write 要的是**对象**（它自己决定编码成文本还是二进制）。两者必须
- * 出自同一份组装逻辑，否则"存 sxsproj"与"导出 sv2"会带上不同的字段集 ——
+ * 出自同一份组装逻辑，否则"存 sxsproj"与"导出 demo"会带上不同的字段集 ——
  * 那种差异极难发现，直到某天用户发现导出后少了东西。
  *
  * @returns {Promise<{out: object, hasEmbeddedPayload: boolean}>}
@@ -803,8 +803,8 @@ async function _commitAutoSave() {
   try {
     // 必须走与 Ctrl+S 同一条路径：按目标扩展名分派。
     // 这里原先直接 `serializeProject` + `saveFile` —— 对 .sxsproj 没问题，
-    // 但插件格式（.sv2）的工程一编辑就被写成一坨 JSON，下次插件再读它会
-    // 直接报"不是 SV2 工程"。走查里就是这么把 /tmp/*.sv2 写坏的。
+    // 但插件格式（.demo）的工程一编辑就被写成一坨 JSON，下次插件再读它会
+    // 直接报"不是 Demo 工程"。走查里就是这么把 /tmp/*.demo 写坏的。
     //
     // `silentWarnings`：自动保存是每 400ms 的冷路径，插件的"没写进去的东西"
     // 提示不能在这里弹 —— 拖一个音符就弹一次没人受得了。警告仍然记在
@@ -940,6 +940,76 @@ export function showSaveProjectOptionsDialog() {
   });
 }
 
+/**
+ * 「另存为 .svp」时的版本行为询问。
+ *
+ * 用户明确要求：SV1 与 SV2 都是 .svp 但 schema 互不兼容，**只有另存为 .svp
+ * 时才询问**按哪个版本行为写；就地保存（Ctrl+S / 自动保存 / MCP 导出）一律沿用
+ * 源工程的世代与 version 原值，绝不弹窗。三选一对齐 Dreamtonics 官方手册的
+ * 「另存为（与 1.10.0 兼容）」：沿用源版本 / SV2 / SV1 兼容。
+ *
+ * 为什么独立成一个对话框而不是塞进 showSaveProjectOptionsDialog：那个对话框
+ * 的顺序与返回值已经被现有流程与测试锁定，版本询问是另一类「写盘前条件询问」
+ * （与「伴奏将丢失」确认同层），混进去会连带改动非 .svp 的保存顺序。
+ *
+ * @returns {Promise<'keep'|'sv2'|'sv1'|null>} null 表示取消
+ */
+export function showSvpVersionDialog() {
+  return new Promise((resolve) => {
+    const container = document.createElement('div');
+    container.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+
+    const intro = document.createElement('div');
+    intro.style.cssText = 'font-size: 12px; color: var(--fg-secondary); line-height: 1.6;';
+    intro.textContent = t('main.svpVersionDesc');
+    container.appendChild(intro);
+
+    const radios = [];
+    for (const [value, label] of [
+      ['keep', t('main.svpVersionKeep')],
+      ['sv2', t('main.svpVersion2')],
+      ['sv1', t('main.svpVersion1Compat')],
+    ]) {
+      const option = document.createElement('label');
+      option.style.cssText = 'display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; color: var(--fg-secondary); line-height: 1.5;';
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'svp-version';
+      input.value = value;
+      input.checked = value === 'keep'; // 默认沿用源版本，与就地保存一致
+      input.style.cssText = 'margin-top: 3px; flex: none;';
+      const text = document.createElement('span');
+      text.textContent = label;
+      option.appendChild(input);
+      option.appendChild(text);
+      container.appendChild(option);
+      radios.push(input);
+    }
+
+    const warn = document.createElement('div');
+    warn.style.cssText = 'font-size: 11px; color: var(--fg-muted); line-height: 1.6;';
+    warn.textContent = t('main.svpVersionDowngradeWarn');
+    container.appendChild(warn);
+
+    createDialog({
+      title: t('main.svpVersionTitle'),
+      contentElement: container,
+      buttons: [
+        { text: t('common.cancel'), type: 'default', onClick: () => resolve(null) },
+        {
+          text: t('common.save'),
+          type: 'primary',
+          onClick: () => {
+            const picked = radios.find((r) => r.checked);
+            resolve(picked ? picked.value : 'keep');
+          },
+        },
+      ],
+      styles: { buttonMarginTop: '0' },
+    });
+  });
+}
+
 export function showSaveBeforeCloseDialog() {
   return new Promise((resolve) => {
     createDialog({
@@ -1017,8 +1087,8 @@ function _notifySaveWarnings(warnings) {
  * 把当前工程写到指定路径。
  *
  * 判定只看**目标扩展名**：内置的 .sxsproj/.sxs 走 JSON，其余一律问插件。
- * 用扩展名而不是"当前文档来源"是刻意的 —— 用户可以把一个 .sv2 工程另存为
- * 另一个 .sv2、也可以把新建工程直接导出成 .sv2；这两种情况都该归插件管，
+ * 用扩展名而不是"当前文档来源"是刻意的 —— 用户可以把一个 .demo 工程另存为
+ * 另一个 .demo、也可以把新建工程直接导出成 .demo；这两种情况都该归插件管，
  * 而"来源"只描述它最初从哪来。
  *
  * 两条路径都进 `_enqueueProjectWrite`：自动保存与手动保存可能几乎同时触发，
@@ -1057,7 +1127,13 @@ async function _writeProjectTo(filePath, opts = {}) {
   if (!api?.saveDocument) throw new Error(t('main.projectPluginUnavailable'));
   return _enqueueProjectWrite(async () => {
     const { out } = await buildProjectObject(opts.embedSingerFiles, embedAccompanimentAudio);
-    const res = await api.saveDocument(filePath, out, { target: 'save' });
+    // 只有「另存为 .svp」才会带 svpVersion（见 saveProjectAs）。就地 Ctrl+S、
+    // 自动保存、MCP 导出都不带，插件侧 resolveWriteTarget 缺省按 'keep' 沿用
+    // 源版本 —— 这正是「就地保存不弹窗、按原 JSON 版本号行为保存」的落点。
+    const res = await api.saveDocument(filePath, out, {
+      target: 'save',
+      ...(opts.svpVersion ? { svpVersion: opts.svpVersion } : {}),
+    });
     if (!res || !res.ok) {
       const err = new Error((res && res.message) || t('main.projectPluginSaveFailed'));
       err.code = res && res.code;
@@ -1120,7 +1196,14 @@ export async function saveProjectAs() {
         // 之后也打不开；统一补宿主默认格式。已有扩展名（含用户主动选的外部
         // 格式）一律原样保留。
         const filePath = normalizeSavePath(result.filePath);
-        // 只有「装不下伴奏」的外部格式（.svp/.vsqx/.sv2 等）才在写盘前提醒：
+        // SV1 / SV2 都是 .svp 但 schema 互不兼容：仅在「另存为 .svp」时询问
+        // 按哪个版本行为写。就地 Ctrl+S 走 saveProject()，完全不经过这里。
+        let svpVersion;
+        if (extensionOf(filePath) === 'svp') {
+          svpVersion = await showSvpVersionDialog();
+          if (!svpVersion) return { saved: false, canceled: true };
+        }
+        // 只有「装不下伴奏」的外部格式（.svp/.vsqx/.demo 等）才在写盘前提醒：
         // 插件的 "伴奏不会写回" 告警是**保存之后**才看得到的，用户往往先发现
         // 伴奏没了。.vpr 从内置插件 1.2.0 起能把伴奏重建进容器，不再误报。
         if (formatDropsAccompaniment(filePath)
@@ -1134,10 +1217,11 @@ export async function saveProjectAs() {
         await _writeProjectTo(filePath, {
           embedSingerFiles: saveOptions.embedSingerFiles,
           embedAccompanimentAudio: saveOptions.embedAccompanimentAudio,
+          ...(svpVersion ? { svpVersion } : {}),
         });
         // projectImportSource 不清：它带着 extSchema 与文档级 ext，是**数据**而不是
         // "当前格式"的标记。存成 .sxsproj 之后这些数据仍要跟着走，否则
-        // `sv2 → sxsproj → sv2` 这一趟会丢插件私有字段。
+        // `demo → sxsproj → demo` 这一趟会丢插件私有字段。
         state.currentProjectFilePath = filePath;
         // 写盘期间若有新编辑，不能清掉 dirty。
         if (epoch === _saveEpoch) markClean();
@@ -1212,7 +1296,7 @@ export async function loadProject(filePath = null) {
     const data = await window.electronAPI.readFile(targetPath);
     const obj = JSON.parse(data);
     if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
-    // 合法 JSON 不等于工程：`{}`、`{"format":"sv2"}`、随便一份配置文件都能 parse 成功。
+    // 合法 JSON 不等于工程：`{}`、`{"format":"demo"}`、随便一份配置文件都能 parse 成功。
     // 少了这道判断，打开一个陌生 .json 会把当前工程**静默清空**（三个字段都 undefined，
     // 下面每个 if 都跳过，最后还 markClean）。插件格式被停用后正好会走到这条路径上。
     if (!obj.project && !obj.singers && !obj.fragments) {
@@ -1259,7 +1343,7 @@ export async function loadProject(filePath = null) {
  * "哪些扩展名是插件的"，插件装/卸之后两边必然对不上，表现是"文件打不开也没提示"。
  *
  * 导入进来的内容**不认作原生工程路径**：本段插件只实现了 codec.read，没有 write，
- * 直接按原路径保存会把 sxsproj 的 JSON 写进 .sv2，把用户的文件毁掉。所以这里
+ * 直接按原路径保存会把 sxsproj 的 JSON 写进 .demo，把用户的文件毁掉。所以这里
  * 只保留"内容来源于哪个插件的哪个文件"，currentProjectFilePath 留空 ——
  * 用户保存时自然走"另存为"，落成真正的 .sxsproj。
  */
@@ -1402,14 +1486,14 @@ export async function applyProjectDocument(obj, targetPath, options = {}) {
     for (const f of obj.fragments) trackManager.addFragment(f);
   }
   // 插件格式也认作"原生路径"。M4 第 1 段只实现了 read，那时把它置空是对的：
-  // 回写会把 sxsproj 的 JSON 塞进 .sv2。现在 codec.write 落地了，覆盖原文件
+  // 回写会把 sxsproj 的 JSON 塞进 .demo。现在 codec.write 落地了，覆盖原文件
   // 才是用户按 Ctrl+S 时期望的行为（写盘有 .bak 兜底）。
   state.currentProjectFilePath = targetPath;
   state.projectImportSource = fromPlugin
     ? { pluginId: options.pluginId, path: targetPath }
     : null;
   // 扩展域与来源解耦：从 .sxsproj 读出来的工程也带着这些数据，它没有来源插件，
-  // 但下次导出成 .sv2 时仍然要用。
+  // 但下次导出成 .demo 时仍然要用。
   state.projectExt = {
     schema: obj.extSchema || null,
     root: obj.ext || null,

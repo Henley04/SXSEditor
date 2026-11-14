@@ -62,8 +62,8 @@ function statusText(ctx, verb, name) {
 function saveWarnings(ctx, formatId) {
   const w = [];
   w.push(msg(ctx,
-    '写回外部工程格式是有损的：源工程的歌手库、音色与风格设置、音素属性，以及颤音的组级强度包络、起始相位与渐出无法在宿主中表达，不会写入；音符颤音的深度、频率、起点与渐入会按宿主设置写回。',
-    'Saving back to an external project format is lossy: voice libraries, singer styles, phoneme attributes, and vibrato depth envelopes, start phase and fade-out have no equivalent in the host and are not written. Note vibrato depth, rate, start and fade-in are written back from the host settings.',
+    '写回外部工程格式是有损的：歌手库、音色与风格设置、音素属性、颤音的组级强度包络、起始相位与渐出在宿主里没有可编辑等价物，不会作为宿主数据导入；音符颤音的深度、频率、起点与渐入按宿主设置写回，其余专有参数按原结构保真回写（降级为 SV1 时另行列出的除外）。',
+    'Saving back to an external project format is lossy: voice libraries, singer styles, phoneme attributes, and vibrato depth envelopes, start phase and fade-out have no editable equivalent in the host and are not imported as host data. Note vibrato depth, rate, start and fade-in are written back from the host settings; other project-specific parameters are preserved structurally (except those listed when downgrading to SV1).',
   ));
   if (formatId === 'svp') {
     w.push(msg(ctx,
@@ -151,7 +151,7 @@ function makeRead(format) {
  * 元数据只在格式一致时沿用；跨格式另存按全新工程生成并告警。
  */
 function makeWrite(format) {
-  return async function write(ctx, { name, document }) {
+  return async function write(ctx, { name, document, svpVersion }) {
     if (!document || typeof document !== 'object' || !Array.isArray(document.fragments)) {
       throw failure(ctx, msg(ctx, '没有可保存的工程文档', 'No project document to save'));
     }
@@ -179,7 +179,11 @@ function makeWrite(format) {
     }
     let encoded;
     try {
-      encoded = format.encode(score, meta);
+      // 只有 .svp 存在世代/版本行为分派。显式分流，避免 svpVersion 悄悄流进
+      // VOCALOID 编码器；插件侧 resolveWriteTarget 还会按白名单再归一一次。
+      encoded = format.id === 'svp'
+        ? format.encode(score, meta, svpVersion)
+        : format.encode(score, meta);
     } catch (err) {
       throw failure(ctx, msg(ctx, `生成 ${format.label} 文件失败：${err.message}`, `Failed to build the ${format.label} file: ${err.message}`));
     }
@@ -190,6 +194,54 @@ function makeWrite(format) {
     const sidecarFiles = !isBytes && Array.isArray(encoded && encoded.files) ? encoded.files : [];
     if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) {
       throw failure(ctx, msg(ctx, '编码器没有产出有效字节', 'The encoder produced no valid bytes'));
+    }
+
+    const writeTarget = !isBytes && encoded && encoded.writeTarget;
+
+    // SVP 版本行为说明：沿用源版本 / 切档目标值 / 跨世代升降级逐类列损失。
+    // 关键告警 unshift 到最前，保证 summarizeWarnings 取的前 3 条里用户能看到
+    // 「降级丢了什么」；版本值这类信息性说明放末尾，不挤掉通用有损提醒。
+    if (format.id === 'svp' && writeTarget) {
+      const wt = writeTarget;
+      const critical = [];
+      if (wt.isUpgrade) {
+        critical.push(msg(ctx,
+          '源工程是 SV1，升级为 SV2 时只补出 SV2 schema 所需的 UUID 等结构性字段，不会凭空造出源工程里没有的 vocal modes / retakes / 音素时序等专有参数。',
+          'The source is SV1; upgrading to SV2 only adds structural fields such as UUIDs required by the SV2 schema. SV2-only data (vocal modes, retakes, phoneme timing) is not fabricated.',
+        ));
+      }
+      if (wt.isDowngrade) {
+        if (wt.losses.length) {
+          critical.push(msg(ctx,
+            `降级为 SV1 兼容版本，以下 SV2 专有参数不会写入：\n${wt.losses.map((l, i) => `  ${i + 1}. ${l.zh}`).join('\n')}`,
+            `Downgrading to SV1-compatible; these SV2-only parameters are dropped:\n${wt.losses.map((l, i) => `  ${i + 1}. ${l.en}`).join('\n')}`,
+          ));
+        } else {
+          critical.push(msg(ctx,
+            '降级为 SV1 兼容版本：源工程未检出 SV2 专有参数，按 SV1 schema 写出。',
+            'Downgrading to SV1-compatible: no SV2-only parameters were detected; written with the SV1 schema.',
+          ));
+        }
+      }
+      if (meta && meta.snapshotTruncated) {
+        critical.push(msg(ctx,
+          '源工程结构快照超出有界克隆上限，部分嵌套内容未能保真回写；建议另存为宿主原生 .sxsproj 以完整保留。',
+          'The source structure snapshot exceeded the bounded clone limit; some nested content could not be preserved. Save as a native .sxsproj to keep everything.',
+        ));
+      }
+      warnings.unshift(...critical);
+
+      if (wt.requested === 'keep') {
+        warnings.push(msg(ctx,
+          `按源工程版本行为保存：${wt.sourceGeneration === 'sv2' ? 'SV2' : 'SV1'}，version 原值 ${wt.version} 原样写回。`,
+          `Saved with the source project's version behaviour: ${wt.sourceGeneration === 'sv2' ? 'SV2' : 'SV1'}, version ${wt.version} written back unchanged.`,
+        ));
+      } else {
+        warnings.push(msg(ctx,
+          `按${wt.generation === 'sv2' ? ' SV2（≥2.0）' : ' SV1 兼容（1.10.0–1.11.2）'}行为另存，version 写为 ${wt.version}：这是开源实现约定的兼容目标值，不是本机安装的真实版号。`,
+          `Saved as ${wt.generation === 'sv2' ? 'SV2 (>=2.0)' : 'SV1-compatible (1.10.0-1.11.2)'}; version ${wt.version} is an interoperability target from open-source implementations, not the installed editor's version.`,
+        ));
+      }
     }
 
     // 伴奏写回结果放在编码之后生成：有没有真的写进去由 encoder 的统计说了算，

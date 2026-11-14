@@ -69,7 +69,7 @@ describe('saveAsPath — normalizeSavePath（无后缀补宿主默认格式）',
     expect(mod.normalizeSavePath('/tmp/song.vpr')).to.equal('/tmp/song.vpr');
     expect(mod.normalizeSavePath('/tmp/song.svp')).to.equal('/tmp/song.svp');
     expect(mod.normalizeSavePath('/tmp/song.vsqx')).to.equal('/tmp/song.vsqx');
-    expect(mod.normalizeSavePath('/tmp/song.sv2')).to.equal('/tmp/song.sv2');
+    expect(mod.normalizeSavePath('/tmp/song.demo')).to.equal('/tmp/song.demo');
   });
 
   it('空值原样返回', () => {
@@ -86,7 +86,7 @@ describe('saveAsPath — isExternalFormat', () => {
 
   it('插件格式是外部格式', () => {
     expect(mod.isExternalFormat('/tmp/song.vpr')).to.equal(true);
-    expect(mod.isExternalFormat('/tmp/song.sv2')).to.equal(true);
+    expect(mod.isExternalFormat('/tmp/song.demo')).to.equal(true);
   });
 
   it('无扩展名（归一化前）不算外部格式', () => {
@@ -95,12 +95,17 @@ describe('saveAsPath — isExternalFormat', () => {
 });
 
 describe('saveAsPath — 伴奏音频写回能力', () => {
-  it('VPR / SVP / SV2 能写回伴奏，不弹"伴奏将丢失"确认，且保存时必须嵌入音频字节', () => {
-    for (const ext of ['vpr', 'svp', 'sv2']) {
+  it('VPR / SVP（SV1/SV2 双世代 .svp）能写回伴奏，不弹"伴奏将丢失"确认，且保存时必须嵌入音频字节', () => {
+    for (const ext of ['vpr', 'svp']) {
       expect(mod.formatDropsAccompaniment(`/tmp/song.${ext}`), ext).to.equal(false);
       expect(mod.requiresAccompanimentAudio(`/tmp/song.${ext}`), ext).to.equal(true);
     }
     expect(mod.formatDropsAccompaniment('/tmp/song.VPR')).to.equal(false);
+  });
+
+  it('未登记的虚构示例格式 .demo 仍需写盘前确认（能力清单只含 vpr/svp）', () => {
+    expect(mod.formatDropsAccompaniment('/tmp/song.demo')).to.equal(true);
+    expect(mod.requiresAccompanimentAudio('/tmp/song.demo')).to.equal(false);
   });
 
   it('VSQX（XML，无音频容器）仍需写盘前确认', () => {

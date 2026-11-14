@@ -41,8 +41,8 @@ module.exports = {
 | `methods` 非空 → `permissions.automation` 必须含 `'expose'` | 权限清单是安装弹窗上用户看的那张表，不能与实际暴露面脱节 |
 | 拼出的方法名不能等于内置方法 | 内置优先，撞名等于你的方法永远调不到 —— 必须在安装时报错 |
 
-方法名是 **`<pluginId>.<命令 id>`**，例如插件 `example-sv2` 的命令 `stats` →
-`example-sv2.stats`。不接受在 `methods` 里写全名，只写本地 id。
+方法名是 **`<pluginId>.<命令 id>`**，例如插件 `example-demo` 的命令 `stats` →
+`example-demo.stats`。不接受在 `methods` 里写全名，只写本地 id。
 
 `automation.expose: false` 是总开关（与 `methods` 非空同时出现会被判为自相矛盾）。
 
@@ -108,14 +108,14 @@ module.exports = {
 ```bash
 # 装了哪些插件；右边一列是"现在真的能调什么"
 SXSEditor --cli plugin list
-SXSEditor --cli plugin methods --plugin example-sv2
+SXSEditor --cli plugin methods --plugin example-demo
 
 # 调用；--params 接受 JSON，`-` 表示从 stdin 读（适合管道）
-SXSEditor --cli plugin call example-sv2.stats --params '{"includeLast":false}'
-echo '{"includeLast":false}' | SXSEditor --cli plugin call example-sv2.stats --params -
+SXSEditor --cli plugin call example-demo.stats --params '{"includeLast":false}'
+echo '{"includeLast":false}' | SXSEditor --cli plugin call example-demo.stats --params -
 
 # 脚本里只想要 JSON：单行输出，人类提示全部走 stderr
-SXSEditor --cli plugin call example-sv2.stats --json
+SXSEditor --cli plugin call example-demo.stats --json
 ```
 
 默认**连接到已经打开的 SXSEditor**，走的是 MCP 用的同一条 `/automation`，所以看到
@@ -181,6 +181,8 @@ module.exports = {
 
 ## 8. 完整示例
 
-[`plugins/example-sv2/`](../../plugins/example-sv2/) 的 `stats` 命令：返回本进程处理过的
+一个 `stats` 命令（示例 id `example-demo`，仅为教学占位名）：返回本进程处理过的
 文件数，参数 `includeLast` 控制是否带出最后处理的文件名。它同时演示了"方法能跑在
-没有窗口的进程里"和"返回值必须是普通对象"。
+没有窗口的进程里"和"返回值必须是普通对象"。仓库里可运行的自动化示例见
+[`plugins/example-clock/`](../../plugins/example-clock/) 与
+[`plugins/example-secrets/`](../../plugins/example-secrets/)。

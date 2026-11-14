@@ -26,6 +26,13 @@
 > [`plugins.md`](plugins.md)（v1 歌声后端契约）与插件管理器内的权限说明。
 > **写作目的**：把「为什么这么设计」固定下来。后续每个里程碑都要能对着 §5 的可逆性
 > 规则和 §11 的待定项做验收，避免二次大范围返工。
+>
+> **关于示例扩展名**：文中 `.demo` / `example-demo` / `com.example.demo` 以及验收
+> 走查里的 `demo.demo` / `auto.demo` 等文件名，都是**虚构的教学占位名**，用于把
+> 数据面契约讲清楚，仓库里没有对应插件目录，也不占用任何真实扩展名。历史上曾
+> 随包分发过一个自造 `.sv2` 示例插件，但那既不是真实的 Synthesizer V 2 工程
+> （SV1/SV2 都用 `.svp`），也不是用户需要的外部格式支持，已彻底移除；真实 SV2
+> 工程的支持由内置插件 `official-project-import` 在 `.svp` 上按版本号分派读写。
 
 ---
 
@@ -72,7 +79,7 @@
 
 ```json
 {
-  "id": "com.example.sv2", "name": "SV2 Project Support", "version": "1.0.0",
+  "id": "com.example.demo", "name": "Demo Project Support", "version": "1.0.0",
   "apiVersion": 2, "engines": { "app": ">=2.1.0 <3.0.0" },
   "main": "main.js",
   "permissions": {
@@ -82,26 +89,26 @@
     "ui": ["menu", "panel", "toolbar", "statusBar", "contextMenu", "overlay", "settings"]
   },
   "contributes": {
-    "commands":  [{ "id": "open", "title": { "en": "Open SV2…", "zh-CN": "打开 SV2…" } }],
-    "menus":     [{ "path": "plugins/com.example.sv2", "command": "open" }],
-    "panels":    [{ "id": "editor", "title": "SV2", "entry": "panel/index.html",
+    "commands":  [{ "id": "open", "title": { "en": "Open Demo…", "zh-CN": "打开 Demo…" } }],
+    "menus":     [{ "path": "plugins/com.example.demo", "command": "open" }],
+    "panels":    [{ "id": "editor", "title": "Demo", "entry": "panel/index.html",
                     "apiScopes": ["project.read", "project.apply", "files.pick"] }],
-    "fileTypes": [{ "ext": ".sv2", "role": "open", "filters": ["SV2 Project"] }],
-    "toolbar":   [{ "command": "open", "title": "SV2", "icon": "file", "group": "project" }],
+    "fileTypes": [{ "ext": ".demo", "role": "open", "filters": ["Demo Project"] }],
+    "toolbar":   [{ "command": "open", "title": "Demo", "icon": "file", "group": "project" }],
     "statusBar": [{ "id": "state", "text": "@idle", "alignment": "right",
                     "command": "open", "when": "projectOpen" }],
-    "contextMenus": [{ "id": "open-in-sv2", "context": "fragment", "command": "open" }],
+    "contextMenus": [{ "id": "open-in-demo", "context": "fragment", "command": "open" }],
     "timelineOverlays": [{ "id": "grid", "entry": "overlay/index.html",
                            "anchor": "canvas", "height": 96, "when": "hasFragments" }],
     "keybindings": [{ "command": "open", "key": "Mod+Alt+O", "mac": "Cmd+Alt+O" }],
-    "i18n": { "idle": { "en": "SV2 ready", "zh-CN": "SV2 就绪" } },
-    "settings":  [{ "id": "general", "title": "SV2", "fields": [
+    "i18n": { "idle": { "en": "Demo ready", "zh-CN": "Demo 就绪" } },
+    "settings":  [{ "id": "general", "title": "Demo", "fields": [
                      { "key": "charset", "type": "select",
                        "options": [{ "value": "utf8", "label": "UTF-8" },
                                    { "value": "shift_jis", "label": "Shift_JIS" }] }]}],
     "pipeline":  { "hooks": [{ "stage": "postMel", "kind": "model",
                                "model": "models/declick.onnx", "order": 100 }] },
-    "services":  { "provides": [{ "id": "sv2.codec", "version": "1.0.0" }] },
+    "services":  { "provides": [{ "id": "demo.codec", "version": "1.0.0" }] },
     "automation":{ "methods": ["open"] }
   }
 }
@@ -275,7 +282,7 @@ src/shared/pluginPhonemes.js             插件音素 → 可绘制的形态（�
 src/main/atomicWrite.js                  原子写盘（宿主 JSON 与插件字节共用一份）
 src/shared/pluginCurve.js                曲线字段的取值与声明修饰（绘制/求值唯一来源）
 src/shared/pluginRenderIntent.js         工程级渲染意图（extSchema.render → pipeline）
-plugins/example-sv2/                     示例：接管 .sv2（read/write 对称）+ .pcm 导出器
+plugins/example-demo/                     示例：接管 .demo（read/write 对称）+ .pcm 导出器
 ```
 
 **待落地（M3–M5）**
@@ -329,7 +336,7 @@ Plugins
 ├─ Install from File…         → 文件对话框 → .sxsp
 ├─ Reload All
 ├─ ───────
-├─ SV2 Project Support ▸      → 该插件的命令
+├─ Demo Project Support ▸      → 该插件的命令
 ├─ MIDI ORT ▸
 └─ Open Plugins Folder / Developer Log
 ```
@@ -490,25 +497,25 @@ second-instance 路径**：起第二个实例带文件参数，由第一个实�
 
 | 场景 | 结果 |
 |---|---|
-| 插件加载 | `registry.stats()` 里 `fileType: 1`；投影中 `example-sv2.fileTypes = [{ext:'.sv2', role:'open', label:{en,zh-CN}}]` |
-| 对话框过滤器 | `pluginHost.fileFilters('open')` → `[{name:'SV2 Project', extensions:['sv2']}]`；`fileFilters('save')` → `[]`（该插件只声明了 open） |
-| 打开 `demo.sv2`（2 轨 5 音符） | BPM 96、2 个歌手轨道、2 个分片（0–4 拍 / 4–6 拍）、5 个音符；时间轴正常绘制；状态栏变为 `SV2 · demo.sv2` |
-| 导入语义 | `currentProjectFilePath === null`、`isDirty === false` —— 保存会走"另存为"，不会把 sxsproj 的 JSON 写进 `.sv2` |
-| 审计 | `file-open` 一条：`{ext:'.sv2', ok:true, bytes:525, singers:2, fragments:2, warnings:0}` |
-| 坏文件（`format:'other'`） | 提示 `The plugin could not open this file: Not an SV2 project (missing "format": "sv2")`；当前工程**未被改动**（BPM 仍 96，2 个分片） |
-| 停用插件后投递 `.sv2` | `classify()` 不再认这个扩展名，投递根本不会发生（不弹"打开失败"）；`fileFilters('open')` 变回 `[]` |
+| 插件加载 | `registry.stats()` 里 `fileType: 1`；投影中 `example-demo.fileTypes = [{ext:'.demo', role:'open', label:{en,zh-CN}}]` |
+| 对话框过滤器 | `pluginHost.fileFilters('open')` → `[{name:'Demo Project', extensions:['demo']}]`；`fileFilters('save')` → `[]`（该插件只声明了 open） |
+| 打开 `demo.demo`（2 轨 5 音符） | BPM 96、2 个歌手轨道、2 个分片（0–4 拍 / 4–6 拍）、5 个音符；时间轴正常绘制；状态栏变为 `Demo · demo.demo` |
+| 导入语义 | `currentProjectFilePath === null`、`isDirty === false` —— 保存会走"另存为"，不会把 sxsproj 的 JSON 写进 `.demo` |
+| 审计 | `file-open` 一条：`{ext:'.demo', ok:true, bytes:525, singers:2, fragments:2, warnings:0}` |
+| 坏文件（`format:'other'`） | 提示 `The plugin could not open this file: Not a Demo project (missing "format": "demo")`；当前工程**未被改动**（BPM 仍 96，2 个分片） |
+| 停用插件后投递 `.demo` | `classify()` 不再认这个扩展名，投递根本不会发生（不弹"打开失败"）；`fileFilters('open')` 变回 `[]` |
 | 重新启用 | 立刻可再次打开同文件（fileAssociation 快照随 registry 变更重推） |
 | 内置 `.sxsproj` | 走宿主管线，`filePath` 被正常写入（不是导入语义），2 个分片内容一致 |
-| 从 `.sxsp` 安装 | `plugin:pack` 打包 → 卸载 → 物删目录 + 撤 4 项贡献 + 过滤器变 `[]` → `installFromPath` 装回 → 过滤器立刻恢复、`demo.sv2` 再次打开成功 |
+| 从 `.sxsp` 安装 | `plugin:pack` 打包 → 卸载 → 物删目录 + 撤 4 项贡献 + 过滤器变 `[]` → `installFromPath` 装回 → 过滤器立刻恢复、`demo.demo` 再次打开成功 |
 | 单测 | `projectFormatDocument` 15 / `pluginDataPlane` 13 / `dialogFilters` 7 |
 
 这一轮抓到并修掉的问题：
 
 | # | 症状 | 根因 | 修法 |
 |---|---|---|---|
-| 1 | 打开一个"合法 JSON 但不是工程"的文件，当前工程被**静默清空** | 内置管线只判 `typeof obj === 'object'`，随后三个 `if (obj.project/singers/fragments)` 全部跳过，最后还 `markClean()`。插件格式被停用后正好走到这条路上（`{"format":"sv2"}` 是合法 JSON） | 加"三个字段至少有一个"的判定，否则报 `projectNotAProject` |
+| 1 | 打开一个"合法 JSON 但不是工程"的文件，当前工程被**静默清空** | 内置管线只判 `typeof obj === 'object'`，随后三个 `if (obj.project/singers/fragments)` 全部跳过，最后还 `markClean()`。插件格式被停用后正好走到这条路上（`{"format":"demo"}` 是合法 JSON） | 加"三个字段至少有一个"的判定，否则报 `projectNotAProject` |
 | 2 | 提示框里中英混杂：`The plugin could not open this file: 插件解码失败：...` | 宿主那句走 i18n，插件与 `PluginDataPlane` 的细节是写死的中文 | 宿主细节文案走 `tr(zh,en)`；插件侧用 `ctx.plugin.locale` 决定自己的那半句（示例插件演示这一点） |
-| 3 | `.sv2` 从对话框选中后 `file:authorizePath` 直接拒绝 | `AUTHORIZABLE_EXTENSIONS` 是写死的 Set，只含内置素材 | 改成"内置 + registry 快照"，插件卸载后自动失效 |
+| 3 | `.demo` 从对话框选中后 `file:authorizePath` 直接拒绝 | `AUTHORIZABLE_EXTENSIONS` 是写死的 Set，只含内置素材 | 改成"内置 + registry 快照"，插件卸载后自动失效 |
 
 **结论**：数据面的骨架（声明 → 过滤器 → 路由 → 跨进程解码 → 校验 → 装载）成立，
 且三处"边界"都落在该落的地方：扩展名归属只在主进程判、文档校验在跨进程返回值上、
@@ -521,7 +528,7 @@ second-instance 路径**：起第二个实例带文件参数，由第一个实�
 #### 为什么先做 ext，再做 write
 
 回写的难点不是"把音符写出去"，而是**用户原文件里插件不认识的部分怎么办**。
-SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是三种不同目标函数下的投影：
+Synthesizer V / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是三种不同目标函数下的投影：
 
 | 层 | 与外部格式的关系 | 处理 |
 |---|---|---|
@@ -539,7 +546,7 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 | **声明与数据分离**：`document.extSchema`（声明）+ 各层 `ext`（数据） | 数据跟着层走（note 上有音素），声明跟着文档走。混在一起会让 5000 个音符各揣一份 schema |
 | **宿主只认 6 个 `kind`**（phonemes/text/number/enum/toggle/curve） | 宿主不需要理解"这个音素合不合法"，只需要知道"怎么显示、能不能改" |
 | **`editable:false` = 只读呈现** | 音素是引擎方言，宿主无从校验。让它可编辑只会制造无效值 |
-| **保存只看目标扩展名** | 不看"文档来源"：新建工程也能直接导出 .sv2，另存为 .sxsproj 之后就按 JSON 走 |
+| **保存只看目标扩展名** | 不看"文档来源"：新建工程也能直接导出 .demo，另存为 .sxsproj 之后就按 JSON 走 |
 | **warnings 必须往上传** | "3 个通道被量化" / "颤音未写入"不告诉用户，等于静默丢数据 |
 | **写盘复用 `writeFileAtomic`** | 两条保存路径共用一份原子写，避免"一边补了 fsync、另一边没有" |
 | **`ext` 不是塞原文件的地方** | 单条 512KB / 全文档 8MB，超了丢弃并告警。不认识的部分请结构化 |
@@ -551,13 +558,13 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 
 | 场景 | 结果 |
 |---|---|
-| 插件声明 `role: both` | `fileFilters('open')` 与 `fileFilters('save')` 都出现 `SV2 Project` |
-| 打开 `demo2.sv2` | BPM 96 / 2 轨（Lead、Harmony）/ 2 分片（0–4、4–6）/ 5 音符；`filePath` 为真实路径（不再是 null） |
-| 导出到 `rt.sv2` | `meta` 三段（含中文）、两个音符的 `phonemes`、轨道结构全部逐字保留；`warnings: []` |
+| 插件声明 `role: both` | `fileFilters('open')` 与 `fileFilters('save')` 都出现 `Demo Project` |
+| 打开 `demo2.demo` | BPM 96 / 2 轨（Lead、Harmony）/ 2 分片（0–4、4–6）/ 5 音符；`filePath` 为真实路径（不再是 null） |
+| 导出到 `rt.demo` | `meta` 三段（含中文）、两个音符的 `phonemes`、轨道结构全部逐字保留；`warnings: []` |
 | 保存为 `.sxsproj` | `extSchema`、`document.ext`、`note.ext` 都在文件里 |
-| `.sxsproj` 重新加载 → 再导出 `.sv2` | `meta` 与 `phonemes` 仍然完整 —— **ext 与"来源插件"解耦**生效 |
-| 改 BPM 100 → Ctrl+S | 插件回写原文件，`bpm: 100`、`meta` 保留；`demo2.sv2.bak` 是旧版本 |
-| 审计 | 三次 `file-save`：`{ext:'.sv2', ok:true, bytes:1093, warnings:0, singers:2, fragments:2}` |
+| `.sxsproj` 重新加载 → 再导出 `.demo` | `meta` 与 `phonemes` 仍然完整 —— **ext 与"来源插件"解耦**生效 |
+| 改 BPM 100 → Ctrl+S | 插件回写原文件，`bpm: 100`、`meta` 保留；`demo2.demo.bak` 是旧版本 |
+| 审计 | 三次 `file-save`：`{ext:'.demo', ok:true, bytes:1093, warnings:0, singers:2, fragments:2}` |
 | 音素微调 + 颤音 | 导出返回两条 warning（中/英随 locale），文件照常写出 |
 | 单测 | `pluginExt` 16 / `pluginSave` 15 |
 
@@ -565,7 +572,7 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 
 | # | 症状 | 根因 | 修法 |
 |---|---|---|---|
-| 1 | `.sv2 → .sxsproj → .sv2` 之后 `meta` 与音素全丢 | ext 原先挂在 `projectImportSource` 上，而它只在"从插件打开"时设置；`loadFrom` 一份 .sxsproj 时 `fromPlugin=false`，ext 直接没接住 | 拆出独立的 `state.projectExt = { schema, root }`，与来源解耦 |
+| 1 | `.demo → .sxsproj → .demo` 之后 `meta` 与音素全丢 | ext 原先挂在 `projectImportSource` 上，而它只在"从插件打开"时设置；`loadFrom` 一份 .sxsproj 时 `fromPlugin=false`，ext 直接没接住 | 拆出独立的 `state.projectExt = { schema, root }`，与来源解耦 |
 | 2 | `ext` 里超过 10 万字符的值被静默截断（变成合法但损坏的数据） | 工程文档的 `stringLength` 上限套到了 ext 子树上 | `cloneJson` 识别 `ext` 键，该子树不截断，长度交给 ext 的字节上限判定 |
 | 3 | `codec.write` 返回的 `Uint8Array` 到主进程变成 `{__typed, data}` | 运行时统一过 `safe()`，它把 TypedArray 摊成对象 | 加入 `NO_SAFE_METHODS`（与 `pipeline.hook`、`codec.read` 同类） |
 | 4 | `saveProject` 固定写 JSON 字符串，插件格式会被写坏 | 它只认 `currentProjectFilePath` 然后 `saveFile(JSON)` | 抽出 `_writeProjectTo`，按目标扩展名分派；MCP 的 `project.saveTo` 共用同一判定 |
@@ -610,21 +617,21 @@ SV2 / Vocaloid 的信息模型与编辑器不是子集也不是超集，而是�
 
 | 场景 | 结果 |
 |---|---|
-| 打开 `ext-phon.sv2` → 双击分片 → Phoneme 面板 | 上排 4 段宿主音素条（la/ah/sa/ma + 音量包络），下排灰色带：`l` `a` / `en_AA1` `tS` / `s` `a` / 第 4 条留空 |
+| 打开 `ext-phon.demo` → 双击分片 → Phoneme 面板 | 上排 4 段宿主音素条（la/ah/sa/ma + 音量包络），下排灰色带：`l` `a` / `en_AA1` `tS` / `s` `a` / 第 4 条留空 |
 | 边框样式 | `en_AA1` 实心浅灰块（宿主命名空间内），`l`/`a`/`tS`/`s` 虚线框（宿主不认识的方言） |
-| 标题行 | 左侧 `Phoneme`，右侧 `外部音素只读`；带子右端 `外部 · example-sv2` |
+| 标题行 | 左侧 `Phoneme`，右侧 `外部音素只读`；带子右端 `外部 · example-demo` |
 | 点宿主音素条 | 该格出现选中框与包络控制点（原有行为不变） |
 | 点外部音素带 | 选中态清除并重绘 —— 带子不接受任何指针交互 |
 | 悬停外部带 | 光标保持默认（不是 `ew-resize` / `crosshair`） |
 | 内置工程（无 `extSchema`） | 面板高度与 M4 之前完全一致，没有灰带、没有"只读"字样 |
-| 改 BPM / 拖动音符（触发 400ms 自动保存） | `.sv2` 仍是 `"format": "sv2"`，`phonemes` 三处逐字保留 |
+| 改 BPM / 拖动音符（触发 400ms 自动保存） | `.demo` 仍是 `"format": "demo"`，`phonemes` 三处逐字保留 |
 | 单测 | `pluginPhonemes` 19（归一化 / 命名空间 / 反查） |
 
 #### 这一轮抓到并修掉的问题
 
 | # | 症状 | 根因 | 修法 |
 |---|---|---|---|
-| 1 | **自动保存把 `.sv2` 写成一坨 SXSEditor JSON**，下次插件读它报"不是 SV2 工程" | `_commitAutoSave` 绕过 `_writeProjectTo`，直接 `serializeProject` + `saveFile`；M4-2 只覆盖了 Ctrl+S 与 MCP 两条路径 | 自动保存改走同一分派；插件警告在自动保存时静默（存入 `state.projectSaveWarnings`），手动保存照常弹 —— 否则拖一个音符弹一次 |
+| 1 | **自动保存把 `.demo` 写成一坨 SXSEditor JSON**，下次插件读它报"不是 Demo 工程" | `_commitAutoSave` 绕过 `_writeProjectTo`，直接 `serializeProject` + `saveFile`；M4-2 只覆盖了 Ctrl+S 与 MCP 两条路径 | 自动保存改走同一分派；插件警告在自动保存时静默（存入 `state.projectSaveWarnings`），手动保存照常弹 —— 否则拖一个音符弹一次 |
 | 2 | 点面板空白 / 外部带后高亮不消失，看起来"点不掉" | `handlePhonemeMouseDown` 清了状态却没重绘，等下一次性渲染才消失 | 清除选中后若之前有选中则 `render()` |
 
 **结论**：`ext` 从"能存能取"变成"能看见"。用户打开一份别家的工程，能对照看到
@@ -672,14 +679,14 @@ test/pluginSidecar.test.js          9
 
 | 场景 | 结果 |
 |---|---|
-| 打开带 `dynamics` 的 `.sv2`（4 个音符：升降曲线 / 波浪 / 水平 / 无数据） | 前三条音符内部出现灰色虚线，形状与数据一致；第四条没有线 |
-| 打开不带任何曲线的 `.sv2` | 音符内部干净，无任何折线 |
+| 打开带 `dynamics` 的 `.demo`（4 个音符：升降曲线 / 波浪 / 水平 / 无数据） | 前三条音符内部出现灰色虚线，形状与数据一致；第四条没有线 |
+| 打开不带任何曲线的 `.demo` | 音符内部干净，无任何折线 |
 | 导出对话框 | "格式"下拉出现 `WAV (built-in encoder)` 与 `PCM 16-bit (example) · .pcm`，切换后路径扩展名自动从 `.wav` 变成 `.pcm` |
 | `pluginHost.exportAudio()`（绕过合成，直接给采样） | `{ok:true, bytes:19200}` = 4800 帧 × 2 声道 × 2 字节；warnings 带回"裸 PCM 不含格式信息" |
 | PCM 内容 | 前 12 个采样的左右声道一致，峰值 16384（= 0.5 × 32767），正弦未被截断 |
 | 导出器与扩展名不符（`.wav` 用 pcm16） | `INVALID_REQUEST: Exporter pcm16 writes .pcm, target is .wav`，文件未创建 |
 | `pluginHost.setRenderIntent()` / `null` | 均返回 `{ok:true}`（通道通；语义由单测覆盖） |
-| MCP `project.save` 往返 | `.sv2` 重新写出：bpm 96→98 生效，`meta` / `phonemes` / `dynamics` 逐字保留 |
+| MCP `project.save` 往返 | `.demo` 重新写出：bpm 96→98 生效，`meta` / `phonemes` / `dynamics` 逐字保留 |
 
 #### 这一轮抓到并修掉的问题
 
@@ -729,7 +736,7 @@ src/main.js                           注入 provider
 scripts/sxseditor-mcp.js              tools/list 合并插件工具（+ miss 时补拉）
 src/pluginManager/index.js|.css       自动化块：开关 + 方法清单 + 状态
 src/shared/ipcChannels.js|preload|windowCapabilities  plugin-host:set-automation（仅管理器）
-plugins/example-sv2/*                 示例：stats 命令（返回处理计数，参数 includeLast）
+plugins/example-demo/*                 示例：stats 命令（返回处理计数，参数 includeLast）
 test/pluginAutomation.test.js         26（校验 / 命名 / 注册表 / 桥接）
 ```
 
@@ -737,18 +744,18 @@ test/pluginAutomation.test.js         26（校验 / 命名 / 注册表 / 桥接�
 
 | 场景 | 结果 |
 |---|---|
-| `POST /automation {method:"capabilities"}` | `features.pluginMethods: 1`，methods 里出现 `example-sv2.stats` |
-| `GET /schema` | 该条目 `target: "plugin"`、`source: "plugin:example-sv2"`、`long: true`、`params` 为开放 object |
-| 调用 `example-sv2.stats` | `{read:0,written:0,lastFile:"",uptimeMs:6}` —— 6ms 说明它刚刚 fork 出插件进程，是真在 utilityProcess 里跑的 |
+| `POST /automation {method:"capabilities"}` | `features.pluginMethods: 1`，methods 里出现 `example-demo.stats` |
+| `GET /schema` | 该条目 `target: "plugin"`、`source: "plugin:example-demo"`、`long: true`、`params` 为开放 object |
+| 调用 `example-demo.stats` | `{read:0,written:0,lastFile:"",uptimeMs:6}` —— 6ms 说明它刚刚 fork 出插件进程，是真在 utilityProcess 里跑的 |
 | 传 `{includeLast:false}` | `lastFile` 变 `null`：参数原样到达插件，宿主没有按内置 schema 过滤 |
-| second-instance 投递 `auto.sv2` 后再调 | `{read:1,lastFile:"auto.sv2"}`，同时 `project.get` 返回 bpm 96 / Lead —— 插件解码与自动化调用看到的是同一份插件状态 |
+| second-instance 投递 `auto.demo` 后再调 | `{read:1,lastFile:"auto.demo"}`，同时 `project.get` 返回 bpm 96 / Lead —— 插件解码与自动化调用看到的是同一份插件状态 |
 | 未暴露的方法名 | `UNKNOWN_METHOD`，hint 指向 `capabilities` 而不是 `/schema` |
-| 管理器卡片 | "External automation" + 勾选框 + 方法行 `example-sv2.stats` / 绿色 `exposed`；无方法的插件显示"未声明任何自动化方法" |
+| 管理器卡片 | "External automation" + 勾选框 + 方法行 `example-demo.stats` / 绿色 `exposed`；无方法的插件显示"未声明任何自动化方法" |
 | 在管理器里取消勾选 | `/schema` 里条目消失、`capabilities.pluginMethods: 0`、直接调用变 `UNKNOWN_METHOD` |
 | 重新勾选 | 方法立即恢复，调用成功 |
 | 停用整个插件 | 方法同样消失；重新启用后恢复（插件进程重启，计数归零） |
-| stdio 网关 `tools/list` | 69 个工具，含 `sxs_example-sv2_stats`，描述带 `[plugin:example-sv2]` |
-| stdio 网关直接 `tools/call`（不先 list） | 补拉后调用成功，返回 `{read:1,lastFile:"auto.sv2"}` |
+| stdio 网关 `tools/list` | 69 个工具，含 `sxs_example-demo_stats`，描述带 `[plugin:example-demo]` |
+| stdio 网关直接 `tools/call`（不先 list） | 补拉后调用成功，返回 `{read:1,lastFile:"auto.demo"}` |
 | 审计 | `logs/plugins-audit.jsonl` 有 `automation-invoke`（含 ms/ok/code）与两次 `automation` 开关记录；`mcp-audit.log` 有对应 method 行 |
 
 #### 这一轮抓到并修掉的问题
@@ -798,16 +805,16 @@ docs/dev/plugins-automation.md  作者视角的命令行用法
 | 场景 | 结果 |
 |---|---|
 | 无实例 `plugin list` | `4 on disk, no running instance (disk state only)`，每行 `automation:--` / `automation:on` |
-| 无实例 `plugin methods` | 1 条 `example-sv2.stats`，末尾标注 `(temporary local instance …)` |
+| 无实例 `plugin methods` | 1 条 `example-demo.stats`，末尾标注 `(temporary local instance …)` |
 | 无实例 `plugin call --params '{"includeLast":false}' --json` | `{"ok":true,"result":{"read":0,…,"lastFile":null,"uptimeMs":2}}`，exit 0 |
-| 有实例 `plugin list` | `live instance on port 45027 (pid …)`，该行 `live: example-sv2.stats` |
+| 有实例 `plugin list` | `live instance on port 45027 (pid …)`，该行 `live: example-demo.stats` |
 | 连续两次 `call`（live） | `uptimeMs` 6 → 3881 → 11317 连续增长：三次调用落在**同一个**插件进程里，不是每次新 fork |
-| second-instance 投递 `auto.sv2` 后 `call` | `{"read":1,"lastFile":"auto.sv2"}`，同时 GUI 主窗口正常 —— CLI 与启动文件走的是同一份插件状态 |
-| 不存在的方法 | `[ERROR] UNKNOWN_METHOD: Unknown method example-sv2.nope`，exit 1 |
+| second-instance 投递 `auto.demo` 后 `call` | `{"read":1,"lastFile":"auto.demo"}`，同时 GUI 主窗口正常 —— CLI 与启动文件走的是同一份插件状态 |
+| 不存在的方法 | `[ERROR] UNKNOWN_METHOD: Unknown method example-demo.nope`，exit 1 |
 | 方法名缺插件前缀 | 发请求前就拒绝，exit 2（`lastRequest` 为空，单测断言） |
-| `automation example-sv2 off` | `example-sv2: automation off — 已写入；运行中的实例（:45027）需要重载插件或重启后生效。`；审计多一条 `{expose:false, via:"cli"}` |
+| `automation example-demo off` | `example-demo: automation off — 已写入；运行中的实例（:45027）需要重载插件或重启后生效。`；审计多一条 `{expose:false, via:"cli"}` |
 | 关闭后立刻 live 调用 | 仍然成功（`read:1`，`uptimeMs:21693`）—— 证明第 7 条的提示是真的，不是免责声明 |
-| 关闭后 `--local` 调用 | `PERMISSION_DENIED: 用户已在插件管理器里关闭 example-sv2 的自动化调用`，exit 1 —— 磁盘状态确实变了，下次启动就会被挡住 |
+| 关闭后 `--local` 调用 | `PERMISSION_DENIED: 用户已在插件管理器里关闭 example-demo 的自动化调用`，exit 1 —— 磁盘状态确实变了，下次启动就会被挡住 |
 | `automation on` 后 `--local` | 恢复可调；用 `--params -` 从 stdin 传参，`lastFile` 变 `null` |
 
 #### 这一轮抓到并修掉的问题

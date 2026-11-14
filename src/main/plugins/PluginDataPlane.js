@@ -344,7 +344,7 @@ class PluginDataPlane {
    * 读取主文件同目录的伴生文件（相对路径引用格式的素材）。
    *
    * 只在该格式在 manifest 里声明了 `companionExts` 时才扫描；不声明的格式连
-   * readdir 都不会发生 —— 打开一个普通的 .sv2 不该顺手把用户目录翻一遍。
+   * readdir 都不会发生 —— 打开一个普通的 .demo 不该顺手把用户目录翻一遍。
    *
    * 安全约束与保存侧 `_writeSidecarFiles` 对称：只读同目录、只收白名单扩展名、
    * 只认纯文件名、跳过隐藏文件/符号链接/主文件自身、数量与总字节双重上限、
@@ -424,7 +424,9 @@ class PluginDataPlane {
    *
    * @param {string} filePath
    * @param {object} document
-   * @param {{target?: 'save'|'export'}} [options]
+   * @param {{target?: 'save'|'export', svpVersion?: 'keep'|'sv2'|'sv1'}} [options]
+   *   svpVersion 只在「另存为 .svp」时由渲染层给出，原样下传给 codec.write；
+   *   非 .svp 格式不会带，插件侧也不会消费其它格式。
    * @returns {Promise<{ok:true, pluginId:string, ext:string, bytes:number, warnings:string[]}
    *                 | {ok:false, code:string, message:string, warnings?:string[]}>}
    */
@@ -487,6 +489,8 @@ class PluginDataPlane {
           name: path.basename(filePath),
           document: checked.document,
           target: options.target === 'export' ? 'export' : 'save',
+          ...(typeof options.svpVersion === 'string'
+            ? { svpVersion: options.svpVersion } : {}),
         },
         TIMEOUTS.command,
       );

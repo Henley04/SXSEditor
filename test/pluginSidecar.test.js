@@ -36,7 +36,7 @@ describe('PluginDataPlane — 旁挂文件', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sxs-sidecar-'));
-    file = path.join(dir, 'song.sv2');
+    file = path.join(dir, 'song.demo');
     authorizePath(file);
   });
 
@@ -48,11 +48,11 @@ describe('PluginDataPlane — 旁挂文件', () => {
     return new PluginDataPlane({
       registry: {
         list: (type) => (type === 'fileType'
-          ? [{ ext: '.sv2', role: 'both', pluginId: 'p1', filters: [], label: { en: 'SV2' } }]
+          ? [{ ext: '.demo', role: 'both', pluginId: 'p1', filters: [], label: { en: 'Demo' } }]
           : []),
         getPlugin: () => makePlugin(),
       },
-      call: async () => ({ bytes: '{"format":"sv2"}', files }),
+      call: async () => ({ bytes: '{"format":"demo"}', files }),
     });
   }
 
@@ -88,10 +88,10 @@ describe('PluginDataPlane — 旁挂文件', () => {
   });
 
   it('与主文件同名被拒 —— 否则后写的会覆盖先写的', async () => {
-    const plane = planeWith([{ name: 'song.sv2', bytes: 'oops' }]);
+    const plane = planeWith([{ name: 'song.demo', bytes: 'oops' }]);
     const res = await plane.saveDocument(file, DOC);
     expect(res.files).to.equal(0);
-    expect(fs.readFileSync(file, 'utf8')).to.equal('{"format":"sv2"}');
+    expect(fs.readFileSync(file, 'utf8')).to.equal('{"format":"demo"}');
     expect(res.warnings.join()).to.match(/重复|collides/);
   });
 

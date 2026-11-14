@@ -21,8 +21,8 @@ const { validateManifest } = require('../src/shared/pluginManifest.js');
 
 function baseManifest(extra = {}) {
   return {
-    id: 'example-sv2',
-    name: 'Example SV2',
+    id: 'example-demo',
+    name: 'Example Demo',
     version: '1.0.0',
     apiVersion: 2,
     main: 'main.js',

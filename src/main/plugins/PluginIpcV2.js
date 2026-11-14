@@ -17,6 +17,12 @@ const { IPC_CHANNELS } = require('../../shared/ipcChannels');
 const { safeHandle } = require('../ipcSafe');
 const { TIMEOUTS } = require('../../shared/pluginApi.js');
 
+/**
+ * 「另存为 .svp」允许的版本行为取值。svpVersion 是跨进程过来的字符串，
+ * 必须过白名单再下传 —— 插件侧 resolveWriteTarget 还会再归一一次，这里是第一道闸。
+ */
+const SVP_VERSION_VALUES = new Set(['keep', 'sv2', 'sv1']);
+
 function registerPluginHostIpc(service, options = {}) {
   const probe = options.probe;
   const channels = [];
@@ -96,6 +102,10 @@ function registerPluginHostIpc(service, options = {}) {
   safeHandle(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, async (_event, filePath, document, options) => (
     service.saveDocument(String(filePath || ''), document, {
       target: options && options.target === 'export' ? 'export' : 'save',
+      // 只有「另存为 .svp」会带；就地 Ctrl+S / 自动保存 / MCP 导出不带，
+      // 插件默认沿用源版本。非法值在这里就被丢掉，不进入 codec.write。
+      ...(SVP_VERSION_VALUES.has(options && options.svpVersion)
+        ? { svpVersion: options.svpVersion } : {}),
     })
   ));
   track(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT);

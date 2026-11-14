@@ -22,7 +22,7 @@ describe('pluginExt — extSchema 归一化', () => {
   it('保留合法的字段声明与渲染声明', () => {
     const warnings = [];
     const schema = normalizeExtSchema({
-      'com.example.sv2': {
+      'com.example.demo': {
         note: {
           phonemes: { kind: 'phonemes', editable: false, maxLength: 64 },
           tension: { kind: 'number', min: 0, max: 1, step: 0.01, unit: '', digits: 2 },
@@ -34,7 +34,7 @@ describe('pluginExt — extSchema 归一化', () => {
     }, warnings);
 
     expect(warnings).to.deep.equal([]);
-    const entry = schema['com.example.sv2'];
+    const entry = schema['com.example.demo'];
     expect(entry.note.phonemes.kind).to.equal('phonemes');
     expect(entry.note.phonemes.editable).to.equal(false);
     expect(entry.note.tension.max).to.equal(1);

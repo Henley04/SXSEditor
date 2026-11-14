@@ -45,8 +45,8 @@ describe('PluginDataPlane — 打开插件格式', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sxs-dataplane-'));
-    file = path.join(dir, 'song.sv2');
-    fs.writeFileSync(file, JSON.stringify({ format: 'sv2', bpm: 96 }));
+    file = path.join(dir, 'song.demo');
+    fs.writeFileSync(file, JSON.stringify({ format: 'demo', bpm: 96 }));
     authorizePath(file);
   });
 
@@ -54,7 +54,7 @@ describe('PluginDataPlane — 打开插件格式', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const entry = { ext: '.sv2', role: 'open', pluginId: 'p1', filters: [], label: { en: 'SV2' } };
+  const entry = { ext: '.demo', role: 'open', pluginId: 'p1', filters: [], label: { en: 'Demo' } };
 
   function makePlane({ entries = [entry], plugins = { p1: makePlugin('p1') }, call } = {}) {
     const calls = [];
@@ -98,12 +98,12 @@ describe('PluginDataPlane — 打开插件格式', () => {
 
   it('文件不存在 → FILE_NOT_FOUND', async () => {
     const { plane } = makePlane();
-    const r = await plane.openDocument(path.join(dir, 'nope.sv2'));
+    const r = await plane.openDocument(path.join(dir, 'nope.demo'));
     expect(r.code).to.equal(FILE_ERR.NOT_FOUND);
   });
 
   it('超过大小上限 → FILE_TOO_LARGE（用稀疏文件，不真写 64MB）', async () => {
-    const big = path.join(dir, 'big.sv2');
+    const big = path.join(dir, 'big.demo');
     const fd = fs.openSync(big, 'w');
     fs.ftruncateSync(fd, MAX_OPEN_BYTES + 1);
     fs.closeSync(fd);
@@ -115,7 +115,7 @@ describe('PluginDataPlane — 打开插件格式', () => {
 
   it('路径未授权 → PERMISSION_DENIED（路由不构成读盘授权）', async () => {
     const { plane } = makePlane();
-    const other = path.join(os.tmpdir(), `sxs-unauthed-${Date.now()}.sv2`);
+    const other = path.join(os.tmpdir(), `sxs-unauthed-${Date.now()}.demo`);
     fs.writeFileSync(other, '{}');
     try {
       const r = await plane.openDocument(other);
@@ -133,7 +133,7 @@ describe('PluginDataPlane — 打开插件格式', () => {
     expect(r.document.fragments).to.have.lengthOf(1);
     expect(calls).to.have.lengthOf(1);
     expect(calls[0].method).to.equal('codec.read');
-    expect(calls[0].params.ext).to.equal('.sv2');
+    expect(calls[0].params.ext).to.equal('.demo');
     expect(Buffer.from(calls[0].params.bytes).toString('utf8')).to.equal(fs.readFileSync(file, 'utf8'));
   });
 
@@ -170,12 +170,12 @@ describe('PluginDataPlane — 打开插件格式', () => {
 
   it('插件抛错 → 错误码透传，不变成 500', async () => {
     const { plane } = makePlane({
-      call: async () => { throw Object.assign(new Error('不是 SV2'), { code: 'INVALID_REQUEST' }); },
+      call: async () => { throw Object.assign(new Error('不是 Demo'), { code: 'INVALID_REQUEST' }); },
     });
     const r = await plane.openDocument(file);
     expect(r.ok).to.equal(false);
     expect(r.code).to.equal('INVALID_REQUEST');
-    expect(r.message).to.match(/不是 SV2/);
+    expect(r.message).to.match(/不是 Demo/);
   });
 
   it('插件返回非法文档 → INVALID_DOCUMENT', async () => {
@@ -193,14 +193,14 @@ describe('PluginDataPlane — 打开插件格式', () => {
 
   it('同扩展名两个插件：先注册者胜，另一个记进 shadowed', () => {
     const entries = [
-      { ext: '.sv2', role: 'open', pluginId: 'p1', filters: [], label: null },
-      { ext: '.sv2', role: 'open', pluginId: 'p2', filters: [], label: null },
+      { ext: '.demo', role: 'open', pluginId: 'p1', filters: [], label: null },
+      { ext: '.demo', role: 'open', pluginId: 'p2', filters: [], label: null },
     ];
     const { plane } = makePlane({
       entries,
       plugins: { p1: makePlugin('p1'), p2: makePlugin('p2') },
     });
-    expect(plane.resolve('.sv2').pluginId).to.equal('p1');
+    expect(plane.resolve('.demo').pluginId).to.equal('p1');
     const list = plane.listFileTypes();
     expect(list).to.have.lengthOf(1);
     expect(list[0].shadowed.map((s) => s.pluginId)).to.deep.equal(['p2']);
@@ -208,24 +208,24 @@ describe('PluginDataPlane — 打开插件格式', () => {
 
   it('首个插件停用后，第二个接管', async () => {
     const entries = [
-      { ext: '.sv2', role: 'open', pluginId: 'p1', filters: [], label: null },
-      { ext: '.sv2', role: 'open', pluginId: 'p2', filters: [], label: null },
+      { ext: '.demo', role: 'open', pluginId: 'p1', filters: [], label: null },
+      { ext: '.demo', role: 'open', pluginId: 'p2', filters: [], label: null },
     ];
     const { plane } = makePlane({
       entries,
       plugins: { p1: makePlugin('p1', { status: 'disabled' }), p2: makePlugin('p2') },
     });
-    expect(plane.resolve('.sv2').pluginId).to.equal('p2');
+    expect(plane.resolve('.demo').pluginId).to.equal('p2');
   });
 
   it('fileFilters 按角色过滤，并把 label 交给本地化取值', () => {
     const entries = [
-      { ext: '.sv2', role: 'open', pluginId: 'p1', filters: [], label: { en: 'SV2', 'zh-CN': 'SV2 工程' } },
+      { ext: '.demo', role: 'open', pluginId: 'p1', filters: [], label: { en: 'Demo', 'zh-CN': 'Demo 工程' } },
       { ext: '.svo', role: 'save', pluginId: 'p1', filters: [], label: null },
     ];
     const { plane } = makePlane({ entries });
     const open = plane.fileFilters('open', (label) => (label && label['zh-CN']) || '');
-    expect(open).to.deep.equal([{ name: 'SV2 工程', extensions: ['sv2'] }]);
+    expect(open).to.deep.equal([{ name: 'Demo 工程', extensions: ['demo'] }]);
     const save = plane.fileFilters('save', (label, fallback) => (label && label.en) || fallback);
     expect(save).to.deep.equal([{ name: 'SVO (Plugin p1)', extensions: ['svo'] }]);
   });

@@ -112,21 +112,21 @@ describe('fileAssociation — 插件扩展名的注册表 ProgId', () => {
    *   · 能唯一标识"哪个插件的哪个扩展名"（清理时靠它精确删键）；
    *   · 能从 ProgId 反解出扩展名（清理 OpenWithProgids 时需要知道挂在哪个键下）。
    *
-   * 后一条容易被忽略：插件 id 允许点分（com.example.sv2），一旦扩展名不是
-   * 最后一段，反解就会把 `sv2` 当成 id 的一部分。
+   * 后一条容易被忽略：插件 id 允许点分（com.example.demo），一旦扩展名不是
+   * 最后一段，反解就会把 `demo` 当成 id 的一部分。
    */
   it('由 pluginId 与扩展名确定性生成', () => {
-    expect(pluginProgId('example-sv2', '.sv2')).to.equal('SXSEditor.Plugin.example-sv2.sv2');
-    expect(pluginProgId('example-sv2', '.sv2')).to.equal(pluginProgId('example-sv2', '.sv2'));
+    expect(pluginProgId('example-demo', '.demo')).to.equal('SXSEditor.Plugin.example-demo.demo');
+    expect(pluginProgId('example-demo', '.demo')).to.equal(pluginProgId('example-demo', '.demo'));
   });
 
-  it('扩展名大小写/点号归一：.SV2 与 .sv2 是同一个', () => {
-    expect(pluginProgId('p', '.SV2')).to.equal(pluginProgId('p', '.sv2'));
+  it('扩展名大小写/点号归一：.DEMO 与 .demo 是同一个', () => {
+    expect(pluginProgId('p', '.DEMO')).to.equal(pluginProgId('p', '.demo'));
   });
 
   it('点分插件 id 也能反解出扩展名', () => {
-    const progId = pluginProgId('com.example.sv2', '.vsqx');
-    expect(progId).to.equal('SXSEditor.Plugin.com.example.sv2.vsqx');
+    const progId = pluginProgId('com.example.demo', '.vsqx');
+    expect(progId).to.equal('SXSEditor.Plugin.com.example.demo.vsqx');
     expect(extFromPluginProgId(progId)).to.equal('.vsqx');
   });
 
@@ -138,7 +138,7 @@ describe('fileAssociation — 插件扩展名的注册表 ProgId', () => {
 
   it('不是我们的 ProgId 一律返回 null', () => {
     expect(extFromPluginProgId('SXSEditor.Project')).to.equal(null);
-    expect(extFromPluginProgId('SomethingElse.sv2')).to.equal(null);
+    expect(extFromPluginProgId('SomethingElse.demo')).to.equal(null);
     expect(extFromPluginProgId('')).to.equal(null);
     expect(extFromPluginProgId(null)).to.equal(null);
   });

@@ -34,7 +34,7 @@ export function extensionOf(filePath) {
 /**
  * 另存为返回的路径若没有扩展名，补上宿主默认格式。
  *
- * 已有扩展名（包括 `.vpr` / `.svp` / `.vsqx` / `.sv2` 这些用户主动选择的
+ * 已有扩展名（包括 `.vpr` / `.svp` / `.vsqx` 这些用户主动选择的
  * 外部格式）一律原样保留 —— 另存为允许导出到插件格式，不能替用户改写。
  * @param {string} filePath
  * @returns {string}
@@ -66,12 +66,12 @@ export function isExternalFormat(filePath) {
  *
  * `official-project-import` 从 1.2.0 起会把伴奏重建为 VPR 的 `type: 1`
  * 音频轨，并把 WAV 字节写进 `Project/Audio/`；从 1.3.0 起 .svp 用标准
- * instrumental track 的相对路径引用 + 旁挂 WAV 写回。`.sv2` 由示例插件
- * 接管，音频可内嵌也可旁挂。这份清单是宿主与插件之间的能力约定：插件
- * 新增可写回伴奏的格式时，这里必须同步，否则界面会对着一个明明能保留
- * 伴奏的格式弹出「伴奏将丢失」的误导性确认。
+ * instrumental track 的相对路径引用 + 旁挂 WAV 写回（SV1/SV2 双世代通用）。
+ * `.vsqx` 是 VOCALOID3/4 的 XML，没有音频轨概念，伴奏不能写回。这份清单是
+ * 宿主与插件之间的能力约定：插件新增可写回伴奏的格式时，这里必须同步，否则
+ * 界面会对着一个明明能保留伴奏的格式弹出「伴奏将丢失」的误导性确认。
  */
-const ACCOMPANIMENT_WRITEBACK_EXTS = new Set(['vpr', 'svp', 'sv2']);
+const ACCOMPANIMENT_WRITEBACK_EXTS = new Set(['vpr', 'svp']);
 
 /**
  * 保存为该格式时伴奏音频会丢失，需要在写盘前提醒用户。

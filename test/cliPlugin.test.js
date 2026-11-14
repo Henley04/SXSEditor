@@ -177,7 +177,7 @@ describe('cli plugin — 转发给运行中的实例', function () {
           lastRequest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
           if (lastRequest.method === 'demo.stats') {
             res.writeHead(200, { 'content-type': 'application/json' });
-            return res.end(JSON.stringify({ ok: true, result: { read: 3, lastFile: 'a.sv2' } }));
+            return res.end(JSON.stringify({ ok: true, result: { read: 3, lastFile: 'a.demo' } }));
           }
           res.writeHead(404, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ ok: false, error: { code: 'UNKNOWN_METHOD', message: 'Unknown method' } }));

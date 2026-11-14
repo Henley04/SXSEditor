@@ -292,7 +292,7 @@ const PLUGIN_PROGID_PREFIX = 'SXSEditor.Plugin.';
 /**
  * `pluginId` + 扩展名 → ProgId。
  *
- * 插件 id 允许点分（com.example.sv2），所以扩展名放在**最后**一段并用
+ * 插件 id 允许点分（com.example.demo），所以扩展名放在**最后**一段并用
  * 去掉点的形式：反解时取最后一个点之后就是扩展名。
  */
 function pluginProgId(pluginId, ext) {
@@ -358,7 +358,7 @@ async function unregisterPluginProgId(progId) {
  *   · 插件被卸载/停用 → 它从 `pluginFileTypes` 消失，下次同步即被删掉。
  *
  * 只在**打包后的 Windows** 上执行：开发模式跑的是 electron.exe，写进注册表
- * 会把 .sv2 绑到一个随时会消失的调试二进制上 —— 卸载重装后用户的文件就打不开了。
+ * 会把 .demo 绑到一个随时会消失的调试二进制上 —— 卸载重装后用户的文件就打不开了。
  *
  * 默认关闭。注册表项的生命周期比插件长，`pluginFileAssociations` 是让用户
  * 显式选择"我愿意让这个应用接管这些扩展名"，而不是装个插件就悄悄改系统。

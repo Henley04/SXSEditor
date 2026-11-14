@@ -537,6 +537,9 @@ async function handleRequest(msg) {
           name: params.name,
           document: params.document,
           target: params.target,
+          // 「另存为 .svp」的版本行为分派值；其它格式插件不消费。主进程
+          // IPC 已按白名单过滤，插件侧 resolveWriteTarget 还会再归一一次。
+          svpVersion: params.svpVersion,
         });
         break;
       }

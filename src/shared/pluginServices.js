@@ -6,7 +6,7 @@
  *
  * 设计取舍：
  *   · **service id 是全局命名空间，不是插件内局部 id。** 与自动化方法的
- *     `<pluginId>.<commandId>` 相反：服务表达的是"能力"（`sv2.codec`、`audio.vad`），
+ *     `<pluginId>.<commandId>` 相反：服务表达的是"能力"（`demo.codec`、`audio.vad`），
  *     消费方在写代码时就该知道名字，而不是拼别人的插件 id。代价是必须要求
  *     带命名空间前缀（至少一个点），否则一个叫 `codec` 的裸词就被抢注了。
  *   · **版本范围用与 `engines.app` 相同的一套极简 semver。** 不为插件间依赖再引

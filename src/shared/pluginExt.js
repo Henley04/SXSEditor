@@ -25,7 +25,7 @@
  * 它只需要知道"这是一串音素、能不能改、改完写回原处"。
  *
  * 与 manifest 的关系：extSchema 由 codec 在**打开时**返回，不是安装时声明。
- * 同一个插件处理 .sv2 和 .vsqx 时方言不同，schema 只能跟着文件走。
+ * 同一个插件处理 .demo 和 .vsqx 时方言不同，schema 只能跟着文件走。
  */
 
 /** 扩展域的规模上限。按"真实工程远远够用"取值，超出即丢弃并告警。 */
@@ -140,7 +140,7 @@ function byteSize(value) {
 function normalizeId(raw) {
   const id = String(raw || '').trim();
   if (!id || id.length > 64) return null;
-  // 插件 id 允许点分（com.example.sv2），但不允许空白与控制字符 ——
+  // 插件 id 允许点分（com.example.demo），但不允许空白与控制字符 ——
   // 它会成为 UI 上"这份数据来自谁"的标签。
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) return null;
   return id;

@@ -45,7 +45,7 @@ function makePlugin(id, permissions) {
   };
 }
 
-const bothEntry = { ext: '.sv2', role: 'both', pluginId: 'p1', filters: [], label: { en: 'SV2' } };
+const bothEntry = { ext: '.demo', role: 'both', pluginId: 'p1', filters: [], label: { en: 'Demo' } };
 
 describe('PluginDataPlane — 保存到插件格式', () => {
   let dir;
@@ -53,7 +53,7 @@ describe('PluginDataPlane — 保存到插件格式', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sxs-save-'));
-    file = path.join(dir, 'out.sv2');
+    file = path.join(dir, 'out.demo');
     authorizePath(file);
   });
 
@@ -67,7 +67,7 @@ describe('PluginDataPlane — 保存到插件格式', () => {
       registry: makeRegistry(options.entries || [bothEntry], options.plugins || { p1: makePlugin('p1') }),
       call: options.call || (async (pluginId, method, params) => {
         calls.push({ pluginId, method, params });
-        return { bytes: '{"format":"sv2"}' };
+        return { bytes: '{"format":"demo"}' };
       }),
       logger: { warn() {}, info() {} },
       locale: () => 'zh-CN',
@@ -101,7 +101,7 @@ describe('PluginDataPlane — 保存到插件格式', () => {
 
   it('路径未授权 → PERMISSION_DENIED，且不调用插件', async () => {
     const { plane, calls } = makePlane();
-    const stranger = path.join(os.tmpdir(), `nope-${Date.now()}.sv2`);
+    const stranger = path.join(os.tmpdir(), `nope-${Date.now()}.demo`);
     const r = await plane.saveDocument(stranger, DOC);
     expect(r.code).to.equal('PERMISSION_DENIED');
     expect(calls).to.have.length(0);
@@ -118,7 +118,7 @@ describe('PluginDataPlane — 保存到插件格式', () => {
   });
 
   it('Uint8Array 原样写盘，原文件转为 .bak', async () => {
-    const payload = Buffer.from('{"format":"sv2","bpm":96}', 'utf8');
+    const payload = Buffer.from('{"format":"demo","bpm":96}', 'utf8');
     const { plane } = makePlane({ call: async () => ({ bytes: new Uint8Array(payload) }) });
     fs.writeFileSync(file, 'ORIGINAL');
     const r = await plane.saveDocument(file, DOC);
@@ -205,6 +205,22 @@ describe('PluginDataPlane — 保存到插件格式', () => {
     // 与入参不共享引用
     expect(sent).to.not.equal(withExt);
     expect(sent.fragments[0]).to.not.equal(withExt.fragments[0]);
+  });
+
+  it('另存为 .svp 的 svpVersion 会透传给 codec.write，就地保存不带', async () => {
+    const seen = [];
+    const { plane } = makePlane({
+      call: async (_pluginId, method, params) => { seen.push({ method, params }); return { bytes: 'x' }; },
+    });
+    await plane.saveDocument(file, DOC, { target: 'save', svpVersion: 'sv1' });
+    expect(seen[0].method).to.equal('codec.write');
+    expect(seen[0].params.svpVersion).to.equal('sv1');
+
+    // 就地 Ctrl+S / 自动保存 / MCP 导出都不带，插件默认按 keep 沿用源版本。
+    await plane.saveDocument(file, DOC, { target: 'save' });
+    expect(seen[1].params).to.not.have.property('svpVersion');
+    await plane.saveDocument(file, DOC, { target: 'export' });
+    expect(seen[2].params).to.not.have.property('svpVersion');
   });
 
   it('超出写出上限 → TOO_LARGE，不写盘', async () => {

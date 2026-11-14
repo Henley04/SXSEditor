@@ -108,33 +108,33 @@ describe('pluginManifest — contributes.automation', function () {
 // ------------------------------------------------------------- 命名与投影
 describe('pluginAutomation — 命名与投影', function () {
   it('方法名是完整命令 id', function () {
-    expect(buildMethodName('example-sv2', 'stats')).to.equal('example-sv2.stats');
-    expect(isMethodName('example-sv2.stats')).to.equal(true);
+    expect(buildMethodName('example-demo', 'stats')).to.equal('example-demo.stats');
+    expect(isMethodName('example-demo.stats')).to.equal(true);
     expect(isMethodName('stats')).to.equal(false);
     expect(isMethodName('')).to.equal(false);
   });
 
   it('投影出 target=plugin 的公开条目，并标明来源', function () {
     const { name, pluginId, commandId, def } = buildAutomationDef({
-      pluginId: 'example-sv2',
+      pluginId: 'example-demo',
       localId: 'stats',
-      title: { en: 'SV2 decoder statistics', 'zh-CN': '解码统计' },
+      title: { en: 'Demo decoder statistics', 'zh-CN': '解码统计' },
       description: '返回处理过的文件数',
-      pluginName: 'Example: SV2',
+      pluginName: 'Example: Demo',
       pluginVersion: '1.0.0',
     });
-    expect(name).to.equal('example-sv2.stats');
-    expect(pluginId).to.equal('example-sv2');
+    expect(name).to.equal('example-demo.stats');
+    expect(pluginId).to.equal('example-demo');
     expect(commandId).to.equal('stats');
     expect(def.target).to.equal('plugin');
-    expect(def.source).to.equal('plugin:example-sv2');
-    expect(def.summary).to.equal('SV2 decoder statistics');
+    expect(def.source).to.equal('plugin:example-demo');
+    expect(def.summary).to.equal('Demo decoder statistics');
     // 桥接层读 long 决定超时：必须比插件自己的 60s 命令超时更宽，否则两边赛跑
     expect(def.long).to.equal(true);
     // 参数形状由插件定义，宿主只要求"是个对象"
     expect(def.params.type).to.equal('object');
     expect(def.params.additionalProperties).to.equal(true);
-    expect(def.description).to.include('example-sv2');
+    expect(def.description).to.include('example-demo');
   });
 
   it('标题缺少英文时退回中文，而不是留空', function () {

@@ -760,9 +760,9 @@ app.whenReady().then(() => {
         console.error('[models] 初始化失败:', err && err.message);
       }
 
-      // 随包分发的内置插件（VOCALOID / Synthesizer V 工程、.sv2 示例工程）必须在
-      // init() 之前落盘：init 只扫描 userData/plugins，装在它之后的话本次启动扫描
-      // 不到，外部工程格式要等到下一次启动才可用。启动入口按内置清单逐个安装，
+      // 随包分发的内置插件（official-project-import：VOCALOID / Synthesizer V 工程）
+      // 必须在 init() 之前落盘：init 只扫描 userData/plugins，装在它之后的话本次启动
+      // 扫描不到，外部工程格式要等到下一次启动才可用。启动入口按内置清单逐个安装，
       // 单个失败不拖挂其它插件，也不阻断启动，细节由该函数自行记录。
       require('./main/plugins/builtinPlugins.js').installBuiltinOnStartup(app.getVersion());
       const pluginService = getPluginService();
