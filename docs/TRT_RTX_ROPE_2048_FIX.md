@@ -1,6 +1,6 @@
 # TRT-RTX 2048 帧边界数值错误：根因分析与修复
 
-> 日期：2026-09-26 ｜ 影响：`NvTensorRTRTXExecutionProvider`（WinML 插件 EP）动态形状路径
+> 日期：2026-09-26（FP16）｜ 2026-11-12（FP32）｜ 影响：`NvTensorRTRTXExecutionProvider`（WinML 插件 EP）动态形状路径
 > 状态：**已根因修复并部署**（模型级修复，非缓解）
 > 关键文件：`scripts/make_diff_step_rope_table.py`（修复）、`scripts/probe_trt_rope.js`（验证）、
 > `src/inference/shared/constants.js`（`DIFF_STEP_MAX_SEQ_LEN`）
@@ -13,8 +13,11 @@ MatMul（`position × inv_freq`）：序列位置 ≥ 2049 时被舍入到最近
 attention，经 32 步扩散迭代放大为**合成音频尾部能量凹陷/静音**。
 
 修复方式：把 rope 的 cos/sin 表**离线烘焙为权重初始化器**（fp64 数学 + fp32 相位仿真 +
-fp16 存储），运行时仅做 Slice 取行——纯数据搬运，引擎内不再存在任何绝对位置算术，
-bug 从结构上不可达。模型 I/O 契约不变。
+fp16/fp32 存储，与各精度图末端的 Cast 一致），运行时仅做 Slice 取行——纯数据搬运，
+引擎内不再存在任何绝对位置算术，bug 从结构上不可达。模型 I/O 契约不变。
+
+> 同一脚本同时覆盖 FP16 与 FP32 两种 diff_step 导出：FP16 图末端有
+> `Cast(FLOAT→FLOAT16)`，表存 fp16；FP32 图无该 Cast，表存 fp32。
 
 ## 1. 问题现象
 
@@ -102,23 +105,28 @@ inv32   = expand_1 的值（inv_freq = 0.75^i, i=0..31）       # 从 initialize
 phase32 = np.outer(pos, inv32)                              # fp32 外积，复现原 fp32 MatMul 的乘积舍入
 cos32   = np.cos(phase32.astype(np.float64)).astype(fp32)   # fp64 算 cos，避免 CPU libm 差异
 cos64   = np.concatenate([cos32, cos32], axis=1)            # 复现 node_cat_1 的 64 通道布局（32 通道重复两遍）
-table   = cos64.astype(np.float16)                          # 与原图 Cast(FLOAT→FLOAT16) 同一舍入
+table   = cos64.astype(fp16)                                # fp16 图：与原图 Cast(FLOAT→FLOAT16) 同一舍入
+                                                            # fp32 图：直接 astype(fp32)，保留原精度
 ```
 
 ### 5.2 图手术
 
-- **删除** 12 节点链：`node_arange_1, node_unsqueeze_2, node_view, node_unsqueeze_7,
+- **FP16 图删除** 12 节点链：`node_arange_1, node_unsqueeze_2, node_view, node_unsqueeze_7,
   node__to_copy_2, node_matmul, node_transpose, node_cat_1, node_cos_1, node_sin_1,
   node__to_copy_3, node__to_copy_4`
-- **新增** 2 个 initializer：`rope_cos_table` / `rope_sin_table`（[1, 8192, 64] fp16，
-  覆盖位置 0..8191 ≈ 163.8s @ 50fps）
+- **FP32 图删除** 10 节点链（无末尾两个 Cast）：`node_arange_1, node_unsqueeze_2,
+  node_view, node_unsqueeze_7, node__to_copy_1, node_matmul, node_transpose, node_cat_1,
+  node_cos_1, node_sin_1`
+- **新增** 2 个 initializer：`rope_cos_table` / `rope_sin_table`（[1, 8192, 64]；
+  FP16 图存 fp16，FP32 图存 fp32，覆盖位置 0..8191 ≈ 163.8s @ 50fps）
 - **新增** 4 个胶水节点：`Unsqueeze(seq_len)` → `Concat(ends)` → `Slice ×2`
   （`starts=[0,0,0], axes=[0,1,2]`，ends 的 seq 维动态取自 `sym_size_int_5`）
-- **改线**：`node_unsqueeze_9/10` 的输入从 `_to_copy_3/_to_copy_4` 改接 `rope_cos_slice /
-  rope_sin_slice`
-- **清理**：孤儿 value_info（12 个）与孤儿 initializer（`val_26/val_27/expand_1`），
+- **改线**：FP16 图 `node_unsqueeze_9/10` 的输入从 `_to_copy_3/_to_copy_4` 改接
+  `rope_cos_slice / rope_sin_slice`；FP32 图从 `cos_1/sin_1` 改接同两个 Slice 输出
+- **清理**：孤儿 value_info（FP16 12 个 / FP32 10 个）与孤儿 initializer
+  （FP16 `val_26/val_27/expand_1`，FP32 `val_25/val_26/expand_1`），
   否则每次加载都产生 ORT `CleanUnused` 警告
-- **不变量**：I/O 契约不变（`xt_input/t/cond/xt_mask → flow_pred`，全 fp16），
+- **不变量**：I/O 契约与张量精度不变（FP16 图全 fp16，FP32 图全 fp32），
   qdrift `wrapDiffSession` 等下游零改动
 
 ### 5.3 安全性论证
@@ -147,25 +155,44 @@ table   = cos64.astype(np.float16)                          # 与原图 Cast(FLO
   （8192 × 64 × 2B × 2）；
 - DML/CPU 与修复前输出一致（rope 表在 DML/CPU 上同样正确）。
 
+FP32 模型补充验证（与原图逐位对照）：
+
+| 检查 | 结果 |
+|------|------|
+| 烘焙表 vs 原图运行时 rope 链（位置 0..8191） | cos 最大偏差 5.96e-8，sin 1.19e-7 |
+| 修复版 vs 备份整模型（seq=2100, CPU） | cos = 1.000000075，minFrameCos = 0.999999830，maxAbsDiff = 1.216e-5 |
+| 修复版 vs 备份整模型（seq=2100, DML） | cos = 1.000000107，maxAbsDiff = 2.164e-4 |
+| 图结构 | 1314 → 1308 节点；删除 10 节点，新增 4 胶水节点 + 2 张 fp32 表（+4.19MB） |
+
 ## 7. 部署与代码变更
 
 | 项 | 变更 |
 |----|------|
-| 模型 | 修复版改名部署为 `onnx_models/fp16/diff_step_dml.onnx`；原版备份为 `diff_step_dml.onnx.bak` |
+| 模型（FP16） | 修复版改名部署为 `onnx_models/fp16/diff_step_dml.onnx`；原版备份为 `diff_step_dml.onnx.bak` |
+| 模型（FP32） | 修复版部署为 `onnx_models/diff_step_dml.onnx`；原版备份为 `diff_step_dml.onnx.bak`（外部权重 `diff_step_dml.onnx.data` 不变） |
+| 修复脚本 | `scripts/make_diff_step_rope_table.py` 自动识别 FP16/FP32 图尾并选择表 dtype |
 | `shared/constants.js` | `TRT_RTX_MAX_DYNAMIC_SEQ_LEN(2047)` → `DIFF_STEP_MAX_SEQ_LEN(8192)`（rope 表容量，对所有 EP 生效） |
 | `pipeline/index.js` | `_clampTrtRtxDynamicFrames` + `_isTrtRtxDynamicDiffStep` → `_clampDiffStepMaxFrames`（通用容量兜底，无 TRT 门控；`SXS_DIAG_NO_TRTCLAMP` 保留） |
 | `pipeline/constants.js` | 导入/导出同步重命名 |
-| `winml/trtDiagnostic.js` | diffStep 探测序列 `[32,512,1950]` → `[32,512,1950,2100]`：2100 跨过旧 bug 边界，将来模型若退化为未修复版本，诊断报告的 trtVsDml cosine 会塌缩报警 |
+| `winml/trtDiagnostic.js` | diffStep 探测序列 `[32,512,1950]` → `[32,512,1950,2100]`：2100 跨过旧 bug 边界，将来模型若退化为未修复版本，诊断报告的 trtVsDml cosine 会塌缩报警；FP32 精度下 feeds 改用 float32 张量（原固定 float16，FP32 模型会输入类型不匹配） |
 | qdrift | 无需改动（I/O 契约不变） |
+
+> 备注：`onnx_models/JP/diff_step_dml.onnx`（FP32）是静态 100 帧导出，图中不含动态
+> rope 位置链（无 Range / 位置 MatMul），因此不涉及本修复；其 I/O 精度与形状均未改动。
 
 ## 8. 维护注意事项
 
 ⚠️ **重导出模型会退化回未修复版**。`tools/export_fp16_onnx_dynamo.py` 等导出脚本产出
-的 diff_step 不含 rope 烘焙。重导出后必须重跑：
+的 diff_step 不含 rope 烘焙。重导出后必须重跑（脚本自动识别 FP16/FP32）：
 
 ```bash
+# FP16
 C:\Users\15240\AppData\Local\Python\bin\python.exe scripts/make_diff_step_rope_table.py \
   --input onnx_models/fp16/diff_step_dml.onnx --output onnx_models/fp16/diff_step_fixed.onnx
+
+# FP32
+C:\Users\15240\AppData\Local\Python\bin\python.exe scripts/make_diff_step_rope_table.py \
+  --input onnx_models/diff_step_dml.onnx --output onnx_models/diff_step_fixed.onnx
 ```
 
 再验证 + 部署。快速回归检查：trtDiagnostic（seq=2100 的 trtVsDml cosine 应 ≈1）

@@ -2027,7 +2027,8 @@ class OnnxSVSPipeline {
     /**
      * 检查 vocoder ONNX 文件的 W16A32 标记及其 external data 引用。
      *
-     * 背景：W16A32 vocoder（权重 FP16 / 激活 FP32，Olive 优化产物）体积约 495 MB，
+     * 背景：W16A32 vocoder（权重 FP16 / 激活 FP32；由 export_vocoder_w16a32_pt.py
+     * 或 export_fp16_onnx_dynamo.py 的 phase 2 生成）体积约 495 MB，
      * 与"真 FP16 输入"模型按体积无法区分，但其 graph input `mel` 声明为 float32。
      * 该模型的 external data 文件名固定为 vocoder_w16a32.onnx.data（导出工具命名）；
      * 即使 graph 文件被改名为 vocoder_dml.onnx，proto 内部 initializer 的

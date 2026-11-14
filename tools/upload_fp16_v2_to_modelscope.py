@@ -1,16 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Upload FP16 v2 models to ModelScope release branch, tag v2 (via git push).
+"""Upload FP16 models to ModelScope release branch and create a release tag.
 
-v2 content:
+Default tag is v2 (already published). Set FP16_RELEASE_TAG (e.g. v3) to
+publish the pure W16A32 vocoder under a new tag.
+
+Current content:
 1. diff_step_dml.onnx — RoPE cos/sin tables baked into weights
    ([1,8192,64] fp16 x2 + Slice), removing the runtime fp32 position
    MatMul that TRT-RTX (NvTensorRtRtx / WinML) Myelin executes on an
    11-bit mantissa grid, which corrupted phases for frames >= 2049
    (tail energy dip). Repo: scripts/make_diff_step_rope_table.py.
-2. vocoder_dml.onnx — W16A32 (FP16 weights + FP32 activations) re-export
-   with hardware-agnostic Olive optimization, re-embedded into a single
-   self-contained file (staged at .workbuddy/tmp_ms_v2/) so the app's
-   download manifest (vocoder_dml.onnx only) stays compatible.
+2. vocoder_dml.onnx — true W16A32 (only Conv/MatMul weights are FP16;
+   every activation stays FP32). Source is the pure artifact from
+   w16a32_output/onnx/vocoder_w16a32.onnx (94 FP16 weights + 94
+   Cast(FP16->FP32)), NOT Olive's OnnxFloatToFloat16 block-list output.
+   It is re-embedded into a single self-contained file (staged at
+   .workbuddy/tmp_ms_v2/) so the app's download manifest
+   (vocoder_dml.onnx only) stays compatible.
 
 Strategy (differs from v1 upload):
 1. upload_file both files to the 'release' branch
@@ -35,20 +41,48 @@ logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FP16_DIR = os.path.join(SCRIPT_DIR, 'onnx_models', 'fp16')
+PURE_W16A32_DIR = os.path.join(SCRIPT_DIR, 'w16a32_output', 'onnx')
 STAGE_DIR = os.path.join(SCRIPT_DIR, '.workbuddy', 'tmp_ms_v2')
 TOKEN_FILE = os.path.join(SCRIPT_DIR, '.workbuddy', 'ms_token.txt')
 
 MODEL_ID = 'syxppp/SoulX-Singer-onnx-directml-fp16'
 GIT_URL = f'https://www.modelscope.cn/{MODEL_ID}.git'
 BRANCH = 'release'
-TAG_NAME = 'v2'
+# v2 is already published with the older Olive W16A32 vocoder. To publish the
+# pure W16A32 replacement under a new tag, set FP16_RELEASE_TAG (e.g. v3).
+TAG_NAME = os.environ.get('FP16_RELEASE_TAG', 'v2')
 
 FILES_TO_UPLOAD = [
     (os.path.join(FP16_DIR, 'diff_step_dml.onnx'), 'diff_step_dml.onnx',
-     'FP16 v2: bake RoPE cos/sin tables into diff_step weights (fixes TRT-RTX tail energy dip for frames >= 2049)'),
+     'FP16: bake RoPE cos/sin tables into diff_step weights (fixes TRT-RTX tail energy dip for frames >= 2049)'),
     (os.path.join(STAGE_DIR, 'vocoder_dml.onnx'), 'vocoder_dml.onnx',
-     'FP16 v2: vocoder re-exported as W16A32 (FP16 weights + FP32 activations) with Olive optimization, single-file'),
+     'FP16: vocoder re-exported as true W16A32 (94 FP16 weights + 94 Cast(FP16->FP32); all activations FP32), single-file'),
 ]
+
+
+def stage_vocoder_w16a32():
+    """Re-embed the pure W16A32 artifact into the single-file upload staging path.
+
+    Always regenerates the staged file so an old Olive W16A32 build can never be
+    uploaded by accident. The source keeps its FP16 weights and FP32 ISTFT basis;
+    embedding only moves external data inline.
+    """
+    src = os.path.join(PURE_W16A32_DIR, 'vocoder_w16a32.onnx')
+    dst = os.path.join(STAGE_DIR, 'vocoder_dml.onnx')
+    if not os.path.exists(src):
+        logger.error("Pure W16A32 source not found: %s", src)
+        logger.error("Run tools/export_vocoder_w16a32_pt.py first.")
+        sys.exit(1)
+    if not os.path.exists(src + '.data'):
+        logger.error("Pure W16A32 external data not found: %s.data", src)
+        sys.exit(1)
+    os.makedirs(STAGE_DIR, exist_ok=True)
+    logger.info("Staging pure W16A32 vocoder: %s -> %s (single-file)", src, dst)
+    subprocess.run(
+        [sys.executable, os.path.join(SCRIPT_DIR, 'tools', 'embed_external_data.py'),
+         '--input', src, '--output', dst],
+        check=True,
+    )
 
 
 def resolve_token():
@@ -126,13 +160,7 @@ def main():
     SECRETS.append(git_token)
     logger.info("Login successful")
 
-    # Pre-flight: files exist, tag absent, branch present
-    for local_path, remote_path, _msg in FILES_TO_UPLOAD:
-        if not os.path.exists(local_path):
-            logger.error(f"File not found: {local_path}")
-            sys.exit(1)
-        logger.info(f"  {remote_path}: {os.path.getsize(local_path)/1024/1024:.1f} MB")
-
+    # Pre-flight: tag absent, branch present
     branches, tags = api.get_model_branches_and_tags(MODEL_ID)
     logger.info(f"Current branches: {branches}")
     logger.info(f"Current tags: {tags}")
@@ -146,6 +174,16 @@ def main():
     tag_only = '--tag-only' in sys.argv
     if tag_only:
         logger.info("--tag-only: skipping upload (files already on release branch)")
+    else:
+        # Regenerate the staged single-file vocoder from the pure W16A32 artifact.
+        stage_vocoder_w16a32()
+
+        # Files exist after staging
+        for local_path, remote_path, _msg in FILES_TO_UPLOAD:
+            if not os.path.exists(local_path):
+                logger.error(f"File not found: {local_path}")
+                sys.exit(1)
+            logger.info(f"  {remote_path}: {os.path.getsize(local_path)/1024/1024:.1f} MB")
 
     # Step 1: upload files to release branch
     if not tag_only:
