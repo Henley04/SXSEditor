@@ -103,6 +103,9 @@ def main() -> int:
                     help='glob 模式，可重复')
     ap.add_argument('--branch', default='master')
     ap.add_argument('--retag', default=None, help='删除后把这个 tag 重指到新 HEAD')
+    ap.add_argument('--allow-remove-onnx', action='store_true',
+                    help='允许删除 .onnx 主体文件（默认禁止）。仅用于删除已被同族 *_dml.onnx '
+                         '取代的旧变体，删前请确认替代文件仍在仓库里。')
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
 
@@ -168,9 +171,21 @@ def main() -> int:
         before_onnx = {p for p in files if p.endswith('.onnx')}
         after_onnx = {p for p in kept if p.endswith('.onnx')}
         if before_onnx - after_onnx:
-            logger.error('sanity check FAILED: .onnx files would disappear: %s',
-                         sorted(before_onnx - after_onnx))
-            return 1
+            if not args.allow_remove_onnx:
+                logger.error('sanity check FAILED: .onnx files would disappear: %s '
+                             '(pass --allow-remove-onnx if this is intentional and the '
+                             'replacement *_dml.onnx is still present)',
+                             sorted(before_onnx - after_onnx))
+                return 1
+            # 显式放行时仍要求：每个被删的 .onnx 必须有同族 *_dml.onnx 仍在树里
+            for gone in sorted(before_onnx - after_onnx):
+                base = gone[:-len('.onnx')]
+                sibling = f'{base}_dml.onnx'
+                if sibling not in after_onnx:
+                    logger.error('refusing to remove %s: replacement %s is not in the new tree',
+                                 gone, sibling)
+                    return 1
+                logger.warn('removing %s (replacement %s present)', gone, sibling)
         logger.info('new tree %s (files: %d -> %d)', tree, len(files), len(kept))
 
         msg = f'remove stale files: {", ".join(targets)}'
