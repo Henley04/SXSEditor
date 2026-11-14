@@ -1,0 +1,21 @@
+{
+  "steps": 32,
+  "cfg": 3.0,
+  "rescale": 0.75,
+  "target_len": 200,
+  "prompt_len": 30,
+  "mel": {
+    "snr_db": 44.2126097677354,
+    "max_abs_err": 0.04293537139892578,
+    "ref_std": 0.8432379961013794
+  },
+  "audio": {
+    "snr_db_full_fp16": 10.413212882286357,
+    "snr_db_vocoder_only": 41.51488451213372,
+    "snr_db_diffstep_only": 10.488335963669464,
+    "rms_ref": 0.10599575058005906,
+    "peak_ref": 1.1888052225112915,
+    "snr_db_seed_control": -1.9110969925895962,
+    "mel_snr_db_seed_control": -2.0152952574995178
+  }
+}

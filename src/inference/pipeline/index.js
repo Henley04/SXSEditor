@@ -94,6 +94,30 @@ function _hasNonFinite(arr) {
     return false;
 }
 
+/**
+ * mel_transform 会话是否仍是 float16 输入（历史下载的 fp16 图）。
+ *
+ * DML 的 fp16 STFT kernel 会退化成常量输出（实测 SQNR -9.4 dB、输出标准差 0），
+ * 而 CPU EP 计算 fp16 图是正确的（66 dB）。这类老文件必须显式换到 CPU，
+ * 否则参考音频的 mel 会变成常数、条件完全失效且不会报错。
+ * @param {Object} session
+ * @returns {boolean}
+ */
+function _melSessionIsFP16Input(session) {
+    try {
+        const meta = session && session.inputMetadata;
+        if (Array.isArray(meta) && meta.length > 0) {
+            return String(meta[0].type || '').includes('float16');
+        }
+        const names = (session && session.inputNames) || [];
+        if (meta && names.length > 0) {
+            const entry = meta[names[0]];
+            return String((entry && entry.type) || '').includes('float16');
+        }
+    } catch (_) { /* metadata 不可用 → 当作 fp32 */ }
+    return false;
+}
+
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
         this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
@@ -1950,11 +1974,11 @@ class OnnxSVSPipeline {
 
         const loadOne = async (i) => {
             const modelFile = resolvedModelFiles[i];
-            // 注意：曾试过在 FP16 下把 mel_transform 换成根目录的 FP32 图（对应上游
-            // model.mel.float()）。实测 mel 变换的误差几乎全部集中在近静音帧的对数
-            // 下限附近（整体 SNR 38–50 dB，能量最高的四分位约 70 dB），对 prompt
-            // 条件的实际影响远小于 vocoder 自身的 ~32 dB；收益不足以支撑一条与其他
-            // 阶段不同的加载分支，故暂不启用，保持与其余阶段一致的精度选择。
+            // mel_transform：自 2026-11 起 fp16 子目录里放的就是 FP32 图（见
+            // onnx_models/fp16/README.md）。历史上曾评估过"加载时改用根目录 FP32"，
+            // 因 FP16 图的误差集中在近静音帧而搁置；后来发现 DML 的 FP16 STFT
+            // kernel 会直接退化成常量输出（SQNR -9.4 dB），才改为替换文件本身 +
+            // 下面的 legacy 检测（老下载的 fp16 图改用 CPU EP）。
             const modelPath = this._getModelPath(modelFile);
             const modelIsFP16 = this.isFP16;
             // SiFiGAN 双输入 dummy（sessionKey 仍为 'vocoder'，通过 overrideDummyInputs 传入 mel+f0）
@@ -1962,8 +1986,20 @@ class OnnxSVSPipeline {
             const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;
             try {
                 const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, modelIsFP16, this.useStaticShapes, sifiganDummy);
-                this.sessions[sessionKeys[i]] = session;
-                this.sessionEPs[sessionKeys[i]] = ep;
+                // 老版本下载的 fp16/mel_transform.onnx 在 DML 上没有可用 kernel：
+                // STFT 会返回常量，且不抛错。检测到 fp16 输入就改用 CPU EP（数值正确）。
+                // 新版本该文件已是 FP32 图，不会进这个分支。
+                let readySession = session;
+                let readyEp = ep;
+                if (sessionKeys[i] === 'melTransform' && _melSessionIsFP16Input(session)) {
+                    console.warn('[OnnxSVSPipeline] mel_transform is float16 (legacy file): DML STFT yields constant output, reloading on CPU EP');
+                    try { if (typeof session.release === 'function') await session.release(); } catch (_) { /* ignore */ }
+                    const cpu = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, false, false, null, false, { cpuOnly: true });
+                    readySession = cpu.session;
+                    readyEp = cpu.ep;
+                }
+                this.sessions[sessionKeys[i]] = readySession;
+                this.sessionEPs[sessionKeys[i]] = readyEp;
             } catch (loadErr) {
                 // SiFiGAN 加载失败 → 回退默认 vocoder（vocoder_dml.onnx → vocoder.onnx）
                 if (isSifigan) {
@@ -2030,9 +2066,10 @@ class OnnxSVSPipeline {
      * 背景：W16A32 vocoder（权重 FP16 / 激活 FP32；由 export_vocoder_w16a32_pt.py
      * 或 export_fp16_onnx_dynamo.py 的 phase 2 生成）体积约 495 MB，
      * 与"真 FP16 输入"模型按体积无法区分，但其 graph input `mel` 声明为 float32。
-     * 该模型的 external data 文件名固定为 vocoder_w16a32.onnx.data（导出工具命名）；
-     * 即使 graph 文件被改名为 vocoder_dml.onnx，proto 内部 initializer 的
-     * external_data.location 字符串仍保留 `w16a32` 标记，可直接从 graph 字节中识别。
+     * 判定依据是 graph 字节里是否出现 `w16a32` 标记：W16A32 图在 model metadata 中写了
+     * `quantization = W16A32 (FP16 weights, FP32 activations)`。部署到 fp16 目录后
+     * graph / external data 都叫 `vocoder_dml.onnx(.data)`，标记仍在 proto 字节里，
+     * 因此不依赖 external data 的文件名。
      *
      * @param {string} modelPath vocoder .onnx 模型路径
      * @returns {{w16a32:boolean, dataFiles:string[]}} dataFiles 为 proto 中引用的

@@ -102,6 +102,10 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'cond_emb.onnx.data', required: true },
   { filePath: 'diff_step_dml.onnx', required: true },
   { filePath: 'vocoder_dml.onnx', required: true },
+  // fp16 的 vocoder 是 W16A32：graph 与权重分离，下载器按 <file>.onnx.data 找伴生文件。
+  // 其它精度（fp32 自包含、v3 及更早的 fp16）远端没有该文件时，会由
+  // filterMissingByRemote 的阶段 1 自动过滤掉。
+  { filePath: 'vocoder_dml.onnx.data', required: true },
   { filePath: 'sifigan_vocoder_dml_fp16.onnx', required: false, size: 0.3 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_vocoder_dml_fp16.onnx.data', required: false, size: 22.7 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_vocoder_dml.onnx', required: false, size: 340 * 1024, group: 'sifigan-vocoder' },

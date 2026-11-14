@@ -1087,9 +1087,10 @@ function _melTransformInputRank(session, inputName) {
 /**
  * 读取某个会话输入声明的浮点类型（'float16' | 'float32'）。
  *
- * 为什么不能直接用全局 isFP16：FP16 精度下 mel_transform 会被强制换成根目录的
- * FP32 版本（对齐官方 `model.half(); model.mel.float()`，见 pipeline/index.js
- * _loadModelsPartitioned），此时全局 isFP16=true 但该会话要的是 float32。
+ * 为什么不能直接用全局 isFP16：FP16 精度下 mel_transform 本身就是 FP32 图
+ * （fp16 子目录里放的是根目录同一份文件，对齐官方 `model.half(); model.mel.float()`），
+ * 此时全局 isFP16=true 但该会话要的是 float32；老版本下载的 fp16 图则是 float16，
+ * 由 pipeline/index.js 的 legacy 检测换到 CPU EP。
  * 以会话自己的 inputMetadata 为准，两种情况都不会构造错张量。
  *
  * @param {Object} session
