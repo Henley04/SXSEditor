@@ -3,6 +3,7 @@ const path = require('node:path');
 const { lazyOrt: ort } = require('./ortRuntime.js');
 const { resampleAudio } = require('../utils/resampleAudio');
 const { buildSessionOptions } = require('./shared/ortOptions');
+const { isCpuOnlyBackend } = require('./shared/epPolicy');
 const {
     TARGET_SAMPLE_RATE,
     TARGET_HOP_SIZE,
@@ -72,16 +73,24 @@ class RmvpePitchDetector {
       });
       
       try {
-        const dmlEp = typeof this.deviceId === 'number'
-          ? { name: 'dml', deviceId: this.deviceId }
-          : 'dml';
-        const dmlOptions = buildSessionOptions({
-          executionProviders: [dmlEp],
-        });
-        this.session = await ort.InferenceSession.create(modelPath, dmlOptions);
-        this.usingDML = true;
-        const deviceTag = typeof this.deviceId === 'number' ? ` [DML deviceId=${this.deviceId}]` : ' [DML]';
-        console.log(`[RmvpePitchDetector] model loaded successfully${deviceTag}`);
+        // 全局强制 CPU 后端：直接建 CPU session，不尝试 DML，
+        // 避免「设置里选了全部 CPU，音高检测却仍占用 GPU」。
+        if (isCpuOnlyBackend()) {
+          this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
+          this.usingDML = false;
+          console.log('[RmvpePitchDetector] model loaded successfully [CPU / forced by backend]');
+        } else {
+          const dmlEp = typeof this.deviceId === 'number'
+            ? { name: 'dml', deviceId: this.deviceId }
+            : 'dml';
+          const dmlOptions = buildSessionOptions({
+            executionProviders: [dmlEp],
+          });
+          this.session = await ort.InferenceSession.create(modelPath, dmlOptions);
+          this.usingDML = true;
+          const deviceTag = typeof this.deviceId === 'number' ? ` [DML deviceId=${this.deviceId}]` : ' [DML]';
+          console.log(`[RmvpePitchDetector] model loaded successfully${deviceTag}`);
+        }
       } catch (dmlErr) {
         console.log('[RmvpePitchDetector] DirectML unavailable, falling back to CPU:', dmlErr.message);
         this.session = await ort.InferenceSession.create(modelPath, sessionOptions);

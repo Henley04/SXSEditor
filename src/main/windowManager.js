@@ -145,6 +145,25 @@ function buildAppMenu() {
           },
         },
         {
+          // 原来收在横向工具栏 ⋯ 里的两个低频动作，改为原生菜单常驻，
+          // 与「导出项目为 MIDI...」对仗。真正实现仍在渲染层（依赖弹窗、
+          // trackManager 与 electronAPI），主进程只发一个「请执行」信号。
+          label: t('menu.importMidi'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_IMPORT_MIDI_REQUEST);
+            }
+          },
+        },
+        {
+          label: t('menu.audioToMidi'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_AUDIO_TO_MIDI_REQUEST);
+            }
+          },
+        },
+        {
           label: t('menu.editSinger'),
           click: () => {
             // 延迟 require：singerIpc 依赖本模块（getMainWindow / openAudioPreprocess），

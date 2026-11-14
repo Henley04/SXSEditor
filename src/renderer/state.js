@@ -92,8 +92,7 @@ export const dom = {
   btnLoad: document.getElementById('btn-load'),
   btnExport: document.getElementById('btn-export'),
   btnExportLrc: document.getElementById('btn-export-lrc'),
-  btnAudioToMidi: document.getElementById('btn-audio-to-midi'),
-  btnImportMidi: document.getElementById('btn-import-midi'),
+  // 「导入 MIDI」「音频转 MIDI」已上移到原生「文件」菜单，主窗口不再持有按钮DOM。
   btnAddSinger: document.getElementById('btn-add-singer'),
   btnImportAccompaniment: document.getElementById('btn-import-accompaniment'),
   btnOpenSingerMarket: document.getElementById('btn-open-singer-market'),

@@ -359,11 +359,9 @@ dom.btnOpenSingerMarket.addEventListener('click', () => {
   }
 });
 
-// Audio to MIDI
-dom.btnAudioToMidi.addEventListener('click', handleAudioToMidi);
-
-// Import MIDI file (multi-track → one singer per track)
-dom.btnImportMidi.addEventListener('click', handleImportMidi);
+// 「导入 MIDI」「音频转 MIDI」由 Electron 原生「文件」菜单发信号触发，
+// 注册见下方 onMainMenuImportMidiRequest / onMainMenuAudioToMidiRequest，
+// 不再有横向工具栏按钮的点击绑定。
 
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {
@@ -807,6 +805,16 @@ if (window.electronAPI?.onMainMenuSaveAsRequest) {
 if (window.electronAPI?.onMainMenuExportMidiRequest) {
   const off3 = window.electronAPI.onMainMenuExportMidiRequest(() => { void exportProjectMidi(); });
   if (state._ipcCleanups) state._ipcCleanups.push(off3);
+}
+// 文件菜单 → 导入 MIDI / 音频转 MIDI。原先这两个低频动作收在横向工具栏的
+// ⋯ 弹出层里，现改为原生菜单常驻；处理函数与旧按钮完全相同，只是入口变了。
+if (window.electronAPI?.onMainMenuImportMidiRequest) {
+  const offImportMidi = window.electronAPI.onMainMenuImportMidiRequest(() => { void handleImportMidi(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offImportMidi);
+}
+if (window.electronAPI?.onMainMenuAudioToMidiRequest) {
+  const offAudioToMidi = window.electronAPI.onMainMenuAudioToMidiRequest(() => { void handleAudioToMidi(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offAudioToMidi);
 }
 // 帮助菜单 → MCP 连接：主进程只发一个「请打开」事件，路径探测与 prompt 生成
 // 都在渲染层完成，避免在菜单点击的同步回调里做文件 IO。

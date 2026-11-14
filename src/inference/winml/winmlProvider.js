@@ -96,17 +96,17 @@ function _getSettings() {
 }
 
 /** Gate for the WinML branch. On by default with backend auto/winml; closed
- * (returns false) when the user opts into DML (nativeInferenceBackend==='dml')
- * or the platform is unsupported.
+ * (returns false) when the user opts into DML (nativeInferenceBackend==='dml'),
+ * the global CPU backend ('cpu'), or the platform is unsupported.
  *
  * 同时校验 nativeInferenceBackend：界面保存时 winmlEnabled 由后端派生，但
- * 旧配置、CLI 注入或诊断快照可能只带其中一个字段。两者任一指向 DML 都应
+ * 旧配置、CLI 注入或诊断快照可能只带其中一个字段。两者任一指向 DML/CPU 都应
  * 关闭 WinML 分支，避免"设置显示已切回 WinML、实际仍走 DML"的不一致。
  */
 function isWinmlEnabled() {
     if (!winmlCatalog.isPlatformSupported()) return false;
     const s = _getSettings();
-    if (s.nativeInferenceBackend === 'dml') return false;
+    if (s.nativeInferenceBackend === 'dml' || s.nativeInferenceBackend === 'cpu') return false;
     if (s.inferenceProvider && s.inferenceProvider !== 'ortnode') return false;
     return s.winmlEnabled === true;
 }

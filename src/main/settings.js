@@ -301,7 +301,9 @@ function loadSettings() {
   if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
     _settingsCache.inferenceProvider = 'ortnode';
   }
-  if (!['auto', 'winml', 'dml'].includes(_settingsCache.nativeInferenceBackend)) {
+  // 'cpu' 是用户显式选择的全局强制 CPU 后端：所有模型都不再尝试 WinML/DML。
+  // 必须进白名单，否则下次 loadSettings() 会把它静默重置成 'auto'，设置无法持久化。
+  if (!['auto', 'winml', 'dml', 'cpu'].includes(_settingsCache.nativeInferenceBackend)) {
     _settingsCache.nativeInferenceBackend = 'auto';
   }
   if (typeof _settingsCache.winmlPreferredEp !== 'string') {

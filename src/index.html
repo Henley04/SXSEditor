@@ -93,22 +93,8 @@
         <div class="toolbar-group market-group">
           <button id="btn-open-singer-market" data-i18n="main.openSingerMarket" data-i18n-title="main.openSingerMarket" data-icon="market">歌手市场</button>
         </div>
-        <!-- 低频动作收进 ⋯：音频转 MIDI / 导入 MIDI 平时用不到，却一直占着
-             顶栏最宝贵的位置。按钮仍在 DOM 里（id 不变），只是搬进了弹出层。 -->
-        <div class="toolbar-group more-group">
-          <div class="toolbar-popover-anchor">
-            <button id="btn-toolbar-more" type="button" class="toolbar-more"
-                    aria-haspopup="menu" aria-expanded="false"
-                    data-i18n-title="main.moreActions" data-i18n-aria-label="main.moreActions"
-                    data-icon="more-horizontal" title="More actions" aria-label="More actions"></button>
-            <div class="toolbar-popover toolbar-popover--menu" id="toolbar-more-panel" hidden role="menu">
-              <button id="btn-audio-to-midi" role="menuitem"
-                      data-i18n="main.audioToMidi" data-i18n-title="main.audioToMidi" data-icon="music">音频转MIDI</button>
-              <button id="btn-import-midi" role="menuitem"
-                      data-i18n="main.importMidi" data-i18n-title="main.importMidi" data-icon="file-music">导入MIDI</button>
-            </div>
-          </div>
-        </div>
+        <!-- 「导入 MIDI」「音频转 MIDI」已上移到 Electron 原生「文件」菜单，
+             不再在这里用 ⋯ 溢出层收纳。 -->
         <div class="toolbar-group version-group">
           <span id="version-display" class="version-badge">v-</span>
         </div>

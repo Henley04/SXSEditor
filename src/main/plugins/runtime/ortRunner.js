@@ -9,6 +9,7 @@
  *   · 每次加载都记日志，便于用户在管理器里看到"这个插件到底跑在哪"。
  */
 const path = require('node:path');
+const { isCpuOnlyBackend } = require('../../../inference/shared/epPolicy');
 
 let _ort = null;
 function ort() {
@@ -71,7 +72,10 @@ class OrtRunner {
    * @returns {Promise<{handle:string, inputs:Array, outputs:Array, ep:string}>}
    */
   async load(modelPath, options = {}) {
-    const requested = options.ep || (this.allowedEps.includes('dml') ? 'dml' : 'cpu');
+    // 「CPU（全部模型）」是全局强制开关：忽略插件请求的 EP 与宿主下发的
+    // allowedEps（可能含 dml），只保留 CPU，避免插件模型成为漏网之鱼。
+    const requested = isCpuOnlyBackend() ? 'cpu'
+      : (options.ep || (this.allowedEps.includes('dml') ? 'dml' : 'cpu'));
     if (requested !== 'cpu' && !this.allowedEps.includes(requested)) {
       throw new Error(`未获授权的执行后端：${requested}（允许：${this.allowedEps.join(', ') || '无'}）`);
     }

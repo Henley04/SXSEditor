@@ -372,6 +372,16 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST, handler);
   },
+  onMainMenuImportMidiRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_IMPORT_MIDI_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_IMPORT_MIDI_REQUEST, handler);
+  },
+  onMainMenuAudioToMidiRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_AUDIO_TO_MIDI_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_AUDIO_TO_MIDI_REQUEST, handler);
+  },
   onMainMenuMcpSetupRequest: (callback) => {
     const handler = () => callback();
     ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_MCP_SETUP_REQUEST, handler);

@@ -41,6 +41,7 @@ const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
 const { EMBED_DIM, MEL_DIM, COND_DIM, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { buildSessionOptions } = require('../shared/ortOptions');
+const { isCpuOnlyBackend } = require('../shared/epPolicy');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
 // 跨进程重启的 dummy 校验结果缓存（EP + 模型 + 模型版本为判定依据）。
@@ -670,6 +671,14 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     // 所有 session 都在这里创建：这是设置 ORT 日志级别最晚且最早的可靠时机
     // （必须在 session 建立前，又不能早到模块加载期）。
     ensureOrtEnv();
+    // 「CPU（全部模型）」是用户显式选择的全局强制开关，而不是 DML 失败后的兜底：
+    // 所有主模型 session 在这里统一短路，不进入下面 WinML / 静态形状 / DML /
+    // _dml.onnx 的任何分支。调用方只解构 { session, ep }，返回结构与之兼容。
+    if (isCpuOnlyBackend()) {
+        const cpuSession = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
+        return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
     const modelName = path.basename(modelPath);
     // GPU 只给 DiT/Vocos：这两个是唯一需要 TRT INT8 tensor core 的模型。
     const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';

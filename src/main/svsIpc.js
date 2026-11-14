@@ -153,7 +153,11 @@ async function _createPipeline(languageOverride) {
     let winmlEnabled = false;
     // 显式后端也要参与判定：settings.winmlEnabled 是界面保存时派生的值，
     // 后端被改成 DML 但派生字段尚未同步时，不能继续按 WinML 路径下发。
+    // 变量名沿用 backendIsDml 以兼容既有调用点，含义是「不应下发 WinML EP」：
+    // 除 DML 外，全局强制 CPU 后端也必须关掉这条路径，否则 worker 会带着
+    // winmlEps 启动，与设置里的 'cpu' 相互矛盾。
     const backendIsDml = settings.nativeInferenceBackend === 'dml'
+      || settings.nativeInferenceBackend === 'cpu'
       || (settings.inferenceProvider && settings.inferenceProvider !== 'ortnode');
     if (settings.winmlEnabled === true && !backendIsDml) {
       try {

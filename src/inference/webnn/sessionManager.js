@@ -105,12 +105,22 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
     // Allow per-model timeout override (vocoder needs longer NPU compilation time)
     const epTimeout = options.timeout || (modelId === 'vocoder' ? WEBNN_VOCODER_TIMEOUT : WEBNN_EP_TIMEOUT);
 
+    // 全局强制 CPU 后端：即使旧配置里残留 inferenceProvider=ortweb，也不尝试
+    // WebNN NPU/GPU，只保留 WASM (CPU)。设置读取不可用时退回原回退链。
+    let cpuOnlyBackend = false;
+    try {
+        const savedSettings = await window.electronAPI?.getSettings?.();
+        cpuOnlyBackend = savedSettings?.nativeInferenceBackend === 'cpu';
+    } catch (_err) {
+        cpuOnlyBackend = false;
+    }
+
     // 回退链：WebNN NPU → WebNN GPU → WASM
     const epChain = [];
-    if (deviceType === 'npu') {
+    if (!cpuOnlyBackend && deviceType === 'npu') {
         epChain.push({ name: 'webnn', deviceType: 'npu' });
         epChain.push({ name: 'webnn', deviceType: 'gpu' });
-    } else if (deviceType === 'gpu') {
+    } else if (!cpuOnlyBackend && deviceType === 'gpu') {
         epChain.push({ name: 'webnn', deviceType: 'gpu' });
     }
     epChain.push('wasm'); // 最终回退到 WASM (CPU)

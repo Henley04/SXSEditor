@@ -684,38 +684,8 @@
   text-align: center;
 }
 
-/* 弹出层里的按钮恢复成"完整按钮"：窄屏规则会把 #btn-audio-to-midi 之类的
-   顶栏按钮压成 28px 纯图标，收进菜单后那样就没有意义了。 */
-#toolbar .toolbar-popover--menu button {
-  width: auto;
-  min-width: 0;
-  justify-content: flex-start;
-  padding: 6px 10px;
-  font-size: var(--font-base);
-}
-
-#toolbar .toolbar-popover--menu button > .icon {
-  width: 14px;
-  height: 14px;
-  margin-right: 6px;
-}
-
-/* ⋯ 触发器：与传输按钮同尺寸，避免图标按钮宽度随语言变化 */
-#toolbar .toolbar-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-}
-
-#toolbar .toolbar-more > .icon {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-}
-
+/* ⋯ 溢出层与收在其中的两个 MIDI 按钮已上移到原生「文件」菜单，
+   相关的恢复/触发器样式一并移除。 */
 #toolbar button > .icon {
   flex: 0 0 auto;
 }
@@ -767,8 +737,6 @@
 @media (max-width: 980px) {
   /* Keep transport and project actions identifiable; collapse verbose labels. */
   #btn-export-lrc,
-  #btn-audio-to-midi,
-  #btn-import-midi,
   #btn-open-singer-market {
     width: 28px;
     min-width: 28px;
@@ -776,8 +744,6 @@
     font-size: 0;
   }
   #btn-export-lrc > .icon,
-  #btn-audio-to-midi > .icon,
-  #btn-import-midi > .icon,
   #btn-open-singer-market > .icon {
     width: 14px;
     height: 14px;

@@ -1,8 +1,9 @@
 /**
- * 顶栏的两个弹出层：拍号（4/4）与"更多操作"（⋯）。
+ * 顶栏的拍号（4/4）弹出层。
  *
  * 定位与开合的通用逻辑在 utils/popoverMenu.js（分片编辑器里的"导出 ▾"
  * 用的是同一套，避免两处各写一份坐标计算）。这里只保留拍号徽标的同步。
+ * 原先的 ⋯「更多操作」弹出层已随两个 MIDI 功能上移到原生「文件」菜单而移除。
  */
 import { installPopoverMenus } from '../utils/popoverMenu.js';
 
@@ -12,7 +13,6 @@ import { installPopoverMenus } from '../utils/popoverMenu.js';
 export function installToolbarPopovers() {
   const cleanupMenus = installPopoverMenus([
     [document.getElementById('btn-timesig'), document.getElementById('timesig-popover')],
-    [document.getElementById('btn-toolbar-more'), document.getElementById('toolbar-more-panel')],
   ]);
 
   const cleanups = [];

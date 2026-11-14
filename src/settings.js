@@ -372,8 +372,11 @@ function applySavedSettingsToUI(currentSetting) {
         updateNativeBackendUI(inferenceProvider, nativeInferenceBackendSelect?.value || 'auto');
     }
 
-    // Device mode
-    const deviceMode = currentSetting.deviceMode || 'smart';
+    // Device mode：CPU 后端下设备模式不参与 EP 决策，UI 统一显示 smart，
+    // 避免残留一个被禁用却仍选中的 manual/advanced 造成误解。
+    const cpuOnly = (currentSetting.nativeInferenceBackend || 'auto') === 'cpu'
+        && inferenceProvider !== 'ortweb';
+    const deviceMode = cpuOnly ? 'smart' : (currentSetting.deviceMode || 'smart');
     const radioToCheck = document.querySelector(`input[name="deviceMode"][value="${deviceMode}"]`);
     if (radioToCheck) radioToCheck.checked = true;
     updateDeviceModeUI(deviceMode);
@@ -662,8 +665,18 @@ function updateInferenceProviderHint(provider) {
 
 function updateNativeBackendUI(provider, backend) {
     if (nativeBackendGroup) nativeBackendGroup.classList.toggle('hidden', provider === 'ortweb');
+    const cpuOnly = provider === 'ortnode' && backend === 'cpu';
     const advancedRadio = document.querySelector('input[name="deviceMode"][value="advanced"]');
+    const manualRadio = document.querySelector('input[name="deviceMode"][value="manual"]');
     const winmlOnly = provider === 'ortnode' && backend !== 'dml';
+    // CPU 后端是全局强制：manual 的设备下拉与 advanced 的按模型组指定设备都不生效。
+    // 禁用并回落到 smart，避免「界面上选了 GPU、实际全跑 CPU」的静默不一致。
+    if (manualRadio) manualRadio.disabled = cpuOnly;
+    if (cpuOnly && (manualRadio?.checked || advancedRadio?.checked)) {
+        const smart = document.querySelector('input[name="deviceMode"][value="smart"]');
+        if (smart) smart.checked = true;
+        updateDeviceModeUI('smart');
+    }
     if (advancedRadio) {
         advancedRadio.disabled = winmlOnly;
         advancedRadio.closest('.device-mode-radio')?.classList.toggle('hidden', winmlOnly);
@@ -674,7 +687,8 @@ function updateNativeBackendUI(provider, backend) {
         }
     }
     if (!nativeBackendHint) return;
-    const key = backend === 'winml' ? 'settings.nativeBackendWinmlHint'
+    const key = backend === 'cpu' ? 'settings.nativeBackendCpuHint'
+        : backend === 'winml' ? 'settings.nativeBackendWinmlHint'
         : backend === 'dml' ? 'settings.nativeBackendDmlHint'
         : 'settings.nativeBackendAutoHint';
     nativeBackendHint.textContent = t(key);
@@ -683,9 +697,13 @@ function updateNativeBackendUI(provider, backend) {
 function updateDeviceModeUI(mode) {
     const isManual = mode === 'manual';
     const isAdvanced = mode === 'advanced';
+    // CPU 后端下所有模型强制 CPU：即便旧的 deviceMode 还是 manual/advanced，
+    // 设备下拉与按模型组映射也必须保持不可用，不能在这里被重新启用。
+    const cpuOnly = nativeInferenceBackendSelect?.value === 'cpu'
+        && inferenceProviderSelect?.value !== 'ortweb';
 
-    inferenceDeviceSelect.disabled = !isManual;
-    advancedSettingsGroup.classList.toggle('hidden', !isAdvanced);
+    inferenceDeviceSelect.disabled = cpuOnly || !isManual;
+    advancedSettingsGroup.classList.toggle('hidden', cpuOnly || !isAdvanced);
 
     if (isAdvanced) {
         buildModelDeviceMapping();
@@ -1177,6 +1195,9 @@ async function loadDevices() {
             winmlProviders = await window.electronAPI.getWinmlProviders();
         } else if (backend === 'dml') {
             allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
+        } else if (backend === 'cpu') {
+            // 全局强制 CPU：不探测 WinML/DML 设备，省掉昂贵的硬件枚举。
+            // 下方 NPU/GPU 状态指示仍走独立的 webnnDetectNPU，不受影响。
         } else {
             // Automatic mode starts with Windows ML only. DML is a runtime fallback, not a confusing parallel choice.
             winmlProviders = await window.electronAPI.getWinmlProviders();
@@ -1282,6 +1303,8 @@ async function loadDevices() {
             addWinmlOptions(winmlProviders);
         } else if (backend === 'dml') {
             for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
+        } else if (backend === 'cpu') {
+            addOption(inferenceDeviceSelect, 'cpu', t('settings.nativeBackendCpu'), 'cpu');
         } else {
             if (winmlProviders.length) {
                 addWinmlOptions(winmlProviders);
@@ -1307,6 +1330,9 @@ async function loadDevices() {
         const validValues = new Set(allValues);
         const desiredOption = Array.from(inferenceDeviceSelect.options).find(o => o.value === desiredValue);
         inferenceDeviceSelect.value = (validValues.has(desiredValue) && !desiredOption?.disabled) ? desiredValue : 'auto';
+        // CPU 后端下拉里只有 auto / cpu，且应由后者表达「当前强制 CPU」；
+        // 上面按 preferredDeviceId 还原会得到 auto，这里显式纠正。
+        if (backend === 'cpu' && provider !== 'ortweb') inferenceDeviceSelect.value = 'cpu';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
@@ -1553,7 +1579,7 @@ function collectSettings() {
     let preferredDeviceType;
     if (deviceMode === 'manual') {
         const inferenceValue = inferenceDeviceSelect.value;
-        preferredDeviceId = inferenceValue === 'auto' || inferenceValue.startsWith('winml:')
+        preferredDeviceId = inferenceValue === 'auto' || inferenceValue === 'cpu' || inferenceValue.startsWith('winml:')
             ? null
             : (inferenceValue === 'npu' || inferenceValue === 'webnn-gpu' ? inferenceValue : parseInt(inferenceValue));
         preferredDeviceType = null;
@@ -1583,7 +1609,10 @@ function collectSettings() {
         deviceMode,
         inferenceProvider,
         nativeInferenceBackend: nativeInferenceBackendSelect?.value || 'auto',
-        winmlEnabled: inferenceProvider === 'ortnode' && (nativeInferenceBackendSelect?.value || 'auto') !== 'dml',
+        // CPU 后端与 DML 一样必须关掉 WinML 门控；否则界面派生值与设置里的
+        // 'cpu' 不一致，worker 仍会尝试 Windows ML vendor EP。
+        winmlEnabled: inferenceProvider === 'ortnode'
+            && !['dml', 'cpu'].includes(nativeInferenceBackendSelect?.value || 'auto'),
         // 设备下拉的 WinML 选项形如 `winml:<EP>` 或 `winml:<EP>|<gpu|cpu|npu>`。
         // 拆两个字段存：EP 决定候选链起点，device 决定钉在哪类硬件上
         // （空 = 该 EP 暴露的全部设备，等价于旧配置）。
