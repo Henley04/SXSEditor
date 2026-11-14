@@ -18,6 +18,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const detectionCache = require('./winmlDetectionCache');
 
 const MIN_BUILD = 26100; // Windows 11 24H2 — downloadable EPs requirement
 
@@ -64,6 +65,23 @@ function locateBootstrapDll(explicitPath) {
     const candidates = [];
     if (explicitPath) candidates.push(explicitPath);
     if (process.env.WINAPPSDK_BOOTSTRAP_DLL_PATH) candidates.push(process.env.WINAPPSDK_BOOTSTRAP_DLL_PATH);
+    // 显式配置永远优先；命中后不再做目录遍历。
+    for (const c of candidates) {
+        try {
+            if (c && fs.existsSync(c)) {
+                _bootstrapDllPath = c;
+                detectionCache.setCachedBootstrapPath(c);
+                return c;
+            }
+        } catch (_) { /* ignore */ }
+    }
+    // 上一次启动找到的路径：文件还在就直接复用，跳过 Edge/WindowsApps 的深度遍历
+    // （这是 EP 探测里最慢的一步，WindowsApps 权限受限时还要等 PowerShell 超时）。
+    const cachedPath = detectionCache.getCachedBootstrapPath();
+    if (cachedPath) {
+        _bootstrapDllPath = cachedPath;
+        return cachedPath;
+    }
 
     const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
     const localAppData = process.env.LOCALAPPDATA || '';
@@ -86,6 +104,7 @@ function locateBootstrapDll(explicitPath) {
         try {
             if (c && fs.existsSync(c)) {
                 _bootstrapDllPath = c;
+                detectionCache.setCachedBootstrapPath(c);
                 return c;
             }
         } catch (_) { /* ignore */ }
@@ -334,16 +353,43 @@ const EP_PRIORITY = [
 /**
  * List EPs compatible with this hardware, ordered so that higher-priority EPs
  * (e.g. NvTensorRTRTX above OpenVINO) appear first in the device dropdown.
+ * @param {{forceRefresh?:boolean}} [options]
  * @returns {Promise<Array<{name:string, readyState:number}>>}
  */
-async function listCompatibleProviders() {
-    const entries = await listCompatibleProviderEntries();
-    const mapped = entries.map(({ name, readyState }) => ({ name, readyState }));
+async function listCompatibleProviders(options = {}) {
+    const cached = detectionCache.getCachedProviders();
+    if (cached && options.forceRefresh !== true) {
+        // 过期 / 后台有更新的 EP 包时先返回可用列表，避免设置页被 WinRT 初始化卡住；
+        // 刷新在后台完成，下次打开或以 forceRefresh 调用时拿到新结果。
+        if (!cached.fresh) {
+            void _refreshCompatibleProviders().catch(() => {});
+        }
+        return cached.list;
+    }
+    return _refreshCompatibleProviders();
+}
+
+let _providersRefreshPromise = null;
+
+function _sortProviders(list) {
     const rank = (name) => {
         const idx = EP_PRIORITY.indexOf(name);
         return idx === -1 ? EP_PRIORITY.length : idx;
     };
-    return mapped.sort((a, b) => rank(a.name) - rank(b.name));
+    return list.sort((a, b) => rank(a.name) - rank(b.name));
+}
+
+async function _refreshCompatibleProviders() {
+    if (_providersRefreshPromise) return _providersRefreshPromise;
+    _providersRefreshPromise = (async () => {
+        const entries = await listCompatibleProviderEntries();
+        const mapped = _sortProviders(entries.map(({ name, readyState }) => ({ name, readyState })));
+        // 空列表可能是"硬件枚举尚未就绪"的瞬时结果，不能落盘，否则 12 小时内
+        // 设置页都会误报"没有可用 EP"。
+        if (mapped.length > 0) detectionCache.setCachedProviders(mapped);
+        return mapped;
+    })().finally(() => { _providersRefreshPromise = null; });
+    return _providersRefreshPromise;
 }
 
 /** Ensure a specific provider wrapper instance is ready (downloads if needed). */

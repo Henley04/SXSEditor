@@ -297,6 +297,7 @@ const ortIntraOpNumThreadsValue = document.getElementById('ortIntraOpNumThreadsV
 const ortInterOpNumThreadsSlider = document.getElementById('ortInterOpNumThreads');
 const ortInterOpNumThreadsValue = document.getElementById('ortInterOpNumThreadsValue');
 const ortLogSeverityLevelSelect = document.getElementById('ortLogSeverityLevel');
+const clearInferenceCacheBtn = document.getElementById('clearInferenceCacheBtn');
 
 const updateChannelSelect = document.getElementById('updateChannelSelect');
 const autoCheckUpdatesCheckbox = document.getElementById('autoCheckUpdates');
@@ -1103,6 +1104,29 @@ function markHardwareDetectionFailed() {
     }
 }
 
+// WinML EP 列表的"缓存优先 + 后台强制刷新"。
+// 设置页首次打开用上次探测结果立即渲染下拉；随后在后台向主进程要一份实时结果
+// （5 分钟节流），有新下载/升级的 EP 才重载设备列表——轮询自身不会再触发刷新。
+let _lastWinmlForceRefreshAt = 0;
+const WINML_FORCE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+function scheduleWinmlProvidersRefresh(currentProviders) {
+    const now = Date.now();
+    if (now - _lastWinmlForceRefreshAt < WINML_FORCE_REFRESH_INTERVAL_MS) return;
+    _lastWinmlForceRefreshAt = now;
+    const signature = (list) => (Array.isArray(list) ? list : [])
+        .map((p) => `${p.name}:${p.readyState}`)
+        .join('|');
+    const current = signature(currentProviders);
+    setTimeout(async () => {
+        try {
+            const fresh = await window.electronAPI.getWinmlProviders({ forceRefresh: true });
+            if (signature(fresh) !== current) void loadDevices();
+        } catch (_) {
+            // 后台刷新失败不影响已渲染的缓存结果
+        }
+    }, 0);
+}
+
 async function loadDevices() {
     try {
         // 立即显示加载状态
@@ -1240,6 +1264,13 @@ async function loadDevices() {
         inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
+
+        // WinML EP 列表走"缓存优先"：上面用上次探测结果立即渲染，这里再强制
+        // 刷新一次。EP 包刚下载完 / 刚升级时，刷新结果会替换下拉选项，用户不必
+        // 重开设置页。非 WinML 后端不做任何额外探测。
+        if (provider !== 'ortweb' && (backend === 'winml' || backend === 'auto')) {
+            scheduleWinmlProvidersRefresh(winmlProviders);
+        }
 
         // Audio discovery is independent and must not block inference hardware.
         loadAudioDevices().catch(() => {});
@@ -1944,6 +1975,21 @@ if (ortInterOpNumThreadsSlider) {
 }
 if (ortLogSeverityLevelSelect) {
     ortLogSeverityLevelSelect.addEventListener('change', () => applySettings());
+}
+
+if (clearInferenceCacheBtn) {
+    clearInferenceCacheBtn.addEventListener('click', async () => {
+        clearInferenceCacheBtn.disabled = true;
+        try {
+            const result = await window.electronAPI.clearInferenceCaches();
+            const trtCount = result && typeof result.trtEngines === 'number' ? result.trtEngines : 0;
+            showToast(t('settings.clearInferenceCacheDone', { count: trtCount }), 'success');
+        } catch (err) {
+            showToast(t('settings.clearInferenceCacheFailed', { error: (err && err.message) || String(err) }), 'error');
+        } finally {
+            clearInferenceCacheBtn.disabled = false;
+        }
+    });
 }
 
 midiExtractToolSelect.addEventListener('change', () => {

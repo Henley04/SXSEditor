@@ -7,6 +7,11 @@ const { parentPort, workerData } = require('node:worker_threads');
 // 主进程在 spawn 时经 workerData 显式下发开关与已就绪的 EP libraryPath 列表，
 // 这里在任何 pipeline/winml 模块加载之前挂到 globalThis。
 if (workerData && typeof workerData === 'object') {
+    // 持久化缓存（dummy 校验 / WinML 探测）在 worker 内拿不到 electron.app，
+    // 由主进程把 userData 目录显式下发。
+    if (typeof workerData.userDataDir === 'string' && workerData.userDataDir) {
+        globalThis.__SXS_USER_DATA_DIR__ = workerData.userDataDir;
+    }
     const snapshot = {
         ...(workerData.settingsSnapshot || {}),
         ...(typeof workerData.winmlEnabled === 'boolean' ? { winmlEnabled: workerData.winmlEnabled } : {}),

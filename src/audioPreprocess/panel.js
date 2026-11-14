@@ -93,7 +93,28 @@ function bindControls() {
   dom.btnTogglePanel.addEventListener('click', () => {
     const collapsed = dom.extractPanel.classList.toggle('collapsed');
     setLabel(dom.btnTogglePanel, t(collapsed ? 'preprocess.expandPanel' : 'preprocess.collapsePanel'), { icon: collapsed ? 'chevron-down' : 'chevron-up' });
+    // 面板收/放只改变布局高度，不会触发 window 'resize'。画布后备缓冲仍是旧尺寸，
+    // 下方会留下一条没有内容/没被重绘的空白区；这里主动按新尺寸重建并重绘。
+    refreshViewportAfterPanelToggle();
   });
+}
+
+/**
+ * 提取参数面板折叠后同步下层画布。
+ *
+ * 收起按钮只切换 `#extract-panel.collapsed`（display:none），主内容区高度随之
+ * 变化，但浏览器不会为子元素尺寸变化派发 window resize —— 钢琴卷帘的
+ * canvas.width/height 与波形 canvas 都保持旧值，视觉上就是"下方空缺一块"。
+ * 这里直接复用两个视图各自的 resize/redraw 入口，语义与用户手动拖窗口一致。
+ */
+export function refreshViewportAfterPanelToggle() {
+  const pr = state.pianoRoll;
+  if (pr) {
+    // _resize() 会按父容器新尺寸重设画布、clamp 滚动位置并重绘（含滚动条）。
+    pr._resize();
+  }
+  invalidateWaveformCache();
+  drawWaveformWithPlayhead(pr ? pr.getCurrentTime() : 0, { isPaused: !state.isPlaying });
 }
 
 /** 初始化参数面板：载入已保存选项 */

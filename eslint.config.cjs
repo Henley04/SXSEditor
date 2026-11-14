@@ -75,6 +75,8 @@ module.exports = [
             // ORT 惰性加载入口：主进程 CJS（新建文件必须显式登记，否则会落到
             // 未覆盖任何分档的默认档，require/module 全被判 no-undef）
             'src/inference/ortRuntime.js',
+            // 推理层跨重启 JSON 缓存（主进程 / svsWorker 共用的 CJS 工具）
+            'src/inference/persistentCache.js',
             // WinML 后端：主进程 CJS（此前漏在分档外，整个目录的 require/console
             // 全被判 no-undef，等于完全没有 lint 覆盖）
             'src/inference/winml/**/*.js',

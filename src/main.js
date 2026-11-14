@@ -978,6 +978,15 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   const cleanup = async () => {
     try {
+      // 推理层持久化缓存同步落盘。写入默认 400ms debounce 且 timer 调了
+      // unref()，快速退出会丢掉刚完成的 dummy 校验 / EP 探测结果，下次启动
+      // 又要重跑（TRT 场景是数十秒）。放在最前面，保证后续清理卡住也不丢。
+      try {
+        require('./inference/pipeline/sessionValidationCache').flushSync();
+        require('./inference/winml/winmlDetectionCache').flushSync();
+      } catch (err) {
+        console.warn('[Main] 推理缓存落盘失败:', err && err.message);
+      }
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();

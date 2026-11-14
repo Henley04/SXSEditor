@@ -137,12 +137,16 @@ export function evalAnchors(anchors, time) {
  * @param {number} opts.interval 细采样间隔（拍）
  * @param {Array<{time:number}>} [opts.sortedAnchors] 已按 time 升序的手动锚点
  * @param {Array<{start:number,end:number}>} [opts.bakedSegments] 自动曲线派生段
+ * @param {number} [opts.minAnchorSpacing] 锚点最小并入间隔（拍）。>0 时跳过与上一个
+ *   并入点距离小于该值的锚点：缩放很小时（如导入 F0 产生的数万锚点）同一条像素
+ *   列上的锚点再密也不多一个像素，全部并入只会让采样循环无谓变长。缺省 0 保持
+ *   "所有可见锚点都并入"的原有语义。
  * @returns {number[]}
  */
 export function buildPitchCurveSampleTimes(opts) {
   const {
     startBeat, endBeat, width, interval,
-    sortedAnchors = [], bakedSegments = [],
+    sortedAnchors = [], bakedSegments = [], minAnchorSpacing = 0,
   } = opts;
   const from = startBeat - 1;
   const to = endBeat + 1;
@@ -160,10 +164,15 @@ export function buildPitchCurveSampleTimes(opts) {
     if (sortedAnchors[mid].time < from) lo = mid + 1;
     else hi = mid;
   }
+  let lastKeptAnchor = -Infinity;
   for (let i = lo; i < sortedAnchors.length; i++) {
     const t = sortedAnchors[i].time;
     if (t > to) break;
+    // 缩放得很小时，同一像素列内的多个锚点只影响像素级视觉；跳过它们可以把
+    // 采样点数量限制在 ~2×宽度，避免数万锚点每帧参与排序/逐点求值。
+    if (minAnchorSpacing > 0 && t - lastKeptAnchor < minAnchorSpacing) continue;
     ts.push(t);
+    lastKeptAnchor = t;
   }
   for (const seg of bakedSegments) {
     if (seg.start >= from && seg.start <= to) ts.push(seg.start);

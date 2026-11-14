@@ -688,6 +688,12 @@
                         </div>
                     </div>
                 </details>
+
+                <div class="setting-group">
+                    <label data-i18n="settings.clearInferenceCacheTitle">推理缓存</label>
+                    <p class="hint" data-i18n="settings.clearInferenceCacheHint">模型首次加载时会跑一次 dummy 推理校验 EP 是否可用，结果缓存到应用数据目录，下次启动直接复用。若更换显卡/驱动、升级 TRT 运行时后仍出现推理异常（静音、全零、报错），或想强制重新探测 EP，可清空缓存后重启应用。清理会同时删除 TensorRT engine 缓存，下次加载会重新编译，耗时更长。</p>
+                    <button type="button" id="clearInferenceCacheBtn" class="btn-secondary" data-i18n="settings.clearInferenceCacheBtn">清除推理缓存</button>
+                </div>
             </div>
 
             <!-- Audio Output -->

@@ -135,10 +135,11 @@ function registerSettingsIpc() {
     }
   });
 
-  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async (_event, options = {}) => {
     if (process.platform !== 'win32') return [];
     try {
-      return await require('../inference/winml/winmlProvider').listCompatibleProviders();
+      return await require('../inference/winml/winmlProvider')
+        .listCompatibleProviders({ forceRefresh: options?.forceRefresh === true });
     } catch (err) {
       console.warn('[Main] Windows ML provider discovery failed:', err.message);
       return [];
@@ -406,6 +407,34 @@ function registerSettingsIpc() {
   // GET_LOCALE 已上移到 main.js 的 STEP 1.5 单独注册（渲染进程首启的 initI18n()
   // 会在 did-finish-load 之前就询问语言，等不到本文件所在的 STEP 4）。
   // 注意 ipcMain.handle 对同一 channel 重复注册会抛错，所以这里必须移除而不是保留。
+
+  // 清理推理层持久化缓存：dummy 校验记录 + WinML EP 探测结果 + TRT engine。
+  // 这是缓存误命中（换卡 / 换驱动 / 引擎损坏）时唯一的用户级恢复入口，
+  // 否则只能手动去 userData / %TEMP% 删文件。
+  safeHandle(IPC_CHANNELS.SETTINGS_CLEAR_INFERENCE_CACHE, async () => {
+    const result = { validation: false, detection: false, trtEngines: 0 };
+    try {
+      await require('../inference/pipeline/sessionValidationCache').clearValidationCache();
+      result.validation = true;
+    } catch (err) {
+      console.warn('[Settings] 清理 session 校验缓存失败:', err && err.message);
+    }
+    try {
+      await require('../inference/winml/winmlDetectionCache').clear();
+      result.detection = true;
+    } catch (err) {
+      console.warn('[Settings] 清理 WinML 探测缓存失败:', err && err.message);
+    }
+    try {
+      result.trtEngines = require('../inference/winml/winmlProvider').clearTRTEngineCache();
+    } catch (err) {
+      console.warn('[Settings] 清理 TRT engine 缓存失败:', err && err.message);
+    }
+    // 内存里的 _validatedSessionModels / EP 状态不清：它们描述的是当前进程
+    // 已建好的 session，清掉只会让正在使用的管线重复校验，不会改变磁盘缓存。
+    console.log('[Settings] 推理缓存已清理:', result);
+    return result;
+  });
 
   safeHandle(IPC_CHANNELS.SETTINGS_RUN_TRTRTX_DIAGNOSTIC, async () => {
     try {

@@ -43,6 +43,8 @@ const { EMBED_DIM, MEL_DIM, COND_DIM, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, NP
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
+// 跨进程重启的 dummy 校验结果缓存（EP + 模型 + 模型版本为判定依据）。
+const sessionValidationCache = require('./sessionValidationCache');
 
 // Flush ORT debug buffer to console after model loading
 function flushOrtDebugLogs() {
@@ -614,6 +616,13 @@ const WINML_ELIGIBLE_KEYS = new Set([
   'preflow', 'condEmb', 'diffStep', 'vocoder', 'sifigan',
 ]);
 
+/**
+ * 创建 session 并（必要时）跑一次 dummy 推理校验。
+ *
+ * 返回值 warmedUp 表示"该 session 已完成校验"：本次实际执行了 dummy，或命中
+ * 持久化记录（上一次启动时同一 EP + 同一运行时 + 同一模型已校验通过）。
+ * 调用方据此判断是否还需要额外预热；它不是"本次是否真的跑了推理"。
+ */
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     // 所有 session 都在这里创建：这是设置 ORT 日志级别最晚且最早的可靠时机
     // （必须在 session 建立前，又不能早到模块加载期）。
@@ -629,6 +638,16 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         ? DUMMY_TEST_INPUTS_NPU[sessionKey]
         : (isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey]));
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
+    // dummy 校验结果持久化：同一 EP + 同一模型（路径/session/形状）+ 同一模型版本
+    // 之前成功过，就直接复用，不再跑一次 dummy 推理。精度切换会落到不同目录，
+    // 切回原精度时仍命中原记录；EP 或模型版本变化则自然失配、重新校验。
+    // TRT 这类"每次启动重新编译 engine"的 EP 还会并入运行时指纹（见 winml 分支）。
+    const _cachedValidation = (epKey) => sessionValidationCache.getValidationRecord({
+        epKey, modelPath, sessionKey, useStaticShapes: useStaticShapes === true,
+    }).catch(() => null);
+    const _rememberValidation = (epKey, detail) => sessionValidationCache.recordValidation({
+        epKey, modelPath, sessionKey, useStaticShapes: useStaticShapes === true, detail,
+    }).catch(() => false);
 
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath,
@@ -696,7 +715,23 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                     const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
                     // Every newly created TRT session must validate itself. A model-level
                     // process cache cannot prove that a recreated engine is healthy.
-                    const shouldValidate = isTRT || runValidation;
+                    // 但"上一次启动、同一套运行时已校验成功"的持久化记录可以：
+                    // 缓存键除 EP/GPU/模型版本外还并入 TRT 运行时指纹（EP 包 MSIX
+                    // 版本 + provider DLL 文件版本），TRT 一升级就失配、强制重新校验；
+                    // 版本不变时重编译出坏 engine 的概率极低，复用是安全的。
+                    // 注意 GPU 用名称而非 deviceId：换卡后索引可能仍是 0。
+                    const trtRuntime = isTRT
+                        ? await winmlProvider.getTrtRuntimeFingerprint()
+                        : null;
+                    const winmlEpKey = sessionValidationCache.buildValidationEpKey({
+                        provider: winmlRes.ep,
+                        device: gpuDeviceName || 'auto',
+                        runtime: trtRuntime,
+                    });
+                    const persistedValidation = (isTRT || runValidation)
+                        ? await _cachedValidation(winmlEpKey)
+                        : null;
+                    const shouldValidate = (isTRT || runValidation) && !persistedValidation;
                     try {
                         if (shouldValidate) {
                             // For TRT sessions, use non-zero dummy inputs. All-zero
@@ -724,7 +759,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                                 validateTRTOutput(outputs, expected);
                             }
                             _validatedSessionModels.add(validationKey);
+                            await _rememberValidation(winmlEpKey, winmlRes.ep);
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=ok${isTRT ? ' (non-zero TRT output verified)' : ''}`);
+                        } else if (persistedValidation) {
+                            _validatedSessionModels.add(validationKey);
+                            console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=persistent-cache(${new Date(persistedValidation.validatedAt || 0).toISOString()})`);
                         } else {
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=skip reason=reload`);
                         }
@@ -743,7 +782,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                                 console.warn('[DIAG] peer attach failed:', (e.message || '').split('\n')[0]);
                             }
                         }
-                        return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate };
+                        return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate || !!persistedValidation };
                     } catch (werr) {
                         const wr = (werr.message || '').split('\n')[0].slice(0, 120);
                         console.warn(`[Model][fallback] name=${modelName} from=winml to=dml/cpu stage=warmup error=${wr}`);
@@ -782,14 +821,24 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                 ? { name: 'dml', deviceId: dmlDeviceId }
                 : 'dml';
             npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
-            if (runValidation) {
+            const npuDmlEpKey = sessionValidationCache.buildValidationEpKey({
+                provider: 'dml',
+                // 形状模式已由 buildModelKey 记为 static；这里只标识硬件身份。
+                device: gpuDeviceName || (typeof dmlDeviceId === 'number' ? String(dmlDeviceId) : 'auto'),
+            });
+            const npuCached = runValidation ? await _cachedValidation(npuDmlEpKey) : null;
+            if (runValidation && !npuCached) {
                 await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
                 _validatedSessionModels.add(validationKey);
+                await _rememberValidation(npuDmlEpKey, 'dml-static');
                 console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
+            } else if (npuCached) {
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation=persistent-cache)`);
             } else {
                 console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
             }
-            return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
+            return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation || !!npuCached };
         } catch (dmlErr) {
             if (npuDmlSession) {
                 try { npuDmlSession.release(); } catch (e) {
@@ -822,15 +871,26 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             });
             console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
             dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
-            if (runValidation) {
+            // GPU 用名称而不是 deviceId：deviceId 只是枚举索引，换卡后仍是 0，
+            // 会让新卡误命中旧卡的校验记录。名称为空时退回索引（与旧键兼容）。
+            const dmlEpKey = sessionValidationCache.buildValidationEpKey({
+                provider: 'dml',
+                device: gpuDeviceName || (typeof dmlDeviceId === 'number' ? String(dmlDeviceId) : 'auto'),
+            });
+            const dmlCached = runValidation ? await _cachedValidation(dmlEpKey) : null;
+            if (runValidation && !dmlCached) {
                 console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
                 await _runWithPrecisionFallback(dmlSession, 'DML');
                 _validatedSessionModels.add(validationKey);
+                await _rememberValidation(dmlEpKey, 'dml');
                 console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+            } else if (dmlCached) {
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (validation=persistent-cache)`);
             } else {
                 console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
             }
-            return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
+            return { session: dmlSession, ep: 'dml', warmedUp: runValidation || !!dmlCached };
         } catch (dmlErr) {
             if (dmlSession) {
                 try { dmlSession.release(); } catch (e) {
@@ -855,7 +915,14 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             try {
                 const dmlModelSession = await ort.InferenceSession.create(dmlModelPath,
                     buildSessionOptions({ executionProviders: ['cpu'] }));
-                if (runValidation) {
+                const dmlOptimizedEpKey = sessionValidationCache.buildValidationEpKey({
+                    provider: 'cpu',
+                    device: 'dml-optimized',
+                });
+                const dmlOptimizedCached = runValidation
+                    ? await _cachedValidation(dmlOptimizedEpKey)
+                    : null;
+                if (runValidation && !dmlOptimizedCached) {
                     try {
                         await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
                     } catch (runErr) {
@@ -863,8 +930,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                         throw runErr;
                     }
                     _validatedSessionModels.add(validationKey);
+                    await _rememberValidation(dmlOptimizedEpKey, 'dml-optimized');
+                } else if (dmlOptimizedCached) {
+                    _validatedSessionModels.add(validationKey);
                 }
-                return { session: dmlModelSession, ep: 'cpu', warmedUp: runValidation };
+                return { session: dmlModelSession, ep: 'cpu', warmedUp: runValidation || !!dmlOptimizedCached };
             } catch (dmlModelErr) {
                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML-optimized model load failed: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
             }
@@ -876,6 +946,13 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     if (!runValidation) {
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (reload, validation skipped)`);
         return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
+    const cpuEpKey = sessionValidationCache.buildValidationEpKey({ provider: 'cpu' });
+    const cpuCached = await _cachedValidation(cpuEpKey);
+    if (cpuCached) {
+        _validatedSessionModels.add(validationKey);
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (validation=persistent-cache)`);
+        return { session: cpuSession, ep: 'cpu', warmedUp: true };
     }
     try {
         await _runWithPrecisionFallback(cpuSession, 'CPU');
@@ -900,6 +977,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         throw runErr;
     }
     _validatedSessionModels.add(validationKey);
+    await _rememberValidation(cpuEpKey, 'cpu');
     console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (inference verified)`);
     return { session: cpuSession, ep: 'cpu', warmedUp: true };
 }

@@ -222,7 +222,7 @@ const _fullElectronAPI = {
   // Used by the Settings → About page (license / papers / acknowledgments).
   openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, url),
   getDMLDevices: (options = {}) => invokeHeavy('settings:getDMLDevices', options),
-  getWinmlProviders: () => invokeHeavy('settings:getWinmlProviders'),
+  getWinmlProviders: (options = {}) => invokeHeavy('settings:getWinmlProviders', options),
   getHardwareStatus: () => invokeHeavy('settings:getHardwareStatus'),
   getCurrentHardware: () => invokeHeavy('settings:getCurrentHardware'),
   getVocoderChunkFramesInfo: () => invokeHeavy('settings:getVocoderChunkFramesInfo'),
@@ -231,6 +231,7 @@ const _fullElectronAPI = {
   saveSettings: (settings) => invokeHeavy('settings:saveSettings', settings),
   checkModels: () => invokeHeavy('settings:check-models'),
   runTrtRtxDiagnostic: () => invokeHeavy('settings:run-trtrtx-diagnostic'),
+  clearInferenceCaches: () => invokeHeavy(IPC_CHANNELS.SETTINGS_CLEAR_INFERENCE_CACHE),
   getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_VERSION),
   getAudioDevices: () => invokeHeavy('audio:getDevices'),
   audioPlay: (audioData, options) => invokeHeavy('audio:play', { audioData, options }),

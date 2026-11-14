@@ -93,6 +93,7 @@ const IPC_CHANNELS = {
   SETTINGS_GET_CURRENT_HARDWARE: 'settings:getCurrentHardware',
   SETTINGS_GET: 'settings:getSettings',
   SETTINGS_SAVE: 'settings:saveSettings',
+  SETTINGS_CLEAR_INFERENCE_CACHE: 'settings:clearInferenceCache',
   SETTINGS_CHECK_MODELS: 'settings:check-models',
   SETTINGS_VALIDATE_DEVICES: 'settings:validateDevices',
   APP_GET_VERSION: 'app:getVersion',
