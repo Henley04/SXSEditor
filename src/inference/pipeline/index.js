@@ -10,6 +10,7 @@ const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, S
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const sessionValidationCache = require('./sessionValidationCache');
 const { buildSessionOptions } = require('../shared/ortOptions');
+const { isCpuOnlyBackend } = require('../shared/epPolicy');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
@@ -1390,8 +1391,11 @@ class OnnxSVSPipeline {
         }
         this.allDevices = gpuInfo.devices || [];
 
-        // 检查是否使用 WebNN (ORTWEB)
-        const useOrtWeb = this.inferenceProvider === 'ortweb';
+        // 检查是否使用 WebNN (ORTWEB)。
+        // CPU 后端是全局强制开关：即便 inferenceProvider 仍是 ortweb，也不做
+        // NPU/GPU 探测、不进 WebNN 分支，统一落到主漏斗的 CPU 短路，避免
+        // _loadVocoderViaDML 等 WebNN 专用旁路绕过「所有模型全部 CPU」。
+        const useOrtWeb = this.inferenceProvider === 'ortweb' && !isCpuOnlyBackend();
         if (useOrtWeb) {
             try {
                 const { detectNPUAvailability } = require('../../main/webnnIpc');
@@ -1838,6 +1842,14 @@ class OnnxSVSPipeline {
         const loadVocDmlOrCpu = async (vocFile) => {
             const ort = getOrt();
             const vocPath = path.join(this.modelDir, vocFile);
+            // 纵深防御：全局 CPU 后端下 vocoder 也只带 CPU EP，即便将来
+            // WebNN 分支因重构重新可达，也不会从这条旁路优先尝试 DML。
+            if (isCpuOnlyBackend()) {
+                const session = await ort.InferenceSession.create(vocPath, buildSessionOptions({
+                    executionProviders: ['cpu'],
+                }));
+                return { session, ep: 'cpu', vocFile };
+            }
             const dmlOpts = typeof this.dmlDeviceId === 'number'
                 ? { name: 'dml', deviceId: this.dmlDeviceId }
                 : 'dml';

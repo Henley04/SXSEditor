@@ -149,6 +149,7 @@ describe('CPU EP 后端 — 全链路接线（源码守卫）', () => {
       'src/inference/fcpePitchDetector.js',
       'src/inference/rmvpePitchDetector.js',
       'src/main/plugins/runtime/ortRunner.js',
+      'src/inference/pipeline/index.js',
     ]) {
       expect(readSrc(rel), `${rel} 未接入 isCpuOnlyBackend`).to.match(/isCpuOnlyBackend\(\)/);
     }
@@ -158,6 +159,25 @@ describe('CPU EP 后端 — 全链路接线（源码守卫）', () => {
     expect(webnn).to.match(/epChain\.push\('wasm'\)/);
     // RosVot 本来就只建 CPU session，不尝试 DML。
     expect(readSrc('src/inference/rosvotDetector.js')).to.match(/executionProviders: \['cpu'\]/);
+  });
+
+  it('WebNN 路径的 vocoder DML 旁路同样受全局 CPU 策略约束', () => {
+    const idx = readSrc('src/inference/pipeline/index.js');
+    expect(idx).to.match(/require\('\.\.\/shared\/epPolicy'\)/);
+    // 门控：CPU 后端不启用 WebNN 分支，避免主模型之外再走 DML vocoder 旁路。
+    expect(idx).to.match(/inferenceProvider === 'ortweb' && !isCpuOnlyBackend\(\)/);
+    // 纵深防御：即便将来 WebNN 分支重新可达，vocoder 也只带 CPU EP，
+    // 且 CPU 短路必须排在 [dmlOpts, 'cpu'] 尝试之前。
+    const guardAt = idx.indexOf('if (isCpuOnlyBackend())');
+    const dmlAt = idx.indexOf("executionProviders: [dmlOpts, 'cpu']");
+    expect(guardAt, 'loadVocDmlOrCpu 缺少 CPU 短路').to.be.greaterThan(-1);
+    expect(dmlAt, '非 CPU 后端仍应保留 DML 优先尝试').to.be.greaterThan(-1);
+    expect(guardAt, 'CPU 短路必须排在 DML 尝试之前').to.be.lessThan(dmlAt);
+    const cpuGuard = /if \(isCpuOnlyBackend\(\)\) \{([\s\S]*?)\n            \}/.exec(idx);
+    expect(cpuGuard, '未找到 CPU 短路块').to.be.ok;
+    expect(cpuGuard[1]).to.match(/executionProviders: \['cpu'\]/);
+    expect(cpuGuard[1]).to.match(/ep: 'cpu'/);
+    expect(cpuGuard[0]).to.not.match(/dml/i);
   });
 
   it('后端变化触发 pipeline 重建与 EP 状态清理（复用既有 RESET_TRIGGER_KEYS）', () => {
