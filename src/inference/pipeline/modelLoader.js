@@ -628,6 +628,38 @@ const TRT_RTX_EXCLUDED_KEYS = new Set([
 ]);
 
 /**
+ * INT8：GPU 是否应当独占给 DiT(diffStep) / Vocos(vocoder) 走 TRT-RTX。
+ *
+ * 背景（实测）：NvTensorRTRTX 与 DmlExecutionProvider 在**同一进程共存**时，
+ * TRT 的 execution context 会稳定报 `enqueue failed`（diff_step / cond_emb 的
+ * warmup 必失败，node hash 恒为 ..._7780293478357352456_0_0）；而完全不建 DML
+ * 会话时，同一模型同一形状（seq=512/548/2048/2100/2300）全部通过且 nan=0。
+ *
+ * 小模型（encoders / preflow / cond_emb / mel_transform）计算量很小 —— 实测
+ * CPU EP：encoder 1-6ms、cond_emb 78ms、mel_transform 110ms、preflow 788ms
+ * @2048 帧（真实歌词 token 数远小于 2048，通常 100-200ms），每次合成只跑一次。
+ * 相比"DiT 落回 DML 导致 24 段 × 38s"，让出 GPU 是明显更优的取舍。
+ *
+ * 只在 winmlEnabled 且真的存在 NvTensorRTRTX 设备时生效；TRT 不可用时保持
+ * 原来的 DML 优先行为（DML 对小模型更快）。
+ */
+async function _trtGpuAvailable() {
+  try {
+    const provider = require('../winml/winmlProvider');
+    if (!provider.isWinmlEnabled()) return false;
+    if (typeof provider.getWinmlCandidates !== 'function') return false;
+    // 复用 WinML 的完整候选链（EP 注册 / canLoadLibrary 过滤 / runtime blocklist）。
+    // 不要自己只注册 NV：实测单独 registerEp 一个 EP 后，TRT 会话虽然能创建，
+    // 但输出回传会报 `device-to-host output copy failed`；走完整 chain 才正常。
+    const chain = await provider.getWinmlCandidates(true, false);
+    return Array.isArray(chain)
+      && chain.some((c) => String((c && c.epName) || '').includes('NvTensorRTRTX'));
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * 创建 session 并（必要时）跑一次 dummy 推理校验。
  *
  * 返回值 warmedUp 表示"该 session 已完成校验"：本次实际执行了 dummy，或命中
@@ -639,6 +671,8 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     // （必须在 session 建立前，又不能早到模块加载期）。
     ensureOrtEnv();
     const modelName = path.basename(modelPath);
+    // GPU 只给 DiT/Vocos：这两个是唯一需要 TRT INT8 tensor core 的模型。
+    const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
     // cpuOnly：跳过 WinML/DML 选择，直接用 CPU EP。
     // 目前只有 mel_transform 的 float16 图会用到——DML 上 STFT 的 fp16 kernel 会退化成
     // 常量输出（见 scripts/fp16_aimet_analysis.py 的实测：SQNR -9.4 dB），CPU EP 反而正确。
@@ -671,6 +705,17 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath,
             buildSessionOptions({ executionProviders: ['cpu'] }));
+        return { session, ep: 'cpu', warmedUp: false };
+    }
+
+    // === INT8：GPU 独占给 DiT/Vocos（TRT-RTX），小模型固定 CPU EP ===
+    // 建任何一个 DML 会话都会让同进程的 NvTensorRTRTX enqueue 失败（见
+    // _trtGpuAvailable 的实测记录），而 INT8 的价值恰恰在 TRT 的 INT8 kernel。
+    // 因此 useStaticShapes（int8 / int8-npu）下，非 diffStep/vocoder 一律 CPU。
+    if (useStaticShapes && !isDiffStepOrVocoder && await _trtGpuAvailable()) {
+        const session = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (INT8: GPU reserved for DiT/Vocos via TRT-RTX)`);
         return { session, ep: 'cpu', warmedUp: false };
     }
 
@@ -723,7 +768,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     // OpenVINO 属“其他 EP”，仅 diffstep/vocoder 允许尝试；其余 WinML 模型只走 NV，
     // NV 不可用/失败时，diffstep/vocoder 回退 DML，其余直接回退 CPU。
     const winmlEligible = WINML_ELIGIBLE_KEYS.has(sessionKey);
-    const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
+    // isDiffStepOrVocoder 已在函数开头定义（INT8 GPU 独占判断也用它）
     // 白名单内但被排除在 TRT-RTX 之外的模型：照常走 WinML 分支（其它 EP 仍可
     // 生效），只是候选链里没有 NvTensorRTRTX；随后必须保留 DML 回退。
     const trtRtxExcluded = TRT_RTX_EXCLUDED_KEYS.has(sessionKey);
