@@ -259,6 +259,10 @@ let _streamingUserStopped = false;
 // 播放新音频。合成中不能用旧缓存音频重启播放（旧音频与新音符不匹配 → 错位/杂音，
 // 且会与合成完成后的兜底播放叠加成双路音频）。
 let _pendingSeekStartTime = null;
+// 播放会话代际。取消推理 / 新一轮播放会自增：在途 playFragment 的 catch / finally
+// 据此判断"自己是否还是当前会话"，旧会话的收尾不得再改动共享播放状态
+// （否则旧会话的错误处理会把新一轮刚排好的音频一起停掉）。
+let _playSessionSeq = 0;
 
 // Buffer underrun protection: shared infrastructure (AudioContext suspend/resume,
 // watchdog, underrun detection, source counting) via StreamingScheduler.
@@ -289,6 +293,13 @@ function _createFragmentScheduler() {
         if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
       } else {
         updateFragmentPlayButton();
+        // 等待结束（新 chunk 到达 / setInferenceDone 解冻）后必须重启播放头循环：
+        // 进入等待时 rAF 已被取消，而 setInferenceDone 路径不会再经过 chunk 回调，
+        // 漏了这一步就会出现"声音继续放、播放头永远停在接缝处"。
+        if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()
+          && !(_scheduler && _scheduler.isWaiting)) {
+          updateFragmentPlayhead();
+        }
       }
     },
     // watchdog 兜底检测带 0.3s 提前量（>= 250ms tick 周期 + suspend 延迟），
@@ -303,8 +314,7 @@ function _onFragmentStreamingFinished() {
   streamingFinished = true;
   streamingSources = [];
   setFragmentIsPlaying(false);
-  const raf = getFragmentPlayheadRaf();
-  if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+  _cancelFragmentSharedRaf();
   setFragmentCurrentTime(0);
   setFragmentPlayStartPosition(0);
   updateFragmentPlayButton();
@@ -318,33 +328,134 @@ let _visibilityHandlerRegistered = false;
 let _exclusiveUpdateFn = null;
 let _sharedUpdateFn = null;
 
+/**
+ * 播放头循环「活性探针」—— 与主窗口 renderer/audioPlayback.js 同一套根因：
+ * `getFragmentExclusiveRaf()` / `getFragmentPlayheadRaf()` 里有 id 不代表回调
+ * 还会执行。窗口最小化时 Chromium 挂起已排队的回调，恢复后不保证重新派发，
+ * 而 id 仍非空 → 「id 为空才重启」会跳过重启；短时间最小化反过来会把 id
+ * 清成 null 但心跳还新鲜。两种都不能只看 id。
+ *
+ * 声音在 decibri 子进程（独占）/ WebAudio 音频线程（共享）里继续，
+ * 只有播放头与时间码靠 rAF —— 卡住时表现为「有声、进度与时间永久冻结」。
+ */
+const LOOP_STALL_MS = 700;
+const LOOP_WATCHDOG_INTERVAL_MS = 400;
+let _lastExclusiveTickAt = 0;
+let _lastSharedTickAt = 0;
+let _loopWatchdogTimer = null;
+
+function _cancelFragmentExclusiveRaf() {
+  const raf = getFragmentExclusiveRaf();
+  if (raf) {
+    cancelAnimationFrame(raf);
+    setFragmentExclusiveRaf(null);
+  }
+  // 取消 = 心跳归零。留着旧时间戳会让「id 空但心跳新鲜」的瞬间被误判成
+  // 循环还活着，从而跳过重启。
+  _lastExclusiveTickAt = 0;
+}
+
+function _cancelFragmentSharedRaf() {
+  const raf = getFragmentPlayheadRaf();
+  if (raf) {
+    cancelAnimationFrame(raf);
+    setFragmentPlayheadRaf(null);
+  }
+  _lastSharedTickAt = 0;
+}
+
+function _exclusiveLoopAlive(now) {
+  return _lastExclusiveTickAt > 0 && (now - _lastExclusiveTickAt) < LOOP_STALL_MS;
+}
+
+function _sharedLoopAlive(now) {
+  return _lastSharedTickAt > 0 && (now - _lastSharedTickAt) < LOOP_STALL_MS;
+}
+
+/** 独占循环停摆时重启；隐藏状态下不重启（那时本就该停，省电）。 */
+function _resumeExclusiveIfStalled() {
+  if (document.hidden) return false;
+  if (!getFragmentIsPlaying() || !getFragmentUseExclusiveMode() || !_exclusiveUpdateFn) return false;
+  // 活着 = 有 id 且最近真的跑过；只有 id（死 id）或只有心跳（刚被 cancel）
+  // 都必须重启。
+  const raf = getFragmentExclusiveRaf();
+  if (raf && _exclusiveLoopAlive(Date.now())) return false;
+  _cancelFragmentExclusiveRaf();
+  // 乐观心跳：新帧最快要下一帧才跑，先占位避免同一毫秒内 visibility/focus
+  // 与看门狗各重启一次（互相 cancel，白扔一帧）。
+  _lastExclusiveTickAt = Date.now();
+  setFragmentExclusiveRaf(requestAnimationFrame(_exclusiveUpdateFn));
+  return true;
+}
+
+/** 共享模式（WebAudio）的同类自愈。 */
+function _resumeSharedIfStalled() {
+  if (document.hidden) return false;
+  if (!getFragmentIsPlaying() || getFragmentUseExclusiveMode()) return false;
+  // 等待推理（underrun 冻结）时循环是**故意**停的，由 chunk 回调/onFinish 恢复。
+  if (_scheduler && _scheduler.isWaiting) return false;
+  const raf = getFragmentPlayheadRaf();
+  if (raf && _sharedLoopAlive(Date.now())) return false;
+  _cancelFragmentSharedRaf();
+  _lastSharedTickAt = Date.now(); // 乐观心跳，避免同毫秒多路同时重启
+  // 首帧还没跑过时 _sharedUpdateFn 仍是 null（只在 tick 内赋值），此时用
+  // 模块级导出函数起链——否则「首帧的 rAF 被丢弃」永远没有第二次机会。
+  setFragmentPlayheadRaf(requestAnimationFrame(_sharedUpdateFn || updateFragmentPlayhead));
+  return true;
+}
+
+/** 看门狗：rAF 之外的心跳，不依赖 visibilitychange 一定送达。 */
+function _ensureLoopWatchdog() {
+  if (_loopWatchdogTimer) return;
+  _loopWatchdogTimer = setInterval(() => {
+    if (!getFragmentIsPlaying() || document.hidden) return;
+    if (getFragmentUseExclusiveMode()) _resumeExclusiveIfStalled();
+    else _resumeSharedIfStalled();
+  }, LOOP_WATCHDOG_INTERVAL_MS);
+  if (typeof _loopWatchdogTimer?.unref === 'function') _loopWatchdogTimer.unref();
+}
+
+function _teardownLoopWatchdog() {
+  if (_loopWatchdogTimer) {
+    clearInterval(_loopWatchdogTimer);
+    _loopWatchdogTimer = null;
+  }
+}
+
+function _resumeLoopsIfNeeded() {
+  if (document.hidden) return;
+  if (getFragmentUseExclusiveMode()) _resumeExclusiveIfStalled();
+  else _resumeSharedIfStalled();
+}
+
+function _onVisibilityChange() {
+  if (document.hidden) {
+    // 主动取消比让 Chromium 挂起更可靠：挂起的 id 会误导"循环还活着"。
+    _cancelFragmentExclusiveRaf();
+    _cancelFragmentSharedRaf();
+    return;
+  }
+  _resumeLoopsIfNeeded();
+}
+
+function _onBeforeUnloadForVisibility() {
+  if (_visibilityHandlerRegistered) {
+    document.removeEventListener('visibilitychange', _onVisibilityChange);
+    window.removeEventListener('focus', _resumeLoopsIfNeeded);
+    window.removeEventListener('pageshow', _resumeLoopsIfNeeded);
+    _visibilityHandlerRegistered = false;
+  }
+  _teardownLoopWatchdog();
+}
+
 function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
   _visibilityHandlerRegistered = true;
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      const exclusiveRaf = getFragmentExclusiveRaf();
-      if (exclusiveRaf) {
-        cancelAnimationFrame(exclusiveRaf);
-        setFragmentExclusiveRaf(null);
-      }
-      const sharedRaf = getFragmentPlayheadRaf();
-      if (sharedRaf) {
-        cancelAnimationFrame(sharedRaf);
-        setFragmentPlayheadRaf(null);
-      }
-    } else {
-      if (getFragmentIsPlaying() && getFragmentUseExclusiveMode() && _exclusiveUpdateFn && !getFragmentExclusiveRaf()) {
-        setFragmentExclusiveRaf(requestAnimationFrame(_exclusiveUpdateFn));
-      } else if (getFragmentIsPlaying() && !getFragmentUseExclusiveMode() && _sharedUpdateFn && !getFragmentPlayheadRaf()) {
-        // 等待推理（underrun 冻结）期间不重启 rAF：underrun 分支已取消循环，
-        // 若在此复活，tick 会把 currentTime 推进到已收音频前沿之外的静音区，
-        // 使播放头与人声脱节；等待结束由 chunk 回调重启动画。
-        if (_scheduler && _scheduler.isWaiting) return;
-        setFragmentPlayheadRaf(requestAnimationFrame(_sharedUpdateFn));
-      }
-    }
-  });
+  document.addEventListener('visibilitychange', _onVisibilityChange);
+  // 最小化恢复时 focus 比 visibilitychange 可靠（实测存在只发 blur/focus 的路径）
+  window.addEventListener('focus', _resumeLoopsIfNeeded);
+  window.addEventListener('pageshow', _resumeLoopsIfNeeded);
+  window.addEventListener('beforeunload', _onBeforeUnloadForVisibility, { once: true });
 }
 
 function stopStreamingPlayback() {
@@ -444,6 +555,39 @@ export function stopFragmentPlayback() {
 }
 
 /**
+ * 取消正在进行的推理（与主页面 stopPlayback 的"合成中取消"语义一致）。
+ *
+ * 分片编辑器此前只停本地音频、从不通知主进程：用户点停止后 GPU 仍会把整段
+ * 推理跑完（长分片几十秒），期间按钮停在"合成中"且不可点，下一次播放被
+ * `isSynthesizing` 的守卫静默挡住 —— 也就是"停止停不掉推理"。
+ *
+ * 与 stopFragmentPlayback 的分工：本函数只在**推理中**才有额外动作（通知主进程
+ * 协作式取消 + 释放重入锁），普通"停播放"仍走 stopFragmentPlayback。
+ *
+ * @returns {boolean} 是否确实取消了在途推理
+ */
+export function cancelFragmentSynthesis() {
+  if (!getFragmentIsSynthesizing()) return false;
+  // 先置停止标记：拦截已排队的 chunk 回调、合成完成后的兜底播放，
+  // 并让 catch 把 SYNTHESIS_CANCELLED 当成正常收尾而不是失败。
+  _streamingUserStopped = true;
+  _pendingSeekStartTime = null;
+  // 代际自增：在途 playFragment 的 catch / finally 不再改动共享播放状态
+  _playSessionSeq += 1;
+  // 模型加载阶段不能发 cancel：主进程会落到"无活跃任务 → resetSvsPipeline()"，
+  // 把正在初始化的 lazy 实例作废，下次播放要重新加载（与主页面同一守卫）。
+  if (getPipelineInitialized() && window.electronAPI?.cancelSVSSynthesis) {
+    window.electronAPI.cancelSVSSynthesis().catch(() => {});
+  }
+  // 立即放开重入锁：否则 IDLE 下按钮可点、playFragment 的 guard 却静默 return，
+  // 用户看到的是"点了没反应"。旧会话会在最近的检查点退出。
+  setFragmentIsSynthesizing(false);
+  stopFragmentPlayback();
+  updateFragmentPlayButton();
+  return true;
+}
+
+/**
  * 播放中拖拽 playhead 时跳转到新位置。
  * 不重新合成：直接复用已缓存的 fragmentAudioData，从 newStartTime 开始播放。
  * 需要先停止当前播放（source.stop / audioStop），再用现有 audioData 重启。
@@ -504,11 +648,7 @@ export async function seekFragmentPlayback(newStartTime) {
 }
 
 function stopFragmentExclusivePlayback() {
-  const raf = getFragmentExclusiveRaf();
-  if (raf) {
-    cancelAnimationFrame(raf);
-    setFragmentExclusiveRaf(null);
-  }
+  _cancelFragmentExclusiveRaf();
   // 在此统一退订 onAudioEnded：所有停止/暂停/跳转路径都经过本函数，
   // rAF 已被 cancel，不能再依赖 rAF 闭包退订。
   _detachFragmentEndedListener();
@@ -544,6 +684,8 @@ export function updateFragmentPlayhead() {
   _ensureVisibilityHandler();
   _sharedUpdateFn = updateFragmentPlayhead;
   if (!getFragmentIsPlaying()) return;
+  // 活性心跳：看门狗与恢复逻辑据此判断循环是否真的在跑（rAF id 不算数）。
+  _lastSharedTickAt = Date.now();
   const ctx = getFragmentAudioContext();
   if (!ctx) return;
 
@@ -933,6 +1075,8 @@ export async function playFragment() {
   // 重入保护：防止连续调用导致前一次 finally 提前把 fragmentIsSynthesizing
   // 置 false，使后续进度回调失效（进度百分比偶发不显示的根因之一）。
   if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
+  // 本次播放的会话号：取消推理 / 新一轮播放会让它失效（见 _playSessionSeq）。
+  const mySession = ++_playSessionSeq;
   setFragmentIsSynthesizing(true);
   updateFragmentPlayButton();
   // 清理上一次流式播放状态
@@ -1061,14 +1205,12 @@ export async function playFragment() {
         // - 迟到 chunk：调度时间已过 → 钳到当前时刻，并把时间基准同步前移，
         //   让播放头与音频一起回退 δ 秒。后续 chunk 排在本次之后
         //   （streamingNextStart += dur），无重叠、无内容丢失。
-        if (_scheduler && _scheduler.isWaiting) {
-          await _scheduler.resumeFromWait();
-          // 等待进入时 rAF 已被 onWaitStateChange 取消，这里重启；
-          // 幂等守卫防止与残留循环叠加成双 rAF 链。
-          if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) {
-            updateFragmentPlayhead();
-          }
-        }
+        //
+        // 顺序纪律（务必保留）：**先排程 + 推进前沿，最后才解除等待**。
+        // 旧实现先 resumeFromWait 再重启播放头，重启的 rAF 立刻用**旧**前沿判定
+        // underrun（此时 curTime 正好停在前沿上）→ 刚解冻的 context 又被 suspend，
+        // 新 chunk 虽然 start() 了却始终不出声：第一段之后整段静音（长分片尤其明显）。
+        const wasWaiting = !!(_scheduler && _scheduler.isWaiting);
         if (streamingNextStart < ctx.currentTime + 0.01) {
           // Late chunk: clamp scheduling time to now, adjust time base.
           const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
@@ -1091,6 +1233,15 @@ export async function playFragment() {
         }
         source.start(streamingNextStart);
         streamingNextStart += effectiveChunkDuration;
+
+        // 解除推理等待：前沿已覆盖本 chunk，此时重启 rAF 不会再次触发 underrun。
+        if (wasWaiting && _scheduler) {
+          await _scheduler.resumeFromWait();
+          // 幂等守卫防止与残留循环叠加成双 rAF 链。
+          if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) {
+            updateFragmentPlayhead();
+          }
+        }
 
         // Unified onended: decrement active source count and release reference.
         // When isLast has been received AND all sources have ended, mark
@@ -1159,6 +1310,8 @@ export async function playFragment() {
         ),
       }),
     });
+    // 会话已被取消/取代（用户点了停止）：结果作废，不写入缓存也不开播。
+    if (mySession !== _playSessionSeq) return;
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
     // 合成成功后更新签名，后续播放可复用此缓存
     setFragmentAudioDataSignature(currentSignature);
@@ -1202,6 +1355,10 @@ export async function playFragment() {
     // 移除 chunk 监听（避免内存泄漏），但保留已调度的 source 继续播放。
     // 注意：必须在 inferenceDone 设置之后移除，否则 underrun 检测
     // 仍会等待（推理未完成标记）。
+    // 先让出一轮宏任务：主进程的 chunk 事件与 invoke 的返回值走不同通道，
+    // 合成结果可能先于最后几个 chunk 到达渲染进程。立即摘监听会把仍在队列里的
+    // chunk 永久丢弃 —— 表现为"前面有声音、后面整段静音"（与主页面 playAll 同一处理）。
+    await new Promise((resolve) => setTimeout(resolve, 0));
     if (streamingCleanup) {
       safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
       streamingCleanup = null;
@@ -1222,9 +1379,19 @@ export async function playFragment() {
       }
     }
   } catch (error) {
-    console.error(t('fragment.synthesisFailed') + ':', error);
-    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
-    showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
+    // 已被取消 / 已被新一轮播放接管：这是正常收尾，不是失败。
+    // 既不能弹"合成失败"，也不能停掉新一轮刚排好的音频。
+    if (mySession !== _playSessionSeq) return;
+    const msg = String((error && error.message) || '');
+    // 协作式取消（主进程 SYNTHESIS_CANCELLED / 被新请求取代）不是错误。
+    const cancelled = /cancel|superseded|abort/i.test(msg);
+    if (cancelled) {
+      console.log('[FragmentAudio] Synthesis cancelled');
+    } else {
+      console.error(t('fragment.synthesisFailed') + ':', error);
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
+    }
     stopStreamingPlayback();
     // stopStreamingPlayback 只清理流式资源，不重置播放状态。异常路径若不补这些
     // 清理，会留下 isPlaying=true + audioData 为空的组合：后续 seek/点击走空
@@ -1235,10 +1402,14 @@ export async function playFragment() {
     if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
     updateFragmentPlayButton();
   } finally {
-    setFragmentIsSynthesizing(false);
-    // 合成流程结束（成功或失败）后清除待跳转标记，避免残留影响下一次播放
-    _pendingSeekStartTime = null;
-    updateFragmentPlayButton();
+    // 只有"当前会话"才允许收尾：取消后用户可能已经开了新一轮播放，
+    // 旧会话在这里把 isSynthesizing 置 false 会把新一轮的重入锁拆掉。
+    if (mySession === _playSessionSeq) {
+      setFragmentIsSynthesizing(false);
+      // 合成流程结束（成功或失败）后清除待跳转标记，避免残留影响下一次播放
+      _pendingSeekStartTime = null;
+      updateFragmentPlayButton();
+    }
   }
 }
 

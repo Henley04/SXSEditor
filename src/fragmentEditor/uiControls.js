@@ -44,7 +44,7 @@ import {
   getPitchAtTime, getClippedNotes,
   isScorePitchMode,
 } from './canvasRenderer.js';
-import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
+import { playFragment, stopFragmentPlayback, cancelFragmentSynthesis, exportFragment } from './audioPlayback.js';
 import { exportFragmentMidi } from './midiExport.js';
 
 
@@ -161,8 +161,10 @@ export function updateFragmentPlayButton() {
     setLabel(btnPlayFragment, t('fragment.stop'), { icon: 'stop' });
     btnPlayFragment.disabled = false;
   } else if (getFragmentIsSynthesizing()) {
-    setLabel(btnPlayFragment, t('fragment.synthesizing'), { icon: 'play' });
-    btnPlayFragment.disabled = true;
+    // 推理中（首个 chunk 尚未到达 / 非流式整段合成）：按钮语义与主页面一致 ——
+    // 可点即"取消推理"。旧实现把它禁用，用户只能等整段推理跑完才能再操作。
+    setLabel(btnPlayFragment, t('fragment.cancelSynthesis'), { icon: 'stop' });
+    btnPlayFragment.disabled = false;
   } else if (getFragmentIsAutoInferring()) {
     // 后台自动推理进行中：仅提示，不禁用按钮——用户仍可随时手动播放或编辑。
     setLabel(btnPlayFragment, t('fragment.autoInferring'), { icon: 'play' });
@@ -286,7 +288,8 @@ export function setupUiControls() {
   const btnClose = document.getElementById('btn-close');
   if (btnClose) {
     btnClose.addEventListener('click', () => {
-      stopFragmentPlayback();
+      // 关窗也要取消在途推理：否则窗口没了，主进程仍会把整段跑完（白占 GPU）
+      if (!cancelFragmentSynthesis()) stopFragmentPlayback();
       const autoSaveTimer = getAutoSaveTimer();
       if (autoSaveTimer) {
         clearTimeout(autoSaveTimer);
@@ -319,10 +322,14 @@ export function setupUiControls() {
         showAlertDialog(t('fragment.noNotesToPlay'));
         return;
       }
-      // 播放中优先按"停止"处理：流式播放期间合成仍在进行（isSynthesizing=true），
-      // 旧顺序会在这里直接 return，按钮看似可点却毫无反应。
-      if (getFragmentIsPlaying()) {
-        stopFragmentPlayback();
+      // 播放中 / 推理中一律按"停止"处理：
+      //   · 流式播放期间合成仍在进行（isSynthesizing=true），按钮此刻是"停止"；
+      //   · 推理刚开始、首个 chunk 还没到时同样要能取消 —— 旧实现直接 return，
+      //     用户只能干等整段推理跑完（与主页面的 Play→取消 行为不一致）。
+      if (getFragmentIsPlaying() || getFragmentIsSynthesizing()) {
+        // 推理中：取消主进程的推理（内部会一并停掉本地音频）；
+        // 只是播放缓存音频（无推理）：走普通停止。
+        if (!cancelFragmentSynthesis()) stopFragmentPlayback();
         setFragmentCurrentTime(0);
         // 停止时重置播放起始位置，下次点击播放从头开始。
         // 用户可再次拖拽 playhead 设置新的起始位置。
@@ -330,7 +337,6 @@ export function setupUiControls() {
         render();
         return;
       }
-      if (getFragmentIsSynthesizing()) return;
       await playFragment();
     });
   }

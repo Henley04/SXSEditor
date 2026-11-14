@@ -822,7 +822,10 @@ if (window.electronAPI?.onMainMenuMcpSetupRequest) {
 // 可点击"继续"从暂停点恢复；后台流式合成不受影响，完成后可正常续播。
 if (window.electronAPI?.onSettingsWindowOpened) {
   const offSettingsPause = window.electronAPI.onSettingsWindowOpened(() => {
-    if (state.isPlaying) pausePlayback();
+    // 无条件调用：pausePlayback 内部会兜底停掉可能残留的独占输出。
+    // 回执超时时 state.isPlaying 已经是 false，旧的 `if (state.isPlaying)`
+    // 守卫会让设置窗口打开时那路幽灵播放继续响。
+    pausePlayback();
   });
   if (state._ipcCleanups) state._ipcCleanups.push(offSettingsPause);
 }

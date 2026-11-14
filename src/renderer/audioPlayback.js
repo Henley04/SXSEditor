@@ -146,6 +146,28 @@ let _visibilityHandlerRegistered = false;
 let _exclusiveUpdateFn = null;
 let _sharedUpdateFn = null;
 
+/**
+ * 播放头循环「活性探针」—— 窗口最小化再恢复后进度条/时间码卡住（声音照常在放）
+ * 的根因就在这里。
+ *
+ * `state.exclusivePlaybackRaf` / `state.playheadRaf` 里存着一个 rAF id **不代表
+ * 循环还活着**：窗口最小化时 Chromium 会挂起已排队的回调，恢复后并不保证重新
+ * 派发（frame sink / GPU 进程重建、节能降频、以及 minimize 未派发
+ * visibilitychange 的组合都会把它彻底丢掉）。而 id 仍是非空 → 恢复逻辑
+ * 用「id 为空才重启」判断就会跳过重启。
+ *
+ * 此时声音还在响：独占走主进程 decibri 子进程，共享走 WebAudio 音频线程，
+ * 两者都不依赖渲染层的 rAF；只有播放头和时间码依赖它 —— 表现就是
+ * 「有声、进度条与时间指示永久冻结」。
+ *
+ * 唯一可靠的判据是「最后一次真正执行的 tick 时刻」，id 一律不当证据。
+ */
+const LOOP_STALL_MS = 700;
+const LOOP_WATCHDOG_INTERVAL_MS = 400;
+let _lastExclusiveTickAt = 0;
+let _lastSharedTickAt = 0;
+let _loopWatchdogTimer = null;
+
 // 独占模式 onAudioEnded 退订函数的模块级持有。旧实现只在 rAF 闭包内拿到它，
 // stop/pause/seek 会先 cancel rAF，导致退订永不执行——每次播放泄漏一个
 // IPC 监听器。所有拆除路径都经过 stopExclusivePlayback()，在那里统一退订。
@@ -157,33 +179,115 @@ function _detachExclusiveEndedListener() {
   }
 }
 
+function _cancelExclusiveRaf() {
+  if (state.exclusivePlaybackRaf) {
+    cancelAnimationFrame(state.exclusivePlaybackRaf);
+    state.exclusivePlaybackRaf = null;
+  }
+  // 取消 = 心跳归零：留着旧时间戳会让「id 空但心跳新鲜」的瞬间被误判成
+  // 循环还活着，从而跳过重启。
+  _lastExclusiveTickAt = 0;
+}
+
+function _exclusiveLoopAlive(now) {
+  return _lastExclusiveTickAt > 0 && (now - _lastExclusiveTickAt) < LOOP_STALL_MS;
+}
+
+function _sharedLoopAlive(now) {
+  return _lastSharedTickAt > 0 && (now - _lastSharedTickAt) < LOOP_STALL_MS;
+}
+
+/**
+ * 独占循环停摆时重启。返回是否真的重启了。
+ * 隐藏状态下不重启：那时 rAF 本来就该停（省电），恢复时再由
+ * visibilitychange / focus / 看门狗接管。
+ */
+function _resumeExclusiveLoopIfStalled() {
+  if (document.hidden) return false;
+  if (!state.isPlaying || !state.useExclusiveMode || !_exclusiveUpdateFn) return false;
+  // 活着 = 有 id **且** 最近真的跑过。只满足前半是"死 id"（最小化挂起后
+  // 恢复、GPU 重建都会留下这种），只满足后半是"id 被主动取消但仍在播"
+  // （短时间最小化时 hidden 分支取消后立刻恢复）。两种都必须重启。
+  if (state.exclusivePlaybackRaf && _exclusiveLoopAlive(Date.now())) return false;
+  // 先取消那个「可能永远不会执行」的旧 id，否则重启会叠出第二条循环，
+  // 而 stop 只能取消其中一个。
+  _cancelExclusiveRaf();
+  // 乐观心跳：新帧最早也要下一帧才执行，不先占位的话，同一毫秒内到达的
+  // visibility/focus 与看门狗会各重启一次（互相 cancel，白扔一帧）。
+  _lastExclusiveTickAt = Date.now();
+  state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
+  return true;
+}
+
+/** 共享模式（WebAudio）的同类自愈。 */
+function _resumeSharedLoopIfStalled() {
+  if (document.hidden) return false;
+  if (!state.isPlaying || state.useExclusiveMode || !_sharedUpdateFn) return false;
+  if (state.playheadRaf && _sharedLoopAlive(Date.now())) return false;
+  // 等待推理（underrun 冻结）时 playheadRaf 是**故意**取消的，不能复活：
+  // 其 getAudioContext() 会在挂起的 context 上触发 resume，伴奏抢跑。
+  if (_scheduler && _scheduler.isWaiting) return false;
+  if (state.playheadRaf) {
+    cancelAnimationFrame(state.playheadRaf);
+    state.playheadRaf = null;
+  }
+  _lastSharedTickAt = Date.now(); // 乐观心跳，避免同毫秒多路同时重启
+  state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
+  return true;
+}
+
+/**
+ * 看门狗：rAF 之外唯一的心跳。隐藏时会被节流（且我们主动跳过），一旦窗口
+ * 恢复可见，它最迟一个周期就能发现停摆并接管 —— 不依赖 visibilitychange
+ * 一定送达（实测 minimize 存在只发 blur、不发 visibilitychange 的路径）。
+ */
+function _ensureLoopWatchdog() {
+  if (_loopWatchdogTimer) return;
+  _loopWatchdogTimer = setInterval(() => {
+    if (!state.isPlaying || document.hidden) return;
+    if (state.useExclusiveMode) _resumeExclusiveLoopIfStalled();
+    else _resumeSharedLoopIfStalled();
+  }, LOOP_WATCHDOG_INTERVAL_MS);
+  // Node/jsdom（含测试环境）下把定时器 unref：它不该阻止进程退出。
+  // 浏览器里 setInterval 返回数字，无 unref，跳过。
+  if (typeof _loopWatchdogTimer?.unref === 'function') _loopWatchdogTimer.unref();
+}
+
+function _teardownLoopWatchdog() {
+  if (_loopWatchdogTimer) {
+    clearInterval(_loopWatchdogTimer);
+    _loopWatchdogTimer = null;
+  }
+}
+
+function _resumeLoopsIfNeeded() {
+  if (document.hidden) return;
+  if (state.useExclusiveMode) _resumeExclusiveLoopIfStalled();
+  else _resumeSharedLoopIfStalled();
+}
+
 function _onVisibilityChange() {
   if (document.hidden) {
-    if (state.exclusivePlaybackRaf) {
-      cancelAnimationFrame(state.exclusivePlaybackRaf);
-      state.exclusivePlaybackRaf = null;
-    }
+    // 主动取消比让 Chromium 挂起更可靠：挂起的 id 在恢复后不一定会被重新
+    // 派发，而留下一个非空 id 会误导"循环还活着"的判断。
+    _cancelExclusiveRaf();
     if (state.playheadRaf) {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-  } else {
-    if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
-      state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
-    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf && !(_scheduler && _scheduler.isWaiting)) {
-      // 等待推理期间不重启 rAF：underrun 冻结时 playheadRaf 已被取消，
-      // 若此处复活循环，其 getAudioContext() 调用会在挂起的 context 上
-      // 触发意外 resume，导致伴奏在人声等待缺口中继续播放。
-      state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
-    }
+    return;
   }
+  _resumeLoopsIfNeeded();
 }
 
 function _onBeforeUnloadForVisibility() {
   if (_visibilityHandlerRegistered) {
     document.removeEventListener('visibilitychange', _onVisibilityChange);
+    window.removeEventListener('focus', _resumeLoopsIfNeeded);
+    window.removeEventListener('pageshow', _resumeLoopsIfNeeded);
     _visibilityHandlerRegistered = false;
   }
+  _teardownLoopWatchdog();
 }
 
 // Streaming playback state (main page Play All with diffStepChunk).
@@ -375,6 +479,10 @@ function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
   _visibilityHandlerRegistered = true;
   document.addEventListener('visibilitychange', _onVisibilityChange);
+  // 窗口从最小化恢复时 focus 比 visibilitychange 更可靠（有些最小化路径只发
+  // blur/focus，不发 visibilitychange），pageshow 覆盖从休眠/挂起恢复。
+  window.addEventListener('focus', _resumeLoopsIfNeeded);
+  window.addEventListener('pageshow', _resumeLoopsIfNeeded);
   window.addEventListener('beforeunload', _onBeforeUnloadForVisibility, { once: true });
 }
 
@@ -1267,6 +1375,28 @@ function _buildPlaybackChannels(vocalMono, bpm, includeAccompaniment = true) {
   return result;
 }
 
+/**
+ * 独占输出（主进程 decibri）用的单声道混音。
+ *
+ * 共享播放把伴奏作为独立 BufferSource 交给 WebAudio（便于实时调音量），
+ * 而独占输出只收到一份 Float32Array PCM，完全没有 WebAudio 这一层。
+ * 旧实现直接把 state.currentAudioData（纯人声）送过去，于是独占模式下
+ * 永远只有清唱。这里在发送前按轨道音量/起点把伴奏预混进来，再下混为
+ * 单声道（decibri 的 PCM 写入是按单声道数据组织的）。
+ */
+function _buildExclusiveMonoMix() {
+  const channels = _buildPlaybackChannels(state.currentAudioData, state.project.bpm, true);
+  if (channels.length === 1) return channels[0];
+  const length = channels[0].length;
+  const mono = new Float32Array(length);
+  for (const ch of channels) {
+    for (let i = 0; i < length; i++) mono[i] += ch[i];
+  }
+  const norm = 1 / channels.length;
+  for (let i = 0; i < length; i++) mono[i] *= norm;
+  return mono;
+}
+
 export function startSharedPlayback(offset) {
   stopAudioSource();
 
@@ -1347,11 +1477,15 @@ export async function startExclusivePlayback(offset) {
       offset: offset,
     };
 
-    const result = await window.electronAPI.audioPlay(state.currentAudioData, options);
+    // 独占输出没有 WebAudio 侧的伴奏 source，必须送一份已混伴奏的 PCM。
+    const result = await window.electronAPI.audioPlay(_buildExclusiveMonoMix(), options);
 
     if (!result.success) {
       console.warn('[Audio] WASAPI exclusive mode failed, falling back to shared:', result.error);
       state.useExclusiveMode = false;
+      // 主进程可能已经开了一路没有回执的独占播放；仅把标志改回共享不会
+      // 把它停掉，必须再兜底一次（幂等）。
+      stopExclusivePlayback();
       startSharedPlayback(offset);
       return;
     }
@@ -1405,18 +1539,22 @@ export async function startExclusivePlayback(offset) {
   } catch (err) {
     console.warn('Exclusive audio playback failed; using shared playback:', err);
     state.useExclusiveMode = false;
+    stopExclusivePlayback();
     startSharedPlayback(offset);
   }
 }
 
 export function startExclusivePlayheadAnimation(removeEndedListener, playbackStartWallTime) {
   _ensureVisibilityHandler();
+  _ensureLoopWatchdog();
   function updatePlayhead() {
     _exclusiveUpdateFn = updatePlayhead;
     if (!state.isPlaying) {
       if (removeEndedListener) removeEndedListener();
       return;
     }
+    // 活性心跳：看门狗与恢复逻辑据此判断循环是否真的在跑（rAF id 不算数）。
+    _lastExclusiveTickAt = Date.now();
 
     const elapsed = Date.now() / 1000 - state.playbackStartTime;
     const duration = state.currentAudioData ? state.currentAudioData.length / SAMPLE_RATE : 0;
@@ -1452,24 +1590,34 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
   }
 
   _exclusiveUpdateFn = updatePlayhead;
+  // 先取消可能残留的旧循环：没有幂等保护时直接赋值会叠出第二条循环，而
+  // stop 只能取消最后存下的那个 id（另一条永久泄漏并继续画播放头）。
+  _cancelExclusiveRaf();
   state.exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
 }
 
 export function stopExclusivePlayback() {
-  if (state.exclusivePlaybackRaf) {
-    cancelAnimationFrame(state.exclusivePlaybackRaf);
-    state.exclusivePlaybackRaf = null;
-  }
+  _cancelExclusiveRaf();
   // Unsubscribe the onAudioEnded IPC listener here: stop/pause/seek all route
   // through this function, whereas the rAF that used to own the unsubscribe
   // has already been cancelled on those paths (listener leak).
   _detachExclusiveEndedListener();
-  window.electronAPI.audioStop().catch(err => {
-    console.warn('[Audio] Failed to stop exclusive playback:', err);
-  });
+  // 现在所有 stop/pause/seek 路径都会无条件调用本函数（包括从未用过独占
+  // 输出的会话），因此这里必须容忍缺失的 API；共享模式下它就是一个 no-op。
+  const stopPromise = window.electronAPI?.audioStop?.();
+  if (stopPromise && typeof stopPromise.catch === 'function') {
+    stopPromise.catch(err => {
+      console.warn('[Audio] Failed to stop exclusive playback:', err);
+    });
+  }
 }
 
 export function pausePlayback() {
+  // 无条件停掉独占输出：失败回退到共享模式后 useExclusiveMode 已是 false，
+  // 但主进程那一路"没有回执、UI 认为没在播"的播放可能仍在出声。只按标志
+  // 判断会漏掉它，表现就是暂停/停止都按不动、清唱停不下来。
+  // stopExclusivePlayback 是幂等的，共享模式下调用只是清一次空 listener。
+  stopExclusivePlayback();
   if (!state.isPlaying) {
     return;
   }
@@ -1503,7 +1651,7 @@ export function pausePlayback() {
   if (state.useExclusiveMode) {
     const elapsed = Date.now() / 1000 - state.playbackStartTime;
     state.playbackPauseOffset = elapsed;
-    stopExclusivePlayback();
+    // 独占输出已在函数开头停止（含 rAF 与 onAudioEnded 退订）。
     state.isPlaying = false;
     // 仅取消 rAF，不清除 playhead 视觉——保留显示"已暂停位置"的虚线播放头
     if (state.exclusivePlaybackRaf) {
@@ -1563,9 +1711,9 @@ export function stopPlayback() {
   // 播放被中止：插件可能还挂着阻滞浮层（它的 end 事件依赖插件走完整条流程），
   // 这里兜底收掉，避免 UI 停在阻滞态。正常路径（无插件）是 no-op。
   clearPluginBlockingOverlay('playback-stopped');
-  if (state.useExclusiveMode) {
-    stopExclusivePlayback();
-  }
+  // 独占输出可能已被失败回退改成 useExclusiveMode=false，但仍有一路幽灵播放
+  // 在响；停止必须无条件兜底，不能靠这个标志。
+  stopExclusivePlayback();
   stopAudioSource();
   state.isPlaying = false;
   state.playbackPauseOffset = 0;
@@ -1653,13 +1801,9 @@ export async function seekPlayback(newOffset) {
   const clamped = Math.max(0, Math.min(duration - margin, newOffset));
 
   // 停止当前播放（保留 currentAudioData，不 null）
-  if (state.useExclusiveMode) {
-    if (state.exclusivePlaybackRaf) {
-      cancelAnimationFrame(state.exclusivePlaybackRaf);
-      state.exclusivePlaybackRaf = null;
-    }
-    window.electronAPI.audioStop().catch(() => {});
-  } else {
+  // 独占输出无条件兜底（幂等）；共享模式再清 WebAudio 侧的 source 与伴奏。
+  stopExclusivePlayback();
+  if (!state.useExclusiveMode) {
     stopAudioSource();
   }
   state.isPlaying = false;
@@ -1706,14 +1850,22 @@ export function stopAudioSource() {
   if (state.playheadRaf) {
     cancelAnimationFrame(state.playheadRaf);
     state.playheadRaf = null;
+    _lastSharedTickAt = 0;
   }
 }
 
 export function startPlayheadAnimation() {
+  _ensureLoopWatchdog();
   // 幂等保护：已有 rAF 循环在跑时不叠加启动。双循环会导致播放头重复绘制，
   // 且 stopPlayheadAnimation 只能取消 state.playheadRaf 存的最后一个 id，
   // 另一个循环永久泄漏（等待推理恢复路径可能命中此竞态）。
-  if (state.playheadRaf) return;
+  // 判断"在跑"必须看活性而不是 id 非空：窗口最小化会留下一个永远不会执行
+  // 的死 id，只认 id 会让此后每一次启动都被 short-circuit（见 LOOP_STALL_MS）。
+  if (state.playheadRaf && _sharedLoopAlive(Date.now())) return;
+  if (state.playheadRaf) {
+    cancelAnimationFrame(state.playheadRaf);
+    state.playheadRaf = null;
+  }
   _ensureVisibilityHandler();
   function updatePlayhead() {
     _sharedUpdateFn = updatePlayhead;
@@ -1726,6 +1878,7 @@ export function startPlayheadAnimation() {
       state.playheadRaf = null;
       return;
     }
+    _lastSharedTickAt = Date.now();
 
     const context = getAudioContext();
     // 两个时钟域，不可混用（混用 = 补偿量重复计入，人声真的与时间轴错开）：
@@ -1795,6 +1948,9 @@ export function stopPlayheadAnimation() {
     cancelAnimationFrame(state.playheadRaf);
     state.playheadRaf = null;
   }
+  // 心跳清零：否则下一次起播的第一帧还没跑时，旧时间戳会被误判成"还在跑"
+  // 而让看门狗跳过重启。
+  _lastSharedTickAt = 0;
   clearPlayheadLine();
 }
 

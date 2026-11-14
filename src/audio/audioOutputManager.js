@@ -2,6 +2,12 @@ const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+// start 要把整段 PCM 交给 native Speaker；正常情况毫秒级就有回执，8s 还没回
+// 只可能是子进程卡在设备打开/写入上。等满 15s 会让每次点播放都白等这么久。
+const START_COMMAND_TIMEOUT_MS = 8000;
+// stop 是用户主动操作，必须快速有反馈；超时就当作子进程失联处理。
+const STOP_COMMAND_TIMEOUT_MS = 3000;
+
 function _findWorkerScript() {
   const searchPaths = [
     // Dev mode: audioOutputManager.js lives in src/audio/, audioWorker.js next to it.
@@ -71,6 +77,10 @@ class AudioOutputManager {
       return null;
     }
 
+    // 捕获本次 fork 的进程身份：旧 worker 被 _killUnresponsiveWorker() 终止后，
+    // 它的 'exit' 事件可能在新 worker 已经 fork 之后才到达。若不过滤，旧事件
+    // 会把新进程的 _worker / _workerReady 一并清掉（表现为播放状态错乱）。
+    const worker = this._worker;
     this._readyPromise = new Promise((resolve) => {
       this._readyResolve = resolve;
     });
@@ -79,7 +89,8 @@ class AudioOutputManager {
     // for this freshly forked process.
     this._idleExitExpected = false;
 
-    this._worker.on('message', (msg) => {
+    worker.on('message', (msg) => {
+      if (this._worker !== worker) return;
       if (msg.type === 'ready') {
         this._workerReady = true;
         this._workerAvailable = msg.isAvailable;
@@ -120,7 +131,8 @@ class AudioOutputManager {
       }
     });
 
-    this._worker.on('error', (err) => {
+    worker.on('error', (err) => {
+      if (this._worker !== worker) return;
       console.error('[AudioOutputManager] child process error:', err.message);
       this._workerReady = false;
       this._workerAvailable = false;
@@ -134,7 +146,8 @@ class AudioOutputManager {
       this._rejectAllPending(err);
     });
 
-    this._worker.on('exit', (code) => {
+    worker.on('exit', (code) => {
+      if (this._worker !== worker) return;
       this._workerReady = false;
       this._workerAvailable = false;
       this._worker = null;
@@ -160,7 +173,7 @@ class AudioOutputManager {
       this._rejectAllPending(new Error(`Audio child process exited (code=${code})`));
     });
 
-    return this._worker;
+    return worker;
   }
 
   _rejectAllPending(err) {
@@ -168,6 +181,37 @@ class AudioOutputManager {
       reject(err);
     }
     this._pendingRequests.clear();
+  }
+
+  /**
+   * 终止没有回执的音频子进程，并把父进程状态复位到"可重新开播"。
+   *
+   * 只 kill 是不够的：`exit` 事件会按"意外崩溃"把 _workerCrashed 置 true，
+   * 之后 _ensureWorker() 永远返回 null，独占模式就再也用不了。这里显式把它
+   * 标成预期退出，并清掉 ready/playing 状态，让下一次 start() 重新 fork。
+   */
+  _killUnresponsiveWorker() {
+    const worker = this._worker;
+    this._worker = null;
+    this._workerReady = false;
+    this._workerAvailable = false;
+    this._isPlaying = false;
+    this._endedSent = false;
+    this._workerCrashed = false;
+    this._idleExitExpected = true;
+    if (this._readyResolve) {
+      this._readyResolve(false);
+      this._readyResolve = null;
+    }
+    this._handleWorkerDeath();
+    this._rejectAllPending(new Error('Audio worker did not respond'));
+    if (!worker) return;
+    try { worker.kill(); } catch (_) {}
+    // Windows 上卡在 native 音频调用里的线程可能不响应 SIGTERM，兜底强杀。
+    const forceTimer = setTimeout(() => {
+      try { worker.kill('SIGKILL'); } catch (_) {}
+    }, 500);
+    if (forceTimer && typeof forceTimer.unref === 'function') forceTimer.unref();
   }
 
   // S12: Called from worker 'error'/'exit' handlers to clean up playing state
@@ -194,10 +238,16 @@ class AudioOutputManager {
       const id = ++this._requestId;
       // B3: Per-command timeout (default 15s; quick status commands use 2s).
       const timeout = setTimeout(() => {
-        if (this._pendingRequests.has(id)) {
-          this._pendingRequests.delete(id);
-          reject(new Error(`Command timeout: ${type}`));
-        }
+        if (!this._pendingRequests.has(id)) return;
+        this._pendingRequests.delete(id);
+        const err = new Error(`Command timeout: ${type}`);
+        // start 没有回执时，worker 端可能已经把 PCM 交给音频设备开始出声，只是
+        // native 调用卡住导致回执发不回来。父进程此刻 _isPlaying 仍是 false，
+        // 带守卫的 stop() 会直接跳过 → 留下"UI 认为没在播、用户却停不掉"的
+        // 幽灵播放（且播放的是没混伴奏的纯人声）。因此 start 超时必须连
+        // 子进程一起终止，让系统释放音频设备句柄。
+        if (type === 'start') this._killUnresponsiveWorker();
+        reject(err);
       }, timeoutMs);
 
       this._pendingRequests.set(id, {
@@ -263,7 +313,7 @@ class AudioOutputManager {
     const result = await this._sendCommand('start', {
       audioData: audioArray,
       options: { ...options, volume: this._volume },
-    }, [audioArray.buffer]);
+    }, [audioArray.buffer], START_COMMAND_TIMEOUT_MS);
 
     if (result.success) {
       this._isPlaying = true;
@@ -279,8 +329,30 @@ class AudioOutputManager {
     if (this._isPlaying) {
       this._isPlaying = false;
       try {
-        await this._sendCommand('stop');
+        await this._sendCommand('stop', {}, null, STOP_COMMAND_TIMEOUT_MS);
       } catch (_) {}
+    }
+  }
+
+  /**
+   * UI 发起的停止/暂停：无条件停掉音频子进程的出声。
+   *
+   * 与 stop() 的区别：stop() 带 `_isPlaying` 守卫，只用于 start() 内部清理。
+   * 当 start 的回执超时、或 worker 已经开始播放但父进程还没标记 playing 时，
+   * 这个守卫会让"停止"变成一个静默 no-op —— 正是用户遇到的"播放停不下来"。
+   * 这里不看状态，只要 worker 还在就发 stop；不响应就按失联处理直接终止。
+   */
+  async forceStop() {
+    this._isPlaying = false;
+    this._lastPosition = 0;
+    // 从未 fork 过 worker（一直在共享 WebAudio 模式）时，不要为了一个 no-op
+    // stop 凭空创建子进程。
+    if (!this._worker) return { success: true };
+    try {
+      return await this._sendCommand('stop', {}, null, STOP_COMMAND_TIMEOUT_MS);
+    } catch (err) {
+      this._killUnresponsiveWorker();
+      return { success: false, error: err.message };
     }
   }
 

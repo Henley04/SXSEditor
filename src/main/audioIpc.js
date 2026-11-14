@@ -96,8 +96,9 @@ function registerAudioIpc() {
   safeHandle(IPC_CHANNELS.AUDIO_STOP, async (event) => {
     try {
       const manager = _getAudioManagerForSender(event);
-      await manager.stop();
-      return { success: true };
+      // 必须用 forceStop：start 超时后 worker 可能仍在出声，而父进程的
+      // _isPlaying 是 false，带守卫的 stop() 会跳过 → 幽灵播放停不掉。
+      return await manager.forceStop();
     } catch (err) {
       console.error('[Main] Audio stop failed:', err);
       return { success: false, error: err.message };

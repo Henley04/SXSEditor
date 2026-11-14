@@ -71,7 +71,9 @@ export function setupIpcHandlers() {
     // 画布播放头体现；否则按钮文案在"停止/合成中"之间来回跳。
     if (getFragmentIsSynthesizing() && !getFragmentIsPlaying()) {
       const btnPlayFragment = document.getElementById('btn-play-fragment');
-      if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.synthesizingProgress', { progress }), { icon: 'play' });
+      // 进度直接叠在"取消推理"按钮上：按钮此刻可点（= 取消推理），
+      // 单纯写"合成中 X%"会让用户以为不能中断。
+      if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.cancelSynthesisProgress', { progress }), { icon: 'stop' });
     } else if (getFragmentIsExporting()) {
       const btnExportFragment = document.getElementById('btn-export-fragment');
       if (btnExportFragment) setLabel(btnExportFragment, t('fragment.exportingProgress', { progress }), { icon: 'download' });
