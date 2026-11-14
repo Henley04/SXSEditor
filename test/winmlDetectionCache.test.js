@@ -132,7 +132,12 @@ describe('winmlDetectionCache — EP 探测结果跨重启缓存', function () {
     // 命中失败只会让调用方重新探测，不会报错。
     expect(cache._isTrustedEpLibraryPath('onnxruntime_providers_nv.dll')).to.equal(false);
     expect(cache._isTrustedEpLibraryPath(path.join(dir, 'notes.txt'))).to.equal(false);
-    const outside = path.join(os.tmpdir(), 'sxs-outside', 'evil.dll');
+    // 注意：不能用 os.tmpdir() 造"根外"路径 —— Windows 上 %TEMP% 位于
+    // C:\Users\<user>\AppData\Local\Temp，正好在可信根 os.homedir() 之下，
+    // 断言会恒为 true（与实现无关的环境耦合）。这里取当前临时目录所在卷的
+    // 根目录，确保它不在任何可信根里。
+    const volumeRoot = path.parse(dir).root;
+    const outside = path.join(volumeRoot, 'sxs-outside', 'evil.dll');
     expect(cache._isTrustedEpLibraryPath(outside)).to.equal(false);
     expect(cache._isTrustedEpLibraryPath('\\\\server\\share\\evil.dll')).to.equal(false);
   });

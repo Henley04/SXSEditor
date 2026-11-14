@@ -602,15 +602,21 @@ async function cmdSynthProject(opts) {
   // 会静默退化成 DML——那样跑出来的就不是 WinML-TRT-RTX 的数字了。
   globalThis.__SXS_SETTINGS_SNAPSHOT__ = { ...settings };
   if (opts.winmlEp) {
+    // 支持 `--winml-ep OpenVINOExecutionProvider:npu`（也接受 `|`）指定同一
+    // EP 的具体硬件，与设置页的 winmlPreferredEp/winmlPreferredDevice 一致。
+    const [epName, epDevice] = String(opts.winmlEp).split(/[|:]/);
     globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = true;
     globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'winml';
-    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredEp = opts.winmlEp;
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredEp = epName.trim();
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredDevice = ['gpu', 'cpu', 'npu'].includes(String(epDevice || '').toLowerCase())
+      ? String(epDevice).toLowerCase()
+      : '';
   }
   if (opts.noWinml) {
     globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = false;
     globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'dml';
   }
-  log(`[ep] 请求: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(智能) NV TRT-RTX 优先'}`);
+  log(`[ep] 请求: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(智能) NV TRT-RTX 优先'}${!opts.winmlEp && settings.winmlPreferredDevice ? '|' + settings.winmlPreferredDevice : ''}`);
 
   const pipeline = new OnnxSVSPipeline(modelDir, {
     deviceId: settings.preferredDeviceId ?? settings.deviceId ?? undefined,

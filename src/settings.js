@@ -641,6 +641,16 @@ function getDeviceOptionText(d) {
     return `${d.name}${vramStr} ${typeStr}${npuTag}${webnnGpuTag}`;
 }
 
+/** WinML EP 暴露的硬件类型标签（gpu / cpu / npu）。 */
+function getWinmlDeviceLabel(deviceType) {
+    switch (deviceType) {
+        case 'gpu': return t('settings.winmlDeviceGpu');
+        case 'npu': return t('settings.winmlDeviceNpu');
+        case 'cpu': return t('settings.winmlDeviceCpu');
+        default: return String(deviceType || '');
+    }
+}
+
 function updateInferenceProviderHint(provider) {
     if (!inferenceProviderHint) return;
     if (provider === 'ortweb') {
@@ -1114,7 +1124,12 @@ function scheduleWinmlProvidersRefresh(currentProviders) {
     if (now - _lastWinmlForceRefreshAt < WINML_FORCE_REFRESH_INTERVAL_MS) return;
     _lastWinmlForceRefreshAt = now;
     const signature = (list) => (Array.isArray(list) ? list : [])
-        .map((p) => `${p.name}:${p.readyState}`)
+        .map((p) => {
+            const devs = (Array.isArray(p.devices) ? p.devices : [])
+                .map((d) => `${d.deviceType}${d.selectable === false ? '!' : ''}`)
+                .join('+');
+            return `${p.name}:${p.readyState}:${devs}`;
+        })
         .join('|');
     const current = signature(currentProviders);
     setTimeout(async () => {
@@ -1224,12 +1239,38 @@ async function loadDevices() {
         }
 
         inferenceDeviceSelect.innerHTML = '';
-        const addOption = (parent, value, label, deviceType = '') => {
+        const addOption = (parent, value, label, deviceType = '', disabled = false) => {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             if (deviceType) option.dataset.deviceType = deviceType;
+            if (disabled) option.disabled = true;
             parent.appendChild(option);
+        };
+        // WinML EP 选项：一个 EP 暴露多种硬件时（OpenVINO 的 GPU/CPU/NPU）
+        // 拆成多条，让用户能明确选到某一类硬件；只有一种硬件时保持原来的
+        // 单条形式（兼容早期只存了 winmlPreferredEp 的配置）。
+        const addWinmlOptions = (list) => {
+            for (const ep of list) {
+                const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
+                const devices = Array.isArray(ep.devices) ? ep.devices : [];
+                if (devices.length <= 1) {
+                    addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
+                    continue;
+                }
+                for (const d of devices) {
+                    const typeLabel = getWinmlDeviceLabel(d.deviceType);
+                    const gated = d.selectable === false;
+                    const suffix = gated ? ` · ${t('settings.winmlDeviceGated')}` : '';
+                    addOption(
+                        inferenceDeviceSelect,
+                        `winml:${ep.name}|${d.deviceType}`,
+                        `Windows ML · ${ep.name} · ${typeLabel} · ${state}${suffix}`,
+                        'winml',
+                        gated,
+                    );
+                }
+            }
         };
         addOption(inferenceDeviceSelect, 'auto', t('settings.autoSelect'));
         if (provider === 'ortweb') {
@@ -1238,18 +1279,12 @@ async function loadDevices() {
                 addOption(inferenceDeviceSelect, value, getDeviceOptionText(d), d.deviceType);
             }
         } else if (backend === 'winml') {
-            for (const ep of winmlProviders) {
-                const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
-                addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
-            }
+            addWinmlOptions(winmlProviders);
         } else if (backend === 'dml') {
             for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
         } else {
             if (winmlProviders.length) {
-                for (const ep of winmlProviders) {
-                    const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
-                    addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
-                }
+                addWinmlOptions(winmlProviders);
             } else {
                 for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
             }
@@ -1257,11 +1292,21 @@ async function loadDevices() {
 
         // Restore device selection from settings（若当前 provider 下不可用则回退 auto）
         const preferredId = currentSetting?.preferredDeviceId ?? currentSetting?.deviceId ?? null;
-        const desiredValue = currentSetting?.winmlPreferredEp
-            ? `winml:${currentSetting.winmlPreferredEp}`
+        const savedEp = currentSetting?.winmlPreferredEp || '';
+        const savedEpDevice = currentSetting?.winmlPreferredDevice || '';
+        let desiredValue = savedEp
+            ? (savedEpDevice ? `winml:${savedEp}|${savedEpDevice}` : `winml:${savedEp}`)
             : (preferredId !== null ? String(preferredId) : 'auto');
-        const validValues = new Set(Array.from(inferenceDeviceSelect.options).map(o => o.value));
-        inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
+        const allValues = Array.from(inferenceDeviceSelect.options).map(o => o.value);
+        if (!allValues.includes(desiredValue) && savedEp) {
+            // 兼容两种迁移：旧配置只有 EP（现在拆成了 EP|设备），或反过来
+            // 指定的硬件这次没被枚举到 —— 落到同 EP 的第一条可选项。
+            const sameEp = allValues.find(v => v.startsWith(`winml:${savedEp}|`) || v === `winml:${savedEp}`);
+            if (sameEp) desiredValue = sameEp;
+        }
+        const validValues = new Set(allValues);
+        const desiredOption = Array.from(inferenceDeviceSelect.options).find(o => o.value === desiredValue);
+        inferenceDeviceSelect.value = (validValues.has(desiredValue) && !desiredOption?.disabled) ? desiredValue : 'auto';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
@@ -1539,7 +1584,15 @@ function collectSettings() {
         inferenceProvider,
         nativeInferenceBackend: nativeInferenceBackendSelect?.value || 'auto',
         winmlEnabled: inferenceProvider === 'ortnode' && (nativeInferenceBackendSelect?.value || 'auto') !== 'dml',
-        winmlPreferredEp: inferenceDeviceSelect?.value?.startsWith('winml:') ? inferenceDeviceSelect.value.slice(6) : '',
+        // 设备下拉的 WinML 选项形如 `winml:<EP>` 或 `winml:<EP>|<gpu|cpu|npu>`。
+        // 拆两个字段存：EP 决定候选链起点，device 决定钉在哪类硬件上
+        // （空 = 该 EP 暴露的全部设备，等价于旧配置）。
+        winmlPreferredEp: inferenceDeviceSelect?.value?.startsWith('winml:')
+            ? inferenceDeviceSelect.value.slice(6).split('|')[0]
+            : '',
+        winmlPreferredDevice: inferenceDeviceSelect?.value?.startsWith('winml:')
+            ? (inferenceDeviceSelect.value.slice(6).split('|')[1] || '')
+            : '',
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,

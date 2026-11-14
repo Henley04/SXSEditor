@@ -616,6 +616,17 @@ const WINML_ELIGIBLE_KEYS = new Set([
   'preflow', 'condEmb', 'diffStep', 'vocoder', 'sifigan',
 ]);
 
+// TRT-RTX 例外名单：这些模型**仍留在上面那份 WinML 白名单里**（主模型身份、
+// EP 上报与回退策略都不变），但不为它们创建 NvTensorRTRTX 会话，固定交给
+// DML。preflow 的理由：输入长度等于歌词 token 数，几乎每次合成都落在引擎
+// 编译 profile 之外（日志里可见 setInputShape / enqueue 失败后回落），而模型
+// 只有 8MB，TRT 的 engine 编译与校验开销远大于它本身的推理耗时。
+// 注意：只排除 NvTensorRTRTX —— 用户手动指定的其它 WinML EP（OpenVINO/NPU）
+// 仍然生效，别把它写成"整条 WinML 分支跳过"。
+const TRT_RTX_EXCLUDED_KEYS = new Set([
+  'preflow',
+]);
+
 /**
  * 创建 session 并（必要时）跑一次 dummy 推理校验。
  *
@@ -623,11 +634,19 @@ const WINML_ELIGIBLE_KEYS = new Set([
  * 持久化记录（上一次启动时同一 EP + 同一运行时 + 同一模型已校验通过）。
  * 调用方据此判断是否还需要额外预热；它不是"本次是否真的跑了推理"。
  */
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true, options = {}) {
     // 所有 session 都在这里创建：这是设置 ORT 日志级别最晚且最早的可靠时机
     // （必须在 session 建立前，又不能早到模块加载期）。
     ensureOrtEnv();
     const modelName = path.basename(modelPath);
+    // cpuOnly：跳过 WinML/DML 选择，直接用 CPU EP。
+    // 目前只有 mel_transform 的 float16 图会用到——DML 上 STFT 的 fp16 kernel 会退化成
+    // 常量输出（见 scripts/fp16_aimet_analysis.py 的实测：SQNR -9.4 dB），CPU EP 反而正确。
+    if (options.cpuOnly) {
+        const session = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
+        return { session, ep: 'cpu', warmedUp: false };
+    }
     // Validation/warmup is a once-per-process action for each concrete model
     // file. Session recreation after VRAM release, language swaps, or model
     // offloading must not run an extra dummy inference.
@@ -705,11 +724,18 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     // NV 不可用/失败时，diffstep/vocoder 回退 DML，其余直接回退 CPU。
     const winmlEligible = WINML_ELIGIBLE_KEYS.has(sessionKey);
     const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
+    // 白名单内但被排除在 TRT-RTX 之外的模型：照常走 WinML 分支（其它 EP 仍可
+    // 生效），只是候选链里没有 NvTensorRTRTX；随后必须保留 DML 回退。
+    const trtRtxExcluded = TRT_RTX_EXCLUDED_KEYS.has(sessionKey);
     if (winmlEligible) {
         try {
             const winmlProvider = require('../winml/winmlProvider');
             if (winmlProvider.isWinmlEnabled()) {
-                const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes, isDiffStepOrVocoder);
+                if (trtRtxExcluded) {
+                    console.log(`[Model][select] name=${modelName} winml=yes trt-rtx=excluded (whitelisted, pinned to DML)`);
+                }
+                const winmlRes = await winmlProvider.tryCreateWinMLSession(
+                    modelPath, useStaticShapes, isDiffStepOrVocoder, { excludeTrtRtx: trtRtxExcluded });
                 if (winmlRes && winmlRes.session) {
                     const wsession = winmlRes.session;
                     const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
@@ -857,8 +883,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     }
 
     // 回退策略：diffstep/vocoder 走 DML；其余 WinML 模型(DML 无加速收益)直接回退 CPU。
+    // 例外：TRT_RTX_EXCLUDED_KEYS 里的模型（preflow）虽然还在白名单内，但既然
+    // 不再尝试 TRT，就必须保留 DML 回退 —— 否则会被上面这条"白名单模型直接
+    // CPU"的规则顺手拖到 CPU 上，比 WinML 之前的行为还慢。
     let dmlSession = null;
-    if (!(winmlEligible && !isDiffStepOrVocoder)) {
+    if (!winmlEligible || isDiffStepOrVocoder || trtRtxExcluded) {
         try {
             const dmlOpts = typeof dmlDeviceId === 'number'
                 ? { name: 'dml', deviceId: dmlDeviceId }

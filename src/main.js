@@ -842,7 +842,9 @@ app.whenReady().then(() => {
         // compiler 版本），版本错配时创建 OpenVINO NPU 会话会让编译器空指针崩溃
         // （minidump: openvino_intel_npu_compiler.dll 0xC0000005 读 0x0）。
         // 默认关闭，避免检测修复后反而触发崩溃；待版本匹配后再放开。
-        globalThis.__SXS_OPENVINO_NPU_SAFE__ = false;
+        // 自担风险想在自己的机器上试 NPU：启动前设 SXS_OPENVINO_NPU_SAFE=1
+        // （设置页里 NPU 选项会从"暂不可用"变成可选）。
+        globalThis.__SXS_OPENVINO_NPU_SAFE__ = process.env.SXS_OPENVINO_NPU_SAFE === '1';
 
         // DML 设备枚举（一次性，结果缓存复用，运行时不再重复探测）
         const controllers = await ensureGPUInfo();

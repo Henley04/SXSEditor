@@ -307,6 +307,10 @@ function loadSettings() {
   if (typeof _settingsCache.winmlPreferredEp !== 'string') {
     _settingsCache.winmlPreferredEp = '';
   }
+  // 同一 EP 的不同硬件分开选（OpenVINO 的 gpu / cpu / npu）。空串表示
+  // "沿用该 EP 暴露的全部设备"，与旧配置（只有 winmlPreferredEp）等价。
+  const winmlDevice = String(_settingsCache.winmlPreferredDevice || '').toLowerCase();
+  _settingsCache.winmlPreferredDevice = ['gpu', 'cpu', 'npu'].includes(winmlDevice) ? winmlDevice : '';
 
   // ===== ONNX Runtime session 选项 =====
   // 这些选项在模型加载时（InferenceSession.create）生效，修改后需要重置 pipeline。
@@ -519,6 +523,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'inferenceProvider',
   'nativeInferenceBackend',
   'winmlPreferredEp',
+  'winmlPreferredDevice',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',
   'ortEnableCpuMemArena',

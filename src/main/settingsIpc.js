@@ -59,6 +59,9 @@ function isValidSettingValue(key, value) {
       return value >= 1 && value <= 4096;
     case 'modelPrecision':
       return VALID_MODEL_PRECISIONS.includes(value);
+    case 'winmlPreferredDevice':
+      // 只接受三种硬件类型或空串（空 = 该 EP 的全部设备）。
+      return typeof value === 'string' && ['', 'gpu', 'cpu', 'npu'].includes(value.toLowerCase());
     case 'previewDynamicThresholdPercentile':
     case 'exportDynamicThresholdPercentile':
       if (typeof value !== 'number' || !Number.isFinite(value)) return false;
@@ -135,11 +138,14 @@ function registerSettingsIpc() {
     }
   });
 
+  // 设置页的设备下拉需要"EP + 硬件"粒度（OpenVINO 的 GPU / CPU / NPU 分开选），
+  // 因此返回 listProviderDevices 而不是裸的 catalog 名单。门控关闭时它内部会
+  // 自动降级成"只有 EP 名、没有设备"，不会去注册 EP。
   safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async (_event, options = {}) => {
     if (process.platform !== 'win32') return [];
     try {
       return await require('../inference/winml/winmlProvider')
-        .listCompatibleProviders({ forceRefresh: options?.forceRefresh === true });
+        .listProviderDevices({ forceRefresh: options?.forceRefresh === true });
     } catch (err) {
       console.warn('[Main] Windows ML provider discovery failed:', err.message);
       return [];
@@ -304,6 +310,9 @@ function registerSettingsIpc() {
         // Windows ML vendor EP 开关影响 diffStep/vocoder/preflow 会话创建路径，
         // 切换后必须重建 pipeline（重建时 createSessionWithValidation 才会尝试 WinML 链）
         'winmlEnabled',
+        // 手动指定的 WinML EP / 硬件（如 OpenVINO→NPU）只在建会话时生效，
+        // 不重建 pipeline 的话用户改了设备却仍是旧会话在跑。
+        'winmlPreferredEp', 'winmlPreferredDevice',
         // 显式后端（auto / winml / dml）也要参与判定：它与 winmlEnabled 一起
         // 决定 WinML 门控，只比较派生值会漏掉"后端改了但派生值相同"的情形。
         'nativeInferenceBackend',
