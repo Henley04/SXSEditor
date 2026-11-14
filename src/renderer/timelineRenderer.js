@@ -543,6 +543,25 @@ export function renderFragmentTimeline() {
     ctx.stroke();
   });
 
+  // Draw vertical measure lines through track rows. These sit above track
+  // backgrounds (so they remain visible when a track row is filled) but below
+  // fragments (so fragments still cover them). Only measure boundaries are
+  // drawn — minor beat lines would be too noisy inside dense tracks.
+  const _firstBeat = Math.max(0, Math.floor(_viewLeft / beatWidth));
+  const _lastBeat = Math.min(totalBeats, Math.ceil(_viewRight / beatWidth));
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.lineWidth = 1;
+  for (let i = _firstBeat; i <= _lastBeat; i++) {
+    if (!isMeasureBoundary(i, beatsPerMeasure)) continue;
+    const x = i * beatWidth;
+    ctx.beginPath();
+    ctx.moveTo(x, HEADER_HEIGHT);
+    ctx.lineTo(x, _viewBottom);
+    ctx.stroke();
+  }
+  ctx.restore();
+
   // Draw dynamic content (fragments) on top of cached grid
   // Visible bounds were computed above; skip offscreen dynamic content.
   // 每帧只做一次分组，避免 singers × fragments 的重复 filter（歌手轨道渲染热点）。
@@ -791,7 +810,7 @@ export function renderFragmentTimeline() {
       }
     });
 
-    if (singerFragments.length === 0) {
+    if (!isAccompaniment && singerFragments.length === 0) {
       ctx.fillStyle = c.fgDisabled;
       ctx.font = '11px sans-serif';
       ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
@@ -1180,10 +1199,20 @@ export function renderSingerList() {
       const singerNameDiv = document.createElement('div');
       singerNameDiv.className = 'singer-singer-name';
       if (isAccompaniment) {
-        // Show audio file name and duration for accompaniment tracks
+        // Show audio file name and duration for accompaniment tracks.
+        // Avoid duplicating the file name: when trackName equals audioFileName
+        // (track not renamed), show file name + duration on the first line and
+        // leave the second line empty (the "音频伴奏" label is rendered below
+        // via singer-config). If the user renamed the track, show the custom
+        // name on the first line and file name + duration here.
         const fileName = singer.audioFileName || t('main.accompanimentTrack');
         const duration = singer.audioDuration ? ` (${formatAccompanimentDuration(singer.audioDuration)})` : '';
-        singerNameDiv.textContent = fileName + duration;
+        if (singer.trackName === fileName) {
+          trackNameDiv.textContent = fileName + duration;
+          singerNameDiv.textContent = '';
+        } else {
+          singerNameDiv.textContent = fileName + duration;
+        }
       } else {
         singerNameDiv.textContent = singer.singerName;
       }
