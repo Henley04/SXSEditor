@@ -83,6 +83,14 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.APP_FILE_REQUESTED, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_FILE_REQUESTED, handler);
   },
+  // 欢迎页「最近的工程」。列表的真源在主进程（userData 下一份配置文件），
+  // 渲染层只读写这一份，不在 localStorage 里另建一套 —— 两套必然漂移。
+  recents: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_LIST),
+    record: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_RECORD, filePath),
+    remove: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_REMOVE, filePath),
+    clear: () => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_CLEAR),
+  },
   openSingerFileAt: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.SINGER_OPEN_AT, filePath),
   saveFile: (filePath, data) => ipcRenderer.invoke(IPC_CHANNELS.FILE_SAVE, filePath, data),
   readFile: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ, filePath),

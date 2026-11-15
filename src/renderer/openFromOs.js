@@ -29,13 +29,19 @@ async function applyTarget(target) {
   refreshAll();
 }
 
-/** 取走主进程暂存的文件并打开。重复调用安全：槽被取走即清空。 */
+/** 取走主进程暂存的文件并打开。重复调用安全：槽被取走即清空。
+ * @returns {Promise<boolean>} 是否真的打开了一个文件 —— 启动时靠它决定
+ *   要不要显示欢迎页（没投递文件 = 常规启动 = 显示）。
+ */
 export async function consumePendingOpenFile() {
   try {
     const target = await window.electronAPI?.takePendingOpenFile?.();
-    if (target) await applyTarget(target);
+    if (!target) return false;
+    await applyTarget(target);
+    return true;
   } catch (err) {
     console.error('[open] failed to take pending file:', err);
+    return false;
   }
 }
 

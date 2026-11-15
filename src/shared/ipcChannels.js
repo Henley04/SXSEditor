@@ -60,6 +60,14 @@ const IPC_CHANNELS = {
   // 主进程 → 渲染层：有新文件待取（仅通知，不携带路径）
   APP_FILE_REQUESTED: 'app:fileRequested',
 
+  // ==================== 最近工程（欢迎页） ====================
+  // 列表存在 userData 的小配置文件里，读写只认主进程这一份：渲染进程开不了
+  // 沙箱外的任意路径，而"最近"本身就是一个跨窗口、跨启动的全局状态。
+  RECENTS_LIST: 'recents:list',
+  RECENTS_RECORD: 'recents:record',
+  RECENTS_REMOVE: 'recents:remove',
+  RECENTS_CLEAR: 'recents:clear',
+
   // ==================== SVS Pipeline ====================
   SVS_INIT: 'svs:init',
   SVS_SYNTHESIZE: 'svs:synthesize',

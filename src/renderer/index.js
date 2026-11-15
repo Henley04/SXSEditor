@@ -28,6 +28,8 @@ import { installPluginHost } from './plugins/pluginHost.js';
 import { installProjectApplyBridge } from './plugins/projectApplyBridge.js';
 import { installModelConsent } from './plugins/modelConsent.js';
 import { installToolbarPopovers } from './toolbarPopovers.js';
+import { installRecentProjectTracking } from './recentProjects.js';
+import { installWelcomePage, showWelcome } from './welcomePage.js';
 
 // 首屏关键路径之外的工作（图标水合）延后到空闲帧执行，让主窗口更早呈现。
 // 首屏的 i18n 文本替换必须先跑，否则用户会先看到英文再闪成中文。
@@ -75,10 +77,21 @@ initWindowTheme(state._ipcCleanups).then(() => {
   // here made a pristine new project prompt to save immediately on close.
   updateProjectSettings({ markDirty: false });
   refreshAll();
+  // 欢迎页与最近工程记录必须先挂上监听：下面 consumePendingOpenFile() 一旦
+  // 真的打开了文件，就会广播 PROJECT_APPLIED_EVENT，"记一笔历史"和"欢迎页
+  // 不要闪现"都靠它。
+  if (state._ipcCleanups) {
+    state._ipcCleanups.push(installRecentProjectTracking());
+    state._ipcCleanups.push(installWelcomePage());
+  }
   // 界面就绪后再接管系统投递的文件：先挂监听（运行中被双击），再取一次
   // （冷启动时文件已经躺在 pending 槽里了，不会走到"有文件"通知）。
   installOpenFromOs();
-  consumePendingOpenFile();
+  // 没投递文件 = 常规启动（双击桌面图标 / 从开始菜单打开）→ 显示欢迎页。
+  // 投递的是歌手文件也算"通过文件打开"，同样不显示：用户的意图是打开东西。
+  consumePendingOpenFile().then((opened) => {
+    if (!opened) showWelcome();
+  });
 });
 
 // 插件播放侧接线：阻滞播放浮层 + progress / diagnostics 输出通道。

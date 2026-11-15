@@ -27,6 +27,8 @@ const CONFIG_FILES = {
   // API Provider 密钥（加密或降级明文）。与 settings.json 分开存，避免密钥随
   // 设置文件被备份/同步时泄漏。
   apiProviderSecrets: 'api-provider-secrets.json',
+  // 欢迎页「最近的工程」列表。见 src/main/recentsStore.js。
+  recentProjects: 'sxseditor-recent-projects.json',
 };
 
 /** userData 目录（懒解析：app 在测试环境里可能尚未 ready）。 */

@@ -134,6 +134,11 @@ const HIGH_RISK_METHOD_WINDOWS = Object.freeze([
   // 系统投递的文件只属于主窗口：它会读盘、还会新建预处理窗口
   { path: ['takePendingOpenFile'], windows: ['index'] },
   { path: ['openSingerFileAt'], windows: ['index'] },
+  // 最近工程列表的**写**只在主窗口发生（打开/新建工程的地方）。其它窗口
+  // 没有"打开工程"这件事，读到就够了 —— 别让更新通知窗口也能改这份历史。
+  { path: ['recents', 'record'], windows: ['index'] },
+  { path: ['recents', 'remove'], windows: ['index'] },
+  { path: ['recents', 'clear'], windows: ['index'] },
 ]);
 
 /**

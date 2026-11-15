@@ -357,6 +357,9 @@ app.whenReady().then(() => {
 
   // 系统投递进来的文件（双击 / 打开方式）。取走即清空，天然幂等。
   ipcMain.handle(IPC_CHANNELS.APP_TAKE_PENDING_FILE, () => takePendingTarget());
+  // 欢迎页「最近的工程」：只读写 userData 下一份小配置文件，无重型依赖，
+  // 因此和上面的 pending 槽放在同一批注册（首屏渲染就要拉这份列表）。
+  require('./main/recentsIpc').registerRecentsIpc();
   const { registerMcpReplyIpc, startMcpBridge } = require('./main/mcpBridge');
   registerMcpReplyIpc(ipcMain);
 

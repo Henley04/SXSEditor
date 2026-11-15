@@ -138,6 +138,38 @@
         <div id="status-bar-right" class="status-bar-slot status-bar-slot--right"></div>
       </div>
     </div>
+    <!-- ==================== 欢迎页 ==================== -->
+    <!-- 只在"不是通过双击工程文件启动"时显示（见 src/renderer/welcomePage.js）。
+         它是盖住整个窗口的浮层：底下那份空白工程仍在，关掉浮层就能直接开始编辑。 -->
+    <div id="welcome-page" class="welcome-page" hidden>
+      <div class="welcome-intro">
+        <h1 id="welcome-title" class="welcome-title" data-i18n="main.welcomeTitle">欢迎使用 SXSEditor</h1>
+        <p id="welcome-subtitle" class="welcome-subtitle" data-i18n="main.welcomeSubtitle">选择最近打开的工程，或新建一个工程开始创作。</p>
+      </div>
+      <section class="welcome-recents" data-i18n-aria-label="main.welcomeRecentProjects" aria-label="最近的工程">
+        <header class="welcome-recents-head">
+          <span class="welcome-recents-title" data-i18n="main.welcomeRecentProjects">最近的工程</span>
+          <button id="welcome-btn-new" class="welcome-head-btn" type="button"
+                  data-i18n="main.welcomeNewProject" data-i18n-title="main.welcomeNewProjectHint"
+                  title="新建一个工程文件" data-icon="file-plus">新建工程</button>
+          <button id="welcome-btn-open" class="welcome-head-btn" type="button"
+                  data-i18n="main.welcomeOpenProject" data-i18n-title="main.welcomeOpenProjectHint"
+                  title="打开已有的工程文件" data-icon="folder-open">打开工程文件</button>
+        </header>
+        <div class="welcome-recents-body">
+          <div class="welcome-row welcome-row--head" role="row">
+            <span class="welcome-col welcome-col--name" role="columnheader" data-i18n="main.welcomeColName">文件名</span>
+            <span class="welcome-col welcome-col--path" role="columnheader" data-i18n="main.welcomeColPath">文件路径</span>
+            <span class="welcome-col welcome-col--time" role="columnheader" data-i18n="main.welcomeColTime">上一次打开的时间</span>
+          </div>
+          <div id="welcome-recent-list" class="welcome-recent-list" role="rowgroup"></div>
+          <p id="welcome-empty" class="welcome-empty" hidden data-i18n="main.welcomeEmpty">还没有最近打开的工程。新建一个，或打开已有的工程文件。</p>
+        </div>
+      </section>
+      <button id="welcome-btn-close" class="welcome-close" type="button"
+              data-icon="close" data-i18n-aria-label="main.welcomeClose" data-i18n-title="main.welcomeClose"
+              aria-label="关闭欢迎页" title="关闭欢迎页"></button>
+    </div>
     <!-- ort.all.min.js (onnxruntime-web UMD bundle, ~5-10MB) was previously
          loaded synchronously here, blocking did-finish-load. It is now
          loaded dynamically on first use via src/inference/webnn/ortSetup.js

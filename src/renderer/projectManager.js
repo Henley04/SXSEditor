@@ -1,5 +1,5 @@
 import { state, dom, trackManager, history } from './state.js';
-import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE } from './constants.js';
+import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE, PROJECT_APPLIED_EVENT } from './constants.js';
 // 工程格式版本收敛到单一常量（原来 '1.1.0' 与 [1,1,0] 两处硬编码，改一处会判错）
 import { PROJECT_FORMAT_VERSION, PROJECT_MIN_READER, PROJECT_FEATURES, checkProjectHeader } from '../shared/projectFormat.js';
 import { buildAutoCurve, resolvePitchRanges } from '../shared/autoPitchCurve.js';
@@ -13,7 +13,7 @@ import { ensurePluginCatalog, findTrackKind, describeTrackBackend } from './plug
 import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
 import { shouldNotifyAutoSaveFailure, resetAutoSaveNotification } from './autoSaveNotification.js';
 import {
-  extensionOf, normalizeSavePath,
+  extensionOf, normalizeSavePath, isExternalFormat,
   formatDropsAccompaniment, requiresAccompanimentAudio,
 } from './saveAsPath.js';
 
@@ -1060,6 +1060,24 @@ function _checkSaveResult(res) {
 }
 
 /**
+ * 广播「一份工程刚刚被装进编辑器」。
+ *
+ * 监听方：欢迎页（收起）、最近工程（记一笔）。两者都不该被 projectManager 直接
+ * import —— 那样 projectManager 就同时拽住了两个 UI 模块，其中一个还要反过来
+ * import projectManager。写法与 fragmentEditor 的 sxse:fragment-loaded 一致。
+ *
+ * @param {string|null} filePath 已落盘的绝对路径；未保存的工程传 null
+ */
+function _notifyProjectApplied(filePath) {
+  if (typeof document === 'undefined') return;
+  try {
+    document.dispatchEvent(new CustomEvent(PROJECT_APPLIED_EVENT, {
+      detail: { filePath: typeof filePath === 'string' && filePath ? filePath : null },
+    }));
+  } catch (_) { /* 非 DOM 环境（单测直接调到这里）忽略 */ }
+}
+
+/**
  * 就地保存时必须嵌入伴奏音频吗？
  *
  * 伴奏音频只有两种存在方式：源文件路径（下次打开能重新解码）或工程内嵌 base64。
@@ -1337,6 +1355,75 @@ export async function loadProject(filePath = null) {
 }
 
 /**
+ * 新建一个空工程文件：选位置 → 把编辑器清成空工程 → 写盘 → 认它为当前工程。
+ *
+ * 欢迎页的「新建工程」按钮用这里，而不是"只清内存、不落盘"：用户在这个按钮上
+ * 要的是"我要开始一个新项目"，随后 Ctrl+S 若还要再选一次位置，等于同一个动作
+ * 问两遍。反过来说，用户在原生对话框里点了取消就真的什么都没发生（不清空、
+ * 不落盘），不会把正在编辑的东西悄悄抹掉。
+ *
+ * 不弹「保存选项」对话框：空工程里没有歌手文件与伴奏可以嵌入，那两个开关
+ * 问了也是白问（默认值本来就是不嵌入）。
+ *
+ * 只建内置格式（.sxsproj）。保存路径若带的是别的扩展名 —— 过滤器拦不住手输 ——
+ * 直接写过去会把 sxsproj 的 JSON 塞进一个不是它的容器里，所以补上 .sxsproj。
+ *
+ * @returns {Promise<{created: boolean, filePath?: string, canceled?: boolean, error?: string}>}
+ */
+export async function createNewProjectFile() {
+  cancelPendingAutoSave();
+  if (state.isDirty) {
+    const discard = await showConfirmDialog(
+      t('main.unsavedChangesConfirm') || 'Unsaved changes will be lost. Continue?',
+    );
+    if (!discard) return { created: false, canceled: true };
+  }
+  if (!window.electronAPI?.showSaveDialog) return { created: false, canceled: true };
+
+  let result;
+  try {
+    result = await window.electronAPI.showSaveDialog({
+      title: t('main.welcomeNewProject'),
+      defaultPath: `${t('main.newProjectDefaultName') || 'untitled'}.sxsproj`,
+      filters: [{ name: 'SXSEditor Project', extensions: BUILTIN_PROJECT_EXTENSIONS }],
+    });
+  } catch (err) {
+    console.error('[project] 新建工程对话框失败:', err);
+    return { created: false, canceled: false, error: err.message };
+  }
+  if (!result || result.canceled || !result.filePath) return { created: false, canceled: true };
+
+  const raw = normalizeSavePath(result.filePath);
+  const filePath = isExternalFormat(raw) ? `${raw}.sxsproj` : raw;
+
+  try {
+    // 先清内存，再序列化：写出去的就是这份空工程（顺序反过来会写进旧内容）
+    trackManager.clearAll();
+    state.project.bpm = 120;
+    state.project.timeSignature = [4, 4];
+    syncProjectControls();
+    state.projectImportSource = null;
+    state.projectExt = { schema: null, root: null };
+    state.projectSaveWarnings = [];
+    state.selectedFragmentId = null;
+    state.selectedSingerId = null;
+    history.clear();
+    resetAutoSaveNotification();
+
+    await _writeProjectTo(filePath, { embedSingerFiles: false, embedAccompanimentAudio: false });
+    state.currentProjectFilePath = filePath;
+    markClean();
+    _notifyProjectApplied(filePath);
+    console.log('New project created at', filePath);
+    return { created: true, filePath };
+  } catch (err) {
+    console.error('[project] 新建工程失败:', err);
+    showAlertDialog(`${t('main.newProjectFailed')}: ${err.message || ''}`);
+    return { created: false, canceled: false, error: err.message };
+  }
+}
+
+/**
  * 走插件 codec 打开。返回 null 表示"这件事不归插件管，继续走内置管线"。
  *
  * 判定交给主进程而不是渲染层：扩展名归属只有注册表说了算，渲染层若自己维护一份
@@ -1507,6 +1594,7 @@ export async function applyProjectDocument(obj, targetPath, options = {}) {
   state.selectedFragmentId = null;
   markClean();
   // refreshAll will be called by the caller
+  _notifyProjectApplied(targetPath);
   console.log('Project loaded', targetPath, fromPlugin ? `(via ${options.pluginId})` : '');
 }
 
