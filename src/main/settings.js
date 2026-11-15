@@ -8,7 +8,8 @@ const DEFAULT_THEME_PER_WINDOW = {};
 
 const ENUM_SETTINGS = {
   deviceMode: ['smart', 'manual', 'advanced'],
-  inferenceProvider: ['ortnode', 'ortweb'],
+  // 'api' = 远程 API 推理（Settings → 推理与硬件 → API）。不加载本地 ONNX 模型。
+  inferenceProvider: ['ortnode', 'ortweb', 'api'],
   modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
   audioOutputMode: ['shared', 'exclusive'],
   audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
@@ -53,6 +54,25 @@ function normalizeSettings(settings) {
   if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
   if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
   if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
+  // API Provider 元数据：settings.json 是信任边界，只保留结构合法的条目，
+  // 密钥不在这里（见 apiProviderStore.js / secretsStore.js）。
+  if (out.apiProviders !== undefined) {
+    if (!Array.isArray(out.apiProviders)) {
+      delete out.apiProviders;
+    } else {
+      out.apiProviders = out.apiProviders.slice(0, 32).filter((p) =>
+        p && typeof p === 'object' && !Array.isArray(p)
+        && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.url === 'string'
+        && /^https?:\/\//i.test(p.url)
+      ).map((p) => ({
+        id: p.id.slice(0, 64), name: p.name.slice(0, 64),
+        url: p.url.slice(0, 512), builtin: p.builtin === true,
+      }));
+    }
+  }
+  if (out.activeApiProviderId !== undefined && typeof out.activeApiProviderId !== 'string') {
+    delete out.activeApiProviderId;
+  }
   // 写注册表的开关：只认严格的 true。字符串 "true" / 1 一律当关 —— 这个开关的
   // 副作用是改用户系统，宽松解析的代价不对称。
   if (out.pluginFileAssociations !== undefined) out.pluginFileAssociations = out.pluginFileAssociations === true;
@@ -297,8 +317,8 @@ function loadSettings() {
     _settingsCache.autoRealtimeInference = false;
   }
 
-  // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
-  if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
+  // 推理提供者: 'ortnode'(默认, onnxruntime-node DirectML/CPU) | 'ortweb'(WebNN) | 'api'(远程 HTTP)
+  if (!['ortweb', 'ortnode', 'api'].includes(_settingsCache.inferenceProvider)) {
     _settingsCache.inferenceProvider = 'ortnode';
   }
   // 'cpu' 是用户显式选择的全局强制 CPU 后端：所有模型都不再尝试 WinML/DML。
@@ -523,6 +543,8 @@ const ALLOWED_SETTINGS_KEYS = [
   'exportDynamicThresholdPercentile',
   'autoRealtimeInference',
   'inferenceProvider',
+  'apiProviders',
+  'activeApiProviderId',
   'nativeInferenceBackend',
   'winmlPreferredEp',
   'winmlPreferredDevice',

@@ -229,6 +229,16 @@ const _fullElectronAPI = {
   getVocoderChunkFramesTable: () => invokeHeavy('settings:getVocoderChunkFramesTable'),
   getSettings: () => invokeHeavy('settings:getSettings'),
   saveSettings: (settings) => invokeHeavy('settings:saveSettings', settings),
+
+  // ---- API Provider（远程推理）----
+  // 用普通 invoke 而非 invokeHeavy：设置页可在重型 IPC 就绪前打开，
+  // Provider 管理不依赖 ONNX 模型加载。
+  apiProvidersList: () => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDERS_LIST),
+  apiProviderSave: (input) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_SAVE, input),
+  apiProviderDelete: (id) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_DELETE, id),
+  apiProviderSetActive: (id) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_SET_ACTIVE, id),
+  apiProviderResetBuiltin: () => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_RESET_BUILTIN),
+  apiProviderTest: (draft) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_TEST, draft),
   checkModels: () => invokeHeavy('settings:check-models'),
   runTrtRtxDiagnostic: () => invokeHeavy('settings:run-trtrtx-diagnostic'),
   clearInferenceCaches: () => invokeHeavy(IPC_CHANNELS.SETTINGS_CLEAR_INFERENCE_CACHE),

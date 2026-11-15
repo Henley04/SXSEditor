@@ -1519,8 +1519,15 @@ export async function synthesizeFragmentInBackground(opts = {}) {
     const isCancelled = code === 'SVS_SUPERSEDED' || code === 'SYNTHESIS_CANCELLED'
       || /superseded|cancelled|canceled|abort/i.test(msg);
     if (isCancelled) return 'skip';
-    // 后台失败不打扰用户：失败可能是模型缺失、显存不足等，
-    // 下次手动播放会以正常路径报错提示。
+    // 后台失败一般不打扰用户（模型缺失、显存不足等，下次手动播放会正常报错）。
+    // 但远程 API 的失败必须显式提示：401/403 鉴权、429 限流、超时、网络不通
+    // 都是用户能立刻处理的问题，静默吞掉会让用户以为"合成还在跑"或"没声音"。
+    // apiInference 生成的消息统一以 "[API " 开头，与语言无关，可稳定识别。
+    if (/\[API[ \]]/i.test(msg)) {
+      try {
+        showAlertDialog(t('fragment.synthesisFailedDetail', { detail: msg }));
+      } catch (_) { /* 弹窗失败也要保留下面的 warn 日志 */ }
+    }
     console.warn('[FragmentAudio] Background inference failed:', error && error.message);
     return 'error';
   } finally {

@@ -24,6 +24,9 @@ const CONFIG_FILES = {
   // 历史文件名（src/main/settings.js 一直用的就是这个），不要重命名 —— 改名会让
   // 老用户的设置"凭空消失"。
   settings: 'settings.json',
+  // API Provider 密钥（加密或降级明文）。与 settings.json 分开存，避免密钥随
+  // 设置文件被备份/同步时泄漏。
+  apiProviderSecrets: 'api-provider-secrets.json',
 };
 
 /** userData 目录（懒解析：app 在测试环境里可能尚未 ready）。 */

@@ -151,7 +151,7 @@
         <tbody>
           <tr>
             <td><span data-lang="en">Inference Provider</span><span data-lang="zh">推理提供者</span></td>
-            <td><span data-lang="en"><code>ORTNODE</code> (DirectML/CPU, main process) or <code>ORTWEB</code> (WebNN NPU/GPU, renderer). ORTNODE shows local GPU/CPU; ORTWEB shows WebNN NPU/GPU.</span><span data-lang="zh"><code>ORTNODE</code>（DirectML/CPU，主进程）或 <code>ORTWEB</code>（WebNN NPU/GPU，渲染进程）。ORTNODE 显示本地 GPU/CPU；ORTWEB 显示 WebNN NPU/GPU。</span></td>
+            <td><span data-lang="en"><code>ORTNODE</code> (DirectML/CPU, main process), <code>ORTWEB</code> (WebNN NPU/GPU, renderer, deprecated), or <code>API</code> (remote HTTP service, no local model needed). See the <a href="../api-standard.html">API Standard</a>.</span><span data-lang="zh"><code>ORTNODE</code>（DirectML/CPU，主进程）、<code>ORTWEB</code>（WebNN NPU/GPU，渲染进程，已弃用）或 <code>API</code>（远程 HTTP 服务，无需本地模型）。详见 <a href="../api-standard.html">API 标准</a>。</span></td>
             <td><code>ORTNODE</code></td>
           </tr>
           <tr>
@@ -168,6 +168,20 @@
       </table>
       <p data-lang="en">The settings page shows real-time status of WebNN, NPU, and GPU availability. Hardware detection runs once after app startup and caches results (no re-probing during synthesis).</p>
       <p data-lang="zh">设置页会实时显示 WebNN、NPU 和 GPU 的可用状态。硬件检测在应用启动后仅运行一次并缓存结果（合成时不再重复探测）。</p>
+
+      <h3>
+        <span data-lang="en">API (Remote Inference)</span>
+        <span data-lang="zh">API（远程推理）</span>
+      </h3>
+      <p data-lang="en">Select <strong>API</strong> as the Inference Provider to send synthesis requests to a remote HTTP service instead of running local ONNX models. No SoulX-Singer model download is required, and all hardware-related options are hidden in this mode.</p>
+      <p data-lang="zh">把<strong>推理系统</strong>选为 <strong>API</strong>，即可把合成请求发往远程 HTTP 服务，不再运行本地 ONNX 模型。此模式下无需下载 SoulX-Singer 模型，界面也会隐藏所有本机硬件选项。</p>
+      <ul>
+        <li><span data-lang="en">Click <strong>New API Provider</strong>, give it a name, enter the API base URL (the <code>/v1/synthesize</code> path is appended automatically), optionally enter a key, then <strong>Save</strong>. Use <strong>Set active</strong> to switch services.</span><span data-lang="zh">点<strong>新建 API Provider</strong>，填写名称、API 根网址（客户端自动拼接 <code>/v1/synthesize</code>）、可选密钥，然后<strong>保存</strong>；用<strong>设为当前</strong>切换服务。</span></li>
+        <li><span data-lang="en"><strong>Free API By SXSEditor</strong> is built in and points to the public ModelScope Studio endpoint. It is completely free, requires <strong>no key or SDK Token</strong>, and works out of the box — only rate limited (20/min, 500/day per IP). The Key field is disabled for it. The built-in service cannot be deleted, but can be restored to defaults.</span><span data-lang="zh">内置 <strong>Free API By SXSEditor</strong>，连接到 ModelScope 创空间公开入口，完全免费、<strong>无需任何密钥或 SDK Token</strong>，开箱即用；仅受速率限制（每分钟 20 次、每天 500 次，按 IP），其「密钥」输入框已禁用。内置服务不可删除，可用「恢复内置默认」还原。</span></li>
+        <li><span data-lang="en">Keys are stored encrypted in the system keyring, never written to <code>settings.json</code>. The UI only shows whether a key is set; leaving the field blank keeps the existing key. If the system keyring is unavailable, the page explicitly warns that keys are stored in plaintext.</span><span data-lang="zh">密钥加密存于系统密钥环，绝不写入 <code>settings.json</code>；界面只显示「已设置」，留空表示保持不变。若本机没有系统密钥环，页面会明确提示密钥以明文存储。</span></li>
+        <li><span data-lang="en"><strong>Test connection</strong> calls <code>GET /health</code> and shows the result. Any failure — including 401/403 authentication and 429 rate limiting — is displayed in the status area and in a dialog during synthesis; errors are never silently swallowed, including for background auto-inference.</span><span data-lang="zh"><strong>测试连接</strong>会调用 <code>GET /health</code> 并显示结果。任何失败（含 401/403 鉴权、429 限流）都会显示在状态区；合成失败时还会弹窗，后台自动推理也不会静默吞掉错误。</span></li>
+        <li><span data-lang="en">Full endpoint, parameter and error-code specification: <a href="../api-standard.html">API Standard</a>.</span><span data-lang="zh">完整端点、参数与错误码规范见 <a href="../api-standard.html">API 标准</a>。</span></li>
+      </ul>
 
       <h3>
         <span data-lang="en">Preview Inference Parameters</span>

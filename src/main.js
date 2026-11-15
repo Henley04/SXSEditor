@@ -677,6 +677,7 @@ app.whenReady().then(() => {
     // These must be registered before the renderer invokes them (which
     // happens on user interaction, far after this setImmediate runs).
     registerSettingsIpc();
+    require('./main/apiIpc').registerApiIpc();
     registerSvsIpc();
     registerPitchMidiIpc();
     registerResourceManagerIpc();

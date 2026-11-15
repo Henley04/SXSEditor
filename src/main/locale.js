@@ -89,6 +89,24 @@ const mainLocales = {
       fragmentSvsNotInitialized: 'Fragment SVS Pipeline 未初始化',
       // W19: i18n key for the JP-models-missing error (was hardcoded Chinese).
       jpModelNotDownloaded: '日语模型未下载。请在模型下载页面下载日语模型。',
+      // ---- 远程 API 推理 ----
+      // 这些消息会经 ipcSafe.sanitizeErrorMessage 处理，其中会把 URL 路径替换成
+      // <path>，因此文案里不要依赖完整 URL；用 Provider 名称指代服务即可。
+      // "[API ...]" 前缀是渲染层识别「必须显式弹窗」的标记（后台自动推理路径）。
+      apiNoProvider: '[API 配置] 未配置 API 服务。请在「设置 → 推理与硬件 → API」中新建或选择一个 Provider。',
+      apiAuth: '[API 401/403] 「{name}」鉴权失败：{detail}。请检查该 Provider 的密钥是否正确或已过期；密钥可留空，但服务端要求鉴权时必须填写。',
+      apiRateLimit: '[API 429] 「{name}」请求被限流：{detail}。{wait}请稍后重试，或切换到其它 Provider。',
+      apiRetryAfter: '建议 {seconds} 秒后重试。',
+      apiServer: '[API {status}] 「{name}」服务端错误：{detail}',
+      apiHttp: '[API {status}] 「{name}」请求失败：{detail}',
+      apiBadRequest: '[API 400] 「{name}」请求参数被拒绝：{detail}',
+      apiTimeout: '[API 超时] 「{name}」在限定时间内没有返回结果，请检查服务是否繁忙或稍后重试。',
+      apiNetwork: '[API 网络] 无法连接到「{name}」：{detail}。请检查 API 网址、网络与防火墙设置。',
+      apiBadResponse: '[API 响应] 「{name}」返回的不是有效 WAV 音频，也没有可解析的音频字段。',
+      apiBadWav: '[API 响应] 服务端返回的 WAV 无法解析（仅支持 32-bit float / PCM16 / PCM32）。',
+      apiEmptyAudio: '[API 响应] 服务端返回的音频为空。',
+      apiEmptyNotes: '[API 请求] 没有可合成的音符。',
+      apiTestOk: '连接成功：「{name}」{summary}',
     },
     about: {
       soulXSingerEditor: 'SoulX Singer 编辑器',
@@ -210,6 +228,24 @@ const mainLocales = {
       fragmentSvsNotInitialized: 'Fragment SVS Pipeline not initialized',
       // W19: i18n key for the JP-models-missing error (was hardcoded Chinese).
       jpModelNotDownloaded: 'Japanese model not downloaded. Please download the Japanese model on the model download page.',
+      // ---- Remote API inference ----
+      // Messages pass through ipcSafe.sanitizeErrorMessage, which rewrites URL
+      // paths to <path>; never rely on a full URL here. The "[API ...]" prefix is
+      // how the renderer recognises errors that MUST be surfaced to the user.
+      apiNoProvider: '[API Config] No API provider configured. Create or select one in Settings > Inference & Hardware > API.',
+      apiAuth: '[API 401/403] Authentication failed for "{name}": {detail}. Check that this provider\'s key is correct and not expired. The key is optional, but must be set when the server requires authentication.',
+      apiRateLimit: '[API 429] Rate limited by "{name}": {detail}. {wait}Please retry later or switch to another provider.',
+      apiRetryAfter: 'Retry in about {seconds}s. ',
+      apiServer: '[API {status}] Server error from "{name}": {detail}',
+      apiHttp: '[API {status}] Request to "{name}" failed: {detail}',
+      apiBadRequest: '[API 400] "{name}" rejected the request: {detail}',
+      apiTimeout: '[API Timeout] "{name}" did not respond in time. The service may be busy; please retry later.',
+      apiNetwork: '[API Network] Cannot reach "{name}": {detail}. Check the API URL, network and firewall settings.',
+      apiBadResponse: '[API Response] "{name}" returned neither a valid WAV nor a parseable audio field.',
+      apiBadWav: '[API Response] The returned WAV cannot be decoded (only 32-bit float / PCM16 / PCM32 are supported).',
+      apiEmptyAudio: '[API Response] The service returned empty audio.',
+      apiEmptyNotes: '[API Request] There are no notes to synthesize.',
+      apiTestOk: 'Connected: "{name}"{summary}',
     },
     about: {
       soulXSingerEditor: 'SoulX Singer Editor',

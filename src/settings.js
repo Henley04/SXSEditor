@@ -24,6 +24,22 @@ const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
 const gpuStatusValue = document.getElementById('gpuStatusValue');
 const advancedSettingsGroup = document.getElementById('advancedSettingsGroup');
+// ---- API Provider（远程推理）----
+const apiProviderGroup = document.getElementById('apiProviderGroup');
+const apiProviderSelect = document.getElementById('apiProviderSelect');
+const apiProviderNewBtn = document.getElementById('apiProviderNewBtn');
+const apiProviderNameInput = document.getElementById('apiProviderName');
+const apiProviderUrlInput = document.getElementById('apiProviderUrl');
+const apiProviderKeyInput = document.getElementById('apiProviderKey');
+const apiProviderSaveBtn = document.getElementById('apiProviderSaveBtn');
+const apiProviderUseBtn = document.getElementById('apiProviderUseBtn');
+const apiProviderTestBtn = document.getElementById('apiProviderTestBtn');
+const apiProviderResetBtn = document.getElementById('apiProviderResetBtn');
+const apiProviderDeleteBtn = document.getElementById('apiProviderDeleteBtn');
+const apiProviderStatus = document.getElementById('apiProviderStatus');
+const apiProviderModeHint = document.getElementById('apiProviderModeHint');
+const apiProviderFreeHint = document.getElementById('apiProviderFreeHint');
+const apiProviderSecretsWarning = document.getElementById('apiProviderSecretsWarning');
 const modelDeviceMappingDiv = document.getElementById('modelDeviceMapping');
 const deviceModeRadios = document.querySelectorAll('input[name="deviceMode"]');
 const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
@@ -363,13 +379,15 @@ function parseKeyframes(text) {
 function applySavedSettingsToUI(currentSetting) {
     if (!currentSetting) return;
 
-    // Inference provider
-    const inferenceProvider = currentSetting.inferenceProvider === 'ortweb' ? 'ortweb' : 'ortnode';
+    // Inference provider：'ortnode' | 'ortweb' | 'api'
+    const inferenceProvider = ['ortweb', 'ortnode', 'api'].includes(currentSetting.inferenceProvider)
+        ? currentSetting.inferenceProvider : 'ortnode';
     if (inferenceProviderSelect) {
         inferenceProviderSelect.value = inferenceProvider;
         updateInferenceProviderHint(inferenceProvider);
         if (nativeInferenceBackendSelect) nativeInferenceBackendSelect.value = currentSetting.nativeInferenceBackend || 'auto';
         updateNativeBackendUI(inferenceProvider, nativeInferenceBackendSelect?.value || 'auto');
+        updateApiProviderVisibility(inferenceProvider);
     }
 
     // Device mode：CPU 后端下设备模式不参与 EP 决策，UI 统一显示 smart，
@@ -654,10 +672,216 @@ function getWinmlDeviceLabel(deviceType) {
     }
 }
 
+// ==================== API Provider（远程推理） ====================
+// 流程：用户选「推理系统 = API」→ 点「新建 API Provider」→ 填名称/网址/可选密钥
+// → 保存 → 设为当前。所有结果（含 401/403、429、网络错误）都写在状态区，
+// 绝不只 console.log 了事。密钥明文只在输入框内短暂存在，保存后由主进程加密存储，
+// 列表只返回 hasKey，界面用「留空保持不变」表达。
+
+let apiProvidersState = { providers: [], activeId: '', freeProviderId: '', secretsEncrypted: true };
+let apiEditId = null;   // null = 新建模式
+let apiBusy = false;
+const API_NEW_OPTION = '__api_new__';
+
+function setApiStatus(message, level = 'info') {
+    if (!apiProviderStatus) return;
+    apiProviderStatus.textContent = message || '';
+    apiProviderStatus.className = `api-provider-status${message ? ` is-${level}` : ''}`;
+}
+
+function currentApiProvider() {
+    return apiProvidersState.providers.find((p) => p.id === apiEditId) || null;
+}
+
+function updateApiProviderVisibility(provider) {
+    const section = document.getElementById('section-inference');
+    if (section) section.classList.toggle('api-mode', provider === 'api');
+    if (apiProviderGroup) apiProviderGroup.classList.toggle('hidden', provider !== 'api');
+}
+
+function fillApiForm(provider) {
+    if (!apiProviderNameInput || !apiProviderUrlInput || !apiProviderKeyInput) return;
+    apiProviderNameInput.value = provider ? provider.name : '';
+    apiProviderUrlInput.value = provider ? provider.url : '';
+    apiProviderKeyInput.value = '';
+    const hasKey = !!(provider && provider.hasKey);
+    // 内置免费服务走免鉴权公开入口：禁用密钥输入，避免用户误以为必须填
+    // ModelScope SDK Token（带了反而会被网关 403 拒绝）。
+    const authRequired = provider ? provider.authRequired !== false : true;
+    apiProviderKeyInput.disabled = !authRequired;
+    apiProviderKeyInput.placeholder = t(!authRequired
+        ? 'settings.apiProviderKeyNotNeeded'
+        : (hasKey ? 'settings.apiProviderKeyPlaceholderSet' : 'settings.apiProviderKeyPlaceholderEmpty'));
+    const builtin = !!(provider && provider.builtin);
+    if (apiProviderDeleteBtn) apiProviderDeleteBtn.disabled = builtin || !provider;
+    if (apiProviderResetBtn) apiProviderResetBtn.disabled = !builtin;
+    if (apiProviderUseBtn) apiProviderUseBtn.disabled = !provider;
+    if (apiProviderFreeHint) apiProviderFreeHint.classList.toggle('hidden', !builtin);
+    if (apiProviderModeHint) {
+        apiProviderModeHint.textContent = provider ? '' : t('settings.apiProviderNewMode');
+        apiProviderModeHint.classList.toggle('hidden', !!provider);
+    }
+}
+
+function renderApiProviderSelect() {
+    if (!apiProviderSelect) return;
+    const { providers, activeId } = apiProvidersState;
+    apiProviderSelect.replaceChildren();
+    if (apiEditId === null) {
+        const opt = document.createElement('option');
+        opt.value = API_NEW_OPTION;
+        opt.textContent = `+ ${t('settings.apiProviderNew')}`;
+        apiProviderSelect.appendChild(opt);
+    }
+    for (const p of providers) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const tags = [
+            p.builtin ? t('settings.apiProviderBuiltinTag') : '',
+            p.id === activeId ? t('settings.apiProviderActiveTag') : '',
+        ].filter(Boolean);
+        opt.textContent = tags.length ? `${p.name} [${tags.join(' / ')}]` : p.name;
+        apiProviderSelect.appendChild(opt);
+    }
+    const target = apiEditId === null ? API_NEW_OPTION
+        : (providers.some((p) => p.id === apiEditId) ? apiEditId : (activeId || providers[0]?.id || API_NEW_OPTION));
+    apiProviderSelect.value = target;
+    if (apiProviderSecretsWarning) {
+        apiProviderSecretsWarning.classList.toggle('hidden', apiProvidersState.secretsEncrypted !== false);
+    }
+}
+
+async function loadApiProviders({ selectActive = false } = {}) {
+    if (!window.electronAPI?.apiProvidersList) return;
+    try {
+        const result = await window.electronAPI.apiProvidersList();
+        apiProvidersState = result;
+        if (selectActive || apiEditId === null && result.providers.length === 0
+            || (apiEditId && !result.providers.some((p) => p.id === apiEditId))) {
+            apiEditId = result.activeId || result.providers[0]?.id || null;
+        }
+        renderApiProviderSelect();
+        fillApiForm(currentApiProvider());
+    } catch (err) {
+        // 读取失败也要显式显示，不能只 console.error（用户要求禁止静默失败）。
+        setApiStatus(`${t('settings.apiProviderLoadFailed')}${err?.message || String(err)}`, 'error');
+    }
+}
+
+function collectApiDraft() {
+    const key = apiProviderKeyInput?.value ?? '';
+    return {
+        id: apiEditId || undefined,
+        name: apiProviderNameInput?.value ?? '',
+        url: apiProviderUrlInput?.value ?? '',
+        key,
+        // 输入为空表示"保持不变"；要清空密钥需走删除后重建（避免误触）。
+        keyChanged: key !== '',
+    };
+}
+
+async function withApiBusy(fn) {
+    if (apiBusy) return;
+    apiBusy = true;
+    const buttons = [apiProviderSaveBtn, apiProviderUseBtn, apiProviderTestBtn,
+        apiProviderResetBtn, apiProviderDeleteBtn, apiProviderNewBtn];
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    try {
+        await fn();
+    } catch (err) {
+        setApiStatus(`${t('settings.apiProviderSaveFailed')}${err?.message || String(err)}`, 'error');
+    } finally {
+        apiBusy = false;
+        buttons.forEach((b) => { if (b) b.disabled = false; });
+        fillApiForm(currentApiProvider());
+    }
+}
+
+function initApiProviderEvents() {
+    if (apiProviderSelect) {
+        apiProviderSelect.addEventListener('change', () => {
+            const v = apiProviderSelect.value;
+            apiEditId = v === API_NEW_OPTION ? null : v;
+            setApiStatus('');
+            renderApiProviderSelect();
+            fillApiForm(currentApiProvider());
+        });
+    }
+    if (apiProviderNewBtn) {
+        apiProviderNewBtn.addEventListener('click', () => {
+            apiEditId = null;
+            setApiStatus('');
+            renderApiProviderSelect();
+            fillApiForm(null);
+            apiProviderNameInput?.focus();
+        });
+    }
+    if (apiProviderSaveBtn) {
+        apiProviderSaveBtn.addEventListener('click', () => withApiBusy(async () => {
+            const draft = collectApiDraft();
+            if (!draft.name.trim()) { setApiStatus(t('settings.apiProviderNameRequired'), 'error'); return; }
+            if (!/^https?:\/\//i.test(draft.url.trim())) { setApiStatus(t('settings.apiProviderUrlRequired'), 'error'); return; }
+            const result = await window.electronAPI.apiProviderSave(draft);
+            apiProvidersState = result;
+            apiEditId = result.savedId || apiEditId;
+            renderApiProviderSelect();
+            setApiStatus(t('settings.apiProviderSaved'), 'ok');
+        }));
+    }
+    if (apiProviderUseBtn) {
+        apiProviderUseBtn.addEventListener('click', () => withApiBusy(async () => {
+            if (!apiEditId) { setApiStatus(t('settings.apiProviderNoSelection'), 'error'); return; }
+            apiProvidersState = await window.electronAPI.apiProviderSetActive(apiEditId);
+            renderApiProviderSelect();
+            // 选中即切到 API 推理系统，保证"设为当前"后立刻生效。
+            if (inferenceProviderSelect) {
+                inferenceProviderSelect.value = 'api';
+                updateInferenceProviderHint('api');
+                updateApiProviderVisibility('api');
+                await applySettings();
+            }
+            setApiStatus(`${t('settings.apiProviderSection')}: ${currentApiProvider()?.name || ''}`, 'ok');
+        }));
+    }
+    if (apiProviderTestBtn) {
+        apiProviderTestBtn.addEventListener('click', () => withApiBusy(async () => {
+            setApiStatus(t('settings.apiProviderTesting'), 'info');
+            const draft = collectApiDraft();
+            const result = await window.electronAPI.apiProviderTest(draft);
+            // 测试连接失败必须把 401/403/429 等原因原样显示出来。
+            setApiStatus(result?.ok ? result.message
+                : `${t('settings.apiProviderTestFailed')}${result?.message || 'unknown error'}`,
+            result?.ok ? 'ok' : 'error');
+        }));
+    }
+    if (apiProviderResetBtn) {
+        apiProviderResetBtn.addEventListener('click', () => withApiBusy(async () => {
+            apiProvidersState = await window.electronAPI.apiProviderResetBuiltin();
+            apiEditId = apiProvidersState.freeProviderId || apiEditId;
+            renderApiProviderSelect();
+            setApiStatus(t('settings.apiProviderSaved'), 'ok');
+        }));
+    }
+    if (apiProviderDeleteBtn) {
+        apiProviderDeleteBtn.addEventListener('click', () => withApiBusy(async () => {
+            const p = currentApiProvider();
+            if (!p) { setApiStatus(t('settings.apiProviderNoSelection'), 'error'); return; }
+            if (p.builtin) { setApiStatus(t('settings.apiProviderBuiltinNoDelete'), 'error'); return; }
+            if (!window.confirm(t('settings.apiProviderConfirmDelete'))) return;
+            apiProvidersState = await window.electronAPI.apiProviderDelete(p.id);
+            apiEditId = apiProvidersState.activeId || apiProvidersState.freeProviderId || null;
+            renderApiProviderSelect();
+            setApiStatus(t('settings.apiProviderDeleted'), 'ok');
+        }));
+    }
+}
+
 function updateInferenceProviderHint(provider) {
     if (!inferenceProviderHint) return;
     if (provider === 'ortweb') {
         inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtweb');
+    } else if (provider === 'api') {
+        inferenceProviderHint.textContent = t('settings.inferenceProviderHintApi');
     } else {
         inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtnode');
     }
@@ -1730,6 +1954,11 @@ async function applySettings(options = {}) {
         // No main window reload needed — avoids losing user's work
     } catch (err) {
         console.error('Failed to apply settings:', err);
+        // 保存失败也要显式告知，不能只留在 console（API 模式下尤其容易造成
+        // "界面选了 API、实际仍是本机推理"的静默不一致）。
+        if (inferenceProviderSelect?.value === 'api') {
+            setApiStatus(`${t('settings.apiProviderSaveFailed')}${err?.message || String(err)}`, 'error');
+        }
     }
 }
 
@@ -1741,10 +1970,14 @@ function applySettingsDebounced() {
 // Inference provider select
 if (inferenceProviderSelect) {
     inferenceProviderSelect.addEventListener('change', async () => {
-        updateInferenceProviderHint(inferenceProviderSelect.value);
-        updateNativeBackendUI(inferenceProviderSelect.value, nativeInferenceBackendSelect?.value || 'auto');
+        const provider = inferenceProviderSelect.value;
+        updateInferenceProviderHint(provider);
+        updateNativeBackendUI(provider, nativeInferenceBackendSelect?.value || 'auto');
+        updateApiProviderVisibility(provider);
         await applySettings();
-        await loadDevices();
+        // 切到 API 时刷新 Provider 列表（含密钥是否已设置），本机硬件枚举无需执行。
+        if (provider === 'api') await loadApiProviders({ selectActive: true });
+        else await loadDevices();
     });
 }
 
@@ -2284,6 +2517,9 @@ initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
   hydrateIcons(document);
+  // API Provider 管理：等文案就绪后再绑定与加载，保证状态/占位符已本地化。
+  initApiProviderEvents();
+  loadApiProviders({ selectActive: true });
   // 滑杆数值可编辑 / 长说明折叠。必须放在 applyLocale 之后：折叠与否取决于
   // 当前语言下的实际文本长度（中文通常比英文短一行）。
   installSettingsUiPolish();

@@ -27,6 +27,28 @@ const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
 
+// ---- 远程 API 推理（设置里「推理系统 = API」）----
+// 惰性 require：这两个模块只依赖 shared/constants 与 locale，不会触发 ONNX 加载。
+// 放在这里而不是文件顶层，是为了不拖慢冷启动（与主注释的惰性化策略一致）。
+let _apiModules = null;
+function apiModules() {
+  if (!_apiModules) {
+    _apiModules = {
+      store: require('./apiProviderStore'),
+      inference: require('./apiInference'),
+    };
+  }
+  return _apiModules;
+}
+function isApiMode() {
+  try { return loadSettings().inferenceProvider === 'api'; } catch (_) { return false; }
+}
+function apiRuntime() {
+  const rt = apiModules().store.getActiveRuntime();
+  if (!rt) throw new Error(t('error.apiNoProvider'));
+  return rt;
+}
+
 // 模型加载进度的目标窗口集合。
 //
 // 用集合而不是单个 sender：SVS_INIT 与 FRAGMENT_SVS_INIT 共享同一个
@@ -459,6 +481,64 @@ async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
 }
 
 /**
+ * 单组 API 分片：逐分片调用远程 /v1/synthesize，再按 startTimeBeat 混合成
+ * 一条 beat 0 起算的单声道，与内置 synthesizeMultiStreaming / _runPluginGroup
+ * 的返回形态完全一致。任何一个分片报错都直接抛出（含 429/401 明确文案），
+ * 不降级、不静默。
+ * @returns {Promise<Float32Array>}
+ */
+async function _runApiGroup({ group, bpm, runtime, options, startPercent, endPercent }) {
+  const { inference } = apiModules();
+  const sr = getSampleRate();
+  const maxSamples = Math.floor(MAX_PLUGIN_MIX_SECONDS * sr);
+  const effectiveBpm = Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  const parts = [];
+  let totalSamples = 0;
+  const span = Math.max(0, endPercent - startPercent);
+  const rawProgress = options && options.onProgress;
+
+  for (let i = 0; i < group.fragments.length; i++) {
+    const frag = group.fragments[i];
+    const fragBase = startPercent + Math.round((i / Math.max(1, group.fragments.length)) * span);
+    const fragEnd = startPercent + Math.round(((i + 1) / Math.max(1, group.fragments.length)) * span);
+    const onProgress = (p) => {
+      if (typeof rawProgress !== 'function') return;
+      const c = Math.max(0, Math.min(100, Number(p) || 0));
+      rawProgress(Math.round(fragBase + (c / 100) * Math.max(0, fragEnd - fragBase)));
+    };
+    let audio;
+    try {
+      audio = await inference.synthesize({
+        runtime,
+        notes: frag.notes || [],
+        bpm,
+        options: { ...(frag.options || {}), onProgress },
+        onProgress,
+      });
+    } catch (err) {
+      // 带分片位置，便于定位是哪个轨道触发了限流/鉴权失败。
+      throw new Error(`分片 ${i + 1}/${group.fragments.length}（trackId=${frag.trackId || frag.id || `#${i + 1}`}）：${err.message}`);
+    }
+    const startBeat = Number(frag.startTimeBeat);
+    if (!Number.isFinite(startBeat) || startBeat < 0) {
+      throw new Error(`分片 ${i + 1}/${group.fragments.length} 的 startTimeBeat 非法：${frag.startTimeBeat}`);
+    }
+    const offset = Math.max(0, Math.round(((startBeat / effectiveBpm) * 60) * sr));
+    const endSample = offset + audio.length;
+    if (!Number.isFinite(endSample) || endSample > maxSamples) {
+      throw new Error(`分片 ${i + 1}/${group.fragments.length} 的混音长度超出上限（${MAX_PLUGIN_MIX_SECONDS} 秒）`);
+    }
+    parts.push({ audio, offset });
+    totalSamples = Math.max(totalSamples, endSample);
+  }
+  const mixed = new Float32Array(totalSamples);
+  for (const part of parts) {
+    for (let i = 0; i < part.audio.length; i++) mixed[part.offset + i] += part.audio[i];
+  }
+  return mixed;
+}
+
+/**
  * 把各组已渲染好的音频叠加到同一条 beat 0 起算的单声道。
  *
  * 每组结果都已经是“绝对路径”布局（内置管线 Phase 4 与插件组混合都按
@@ -570,6 +650,11 @@ function registerSvsIpc() {
     if (options && options.needsBuiltin === false) {
       return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
     }
+    // API 模式不需要任何本地 ONNX 模型：必须在 svsPipelineLazy.get() 之前短路，
+    // 否则没下载 SoulX-Singer 模型的用户仍会被要求加载 882MB 权重并卡在进度条。
+    if (isApiMode()) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
     await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
@@ -625,6 +710,21 @@ function registerSvsIpc() {
         throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
       }
       return pluginResult.audio;
+    }
+
+    // ---- 远程 API 后端（设置里「推理系统 = API」）----
+    // 与插件分支同处"内置管线初始化之前"：API 模式不加载本地模型。
+    // 错误（401/403 鉴权、429 限流、超时、网络）由 apiInference 生成已本地化、
+    // 带 [API ...] 前缀的消息，经 safeHandle 抛给渲染层弹窗，绝不静默返回空音频。
+    if (isApiMode()) {
+      const { inference } = apiModules();
+      return await inference.synthesize({
+        runtime: apiRuntime(),
+        notes,
+        bpm,
+        options: opts,
+        onProgress: opts.onProgress,
+      });
     }
 
     // Check if JP models are needed but missing (only in jp-lora mode)
@@ -725,6 +825,18 @@ function registerSvsIpc() {
           throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
         }
         tracks.push(pluginResult.audio);
+      } else if (isApiMode()) {
+        // API 模式：内置组分片逐个走远程合成，再按 startTimeBeat 混合成绝对路径
+        // 布局的单声道，与内置 synthesizeMultiStreaming 返回形态一致。
+        const apiAudio = await _runApiGroup({
+          group,
+          bpm,
+          runtime: apiRuntime(),
+          options: opts,
+          startPercent,
+          endPercent,
+        });
+        tracks.push(apiAudio);
       } else {
         try {
           const pipeline = await ensurePipelineLanguage(language);
@@ -753,6 +865,10 @@ function registerSvsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.SVS_CANCEL, async () => {
+    // API 模式没有可取消的本地 pipeline，但要中止在途 HTTP 请求（Fetch AbortController）。
+    if (isApiMode()) {
+      try { apiModules().inference.cancelAll(); } catch (_) { /* 尚未加载 API 模块 */ }
+    }
     // 优先命中当前持有 mutex 的实例（覆盖 lazy 实例尚未注册的初始化窗口，
     // 以及延迟重置清空 getInstance() 后仍在收尾的场景）。
     const target = _activeCancellable || svsPipelineLazy.getInstance();
@@ -784,6 +900,11 @@ function registerSvsIpc() {
     // 与 svs:init 同一套短路：分片编辑器显示插件后端轨道时，不应为了在编辑器
     // 里按一次播放就把整套内置 ONNX 模型读进显存。未传或传 true 时原逻辑不变。
     if (options && options.needsBuiltin === false) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
+    // API 模式不需要任何本地 ONNX 模型：必须在 svsPipelineLazy.get() 之前短路，
+    // 否则没下载 SoulX-Singer 模型的用户仍会被要求加载 882MB 权重并卡在进度条。
+    if (isApiMode()) {
       return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
     }
     await _withLoadProgress(event, () => svsPipelineLazy.get());
@@ -846,6 +967,26 @@ function registerSvsIpc() {
         return { error: `PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}` };
       }
       return { data: pluginResult.audio };
+    }
+
+    // ---- 远程 API 后端 ----
+    // 返回 {error} 而不是 throw：preload 的 synthesizeFragmentSVS 会把它转成
+    // Error 抛出，渲染层（含后台自动推理路径）据此显式报错。
+    if (isApiMode()) {
+      const { inference } = apiModules();
+      try {
+        const data = await inference.synthesize({
+          runtime: apiRuntime(),
+          notes,
+          bpm,
+          options: opts,
+          onProgress: opts.onProgress,
+        });
+        return { data };
+      } catch (err) {
+        console.error('[Main] fragment-svs:synthesize (API) failed:', err.message);
+        return { error: err.message };
+      }
     }
 
     // Check if JP models are needed but missing (only in jp-lora mode)

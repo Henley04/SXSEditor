@@ -96,6 +96,16 @@ const IPC_CHANNELS = {
   SETTINGS_CLEAR_INFERENCE_CACHE: 'settings:clearInferenceCache',
   SETTINGS_CHECK_MODELS: 'settings:check-models',
   SETTINGS_VALIDATE_DEVICES: 'settings:validateDevices',
+
+  // ==================== API Provider（远程推理） ====================
+  // 密钥明文只存在于主进程；渲染层通过这些通道管理 Provider 元数据与连接测试。
+  API_PROVIDERS_LIST: 'api:providersList',
+  API_PROVIDER_SAVE: 'api:providerSave',
+  API_PROVIDER_DELETE: 'api:providerDelete',
+  API_PROVIDER_SET_ACTIVE: 'api:providerSetActive',
+  API_PROVIDER_RESET_BUILTIN: 'api:providerResetBuiltin',
+  API_PROVIDER_TEST: 'api:providerTest',
+
   APP_GET_VERSION: 'app:getVersion',
   GET_MODEL_DIR: 'getModelDir',
 

@@ -218,9 +218,41 @@
                     <select id="inferenceProvider">
                         <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">本机推理</option>
                         <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">WebNN（已弃用）</option>
+                        <option value="api" data-i18n="settings.inferenceProviderApi">API（远程服务）</option>
                     </select>
                     <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用本机推理运行时。推荐 Windows ML，若不可用则回退 DirectML/CPU。</p>
                 </div>
+
+                <!-- API Provider 管理：仅当「推理系统 = API」时显示 -->
+                <div class="setting-group hidden api-provider-group" id="apiProviderGroup">
+                    <label data-i18n="settings.apiProviderSection">API 服务</label>
+                    <div class="api-provider-bar">
+                        <select id="apiProviderSelect" aria-label="API Provider"></select>
+                        <button type="button" id="apiProviderNewBtn" class="api-btn" data-i18n="settings.apiProviderNew">新建 API Provider</button>
+                    </div>
+                    <p class="hint" id="apiProviderModeHint"></p>
+                    <p class="hint" id="apiProviderFreeHint" data-i18n="settings.apiProviderFreeHint">Free API By SXSEditor 连接到 ModelScope 创空间公开入口，完全免费、无需任何密钥或 Token，开箱即用。仅受速率限制（每分钟 20 次、每天 500 次，按 IP）；触发限流或鉴权错误时会明确提示。</p>
+                    <div class="api-provider-form">
+                        <label for="apiProviderName"><span data-i18n="settings.apiProviderName">名称</span></label>
+                        <input type="text" id="apiProviderName" maxlength="64" autocomplete="off" placeholder="My API">
+                        <label for="apiProviderUrl"><span data-i18n="settings.apiProviderUrl">API 网址</span></label>
+                        <input type="text" id="apiProviderUrl" maxlength="512" autocomplete="off" spellcheck="false" data-i18n-placeholder="settings.apiProviderUrlPlaceholder" placeholder="https://your-api.example.com">
+                        <label for="apiProviderKey"><span data-i18n="settings.apiProviderKey">密钥（可选）</span></label>
+                        <input type="password" id="apiProviderKey" maxlength="512" autocomplete="new-password" data-i18n-placeholder="settings.apiProviderKeyPlaceholderEmpty" placeholder="可留空；服务端要求鉴权时再填写">
+                        <div class="api-provider-actions">
+                            <button type="button" id="apiProviderSaveBtn" class="api-btn api-btn-primary" data-i18n="settings.apiProviderSave">保存</button>
+                            <button type="button" id="apiProviderUseBtn" class="api-btn" data-i18n="settings.apiProviderUse">设为当前</button>
+                            <button type="button" id="apiProviderTestBtn" class="api-btn" data-i18n="settings.apiProviderTest">测试连接</button>
+                            <button type="button" id="apiProviderResetBtn" class="api-btn" data-i18n="settings.apiProviderResetBuiltin">恢复内置默认</button>
+                            <button type="button" id="apiProviderDeleteBtn" class="api-btn api-btn-danger" data-i18n="settings.apiProviderDelete">删除</button>
+                        </div>
+                        <!-- 所有结果（含 429 限流 / 401 鉴权 / 网络错误）都在此显式显示 -->
+                        <div id="apiProviderStatus" class="api-provider-status" role="alert" aria-live="polite"></div>
+                        <p class="hint hint-warning hidden" id="apiProviderSecretsWarning" data-i18n="settings.apiProviderSecretsWarning">本机未启用系统密钥环，密钥将以明文存储于本机配置文件。</p>
+                        <p class="hint"><a id="apiProviderDocsLink" href="https://henley04.github.io/SXSEditor/api-standard.html" target="_blank" rel="noopener" data-i18n="settings.apiProviderDocs">API 标准（端点 / 参数 / 错误码）</a></p>
+                    </div>
+                </div>
+
                 <div class="setting-group" id="nativeBackendGroup">
                     <label for="nativeInferenceBackend" data-i18n="settings.nativeInferenceBackend">本机执行后端</label>
                     <select id="nativeInferenceBackend">
@@ -237,7 +269,7 @@
                         <span id="currentHardwareText" data-i18n="settings.notInitialized">未初始化</span>
                     </div>
                 </div>
-                <div class="setting-group">
+                <div class="setting-group" id="deviceModeGroup">
                     <label data-i18n="settings.deviceMode">设备模式</label>
                     <div class="device-mode-radios">
                         <label class="device-mode-radio">

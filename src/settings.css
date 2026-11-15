@@ -2063,3 +2063,111 @@ label.model-check {
 .model-audit-time { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .model-audit-subject,
 .model-audit-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==================== API Provider（远程推理） ==================== */
+
+.api-provider-group {
+    border-left: 3px solid var(--accent-soft);
+    padding-left: 14px;
+}
+
+/* API 模式下本机硬件选项全部不适用：用 section 级 class 统一隐藏，
+   切回本机推理时只需移除 class，无需逐个还原（避免与 deviceMode UI 状态打架）。 */
+#section-inference.api-mode .hardware-info,
+#section-inference.api-mode #nativeBackendGroup,
+#section-inference.api-mode #deviceModeGroup,
+#section-inference.api-mode #deviceSelectGroup,
+#section-inference.api-mode #webnnStatusGroup,
+#section-inference.api-mode #advancedSettingsGroup {
+    display: none;
+}
+
+.api-provider-bar {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+    margin-bottom: var(--space-3);
+}
+
+.api-provider-bar select { flex: 1 1 auto; min-width: 0; }
+
+/* password 输入框沿用 text 的视觉（原样式只覆盖 text/number） */
+.setting-group input[type="password"] {
+    width: 100%;
+    padding: var(--space-4) var(--space-5);
+    font-size: var(--font-md);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    color: var(--fg-primary);
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color var(--motion-base), box-shadow var(--motion-base);
+}
+.setting-group input[type="password"]:hover { border-color: var(--button-secondary-border); }
+.setting-group input[type="password"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.api-provider-form > label { margin-top: 10px; }
+
+.api-provider-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.api-btn {
+    flex: 0 1 auto;
+    padding: 8px 14px;
+    font-size: var(--font-sm);
+    font-weight: 500;
+    border: 1px solid var(--button-secondary-border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--fg-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
+}
+.api-btn:hover { border-color: var(--accent-glow-strong); background: var(--accent-softer); color: var(--accent-fg); }
+.api-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.api-btn-primary { border-color: var(--accent-line); background: var(--bg-button-primary); color: var(--fg-primary); }
+.api-btn-danger { color: var(--danger-fg); border-color: var(--danger-soft); }
+.api-btn-danger:hover { background: var(--danger-soft); border-color: var(--danger-glow); color: var(--danger-fg); }
+
+/* 状态区：成功/失败都显示在这里，绝不用 console 静默吞掉 */
+.api-provider-status {
+    margin-top: 12px;
+    min-height: 0;
+    font-size: var(--font-sm);
+    line-height: 1.6;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+.api-provider-status:empty { display: none; }
+.api-provider-status.is-info {
+    padding: 9px 12px;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-softer);
+    color: var(--fg-secondary);
+    border-radius: var(--radius-sm);
+}
+.api-provider-status.is-ok {
+    padding: 9px 12px;
+    border-left: 3px solid var(--success-fg, #4ade80);
+    background: var(--bg-elevated);
+    color: var(--fg-primary);
+    border-radius: var(--radius-sm);
+}
+.api-provider-status.is-error {
+    padding: 9px 12px;
+    border-left: 3px solid var(--danger-fg);
+    background: var(--danger-soft);
+    color: var(--danger-fg);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+}
+.api-provider-group a { color: var(--accent-fg); text-decoration: underline; }
