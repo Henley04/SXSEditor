@@ -115,6 +115,12 @@ Accept: audio/wav, application/json
 <td>合成推理，返回 WAV 二进制或 JSON</td>
 </tr>
 <tr>
+<td><code>POST</code></td>
+<td><code>/v1/synthesize/stream</code></td>
+<td>是</td>
+<td>流式合成（NDJSON）：逐行推送<strong>真实推理进度</strong>，最后一条事件携带 WAV；见 4.5</td>
+</tr>
+<tr>
 <td><code>GET</code></td>
 <td><code>/health</code></td>
 <td>否</td>
@@ -470,6 +476,82 @@ body 为 WAV 二进制。</p>
 <p>参考实现会在日志里打印 <code>[API] &lt;Provider&gt;: 520 notes &gt; 200/request → 3 chunks</code>，
 便于确认是否发生了分段。分段是串行请求，耗时约等于各片之和。</p>
 </blockquote>
+<h3 id="45-post-v1synthesizestream">4.5 流式合成：<code>POST /v1/synthesize/stream</code></h3>
+<p>请求体与 4.1 <strong>完全一致</strong>（同一个 schema），响应改为逐行 NDJSON：</p>
+<pre><code>Content-Type: application/x-ndjson; charset=utf-8
+X-Accel-Buffering: no
+</code></pre>
+<p>每行一个 JSON 事件，按顺序：</p>
+<table>
+<thead>
+<tr>
+<th><code>type</code></th>
+<th>关键字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code></td>
+<td><code>request_id</code> / <code>notes</code> / <code>bpm</code> / <code>n_steps</code></td>
+<td>流开始，可用于确认服务端已受理</td>
+</tr>
+<tr>
+<td><code>progress</code></td>
+<td><code>percent</code>（0–100 整数）/ <code>elapsed_ms</code></td>
+<td><strong>服务端真实推理进度</strong>，来自 <code>pipeline.synthesize(..., {onProgress})</code></td>
+</tr>
+<tr>
+<td><code>ping</code></td>
+<td><code>t</code></td>
+<td>15 秒心跳，防止反代/网关空闲断连；客户端忽略即可</td>
+</tr>
+<tr>
+<td><code>done</code></td>
+<td><code>sample_rate</code> / <code>duration_seconds</code> / <code>inference_ms</code> / <code>format</code> / <code>audio_base64</code></td>
+<td>最后一条，音频为 WAV 的 Base64</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>error</code> / <code>message</code> / <code>request_id</code></td>
+<td>流开始后推理失败；HTTP 状态此时已是 200</td>
+</tr>
+</tbody>
+</table>
+<p>要点：</p>
+<ol>
+<li><strong>进度是真实的</strong>，不是按耗时估算。参考实现的进度覆盖 diffusion 全步数与 vocoder，
+   每 250ms 最多一条（diffusion 每个 step 都会回调，不节流会刷爆连接），100% 必发。</li>
+<li><strong>错误用事件表达</strong>：流一旦开始，HTTP 状态固定 200，失败只能通过 <code>type:error</code>
+   传达。客户端<strong>必须</strong>把 <code>message</code> 展示给用户，不能当成空音频。</li>
+<li><strong>不支持时回退</strong>：服务端没有该端点时返回 404/405；被反代改写成 HTML 时
+   <code>Content-Type</code> 不是 <code>x-ndjson</code>。客户端遇到这两种情况应回退到 <code>/v1/synthesize</code>，
+   其余 4xx/5xx（401/429/500）直接按第 5 节报错，<strong>不得</strong>重试（会重复消耗配额）。</li>
+<li><strong>分段兼容</strong>：4.4 的每片都可以走流式，客户端把 <code>percent</code> 按片区间折算成整体进度。</li>
+</ol>
+<p>最小客户端（Node 18+）：</p>
+<pre><code class="language-js">const resp = await fetch(`${base}/v1/synthesize/stream`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+  body: JSON.stringify({ notes, bpm: 120, n_steps: 32 }),
+});
+if (!resp.ok || !resp.headers.get('content-type')?.includes('ndjson')) {
+  throw new Error(`stream unsupported: ${resp.status}`); // 回退普通端点
+}
+let buf = '';
+for await (const chunk of resp.body) {
+  buf += new TextDecoder().decode(chunk, { stream: true });
+  let i;
+  while ((i = buf.indexOf('
+')) &gt;= 0) {
+    const evt = JSON.parse(buf.slice(0, i));
+    buf = buf.slice(i + 1);
+    if (evt.type === 'progress') onProgress(evt.percent);
+    else if (evt.type === 'error') throw new Error(evt.message);
+    else if (evt.type === 'done') return Buffer.from(evt.audio_base64, 'base64');
+  }
+}
+</code></pre>
 <hr />
 <h2 id="5">5. 错误响应</h2>
 <p>所有错误都返回统一结构（HTTP 状态码 + JSON body）：</p>
@@ -715,11 +797,13 @@ open(&quot;out.wav&quot;, &quot;wb&quot;).write(r.content)
 <hr />
 <h2 id="10">10. 兼容性与版本</h2>
 <ul>
-<li>本规范版本 <strong>1.0</strong>，对应 SXSEditor 2.x 与参考 API 服务 v1.3.0。</li>
+<li>本规范版本 <strong>1.0</strong>，对应 SXSEditor 2.x 与参考 API 服务 v1.4.0。</li>
 <li>服务端<strong>可以</strong>增加可选请求字段，但不得删除或改变已有字段语义；未知顶层字段
   在参考实现中会触发 400，因此客户端只发送本规范列出的字段。</li>
-<li>客户端在 <code>GET /</code> 与 <code>GET /health</code> 中读取 <code>model_revision</code> 等信息用于展示，
-  不依赖它们做功能分流。</li>
+<li><code>/v1/synthesize/stream</code> 是<strong>可选端点</strong>（v1.4.0 引入）。客户端必须先探测
+  <code>Content-Type</code>，不支持时回退 <code>/v1/synthesize</code>，不得因为缺少该端点而判服务不可用。</li>
+<li>客户端在 <code>GET /</code> 与 <code>GET /health</code> 中读取 <code>model_revision</code> / <code>max_notes</code> 等信息用于
+  展示与分段校准，不依赖它们做功能分流。</li>
 <li>音频采样率若不是 24000 Hz，客户端会做线性重采样到 24000 Hz；为保证音质，
   服务端仍应输出 24000 Hz。</li>
 </ul>

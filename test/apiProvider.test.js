@@ -354,6 +354,11 @@ describe('apiInference 切片合成端到端', () => {
       let raw = '';
       req.on('data', (c) => { raw += c; });
       req.on('end', () => {
+        // 这个 mock 只模拟"旧版服务端"：没有流式端点，客户端应自动回退。
+        if (req.url.startsWith('/v1/synthesize/stream')) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end('{"error":"not_found"}');
+        }
         const body = JSON.parse(raw);
         bodies.push(body);
         if (body.notes.length > cap) {
@@ -414,5 +419,88 @@ describe('apiInference 切片合成端到端', () => {
     expect(seen[0]).to.be.at.most(1);
     expect(seen[seen.length - 1]).to.equal(100);
     for (let i = 1; i < seen.length; i++) expect(seen[i]).to.be.at.least(seen[i - 1]);
+  });
+});
+
+describe('apiInference 流式进度（NDJSON）', () => {
+  let server;
+  let base;
+  let mode = 'stream';
+  let hits = [];
+
+  before((done) => {
+    server = http.createServer((req, res) => {
+      req.on('data', () => { /* 丢弃请求体，仅验证响应解析 */ });
+      req.on('end', () => {
+        hits.push(req.url);
+        if (req.url.startsWith('/v1/synthesize/stream')) {
+          if (mode === 'no-stream') {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            return res.end('{"error":"not_found"}');
+          }
+          if (mode === 'html') {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            return res.end('<html>login</html>');
+          }
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
+          const evt = (o) => res.write(`${JSON.stringify(o)}\n`);
+          evt({ type: 'start', request_id: 'r1' });
+          evt({ type: 'progress', percent: 12 });
+          evt({ type: 'ping', t: 1 });
+          if (mode === 'error') {
+            evt({ type: 'error', error: 'synthesis_failed', message: '内部 NaN' });
+            return res.end();
+          }
+          evt({ type: 'progress', percent: 64 });
+          evt({ type: 'progress', percent: 100 });
+          evt({ type: 'done', duration_seconds: 0.1, inference_ms: 1234, audio_base64: wavFloat32(2400).toString('base64') });
+          return res.end();
+        }
+        res.writeHead(200, { 'Content-Type': 'audio/wav' });
+        res.end(wavFloat32(24000));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => { base = `http://127.0.0.1:${server.address().port}`; done(); });
+  });
+  after((done) => server.close(done));
+  beforeEach(() => { mode = 'stream'; hits = []; });
+
+  const runtime = () => ({ id: 'mock', name: 'Mock API', url: base, key: '' });
+
+  it('把服务端 progress 事件实时转发给 onProgress', async () => {
+    const seen = [];
+    const audio = await api.synthesize({ runtime: runtime(), notes: NOTES, bpm: 120, onProgress: (p) => seen.push(p) });
+    expect(audio).to.have.length(2400);
+    expect(seen).to.include(12);
+    expect(seen).to.include(64);
+    expect(seen[seen.length - 1]).to.equal(100);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).to.be.at.least(seen[i - 1]);
+    expect(hits[0]).to.equal('/v1/synthesize/stream');
+  });
+
+  it('服务端没有流式端点（404）时回退普通端点', async () => {
+    mode = 'no-stream';
+    const audio = await api.synthesize({ runtime: runtime(), notes: NOTES, bpm: 120 });
+    expect(audio).to.have.length(24000);
+    expect(hits).to.deep.equal(['/v1/synthesize/stream', '/v1/synthesize']);
+  });
+
+  it('流式端点返回 HTML 时回退普通端点', async () => {
+    mode = 'html';
+    const audio = await api.synthesize({ runtime: runtime(), notes: NOTES, bpm: 120 });
+    expect(audio).to.have.length(24000);
+    expect(hits[hits.length - 1]).to.equal('/v1/synthesize');
+  });
+
+  it('流内 error 事件转成可展示的报错，不回退', async () => {
+    mode = 'error';
+    try {
+      await api.synthesize({ runtime: runtime(), notes: NOTES, bpm: 120 });
+      expect.fail('应抛错');
+    } catch (e) {
+      expect(e.message).to.match(/\[API 推理失败\].*内部 NaN/);
+      expect(e.kind).to.equal('server');
+    }
+    expect(hits).to.deep.equal(['/v1/synthesize/stream']);
   });
 });

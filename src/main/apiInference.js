@@ -20,6 +20,7 @@ const { SAMPLE_RATE, HOP_SIZE } = require('../inference/shared/constants.js');
 const { t } = require('./locale');
 
 const SYNTH_PATH = '/v1/synthesize';
+const STREAM_PATH = '/v1/synthesize/stream';
 const HEALTH_PATH = '/health';
 const DEFAULT_TIMEOUT_MS = 600000;   // 32 步长样本实测约 108s，留足余量
 const HEALTH_TIMEOUT_MS = 15000;
@@ -463,10 +464,12 @@ function authHeaders(key) {
 }
 
 /**
- * 执行一次远程合成（单次请求，不切片），返回与内置 pipeline.synthesize 完全一致的
- * Float32Array（24kHz 单声道）。对外请调用 synthesize()，它会按服务端 notes 上限自动切片。
+ * 单次远程合成（普通端点，等整段生成完再返回）。
+ *
+ * 进度只有 0 / 95 / 100 三档 —— 服务端在 HTTP 响应前无法回传中间状态。
+ * 需要真实进度请走 _synthesizeOnceStreaming（synthesize 会优先尝试）。
  */
-async function _synthesizeOnce({ runtime, notes, bpm, options = {}, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+async function _synthesizeOncePlain({ runtime, notes, bpm, options = {}, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS }) {
   const body = buildRequestBody(notes, bpm, options);
   const controller = new AbortController();
   activeControllers.add(controller);
@@ -518,6 +521,125 @@ async function _synthesizeOnce({ runtime, notes, bpm, options = {}, onProgress, 
   } finally {
     clearTimeout(timer);
     activeControllers.delete(controller);
+  }
+}
+
+/**
+ * 单次远程合成（流式端点）：把服务端 NDJSON 里的**真实推理进度**透传给 UI。
+ *
+ * 服务端不支持流式（旧版本 / 第三方实现）时抛 kind='stream_unsupported'，
+ * 由 _synthesizeOnce 回退普通端点。回退只发生在「一个字节音频都没拿到」之前，
+ * 401/429/500 等业务错误一律原样上抛，绝不重复消耗配额。
+ */
+async function _synthesizeOnceStreaming({ runtime, notes, bpm, options = {}, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+  const body = buildRequestBody(notes, bpm, options);
+  const controller = new AbortController();
+  activeControllers.add(controller);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const started = Date.now();
+  try {
+    if (typeof onProgress === 'function') onProgress(0);
+    let resp;
+    try {
+      resp = await fetch(buildUrl(runtime.url, STREAM_PATH), {
+        method: 'POST',
+        headers: { ...authHeaders(runtime.key), Accept: 'application/x-ndjson' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw networkError(err, runtime.name);
+    }
+
+    const contentType = String(resp.headers.get('content-type') || '');
+    if (!resp.ok || !contentType.includes('ndjson')) {
+      let text = '';
+      try { text = await resp.text(); } catch (_) { /* 用空 body 兜底 */ }
+      // 404/405/501 = 服务端没有这个端点；200 但不是 ndjson = 被反代改写成页面。
+      if (resp.status === 404 || resp.status === 405 || resp.status === 501 || (resp.ok && !contentType.includes('ndjson'))) {
+        throw new ApiError('stream endpoint unavailable',
+          { kind: 'stream_unsupported', status: resp.status, code: 'API_NO_STREAM' });
+      }
+      throw errorForStatus(resp.status, parseErrorBody(text), runtime.name, resp.headers.get('retry-after'));
+    }
+
+    const reader = resp.body && typeof resp.body.getReader === 'function' ? resp.body.getReader() : null;
+    if (!reader) {
+      throw new ApiError('stream body unavailable',
+        { kind: 'stream_unsupported', status: resp.status, code: 'API_NO_STREAM' });
+    }
+
+    const decoder = new TextDecoder();
+    let pending = '';
+    let doneEvent = null;
+    const handleEvent = (evt) => {
+      if (!evt || typeof evt !== 'object') return;
+      if (evt.type === 'progress') {
+        const p = Number(evt.percent);
+        if (typeof onProgress === 'function' && Number.isFinite(p)) {
+          onProgress(Math.max(0, Math.min(100, Math.round(p))));
+        }
+      } else if (evt.type === 'error') {
+        throw new ApiError(
+          tr('error.apiStreamFail', { name: runtime.name, detail: shorten(evt.message) }),
+          { kind: 'server', status: resp.status, code: 'API_SYNTHESIS_FAILED' },
+        );
+      } else if (evt.type === 'done') {
+        doneEvent = evt;
+      }
+    };
+
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = pending.indexOf('\n')) >= 0) {
+          const line = pending.slice(0, nl).trim();
+          pending = pending.slice(nl + 1);
+          if (!line) continue;
+          let evt = null;
+          try { evt = JSON.parse(line); } catch (_) { continue; }
+          handleEvent(evt);
+        }
+      }
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      // 连接中断 / 超时 abort：给出可展示的网络或超时文案，而不是裸的 DOMException。
+      throw networkError(err, runtime.name);
+    }
+    if (pending.trim()) {
+      try {
+        handleEvent(JSON.parse(pending.trim()));
+      } catch (err) {
+        if (err instanceof ApiError) throw err;
+      }
+    }
+
+    if (!doneEvent || typeof doneEvent.audio_base64 !== 'string' || !doneEvent.audio_base64) {
+      throw new ApiError(tr('error.apiBadResponse', { name: runtime.name }),
+        { kind: 'bad_response', code: 'API_BAD_RESPONSE' });
+    }
+    const audio = decodeWav(Buffer.from(doneEvent.audio_base64, 'base64'), SAMPLE_RATE);
+    console.log(`[API] ${runtime.name} stream ok: ${audio.length} samples, ${Date.now() - started}ms, inference=${doneEvent.inference_ms ?? '?'}ms`);
+    if (typeof onProgress === 'function') onProgress(100);
+    return audio;
+  } finally {
+    clearTimeout(timer);
+    activeControllers.delete(controller);
+  }
+}
+
+/** 单次合成：优先流式（真实进度），服务端不支持时回退普通端点。 */
+async function _synthesizeOnce(params) {
+  try {
+    return await _synthesizeOnceStreaming(params);
+  } catch (err) {
+    if (err && err.kind === 'stream_unsupported') {
+      return _synthesizeOncePlain(params);
+    }
+    throw err;
   }
 }
 

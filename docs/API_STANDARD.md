@@ -59,6 +59,7 @@ Accept: audio/wav, application/json
 | 方法 | 路径 | 是否计入配额 | 说明 |
 |---|---|---|---|
 | `POST` | `/v1/synthesize` | 是 | 合成推理，返回 WAV 二进制或 JSON |
+| `POST` | `/v1/synthesize/stream` | 是 | 流式合成（NDJSON）：逐行推送**真实推理进度**，最后一条事件携带 WAV；见 4.5 |
 | `GET` | `/health` | 否 | 健康检查、模型/版本状态；可用 `?strict=1` 要求模型就绪（否则 503） |
 | `GET` | `/v1/usage` | 否 | 查询当前 IP 的配额使用情况 |
 | `GET` | `/` | 否 | 服务自描述（版本、模型、限流、端点清单、示例） |
@@ -211,6 +212,61 @@ SXSEditor 内置的 API 后端（`src/main/apiInference.js`）按以下规则处
 
 > 参考实现会在日志里打印 `[API] <Provider>: 520 notes > 200/request → 3 chunks`，
 > 便于确认是否发生了分段。分段是串行请求，耗时约等于各片之和。
+
+### 4.5 流式合成：`POST /v1/synthesize/stream`
+
+请求体与 4.1 **完全一致**（同一个 schema），响应改为逐行 NDJSON：
+
+```
+Content-Type: application/x-ndjson; charset=utf-8
+X-Accel-Buffering: no
+```
+
+每行一个 JSON 事件，按顺序：
+
+| `type` | 关键字段 | 说明 |
+|---|---|---|
+| `start` | `request_id` / `notes` / `bpm` / `n_steps` | 流开始，可用于确认服务端已受理 |
+| `progress` | `percent`（0–100 整数）/ `elapsed_ms` | **服务端真实推理进度**，来自 `pipeline.synthesize(..., {onProgress})` |
+| `ping` | `t` | 15 秒心跳，防止反代/网关空闲断连；客户端忽略即可 |
+| `done` | `sample_rate` / `duration_seconds` / `inference_ms` / `format` / `audio_base64` | 最后一条，音频为 WAV 的 Base64 |
+| `error` | `error` / `message` / `request_id` | 流开始后推理失败；HTTP 状态此时已是 200 |
+
+要点：
+
+1. **进度是真实的**，不是按耗时估算。参考实现的进度覆盖 diffusion 全步数与 vocoder，
+   每 250ms 最多一条（diffusion 每个 step 都会回调，不节流会刷爆连接），100% 必发。
+2. **错误用事件表达**：流一旦开始，HTTP 状态固定 200，失败只能通过 `type:error`
+   传达。客户端**必须**把 `message` 展示给用户，不能当成空音频。
+3. **不支持时回退**：服务端没有该端点时返回 404/405；被反代改写成 HTML 时
+   `Content-Type` 不是 `x-ndjson`。客户端遇到这两种情况应回退到 `/v1/synthesize`，
+   其余 4xx/5xx（401/429/500）直接按第 5 节报错，**不得**重试（会重复消耗配额）。
+4. **分段兼容**：4.4 的每片都可以走流式，客户端把 `percent` 按片区间折算成整体进度。
+
+最小客户端（Node 18+）：
+
+```js
+const resp = await fetch(`${base}/v1/synthesize/stream`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+  body: JSON.stringify({ notes, bpm: 120, n_steps: 32 }),
+});
+if (!resp.ok || !resp.headers.get('content-type')?.includes('ndjson')) {
+  throw new Error(`stream unsupported: ${resp.status}`); // 回退普通端点
+}
+let buf = '';
+for await (const chunk of resp.body) {
+  buf += new TextDecoder().decode(chunk, { stream: true });
+  let i;
+  while ((i = buf.indexOf('\n')) >= 0) {
+    const evt = JSON.parse(buf.slice(0, i));
+    buf = buf.slice(i + 1);
+    if (evt.type === 'progress') onProgress(evt.percent);
+    else if (evt.type === 'error') throw new Error(evt.message);
+    else if (evt.type === 'done') return Buffer.from(evt.audio_base64, 'base64');
+  }
+}
+```
 
 ---
 
@@ -395,11 +451,13 @@ open("out.wav", "wb").write(r.content)
 
 ## 10. 兼容性与版本
 
-- 本规范版本 **1.0**，对应 SXSEditor 2.x 与参考 API 服务 v1.3.0。
+- 本规范版本 **1.0**，对应 SXSEditor 2.x 与参考 API 服务 v1.4.0。
 - 服务端**可以**增加可选请求字段，但不得删除或改变已有字段语义；未知顶层字段
   在参考实现中会触发 400，因此客户端只发送本规范列出的字段。
-- 客户端在 `GET /` 与 `GET /health` 中读取 `model_revision` 等信息用于展示，
-  不依赖它们做功能分流。
+- `/v1/synthesize/stream` 是**可选端点**（v1.4.0 引入）。客户端必须先探测
+  `Content-Type`，不支持时回退 `/v1/synthesize`，不得因为缺少该端点而判服务不可用。
+- 客户端在 `GET /` 与 `GET /health` 中读取 `model_revision` / `max_notes` 等信息用于
+  展示与分段校准，不依赖它们做功能分流。
 - 音频采样率若不是 24000 Hz，客户端会做线性重采样到 24000 Hz；为保证音质，
   服务端仍应输出 24000 Hz。
 
