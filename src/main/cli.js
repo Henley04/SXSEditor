@@ -24,7 +24,8 @@
  *                         --from <sec> --to <sec> --duration <sec> --singer <x.sxssinger>
  *                         --precision fp32|fp16|int8 --steps <N> --sampler <name>
  *                         --cfg <n> --cfg-rescale <n>
- *                         --cfg-schedule constant|linear|cosine --qdrift --seed <N> --dry-run
+ *                         --cfg-schedule constant|linear|cosine --qdrift --seed <N>
+ *                         --pitch-control score|manual --dry-run
  *   qdrift-conds    从一个或多个 .sxsproj 导出 Q-Drift 标定条件（prompt mel + cond），
  *                   默认写入 qdrift/conds_proj
  *                   可选：--file <project.sxsproj>（可重复，必需）--fragment <N> --out <dir>
@@ -100,6 +101,9 @@ Commands:
                            --qdrift                  enable Q-Drift
                            --seed <N>                fix initial noise (required
                                                      for any precision comparison)
+                           --pitch-control score|manual  pitch conditioning mode
+                                                     (score=model generates F0,
+                                                     manual=follow curve; default manual)
                            --dry-run                 only print the parsed plan
   plugin          Work with plugin-provided automation methods.
                   plugin list           installed plugins + methods the app exposes
@@ -624,7 +628,7 @@ async function cmdSynthProject(opts) {
     preferredDeviceType: settings.preferredDeviceType || undefined,
     modelDeviceMapping: settings.modelDeviceMapping || undefined,
     modelPrecision: precision,
-    japaneseVocalization: settings.japaneseVocalization || 'hybrid',
+    japaneseVocalization: settings.japaneseVocalization || 'en-phonemes',
     inferenceProvider: settings.inferenceProvider || 'ortnode',
   });
 
@@ -662,6 +666,10 @@ async function cmdSynthProject(opts) {
     if (Number.isInteger(opts.seed)) {
         synthOpts.seed = opts.seed;
         log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
+    }
+    if (opts.pitchControl === 'score' || opts.pitchControl === 'manual') {
+        synthOpts.pitchControl = opts.pitchControl;
+        log(`pitchCtrl  : ${opts.pitchControl}（score=模型自生成F0，manual=跟随曲线；缺省 manual）`);
     }
 
     const tSynth = Date.now();
@@ -795,7 +803,7 @@ async function cmdQdriftConds(opts) {
     preferredDeviceType: settings.preferredDeviceType || undefined,
     modelDeviceMapping: settings.modelDeviceMapping || undefined,
     modelPrecision: 'fp32',
-    japaneseVocalization: settings.japaneseVocalization || 'hybrid',
+    japaneseVocalization: settings.japaneseVocalization || 'en-phonemes',
     inferenceProvider: settings.inferenceProvider || 'ortnode',
   });
 
@@ -1023,6 +1031,7 @@ function parseArgs(argv) {
     if (a === '--qdrift') { opts.qdrift = true; continue; }
     if (a === '--no-qdrift') { opts.qdrift = false; continue; }
     if (a === '--seed') { opts.seed = parseInt(rest[++i], 10); continue; }
+    if (a === '--pitch-control') { opts.pitchControl = rest[++i]; continue; }
     if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
     if (a === '--no-winml') { opts.noWinml = true; continue; }
     if (a === '--diffstep-chunk') {
