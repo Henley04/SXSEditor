@@ -48,7 +48,20 @@ try {
 } finally {
   Module._load = originalLoad;
 }
-locale.setLocale('zh-CN');
+
+// 本文件多个用例断言中文文案（[API 超时]、[API 推理失败]…），必须把主进程 locale
+// 切到 zh-CN。但 locale 是模块级单例，像以前那样在文件顶层设一次再也不还原，
+// 会把后面依赖英文文案的文件（singerMarketIpc 的"区域不可用"断言）带崩——
+// 单独跑本文件全绿、全量跑才红，是典型的跨文件状态污染。
+// 这里按 currentTest.file 把设置与还原都限定在本文件，等价于文件级隔离。
+const localeAtLoad = locale.getLocale();
+const isThisFile = (ctx) => ((ctx.currentTest && ctx.currentTest.file) || '').includes('apiProvider.test.js');
+beforeEach(function () {
+  if (isThisFile(this)) locale.setLocale('zh-CN');
+});
+afterEach(function () {
+  if (isThisFile(this)) locale.setLocale(localeAtLoad);
+});
 
 // ------------------------------------------------------------------ helpers
 function wavWrap(data, format, bits, rate, channels) {

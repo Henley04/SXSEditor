@@ -109,7 +109,10 @@ describe('推理后端隔离 — 回归矩阵', () => {
 
       const svs = read('main/svsIpc.js');
       expect((svs.match(/options\.needsBuiltin === false/g) || [])).to.have.length(2);
-      expect((svs.match(/skipped: true/g) || [])).to.have.length(2);
+      // 每个 init handler 有两个短路：插件工程（needsBuiltin === false）与 API 模式（isApiMode()）。
+      // 后者是 API 推理后端引入的：没下载本地权重的用户不能因为按一次播放就被拖进
+      // 882MB 模型加载进度条。所以 skipped:true 由 2 处变成 4 处（2 handler × 2 短路）。
+      expect((svs.match(/skipped: true/g) || [])).to.have.length(4);
     });
   });
 

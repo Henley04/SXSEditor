@@ -35,6 +35,12 @@ try {
 const { request, buildMultipart, buildMultipartParts, errorPayload, parseGeo, MSG_UNREACHABLE, MSG_TIMEOUT } = singerMarketIpc._internal;
 
 describe('singerMarketIpc request/timeout', function () {
+  // 区域封锁提示的断言是英文（/not available in your region/i），而主进程 locale
+  // 是模块级单例。这里显式钉住 en，不依赖"前面没人改过语言"这种脆弱假设。
+  const localeMod = require('../src/main/locale');
+  const localeBefore = localeMod.getLocale();
+  before(function () { localeMod.setLocale('en'); });
+  after(function () { localeMod.setLocale(localeBefore); });
   // Point the client at a local server before the first getApiBase() call.
   let server;
   let baseUrl;
