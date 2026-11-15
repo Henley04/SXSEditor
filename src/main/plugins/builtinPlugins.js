@@ -29,7 +29,7 @@ const installer = require('./PluginInstaller.js');
 const store = require('./PluginStateStore.js');
 const { SIGNATURE_STATUS } = require('../../shared/pluginSignature.js');
 const { compareVersions } = require('../../shared/pluginMarket.js');
-const { BUILTIN_PLUGIN_IDS } = require('../../shared/builtinPluginIds.js');
+const { BUILTIN_PLUGIN_IDS, RETIRED_BUILTIN_PLUGIN_IDS } = require('../../shared/builtinPluginIds.js');
 
 /** 兼容旧调用方：首个内置插件（官方工程导入）的 id。 */
 const BUILTIN_ID = BUILTIN_PLUGIN_IDS[0];
@@ -215,6 +215,51 @@ function ensureBuiltinPlugins(options = {}) {
 }
 
 /**
+ * 清理已下架的内置插件（见 RETIRED_BUILTIN_PLUGIN_IDS）。
+ *
+ * 为什么必须在启动安装时做：内置插件首次启动会被复制进 `userData/plugins/<id>`，
+ * 之后由用户目录扫描加载。仅把源码目录和内置清单里的条目删掉，那份已安装的副本
+ * 不会自己消失 —— 插件列表里会一直留着它，连带它声明的文件类型也继续生效。
+ *
+ * 为什么可以直接走 installer.uninstall：调用点在 pluginService.init() 之前，
+ * 运行时与 UI 都还没建立，不存在"先拆运行时再删文件"的顺序问题；uninstall 会
+ * 一并清掉安装目录、用户数据、包记录、注册表状态与授权记录。
+ *
+ * 只处理清单里的 id：用户自己安装的第三方插件不在这里，绝不会被误删。
+ *
+ * @returns {{pruned:string[], failed:Array<{id:string,error:string}>}}
+ */
+function pruneRetiredBuiltinPlugins() {
+  const pruned = [];
+  const failed = [];
+  for (const id of RETIRED_BUILTIN_PLUGIN_IDS) {
+    try {
+      const dir = path.join(store.paths().plugins, id);
+      const registry = store.readRegistry();
+      const hasRecord = !!(registry && registry.plugins
+        && Object.prototype.hasOwnProperty.call(registry.plugins, id));
+      // 目录与注册表都干净时直接跳过：避免每次启动都写一次 registry/审计。
+      if (!fs.existsSync(dir) && !hasRecord) continue;
+
+      const res = installer.uninstall(id);
+      if (res && res.ok) {
+        pruned.push(id);
+        console.log(`[plugins] 已清理下架的内置插件：${id}`);
+      } else {
+        const error = String((res && res.error) || 'uninstall failed');
+        failed.push({ id, error });
+        console.warn(`[plugins] 清理下架内置插件 ${id} 失败：${error}`);
+      }
+    } catch (err) {
+      const error = String((err && err.message) || err);
+      failed.push({ id, error });
+      console.warn(`[plugins] 清理下架内置插件 ${id} 异常：${error}`);
+    }
+  }
+  return { pruned, failed };
+}
+
+/**
  * 逐个确保整份清单里的内置插件都已安装且为随包版本。
  *
  * 为什么不透传 sourceDir：批量入口面向真实启动，每个 id 必须各自解析自己的随包
@@ -252,10 +297,19 @@ function ensureAllBuiltinPlugins(options = {}) {
  * 合法降级，只记一行说明、不按错误刷屏；其它失败才 warn。
  *
  * @param {string} [appVersion] 应用版本，用于清单兼容性校验
- * @returns {{ok:boolean, installed:boolean, upgraded?:boolean, results:Array<object>, error?:string}}
+ * @returns {{ok:boolean, installed:boolean, upgraded?:boolean, results:Array<object>, pruned:string[], error?:string}}
  */
 function installBuiltinOnStartup(appVersion) {
   try {
+    // 先清理已下架的内置插件：本函数在 pluginService.init() 之前调用，
+    // 清完再进入用户目录扫描，本次启动就不会再加载它们。
+    let pruned = [];
+    try {
+      pruned = pruneRetiredBuiltinPlugins().pruned;
+    } catch (err) {
+      console.warn('[plugins] 清理下架内置插件异常：', (err && err.message) || err);
+    }
+
     const summary = ensureAllBuiltinPlugins({ appVersion });
     for (const result of summary.results) {
       const id = result.id || '?';
@@ -272,16 +326,18 @@ function installBuiltinOnStartup(appVersion) {
         console.warn(`[plugins] 内置插件 ${id} 安装失败：${result.error || result.reason}`);
       }
     }
-    return summary;
+    return { ...summary, pruned };
   } catch (err) {
     console.warn('[plugins] 内置插件安装异常：', (err && err.message) || err);
-    return { ok: false, installed: false, results: [], error: String((err && err.message) || err) };
+    return { ok: false, installed: false, results: [], pruned: [], error: String((err && err.message) || err) };
   }
 }
 
 module.exports = {
   BUILTIN_ID,
   BUILTIN_PLUGIN_IDS,
+  RETIRED_BUILTIN_PLUGIN_IDS,
+  pruneRetiredBuiltinPlugins,
   resolveBuiltinPluginsDir,
   ensureBuiltinPlugins,
   ensureAllBuiltinPlugins,

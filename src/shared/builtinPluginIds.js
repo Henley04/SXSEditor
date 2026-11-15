@@ -21,4 +21,21 @@ const BUILTIN_PLUGIN_IDS = Object.freeze([
   'official-project-import',
 ]);
 
-module.exports = { BUILTIN_PLUGIN_IDS };
+/**
+ * 已下架的内置插件：曾经随包分发、现已从产品中移除的 id。
+ *
+ * 为什么需要这份清单：内置插件首次启动会被复制到 `userData/plugins/<id>`，之后
+ * 由用户目录扫描加载。只从源码与内置清单里删除，已安装的副本不会自己消失 ——
+ * 老用户会一直看到已下架插件（example-sv2 就是这样残留的，还继续声明 `.sv2`
+ * 文件类型、在插件列表里占位）。启动安装器在扫描前按本清单逐个清理。
+ *
+ * 只认这里明确列出的 id：用户自己安装的第三方插件不在清单里，绝不会被误删。
+ */
+const RETIRED_BUILTIN_PLUGIN_IDS = Object.freeze([
+  // 自造 `.sv2` 示例格式的插件。真实 Synthesizer V 工程（SV1 / SV2）都用
+  // `.svp`，且已合并进 official-project-import，这个插件不应再出现在任何
+  // 用户的插件列表里。
+  'example-sv2',
+]);
+
+module.exports = { BUILTIN_PLUGIN_IDS, RETIRED_BUILTIN_PLUGIN_IDS };

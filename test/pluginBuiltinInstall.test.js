@@ -334,4 +334,62 @@ describe('builtinPlugins — 内置插件按版本升级', function () {
     expect(result.reason).to.equal('already-installed');
     expect(fs.readFileSync(path.join(installDir(), 'user-marker.txt'), 'utf8')).to.equal('user installed');
   });
+
+  it('清理已下架的内置插件：安装目录、用户数据与注册表记录一并移除', function () {
+    const ids = require('../src/shared/builtinPluginIds.js');
+    expect(ids.RETIRED_BUILTIN_PLUGIN_IDS).to.include('example-sv2');
+    expect(ids.BUILTIN_PLUGIN_IDS, '下架清单与在售清单不能重叠').to.not.include('example-sv2');
+
+    // 复现老用户现场：内置插件曾被复制到用户目录，插件列表里一直留着它。
+    const retiredDir = path.join(root, 'plugins', 'example-sv2');
+    const retiredData = path.join(root, 'plugin-data', 'example-sv2');
+    fs.mkdirSync(retiredDir, { recursive: true });
+    fs.writeFileSync(path.join(retiredDir, 'manifest.json'), JSON.stringify({
+      apiVersion: 2, id: 'example-sv2', name: 'Example: SV2 Project',
+      version: '1.1.0', main: 'main.js',
+    }, null, 2));
+    fs.writeFileSync(path.join(retiredDir, 'main.js'), 'module.exports = {};');
+    fs.mkdirSync(retiredData, { recursive: true });
+    fs.writeFileSync(path.join(retiredData, 'state.json'), '{"n":1}');
+    const registry = store.readRegistry();
+    store.setPluginState(registry, 'example-sv2', { enabled: true, source: 'package' });
+    store.writeRegistry(registry);
+
+    const result = builtin.pruneRetiredBuiltinPlugins();
+    expect(result.failed, JSON.stringify(result.failed)).to.deep.equal([]);
+    expect(result.pruned).to.include('example-sv2');
+    expect(fs.existsSync(retiredDir), '安装目录应被删除').to.equal(false);
+    expect(fs.existsSync(retiredData), '用户数据应被删除').to.equal(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(store.readRegistry().plugins, 'example-sv2'),
+      '注册表记录应被清除'
+    ).to.equal(false);
+  });
+
+  it('没有残留时不产生动作，也不误删用户自己安装的插件', function () {
+    const clean = builtin.pruneRetiredBuiltinPlugins();
+    expect(clean.pruned).to.deep.equal([]);
+    expect(clean.failed).to.deep.equal([]);
+
+    const userDir = path.join(root, 'plugins', 'user-own-plugin');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'manifest.json'), JSON.stringify({
+      apiVersion: 2, id: 'user-own-plugin', version: '1.0.0', main: 'main.js',
+    }, null, 2));
+    builtin.pruneRetiredBuiltinPlugins();
+    expect(fs.existsSync(userDir), '不在下架清单里的插件必须保留').to.equal(true);
+    fs.rmSync(userDir, { recursive: true, force: true });
+  });
+
+  it('启动安装入口先清理下架插件，本次启动的扫描就不会再加载它', function () {
+    const retiredDir = path.join(root, 'plugins', 'example-sv2');
+    fs.mkdirSync(retiredDir, { recursive: true });
+    fs.writeFileSync(path.join(retiredDir, 'manifest.json'), JSON.stringify({
+      apiVersion: 2, id: 'example-sv2', version: '1.1.0', main: 'main.js',
+    }, null, 2));
+
+    const summary = builtin.installBuiltinOnStartup(APP_VERSION);
+    expect(summary.pruned).to.include('example-sv2');
+    expect(fs.existsSync(retiredDir), '清理必须发生在插件扫描之前').to.equal(false);
+  });
 });
