@@ -1200,10 +1200,13 @@ export async function playFragment() {
 
         // Buffer underrun recovery（顺序调度 + 时间基准重置设计）：
         // - 等待推理恢复：AudioContext 解冻，共享时钟（playbackStartTime）不变。
-        //   watchdogMarginSec=0.3 使冻结点落在前沿之前，chunk 的原始调度时间
-        //   仍在未来 → 直接按原位无缝衔接，无需任何调整。
-        // - 迟到 chunk：调度时间已过 → 钳到当前时刻，并把时间基准同步前移，
-        //   让播放头与音频一起回退 δ 秒。后续 chunk 排在本次之后
+        //   chunk 按原位无缝衔接。注意 rAF 是在「播放头到达前沿」处冻结
+        //   （curTime >= bufferEndSec），此刻 ctx.currentTime 已 ≈ streamingNextStart，
+        //   若走下面「迟到重置时间基准」分支会误命中：把第二段凭空推迟 0.05s 并让
+        //   播放头回跳（用户报告的「第二段延迟 + 播放头与实际不符」）。因此恢复时
+        //   只把略微过期的调度时间钳到当前时刻，时间基准不动 → 播放头连续、段间无缝。
+        // - 迟到 chunk（非 underrun 恢复）：调度时间已过 → 钳到当前时刻，并把时间基准
+        //   同步前移，让播放头与音频一起回退 δ 秒。后续 chunk 排在本次之后
         //   （streamingNextStart += dur），无重叠、无内容丢失。
         //
         // 顺序纪律（务必保留）：**先排程 + 推进前沿，最后才解除等待**。
@@ -1211,7 +1214,13 @@ export async function playFragment() {
         // underrun（此时 curTime 正好停在前沿上）→ 刚解冻的 context 又被 suspend，
         // 新 chunk 虽然 start() 了却始终不出声：第一段之后整段静音（长分片尤其明显）。
         const wasWaiting = !!(_scheduler && _scheduler.isWaiting);
-        if (streamingNextStart < ctx.currentTime + 0.01) {
+        if (wasWaiting) {
+          // underrun 恢复：冻结期间 currentTime 停住，streamingNextStart 仍在原位
+          // （≈currentTime）。不动 playbackStartTime，仅钳掉冻结检测的微小过冲。
+          if (streamingNextStart < ctx.currentTime) {
+            streamingNextStart = ctx.currentTime;
+          }
+        } else if (streamingNextStart < ctx.currentTime + 0.01) {
           // Late chunk: clamp scheduling time to now, adjust time base.
           const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
           setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);

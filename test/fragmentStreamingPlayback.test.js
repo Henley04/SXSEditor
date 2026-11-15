@@ -242,6 +242,36 @@ describe('分片编辑器流式播放（underrun 恢复 / 取消推理）', () =
     await sleep(20);
   });
 
+  it('underrun 恢复后第二段无缝衔接：不重置时间基准、不凭空延迟（播放头连续）', async () => {
+    // 回归：rAF 在「播放头到达前沿」处冻结（curTime >= bufferEndSec），此刻
+    // ctx.currentTime 已 ≈ streamingNextStart。旧实现的迟到判断在此误命中 →
+    // 重置时间基准 → 第二段被推迟 0.05s 且播放头回跳（第二段延迟 + 声画错位）。
+    chunkCb(makeChunk(14, false));
+    await sleep(60);
+    expect(ctx.sources, '首个 chunk 已开播').to.have.lengthOf(1);
+    const firstEnd = ctx.sources[0].startWhen + 14; // 0.05 + 14 = 14.05
+    const baseBefore = state.getFragmentPlaybackStartTime();
+
+    // 精确推到前沿冻结点：curTime = ctx.t - base = 14 → 冻结
+    ctx.t = 14 + baseBefore;
+    await sleep(150);
+    expect(ctx.state, '播放头到达前沿应冻结').to.equal('suspended');
+
+    chunkCb(makeChunk(12, true));
+    await sleep(150);
+    expect(ctx.state, '新 chunk 到达后必须解冻').to.equal('running');
+    expect(ctx.sources, '第二个 chunk 必须被排程').to.have.lengthOf(2);
+    const second = ctx.sources[1];
+    // 第二段紧接第一段末端（无缝），不能被推迟到 firstEnd + 0.05
+    expect(second.startWhen, '第二段应无缝衔接第一段末端，不得凭空延迟').to.be.at.most(firstEnd + 0.001);
+    // 时间基准不动 → 播放头连续，不回跳
+    expect(state.getFragmentPlaybackStartTime(), 'underrun 恢复不得重置时间基准').to.equal(baseBefore);
+
+    resolveSynth(new Float32Array(26 * SAMPLE_RATE));
+    await playPromise;
+    await sleep(20);
+  });
+
   it('合成结束（后续无 chunk）时解除冻结并重启播放头循环', async () => {
     chunkCb(makeChunk(14, true));
     await sleep(60);
