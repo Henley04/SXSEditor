@@ -16,13 +16,26 @@
  * 绝不静默返回空音频、绝不把 HTTP 错误吞成成功。
  */
 
-const { SAMPLE_RATE } = require('../inference/shared/constants.js');
+const { SAMPLE_RATE, HOP_SIZE } = require('../inference/shared/constants.js');
 const { t } = require('./locale');
 
 const SYNTH_PATH = '/v1/synthesize';
 const HEALTH_PATH = '/health';
 const DEFAULT_TIMEOUT_MS = 600000;   // 32 步长样本实测约 108s，留足余量
 const HEALTH_TIMEOUT_MS = 15000;
+
+/**
+ * 单次请求携带的音符上限。
+ *
+ * 服务端 schema 对 `notes` 有 maxItems（官方服务默认 256，见 MAX_NOTES），
+ * 而编辑器里一个分片动辄几百个音符（长句 / 多字连唱），直接整段发过去会被
+ * 400 拒绝：「notes must NOT have more than 256 items」。这里按 200 保守切片，
+ * 留出余量给上限更小的自建服务；真正的上限以服务端报错为准（见
+ * parseServerNoteLimit），命中后本次会话按服务端值重切。
+ */
+const DEFAULT_MAX_NOTES_PER_REQUEST = 200;
+/** 音高曲线的帧率：pitchCurveF0 / melPostprocess 都是 50fps（20ms 一帧）。 */
+const CURVE_FPS = SAMPLE_RATE / HOP_SIZE;
 
 // ModelScope 创空间公开域名（*.ms.show）按 User-Agent 区分「页面访问」与
 // 「API 调用」：curl / undici 默认 UA 会被网关判为程序调用并返回 403，
@@ -273,6 +286,166 @@ function networkError(err, providerName) {
     { kind: 'network', code: 'API_NETWORK_ERROR' });
 }
 
+// ---------------------------------------------------------------- 分段（notes 上限）
+
+function noteStart(n) {
+  const v = Number(n?.start);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function noteEnd(n) {
+  const d = Number(n?.duration);
+  return noteStart(n) + (Number.isFinite(d) && d > 0 ? d : 0);
+}
+
+function noteLimitFor(runtime) {
+  const n = Number(runtime?.maxNotes);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_MAX_NOTES_PER_REQUEST;
+}
+
+/**
+ * 把整段 notes 切成「每片 ≤ limit 个音符」的连续时间片。
+ *
+ * 切点选择：在 [60% limit, limit] 范围内找相邻音符间隙最大的位置，并惩罚
+ * 「下一音符是连音尾 / 滑音」的切点 —— 每片是独立推理，切在字中间会丢掉
+ * 前文音素上下文，听起来像断字；切在自然停顿处几乎无损。
+ *
+ * 输入按 start 稳定排序（同一 start 保持原序），因为歌词 token 顺序由数组
+ * 顺序决定；单段路径不排序，保证 ≤limit 时行为与改造前逐字一致。
+ */
+function splitNoteChunks(notes, limit) {
+  const ordered = notes
+    .map((n, i) => ({ n, i }))
+    .sort((a, b) => noteStart(a.n) - noteStart(b.n) || a.i - b.i)
+    .map((x) => x.n);
+
+  const chunks = [];
+  let from = 0;
+  while (from < ordered.length) {
+    const maxEnd = Math.min(ordered.length, from + limit);
+    let cut = maxEnd;
+    if (maxEnd < ordered.length) {
+      const lo = from + Math.max(1, Math.floor(limit * 0.6));
+      let bestScore = -Infinity;
+      for (let k = lo; k <= maxEnd; k++) {
+        const prev = ordered[k - 1];
+        const next = ordered[k];
+        const gap = noteStart(next) - noteEnd(prev);
+        const slurTail = next?.isSlur || next?.is_slur || next?.isContinuation || next?.is_continuation;
+        // 间隙相同时偏向更靠后的切点（把片填满，少发一次请求）；1e-6 只做 tie-break。
+        const score = gap - (slurTail ? 0.25 : 0) + k * 1e-6;
+        if (score > bestScore) { bestScore = score; cut = k; }
+      }
+    }
+    chunks.push(ordered.slice(from, cut));
+    from = cut;
+  }
+  return chunks;
+}
+
+/** 从 400 的英文细节里抠出服务端真实的 notes 上限（拿不到返回 0）。 */
+function parseServerNoteLimit(err) {
+  if (!err || err.kind !== 'bad_request') return 0;
+  const msg = String(err.message || '');
+  const m = /more than\s+(\d+)\s+items/i.exec(msg)
+    || /at most\s+(\d+)\s+items/i.exec(msg)
+    || /最多\s*(\d+)\s*(?:个|条)?(?:音符|items)/i.exec(msg);
+  const n = m ? Number(m[1]) : 0;
+  return Number.isFinite(n) && n >= 1 ? n : 0;
+}
+
+/**
+ * 把「整段坐标系」的可选参数裁到单个分片。
+ *
+ * 只有三类参数是绝对时间轴，必须跟着 baseBeat 平移 / 裁剪：
+ *   - pitchCurveF0：50fps 的逐帧 F0（索引 0 = 绝对 beat 0）
+ *   - f0Envelope.keyframes[].time：单位拍
+ *   - melPostprocess：逐帧音色曲线，自带 startBeat 锚点
+ * 其余（参考音频、参考歌手数据、采样参数）与时间轴无关，原样透传。
+ */
+function sliceOptionsForChunk(options, baseBeat, spanBeats, bpm) {
+  const out = { ...options };
+  const secPerBeat = 60 / (Number.isFinite(bpm) && bpm > 0 ? bpm : 120);
+
+  const curve = options.pitchCurveF0;
+  if (curve && (Array.isArray(curve) || ArrayBuffer.isView(curve))) {
+    const fromFrame = Math.max(0, Math.round(baseBeat * secPerBeat * CURVE_FPS));
+    const toFrame = Math.max(fromFrame + 2, Math.round((baseBeat + spanBeats) * secPerBeat * CURVE_FPS));
+    const sliced = curve.slice(fromFrame, toFrame);
+    if (sliced.length >= 2) out.pitchCurveF0 = sliced;
+    else delete out.pitchCurveF0;
+  }
+
+  const env = options.f0Envelope;
+  if (env && Array.isArray(env.keyframes) && env.keyframes.length) {
+    const keyframes = env.keyframes
+      .map((k) => ({ ...k, time: Number(k?.time) - baseBeat }))
+      .filter((k) => Number.isFinite(k.time) && k.time >= -16 && k.time <= spanBeats + 16)
+      .sort((a, b) => a.time - b.time);
+    if (keyframes.length) out.f0Envelope = { ...env, keyframes };
+    else delete out.f0Envelope;
+  }
+
+  const mp = options.melPostprocess;
+  if (mp && typeof mp === 'object') {
+    const shifted = shiftMelPostprocess(mp, baseBeat, spanBeats, secPerBeat);
+    if (shifted) out.melPostprocess = shifted;
+    else delete out.melPostprocess;
+  }
+  return out;
+}
+
+/** 音色曲线随分片平移：帧号 -from，锚点 startBeat 归零。越界帧按 0（不处理）补齐。 */
+function shiftMelPostprocess(mp, baseBeat, spanBeats, fallbackSecPerBeat) {
+  const mpBpm = Number(mp.bpm);
+  const secPerBeat = Number.isFinite(mpBpm) && mpBpm > 0 ? 60 / mpBpm : fallbackSecPerBeat;
+  const anchor = Number(mp.startBeat);
+  const startBeat = Number.isFinite(anchor) ? anchor : 0;
+  const from = Math.round((baseBeat - startBeat) * secPerBeat * CURVE_FPS);
+  const frames = Math.max(1, Math.round(spanBeats * secPerBeat * CURVE_FPS) + 4);
+
+  const sliceCurve = (src) => {
+    if (!src) return undefined;
+    const dst = new Array(frames);
+    for (let i = 0; i < frames; i++) {
+      const v = src[from + i];
+      dst[i] = Number.isFinite(v) ? v : 0;
+    }
+    return dst;
+  };
+  const sigmaT = sliceCurve(mp.sigmaT);
+  const sigmaF = sliceCurve(mp.sigmaF);
+  const blend = sliceCurve(mp.blend);
+  if (!sigmaT && !sigmaF && !blend) return null;
+
+  const boundaries = Array.isArray(mp.boundaries)
+    ? mp.boundaries.map((b) => Number(b) - from).filter((b) => Number.isFinite(b) && b > 0 && b < frames).sort((a, b) => a - b)
+    : [];
+  return {
+    ...mp,
+    startBeat: 0,
+    frames,
+    ...(sigmaT ? { sigmaT } : {}),
+    ...(sigmaF ? { sigmaF } : {}),
+    ...(blend ? { blend } : {}),
+    boundaries,
+  };
+}
+
+/** 把一个分片的音频叠加进总缓冲；段尾与下一段重叠时裁剪并做短淡出，避免双声与爆音。 */
+function mixChunk(out, audio, offset, limit, sampleRate) {
+  const avail = Math.max(0, Math.min(audio.length, limit - offset));
+  if (avail <= 0) return;
+  const fadeIn = Math.min(Math.round(0.002 * sampleRate), avail);
+  const fadeOut = Math.min(Math.round(0.012 * sampleRate), avail);
+  for (let i = 0; i < avail; i++) {
+    let gain = 1;
+    if (fadeIn > 0 && i < fadeIn) gain = i / fadeIn;
+    if (fadeOut > 0 && i >= avail - fadeOut) gain = Math.min(gain, (avail - i) / fadeOut);
+    out[offset + i] += audio[i] * gain;
+  }
+}
+
 // ---------------------------------------------------------------- 主入口
 
 function buildUrl(baseUrl, path) {
@@ -290,17 +463,10 @@ function authHeaders(key) {
 }
 
 /**
- * 执行一次远程合成，返回与内置 pipeline.synthesize 完全一致的 Float32Array（24kHz 单声道）。
- * @param {{name:string,url:string,key:string}} runtime
+ * 执行一次远程合成（单次请求，不切片），返回与内置 pipeline.synthesize 完全一致的
+ * Float32Array（24kHz 单声道）。对外请调用 synthesize()，它会按服务端 notes 上限自动切片。
  */
-async function synthesize({ runtime, notes, bpm, options = {}, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  if (!runtime || !runtime.url) {
-    throw new ApiError(tr('error.apiNoProvider'), { kind: 'config', code: 'API_NO_PROVIDER' });
-  }
-  if (!Array.isArray(notes) || notes.length === 0) {
-    throw new ApiError(tr('error.apiEmptyNotes'), { kind: 'bad_request', code: 'API_BAD_REQUEST' });
-  }
-
+async function _synthesizeOnce({ runtime, notes, bpm, options = {}, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS }) {
   const body = buildRequestBody(notes, bpm, options);
   const controller = new AbortController();
   activeControllers.add(controller);
@@ -355,6 +521,98 @@ async function synthesize({ runtime, notes, bpm, options = {}, onProgress, timeo
   }
 }
 
+/**
+ * 切片合成：逐片串行请求后按绝对拍偏移叠回一条完整音轨。
+ *
+ * 串行而非并发：创空间是单卡 CPU 串行推理，并发只会排队 + 触发限流（20/min），
+ * 还会让进度条乱跳。每片的 onProgress 折算到整体区间，用户看到的是单调进度。
+ */
+async function _synthesizeChunked({ runtime, notes, bpm, options, onProgress, timeoutMs, limit }) {
+  const chunks = splitNoteChunks(notes, limit);
+  const effBpm = Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  const secPerBeat = 60 / effBpm;
+  const sr = SAMPLE_RATE;
+
+  console.log(`[API] ${runtime.name}: ${notes.length} notes > ${limit}/request → ${chunks.length} chunks`);
+
+  const parts = [];
+  let totalSamples = 0;
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
+    let baseBeat = Infinity;
+    let lastEnd = 0;
+    for (const n of chunk) {
+      baseBeat = Math.min(baseBeat, noteStart(n));
+      lastEnd = Math.max(lastEnd, noteEnd(n));
+    }
+    if (!Number.isFinite(baseBeat)) baseBeat = 0;
+    const spanBeats = Math.max(0.001, lastEnd - baseBeat);
+
+    const shifted = chunk.map((n) => ({ ...n, start: noteStart(n) - baseBeat }));
+    const chunkOptions = sliceOptionsForChunk(options, baseBeat, spanBeats, effBpm);
+    const progressBase = ci / chunks.length;
+    const chunkProgress = (p) => {
+      if (typeof onProgress !== 'function') return;
+      const c = Math.max(0, Math.min(100, Number(p) || 0));
+      onProgress(Math.round((progressBase + (c / 100) / chunks.length) * 100));
+    };
+
+    const audio = await _synthesizeOnce({
+      runtime,
+      notes: shifted,
+      bpm: effBpm,
+      options: chunkOptions,
+      onProgress: chunkProgress,
+      timeoutMs,
+    });
+    const offset = Math.max(0, Math.round(baseBeat * secPerBeat * sr));
+    parts.push({ audio, offset });
+    totalSamples = Math.max(totalSamples, offset + audio.length);
+  }
+
+  const out = new Float32Array(totalSamples);
+  for (let i = 0; i < parts.length; i++) {
+    const nextOffset = i + 1 < parts.length ? parts[i + 1].offset : Infinity;
+    mixChunk(out, parts[i].audio, parts[i].offset, nextOffset, sr);
+  }
+  if (typeof onProgress === 'function') onProgress(100);
+  console.log(`[API] ${runtime.name} chunked synth ok: ${(totalSamples / sr).toFixed(2)}s audio, ${chunks.length} chunks`);
+  return out;
+}
+
+/**
+ * 远程合成入口：notes 超过单请求上限时自动切片 + 拼接。
+ *
+ * 上限来源优先级：Provider 自带 maxNotes → 服务端 400 报错里声明的值 → 默认 200。
+ * 命中服务端更小上限时用 parseServerNoteLimit 学到的值重切一次（仅一次，避免死循环）。
+ */
+async function synthesize({ runtime, notes, bpm, options = {}, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+  if (!runtime || !runtime.url) {
+    throw new ApiError(tr('error.apiNoProvider'), { kind: 'config', code: 'API_NO_PROVIDER' });
+  }
+  if (!Array.isArray(notes) || notes.length === 0) {
+    throw new ApiError(tr('error.apiEmptyNotes'), { kind: 'bad_request', code: 'API_BAD_REQUEST' });
+  }
+
+  const limit = noteLimitFor(runtime);
+  const params = { runtime, notes, bpm, options, onProgress, timeoutMs };
+  try {
+    if (notes.length <= limit) {
+      return await _synthesizeOnce(params);
+    }
+    return await _synthesizeChunked({ ...params, limit });
+  } catch (err) {
+    // 服务端声明的上限可能比默认值更小（自建服务 / MAX_NOTES 调低）：
+    // 按它重新切一次，而不是把 400 直接甩给用户。
+    const serverLimit = parseServerNoteLimit(err);
+    if (serverLimit && serverLimit < notes.length) {
+      console.warn(`[API] ${runtime.name}: server accepts ${serverLimit} notes/request, retry chunking`);
+      return _synthesizeChunked({ ...params, limit: serverLimit });
+    }
+    throw err;
+  }
+}
+
 /** 连接测试：走 GET /health，任何错误都以结构化结果返回，不抛给调用方。 */
 async function healthCheck({ runtime, timeoutMs = HEALTH_TIMEOUT_MS }) {
   if (!runtime || !runtime.url) {
@@ -402,6 +660,11 @@ module.exports = {
   cancelAll,
   buildRequestBody,
   decodeWav,
+  // 分段：由 synthesize 内部使用，导出供单测直接验证切点与参数裁剪
+  splitNoteChunks,
+  sliceOptionsForChunk,
+  parseServerNoteLimit,
+  DEFAULT_MAX_NOTES_PER_REQUEST,
   SYNTH_PATH,
   HEALTH_PATH,
 };

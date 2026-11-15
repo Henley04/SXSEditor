@@ -186,9 +186,9 @@ Accept: audio/wav, application/json
 <tbody>
 <tr>
 <td><code>notes</code></td>
-<td>array（必填，1–256 项）</td>
+<td>array（必填，1–<code>MAX_NOTES</code> 项，默认 256）</td>
 <td>—</td>
-<td>音符序列，见 4.2</td>
+<td>音符序列，见 4.2；超出上限返回 400，长序列请按 4.4 分段</td>
 </tr>
 <tr>
 <td><code>bpm</code></td>
@@ -446,6 +446,30 @@ body 为 WAV 二进制。</p>
 }
 </code></pre>
 <p>客户端两种都支持；<code>audio_base64</code> 内容仍须是可解析的 WAV。</p>
+<h3 id="44">4.4 长序列：单请求上限与客户端分段</h3>
+<p>服务端对 <code>notes</code> 数量有硬上限（参考实现 <code>MAX_NOTES</code>，默认 <strong>256</strong>），
+超出直接返回 <code>400</code>：<code>body/notes must NOT have more than 256 items</code>。
+编辑器里一个分片常有几百个音符，客户端<strong>必须</strong>自行分段，不能假设一条请求能放下整首。</p>
+<p>SXSEditor 内置的 API 后端（<code>src/main/apiInference.js</code>）按以下规则处理，可作为参考实现：</p>
+<ol>
+<li><strong>切点</strong>：每片 ≤ 200 个音符（低于默认上限留余量）；在 <code>[60%·limit, limit]</code>
+   范围内选<strong>相邻音符间隙最大</strong>的位置下刀，并惩罚「下一音符是连音 / 延音」的切点 ——
+   每片独立推理，切在字中间会丢掉前文音素上下文。</li>
+<li><strong>时间轴归零</strong>：片段内所有 <code>start</code> 减去该片首音符的 <code>start</code>。服务端按
+   <code>max(start+duration)</code> 生成音频，不归零会让第 2 片先吐出几十秒静音（等同超时）。</li>
+<li><strong>绝对时间参数同步平移</strong>：<code>pitch_curve_f0</code>（50 fps，索引 0 = beat 0）按帧裁剪；
+   <code>f0_envelope.keyframes[].time</code> 减去片首拍；<code>mel_postprocess</code> 的帧数组按
+   <code>(片首拍 − startBeat) × 60/bpm × 50</code> 平移并把 <code>startBeat</code> 置 0。
+   <code>reference_wav_base64</code> / <code>ref_singer_data</code> 等与时间轴无关，原样透传。</li>
+<li><strong>拼接</strong>：各片音频按 <code>片首拍 × 60/bpm × 24000</code> 的采样偏移叠回一条完整音轨；
+   片尾与下一片重叠时裁剪并做 12ms 淡出，避免双声与爆音。</li>
+<li><strong>上限自适应</strong>：若服务端上限更小（自建服务把 <code>MAX_NOTES</code> 调低），客户端从
+   400 的 <code>message</code> 里读出真实上限并自动重切一次。</li>
+</ol>
+<blockquote>
+<p>参考实现会在日志里打印 <code>[API] &lt;Provider&gt;: 520 notes &gt; 200/request → 3 chunks</code>，
+便于确认是否发生了分段。分段是串行请求，耗时约等于各片之和。</p>
+</blockquote>
 <hr />
 <h2 id="5">5. 错误响应</h2>
 <p>所有错误都返回统一结构（HTTP 状态码 + JSON body）：</p>

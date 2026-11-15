@@ -291,3 +291,128 @@ describe('apiInference 错误必须显式分类', () => {
     expect(captured[captured.length - 1].auth).to.equal('');
   });
 });
+
+describe('apiInference 长分片自动切片', () => {
+  const mkNotes = (count, { step = 1.5, dur = 1 } = {}) =>
+    Array.from({ length: count }, (_, i) => ({ pitch: 60, start: i * step, duration: dur, lyric: 'a' }));
+
+  it('splitNoteChunks：按上限切片、覆盖全部音符且顺序不乱', () => {
+    const notes = mkNotes(500);
+    const chunks = api.splitNoteChunks(notes, 200);
+    expect(chunks).to.have.length(3);
+    expect(chunks.map((c) => c.length)).to.deep.equal([200, 200, 100]);
+    expect(chunks.flat()).to.have.length(500);
+    expect(chunks.flat().map((n) => n.start)).to.deep.equal(notes.map((n) => n.start));
+  });
+
+  it('切点落在最大的音符间隙上，而不是机械等分', () => {
+    const notes = mkNotes(300, { step: 1.2, dur: 1 });
+    // 第 176 个音符前是一个 5 拍长休止，切点必须落在这里（而不是第 200 个）
+    for (let i = 175; i < notes.length; i++) notes[i].start += 5;
+    const chunks = api.splitNoteChunks(notes, 200);
+    expect(chunks[0]).to.have.length(175);
+    expect(chunks[1][0].start).to.equal(notes[175].start);
+  });
+
+  it('sliceOptionsForChunk：音高曲线 / 包络 / 音色曲线随分片平移', () => {
+    const bpm = 120; // 1 拍 = 0.5s = 25 帧（50fps）
+    const options = {
+      nSteps: 16,
+      pitchCurveF0: Array.from({ length: 2000 }, (_, i) => i),
+      f0Envelope: { keyframes: [{ time: 0, value: 0 }, { time: 10, value: 2 }, { time: 40, value: 0 }] },
+      melPostprocess: {
+        frames: 2000, startBeat: 0, bpm,
+        sigmaT: new Array(2000).fill(1), blend: new Array(2000).fill(100),
+        boundaries: [300, 500],
+      },
+    };
+    const out = api.sliceOptionsForChunk(options, 10, 20, bpm);
+    expect(out.nSteps).to.equal(16);
+    expect(out.pitchCurveF0[0]).to.equal(250);      // 第 10 拍 = 第 250 帧
+    expect(out.pitchCurveF0).to.have.length(500);   // 20 拍 = 500 帧
+    expect(out.f0Envelope.keyframes[0].time).to.equal(-10);
+    expect(out.melPostprocess.startBeat).to.equal(0);
+    expect(out.melPostprocess.blend[0]).to.equal(100);
+    expect(out.melPostprocess.boundaries).to.deep.equal([50, 250]);
+  });
+
+  it('parseServerNoteLimit 只认 400 且能读出上限', () => {
+    expect(api.parseServerNoteLimit({ kind: 'bad_request', message: 'x: body/notes must NOT have more than 256 items' })).to.equal(256);
+    expect(api.parseServerNoteLimit({ kind: 'server', message: 'more than 256 items' })).to.equal(0);
+    expect(api.parseServerNoteLimit({ kind: 'bad_request', message: 'bpm must be <= 300' })).to.equal(0);
+  });
+});
+
+describe('apiInference 切片合成端到端', () => {
+  let server;
+  let base;
+  let cap = 256;
+  let bodies = [];
+
+  before((done) => {
+    server = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => {
+        const body = JSON.parse(raw);
+        bodies.push(body);
+        if (body.notes.length > cap) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'bad_request',
+            message: `request body is invalid: body/notes must NOT have more than ${cap} items`,
+          }));
+        }
+        const endBeat = Math.max(...body.notes.map((n) => n.start + n.duration));
+        const samples = Math.max(1, Math.round((endBeat * 60 / body.bpm) * 24000));
+        res.writeHead(200, { 'Content-Type': 'audio/wav' });
+        res.end(wavFloat32(samples, 24000, 0.3));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => { base = `http://127.0.0.1:${server.address().port}`; done(); });
+  });
+  after((done) => server.close(done));
+  beforeEach(() => { cap = 256; bodies = []; });
+
+  const runtime = () => ({ id: 'mock', name: 'Mock API', url: base, key: '' });
+  const mkNotes = (count, step = 0.25, dur = 0.2) =>
+    Array.from({ length: count }, (_, i) => ({ pitch: 60, start: i * step, duration: dur, lyric: 'a' }));
+
+  it('400 音符切成两片，第二片从 0 起算并拼回原时间轴', async () => {
+    const notes = mkNotes(400);
+    const audio = await api.synthesize({ runtime: runtime(), notes, bpm: 120 });
+    expect(bodies).to.have.length(2);
+    expect(bodies[0].notes).to.have.length(200);
+    expect(bodies[1].notes).to.have.length(200);
+    expect(bodies[1].notes[0].start).to.equal(0);
+    expect(bodies[0].bpm).to.equal(120);
+    const totalBeats = 399 * 0.25 + 0.2; // 99.95 拍 = 49.975s
+    const expected = Math.round(totalBeats * 0.5 * 24000);
+    expect(audio.length).to.be.closeTo(expected, 24000);
+  });
+
+  it('服务端上限更小时按报错自动降级重切', async () => {
+    cap = 64;
+    const notes = mkNotes(100);
+    const audio = await api.synthesize({ runtime: runtime(), notes, bpm: 120 });
+    expect(bodies[0].notes).to.have.length(100); // 首次整段被拒
+    const retried = bodies.slice(1);
+    expect(retried.length).to.be.at.least(2);
+    for (const b of retried) expect(b.notes.length).to.be.at.most(64);
+    expect(audio.length).to.be.greaterThan(0);
+  });
+
+  it('Provider 显式 maxNotes 优先于默认值', async () => {
+    await api.synthesize({ runtime: { ...runtime(), maxNotes: 50 }, notes: mkNotes(120), bpm: 120 });
+    expect(bodies).to.have.length(3); // 50 + 50 + 20
+    for (const b of bodies) expect(b.notes.length).to.be.at.most(50);
+  });
+
+  it('切片时进度单调递增到 100', async () => {
+    const seen = [];
+    await api.synthesize({ runtime: runtime(), notes: mkNotes(400), bpm: 120, onProgress: (p) => seen.push(p) });
+    expect(seen[0]).to.be.at.most(1);
+    expect(seen[seen.length - 1]).to.equal(100);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).to.be.at.least(seen[i - 1]);
+  });
+});
