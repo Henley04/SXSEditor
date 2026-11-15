@@ -115,7 +115,7 @@ async function _createPipeline(languageOverride) {
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp32';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
-  const japaneseVocalization = settings.japaneseVocalization || 'hybrid';
+  const japaneseVocalization = settings.japaneseVocalization || 'en-phonemes';
   console.log(`[Main] Pipeline settings: winmlEnabled=${settings.winmlEnabled === true} deviceMode=${deviceMode} inferenceProvider=${inferenceProvider}`);
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
@@ -662,10 +662,10 @@ function registerSvsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
@@ -755,7 +755,7 @@ function registerSvsIpc() {
   // 接收所有分片，按时间顺序交错推理各分片的 diffusion chunk，边推理边推送音频
   safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE_MULTI_STREAMING, async (event, { fragments, bpm }) => {
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
     // 确定语言用于 pipeline 初始化（假设所有内置分片同语言）。
     // 注意：必须取**内置分片**的首个音符——旧实现取 fragments[0]，当第一条轨是
@@ -914,10 +914,10 @@ function registerSvsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.FRAGMENT_SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);

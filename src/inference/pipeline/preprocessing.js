@@ -376,10 +376,14 @@ class Preprocessing {
                 // In en-phonemes / hybrid mode, convert Japanese kana/kanji to English ARPAbet phonemes.
                 // The base multilingual model (not JP LoRA) is used, so English phonemes + SEP
                 // are the correct input format — consistent with how English lyrics are processed.
-                // hybrid mode uses an improved mapping table (L for ら行, AO for お段) but the
-                // token format (en_ prefix + SEP) is identical to en-phonemes.
+                // Both en-phonemes (default) and hybrid use the same ARPAbet mapping (L for ら行,
+                // AO1 for お段, い段 palatal collapse, ん place assimilation) and the same token
+                // format (en_ prefix + SEP). hybrid only differs by preferring yue_ syllables.
+                // nextKana 传入下一个音符的歌词，供末尾 ん 做部位同化（一个 note 只放一个假名）。
                 if (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid') {
-                    const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric);
+                    const nextNote = notes[phIdx + 1];
+                    const nextKana = nextNote && nextNote.lyric ? nextNote.lyric : null;
+                    const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric, nextKana);
                     const enPhIds = [];
                     // Collect mora-based weights from the phoneme objects (set by
                     // _attachJapaneseWeights). These are passed to _allocateByStats

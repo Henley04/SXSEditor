@@ -477,12 +477,19 @@ class AudioSegmentation {
         // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
         const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
 
+        // 日语歌词走 en_ 音素合成，音素序列由「假名 → 英语 ARPAbet」映射表决定，
+        // 而映射表不属于 notes/bpm 等任何已入键字段。改动映射（例如 い段去 Y、
+        // ら行 R→L、お段 OW1→AO1、ん 部位同化）后歌词一个字符都没变，缓存键完全
+        // 相同，会直接命中旧音频，听感上"改了代码却一点没变"。因此用一个手动版本
+        // 号占位：**每次改动 JP→EN 映射或 _applyMoraContext 的判定规则都要递增**。
+        const jpMapVersion = 4;
+
         // 两个来源必须同时进键：
         //   · p<promptSignature> —— prompt 条件（singerData / midiNotes / f0Data），
         //     见 shared/promptCondSignature.js；
         //   · _pm/_be —— 权重集合（fp32/fp16/int8）与推理后端，同一输入换权重
         //     输出音频不同；_rt<n> 是「重新合成」注入的一次性 nonce。
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}_pm${modelPrecision}_be${inferBackend}${retakeSuffix}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}_pm${modelPrecision}_be${inferBackend}_jpm${jpMapVersion}${retakeSuffix}`;
     }
 
     /**

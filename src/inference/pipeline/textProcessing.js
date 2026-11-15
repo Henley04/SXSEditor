@@ -97,21 +97,35 @@ const JP_KANJI_DICT = _loadJpKanjiDict();
  * - jp_u → UW1 (close back, closest available — Japanese /u/ is [ɯ] unrounded,
  *   but ARPAbet has no pure [ɯ]; UW is the nearest high back vowel)
  * - jp_e → EH1 (open-mid front unrounded, close to Japanese /e/ [e̞])
- * - jp_o → OW1 (close-mid back rounded, closest to Japanese /o/ [o̞];
- *   OW is technically a diphthong [oʊ] but starts at [o])
+ * - jp_o → AO1 (open-mid back rounded [ɔ]). Deliberately NOT OW1: OW is a
+ *   diphthong [oʊ] whose off-glide makes Japanese sound Anglicized ("oh-oo").
+ *   Japanese /o/ is a pure monophthong [o̞]; AO1 is the closest pure vowel in
+ *   ARPAbet and carries no off-glide.
  *
  * Consonants map 1:1 to nearest ARPAbet:
- * - jp_r → R (Japanese [ɾ] tap vs English [ɹ] approximant — closest available)
+ * - jp_r → L (Japanese [ɾ] is an alveolar tap). English R [ɹ] is a labialized
+ *   approximant and is one of the most recognizable "English accent" cues —
+ *   it makes ら行 sound like American "r". L [l] shares the alveolar place
+ *   and a brief closure, so it reads as a Japanese tap far better.
  * - jp_f → F (Japanese [ɸ] bilabial vs English [f] labiodental — closest)
  *
  * Affricates map to multi-phoneme sequences:
  * - jp_ts → T S (no single ARPAbet for [ts])
- * - Palatal consonants (ky, gy, etc.) → consonant + Y (palatal glide)
+ * - Palatal consonants (ky, gy, etc.) → consonant + Y (palatal glide).
+ *   い-row kana (に/ひ/み/り/び/ぴ/ぎ) also arrive as palatal (ny/hy/...) from
+ *   the kana table, but Japanese に [ɲi] / ひ [çi] / り [ɾʲi] are a single
+ *   mora — emitting N+Y+IY1 stretches one mora into "n-yi" and is the main
+ *   reason mapped Japanese sounds wrong. `_applyMoraContext()` degrades those
+ *   back to a plain consonant before /i/ so one mora stays one onset+vowel.
  *
  * っ (cl): maps to T as an approximation of the gemination/stop effect.
  *   In Japanese, っ lengthens the following consonant; since we can't easily
  *   merge across notes, T provides a brief stop consonant. The durationStats
  *   will give it a short duration.
+ *
+ * ん (n): syllable-final nasal, place-assimilated by `_applyMoraContext()`
+ *   (→ M before p/b/m, → NG before k/g, otherwise N). A flat N before every
+ *   consonant is audibly wrong in words like さんぽ or まんが.
  */
 const JP_TO_EN_PHONEME_MAP = {
     // Vowels (stress 1 = primary stress, ensures proper duration)
@@ -119,77 +133,9 @@ const JP_TO_EN_PHONEME_MAP = {
     'i': ['IY1'],
     'u': ['UW1'],
     'e': ['EH1'],
-    'o': ['OW1'],
-
-    // Consonants — 1:1 mapping to nearest ARPAbet
-    'k': ['K'],
-    's': ['S'],
-    'sh': ['SH'],
-    'ch': ['CH'],
-    't': ['T'],
-    'n': ['N'],
-    'h': ['HH'],
-    'm': ['M'],
-    'r': ['R'],
-    'w': ['W'],
-    'y': ['Y'],
-    'g': ['G'],
-    'z': ['Z'],
-    'd': ['D'],
-    'b': ['B'],
-    'p': ['P'],
-    'f': ['F'],
-    'j': ['JH'],
-
-    // Affricate — split into components
-    'ts': ['T', 'S'],
-
-    // Gemination marker (っ) — approximate with alveolar stop
-    'cl': ['T'],
-
-    // Palatal consonants (yōon) — consonant + palatal glide
-    'ky': ['K', 'Y'],
-    'gy': ['G', 'Y'],
-    'ny': ['N', 'Y'],
-    'hy': ['HH', 'Y'],
-    'my': ['M', 'Y'],
-    'ry': ['R', 'Y'],
-    'py': ['P', 'Y'],
-    'by': ['B', 'Y'],
-};
-
-/**
- * Hybrid mode JP→EN phoneme mapping table.
- *
- * Hybrid mode is an improved variant of en-phonemes that produces more
- * accurate Japanese pronunciation on the base multilingual model. Key
- * differences from JP_TO_EN_PHONEME_MAP:
- *
- * 1. ら行 (r) → L (alveolar lateral [l]) instead of R (approximant [ɹ]).
- *    Japanese /ɾ/ is an alveolar tap; ARPAbet R [ɹ] is a labiodental-ish
- *    approximant and sounds too "American". L [l] is acoustically closer
- *    to the tap and avoids the English r-coloring. This mirrors the
- *    design intent of the Cantonese y_l extension in the hybrid plan.
- *
- * 2. お段 (o) → AO1 (close-mid back rounded, pure vowel) instead of
- *    OW1 (diphthong [oʊ]). Japanese /o/ is a pure monophthong [o̞];
- *    OW introduces an off-glide that sounds Anglicized.
- *
- * 3. り拗音 (ry) → L Y (matching the r→L change for palatalized forms).
- *
- * All other phonemes match JP_TO_EN_PHONEME_MAP. The base model vocabulary
- * already contains en_L, en_AO1, etc., so no vocabulary extension or
- * model retraining is required.
- */
-const JP_TO_EN_PHONEME_MAP_HYBRID = {
-    // Vowels — AO1 for o (pure vowel, not OW diphthong)
-    'a': ['AA1'],
-    'i': ['IY1'],
-    'u': ['UW1'],
-    'e': ['EH1'],
     'o': ['AO1'],
 
-    // Consonants — L for r (closer to Japanese tap [ɾ] than R [ɹ])
+    // Consonants — 1:1 mapping to nearest ARPAbet
     'k': ['K'],
     's': ['S'],
     'sh': ['SH'],
@@ -215,6 +161,11 @@ const JP_TO_EN_PHONEME_MAP_HYBRID = {
     // Gemination marker (っ) — approximate with alveolar stop
     'cl': ['T'],
 
+    // ん place assimilation (synthetic keys produced by _applyMoraContext)
+    // ん is a syllable-final nasal whose place merges with the next consonant.
+    'n_m': ['M'],    // ん + p/b/m → [m]
+    'n_ng': ['NG'],  // ん + k/g   → [ŋ]
+
     // Palatal consonants (yōon) — consonant + palatal glide
     'ky': ['K', 'Y'],
     'gy': ['G', 'Y'],
@@ -225,6 +176,18 @@ const JP_TO_EN_PHONEME_MAP_HYBRID = {
     'py': ['P', 'Y'],
     'by': ['B', 'Y'],
 };
+
+/**
+ * Hybrid mode JP→EN phoneme mapping table.
+ *
+ * Historically hybrid mode carried its own improved table (L for ら行, AO1 for
+ * お段) while en-phonemes kept the original R/OW1 values. The improvements are
+ * now folded into JP_TO_EN_PHONEME_MAP, so both modes convert to the same
+ * ARPAbet sequence; hybrid additionally prefers yue_ syllables where a
+ * Cantonese syllable is a closer match. Keeping this alias means any code or
+ * test that still references the hybrid table keeps working unchanged.
+ */
+const JP_TO_EN_PHONEME_MAP_HYBRID = JP_TO_EN_PHONEME_MAP;
 
 /**
  * Japanese kana → Cantonese (yue_) syllable-level phoneme mapping for hybrid mode.
@@ -302,9 +265,11 @@ const JpKanaToYueSyllableMap = {
 };
 
 // Katakana equivalents (ア↔あ offset 0x60), generated at module load.
+// 逐码位转换（与 shared/jpPhonemeMap.js 一致）：源表目前只有单字，但同款
+// 「只转首码位」的写法在多字符条目下会丢字并覆盖单字键，统一成安全写法。
 const JpKataKanaToYueSyllableMap = {};
 for (const [hira, yue] of Object.entries(JpKanaToYueSyllableMap)) {
-    const kata = String.fromCharCode(hira.charCodeAt(0) + 0x60);
+    const kata = [...hira].map(c => String.fromCharCode(c.charCodeAt(0) + 0x60)).join('');
     JpKataKanaToYueSyllableMap[kata] = yue;
 }
 
@@ -370,6 +335,11 @@ const JP_MORA_WEIGHTS = {
     // 促音 (gemination marker) — very brief stop
     'cl': 0.20,
 
+    // ん 部位同化（_applyMoraContext 产生的合成键）：鼻音本身带浊音，
+    // 与普通鼻音同档，略长于口腔塞音。
+    'n_m': 0.45,
+    'n_ng': 0.45,
+
     // Unknown kanji fallback — neutral
     'pau': 0.50,
 };
@@ -399,10 +369,14 @@ class TextProcessing {
         // 基础音节 → 词表里实际存在的声调列表，用于"缺声调"回退。
         this._zhToneIndex = new Map();
         // Japanese vocalization mode:
-        // - 'hybrid' (default): improved ARPAbet mapping (L for ら行, AO for お段) on the base model
-        // - 'en-phonemes': uses English ARPAbet phonemes (original mapping) on the base multilingual model
+        // - 'en-phonemes' (default): English ARPAbet on the base multilingual model.
+        //   One mora = one onset + one vowel, pure monophthong for お段, L for ら行,
+        //   ん place assimilation. No Cantonese syllables involved.
+        // - 'hybrid': same ARPAbet conversion as en-phonemes, but prefers a Cantonese
+        //   yue_ syllable where one is a closer match (opt-in; keeps Cantonese timbre,
+        //   which is why it is no longer the default).
         // - 'jp-lora': uses JP LoRA models with jp_ phonemes
-        this.japaneseVocalization = options.japaneseVocalization || 'hybrid';
+        this.japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
         this._loadPhoneSet();
         this._loadEnG2pDict();
     }
@@ -807,8 +781,11 @@ class TextProcessing {
     }
 
     /**
-     * 根据当前模式返回 JP→EN 映射表。
-     * hybrid 模式使用改进的映射（L 替代 R、AO 替代 OW），其他模式使用默认表。
+     * 返回 JP→EN 映射表。
+     *
+     * 两种模式现在共用同一张表（L 替代 R、AO1 替代 OW1、ん 同化、い段去 Y）——
+     * 差别只在 hybrid 是否优先取 yue_ 音节。保留按模式分派的形式，是为了以后
+     * 若要给某种模式单独调表时不至于改动调用点。
      */
     _getJpToEnMap() {
         return this.japaneseVocalization === 'hybrid'
@@ -832,7 +809,7 @@ class TextProcessing {
      * @param {string} text - 日文歌词（假名/汉字/混合）
      * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
      */
-    _japaneseToEnglishPhonemes(text) {
+    _japaneseToEnglishPhonemes(text, nextKana = null) {
         // hybrid 模式：逐 mora 选择 yue 音节或 ARPAbet 回退。未覆盖的
         // 单个假名不再迫使整段歌词放弃已经可用的 yue 映射。
         if (this.japaneseVocalization === 'hybrid') {
@@ -844,7 +821,9 @@ class TextProcessing {
         if (!jpPhonemeStr) return [{ name: '<SP>', display: 'SP' }];
 
         const map = this._getJpToEnMap();
-        const jpParts = jpPhonemeStr.split(' ').filter(s => s);
+        // 逐 mora 上下文修正必须在查表之前做：它改的是"日语音素序列"本身
+        // （い段 palatal 去 Y、ん 部位同化），而不是映射结果。
+        const jpParts = this._applyMoraContext(jpPhonemeStr.split(' ').filter(s => s), nextKana);
         const enPhonemes = [];
         // Track the JP source phoneme for each EN phoneme, so we can attach
         // mora-based weights (e.g., 'ts' → [T, S] each gets half of ts weight).
@@ -870,6 +849,80 @@ class TextProcessing {
             }
         }
         return this._attachJapaneseWeights(enPhonemes, jpSources, false);
+    }
+
+    /**
+     * 逐 mora 的日语上下文修正（在 JP→EN 查表之前执行）。
+     *
+     * 1. い段 palatal 退化：假名表把 に/ひ/み/り/び/ぴ/ぎ 记成 ny/hy/my/ry/by/py/gy。
+     *    音系上没错（日语 /i/ 会让前面的辅音腭化），但映射成 ARPAbet 会变成
+     *    N+Y+IY1 三个音素，把一个 mora 撑成 "n-yi" 两拍，听感直接崩坏——这是
+     *    "日语转英语音素听起来不像日语"最主要的来源。紧跟 i 时把 palatal 还原成
+     *    基础辅音，得到 N+IY1 / HH+IY1 / L+IY1，一个 mora 仍是 onset+vowel。
+     *
+     * 2. ん 的部位同化：单独出现的 n（后面不是元音）就是拨音 ん。它在
+     *    p/b/m 前读 [m]、在 k/g 前读 [ŋ]、其余读 [n]。一律发 N 会让
+     *    さんぽ / まんが 听起来像英文式的 "san-po / man-ga"。
+     *
+     * 3. っ 的促音同化：cl 本质是延长后接辅音（gemination），一律发 T 会把
+     *    れっしゃ 唱成 "re-t-sha"、っき 唱成 "ki-t-ki"。按后接辅音还原成同部位
+     *    辅音，与后接辅音叠成双辅音（SH+SH / K+K / T+T）才是促音的正确近似。
+     *
+     * @param {string[]} jpParts - _japaneseG2p 输出的日语音素序列
+     * @param {string} [nextKana] - 下一个音符的歌词。工程里一个 note 只放一个假名，
+     *   词尾的 ん / っ 在自己的 note 上看不到后面的音，必须由调用方把下一个音符传进来，
+     *   否则 ん 永远退化成 N（さんぽ 会唱成 "san-po"）、っ 永远退化成 T。
+     * @returns {string[]} 修正后的序列（长度不变）
+     */
+    _applyMoraContext(jpParts, nextKana = null) {
+        const VOWELS = new Set(['a', 'i', 'u', 'e', 'o']);
+        // palatal → 基础辅音（只用于 い段退化）
+        const PALATAL_BASE = {
+            ny: 'n', hy: 'h', my: 'm', ry: 'r', by: 'b', py: 'p', gy: 'g',
+        };
+        // 促音 っ → 后接辅音（gemination）：っ 本质是延长后接辅音的持阻/摩擦段，
+        // 一律发 T 会把 れっしゃ 唱成 "re-t-sha"、っき 唱成 "ki-t-ki"。按后接
+        // 辅音还原成同部位辅音，与后接辅音叠成双辅音（KK/SS/SH+SH…）才像促音。
+        // 拗音取基础辅音（きゃ 的促音延长的是 k，不是整个 ky）。
+        const GEMINATE_BASE = {
+            k: 'k', g: 'g', s: 's', z: 'z', t: 't', d: 'd', n: 'n', h: 'h',
+            f: 'f', m: 'm', r: 'r', w: 'w', y: 'y', b: 'b', p: 'p', j: 'j',
+            sh: 'sh', ch: 'ch', ts: 'ts',
+            ky: 'k', gy: 'g', ny: 'n', hy: 'h', my: 'm', ry: 'r', py: 'p', by: 'b',
+        };
+        const out = jpParts.slice();
+        for (let i = 0; i < out.length; i++) {
+            const part = out[i];
+            const next = out[i + 1];
+            const base = PALATAL_BASE[part];
+            if (base && next === 'i') {
+                // い段：腭化是辅音自身的音色，不能再叠一个 Y 滑音
+                out[i] = base;
+                continue;
+            }
+            if (part === 'cl' && next && GEMINATE_BASE[next]) {
+                // 促音：同化为后接辅音（与后接辅音叠成双辅音）
+                out[i] = GEMINATE_BASE[next];
+                continue;
+            }
+            if (part === 'n' && next && !VOWELS.has(next)) {
+                // 拨音 ん：按后接辅音的部位同化
+                if (next === 'p' || next === 'b' || next === 'm') out[i] = 'n_m';
+                else if (next === 'k' || next === 'g') out[i] = 'n_ng';
+            }
+        }
+        const last = out.length - 1;
+        // 末位拨音/促音：本音符只有 ん 或 っ 时，用后面那个音符的首音补同化上下文
+        if (last >= 0 && nextKana && (out[last] === 'n' || out[last] === 'cl')) {
+            const nextJp = this._japaneseG2p(nextKana).split(' ').filter(Boolean)[0];
+            if (out[last] === 'n') {
+                if (nextJp === 'p' || nextJp === 'b' || nextJp === 'm') out[last] = 'n_m';
+                else if (nextJp === 'k' || nextJp === 'g') out[last] = 'n_ng';
+            } else if (nextJp && GEMINATE_BASE[nextJp]) {
+                out[last] = GEMINATE_BASE[nextJp];
+            }
+        }
+        return out;
     }
 
     /**

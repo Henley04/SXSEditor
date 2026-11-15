@@ -15,7 +15,7 @@ const ENUM_SETTINGS = {
   audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
   vocoderType: ['default', 'sifigan'],
   sifiganPrecision: ['fp32', 'fp16'],
-  japaneseVocalization: ['hybrid', 'en-phonemes', 'jp-lora'],
+  japaneseVocalization: ['en-phonemes', 'hybrid', 'jp-lora'],
   vocoderChunkMode: ['smart', 'manual'],
   ortGraphOptLevel: ['disabled', 'basic', 'extended', 'all'],
   ortExecutionMode: ['sequential', 'parallel'],
@@ -403,12 +403,14 @@ function loadSettings() {
     _settingsCache.sifiganPrecision = 'fp32';
   }
 
-  // Japanese vocalization method: 'hybrid' (default, improved ARPAbet mapping:
-  // L for ら行, AO for お段, on base model)
-  // | 'en-phonemes' (English ARPAbet on base model, original mapping)
+  // Japanese vocalization method: 'en-phonemes' (default — English ARPAbet on the
+  // base multilingual model: one mora = onset+vowel, AO1 for お段, L for ら行,
+  // ん place assimilation; no Cantonese syllables)
+  // | 'hybrid' (same ARPAbet conversion but prefers a Cantonese yue_ syllable
+  //   where one is closer — opt-in, keeps Cantonese timbre)
   // | 'jp-lora' (JP LoRA models, in development — not available for download yet)
   if (_settingsCache.japaneseVocalization !== 'en-phonemes' && _settingsCache.japaneseVocalization !== 'hybrid' && _settingsCache.japaneseVocalization !== 'jp-lora') {
-    _settingsCache.japaneseVocalization = 'hybrid';
+    _settingsCache.japaneseVocalization = 'en-phonemes';
   }
 
   // Vocoder type default + startup fallback:

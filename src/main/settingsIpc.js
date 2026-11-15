@@ -394,8 +394,8 @@ function registerSettingsIpc() {
     if (jpVocalizationChanged && !needsPipelineReset) {
       const pipeline = getSvsPipeline();
       if (pipeline && pipeline._textProcessing) {
-        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'hybrid';
-        pipeline._japaneseVocalization = merged.japaneseVocalization || 'hybrid';
+        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
+        pipeline._japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
         // Clear synthesis cache: phoneme processing changed, old results are stale
         if (typeof pipeline.clearSynthCache === 'function') {
           pipeline.clearSynthCache();

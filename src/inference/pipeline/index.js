@@ -128,7 +128,7 @@ class OnnxSVSPipeline {
         // 由 svsIpc 经 pipelineOptions 注入；主进程场景可以直接解析 userData。
         if (options.userDataDir) sessionValidationCache.configureCacheDir(options.userDataDir);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
-        this._japaneseVocalization = options.japaneseVocalization || 'hybrid';
+        this._japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
