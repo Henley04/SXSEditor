@@ -320,6 +320,12 @@ const IPC_CHANNELS = {
   CRASH_LOG: 'crash:log',
   CRASH_OPEN_DUMP_DIR: 'crash:openDumpDir',
   CRASH_OPEN_LOG_DIR: 'crash:openLogDir',
+  // ---- env-check ----
+  // 环境检测刻意拆两个通道：report 是纯内存快照（毫秒级，撑首屏），
+  // probes 才做原生桥 / EP 枚举等重活并自带超时。合成一个会让弹层
+  // 被 EP 枚举卡住（冷启动要扫 catalog 并注册 DLL）。
+  ENV_CHECK_GET_REPORT: 'env-check:get-report',
+  ENV_CHECK_GET_PROBES: 'env-check:get-probes',
   // ---- fragment ----
   FRAGMENT_CLOSE: 'fragment:close',
   FRAGMENT_CLOSE_ALL: 'fragment:closeAll',
@@ -330,6 +336,7 @@ const IPC_CHANNELS = {
   MAIN_MENU_IMPORT_MIDI_REQUEST: 'main-menu:import-midi-request',
   MAIN_MENU_AUDIO_TO_MIDI_REQUEST: 'main-menu:audio-to-midi-request',
   MAIN_MENU_MCP_SETUP_REQUEST: 'main-menu:mcp-setup-request',
+  MAIN_MENU_ENV_CHECK_REQUEST: 'main-menu:env-check-request',
   MAIN_MENU_SAVE_AS_REQUEST: 'main-menu:save-as-request',
   MAIN_MENU_SAVE_REQUEST: 'main-menu:save-request',
   // ---- mcp ----

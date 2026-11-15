@@ -406,6 +406,14 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_MCP_SETUP_REQUEST, handler);
   },
   mcpSetupGetInfo: () => ipcRenderer.invoke(IPC_CHANNELS.MCP_SETUP_GET_INFO),
+  // 帮助 → 环境检测：report 是毫秒级内存快照，probes 才做原生桥/EP 探测。
+  onMainMenuEnvCheckRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_ENV_CHECK_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_ENV_CHECK_REQUEST, handler);
+  },
+  envCheckGetReport: () => ipcRenderer.invoke(IPC_CHANNELS.ENV_CHECK_GET_REPORT),
+  envCheckGetProbes: () => ipcRenderer.invoke(IPC_CHANNELS.ENV_CHECK_GET_PROBES),
   // 资源管理器
   resmgrOpen: () => ipcRenderer.invoke(IPC_CHANNELS.RESMGR_OPEN),
   resmgrGetGPUInfo: () => ipcRenderer.invoke(IPC_CHANNELS.RESMGR_GET_GPU_INFO),

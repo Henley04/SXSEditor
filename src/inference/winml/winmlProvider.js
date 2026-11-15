@@ -104,11 +104,66 @@ function _getSettings() {
  * 关闭 WinML 分支，避免"设置显示已切回 WinML、实际仍走 DML"的不一致。
  */
 function isWinmlEnabled() {
-    if (!winmlCatalog.isPlatformSupported()) return false;
-    const s = _getSettings();
-    if (s.nativeInferenceBackend === 'dml' || s.nativeInferenceBackend === 'cpu') return false;
-    if (s.inferenceProvider && s.inferenceProvider !== 'ortnode') return false;
-    return s.winmlEnabled === true;
+    return getWinmlGate().enabled;
+}
+
+/**
+ * WinML 门控判定（单一真源）。
+ *
+ * 历史实现只返回布尔，导致「环境检测」想解释「为什么 WinML 没生效」时只能
+ * 再抄一份判定顺序 —— 两份迟早漂移成「设置说开了、报告说关了」。这里把
+ * 四条短路原样保留并映射成原因码，isWinmlEnabled() 退化为它的布尔投影。
+ *
+ * 短路顺序（与改造前逐条一致）：
+ *   1. 平台 / 架构 / OS Build（WinML vendor EP 需 Win11 24H2 build 26100+）
+ *   2. nativeInferenceBackend 为 dml / cpu（用户显式关掉 WinML）
+ *   3. inferenceProvider 不是本机 ORT（WebNN / 远程 API 模式）
+ *   4. winmlEnabled !== true
+ *
+ * @param {{platform?:string, arch?:string, build?:number, minBuild?:number, settings?:object}} [overrides]
+ *   仅单测与诊断注入；生产调用留空，走真实环境与 loadSettings()。
+ * @returns {{enabled:boolean, reason:string, detail:{build:number, minBuild:number, arch:string, provider:string}}}
+ */
+function getWinmlGate(overrides = {}) {
+    const o = overrides || {};
+    let support;
+    if (o.platform) {
+        const platformOk = o.platform === 'win32';
+        const archOk = o.arch === 'x64' || o.arch === 'arm64';
+        const minBuild = Number(o.minBuild) || winmlCatalog.MIN_BUILD;
+        const build = Number(o.build) || 0;
+        const buildOk = build >= minBuild;
+        support = {
+            supported: platformOk && archOk && buildOk,
+            platform: o.platform,
+            arch: String(o.arch || ''),
+            build,
+            minBuild,
+            reason: !platformOk ? 'platform' : (!archOk ? 'arch' : (!buildOk ? 'build' : 'ok')),
+        };
+    } else {
+        const meta = winmlCatalog.getPlatformSupport();
+        // 以 isPlatformSupported() 作最终裁决而不是直接用 meta.supported：
+        // 它经 module 属性调用，是既有契约，单测与诊断都 stub 这个导出属性来
+        // 模拟 Windows 环境（Linux CI 上真实值恒为 false）。meta 只负责在门关着
+        // 的时候解释「卡在哪一步」。
+        const supported = winmlCatalog.isPlatformSupported();
+        support = { ...meta, supported, reason: supported ? 'ok' : meta.reason };
+    }
+
+    const s = o.settings || _getSettings();
+    const detail = {
+        build: support.build,
+        minBuild: support.minBuild,
+        arch: support.arch,
+        provider: String(s.inferenceProvider || ''),
+    };
+    if (!support.supported) return { enabled: false, reason: support.reason, detail };
+    if (s.nativeInferenceBackend === 'dml') return { enabled: false, reason: 'backendDml', detail };
+    if (s.nativeInferenceBackend === 'cpu') return { enabled: false, reason: 'backendCpu', detail };
+    if (s.inferenceProvider && s.inferenceProvider !== 'ortnode') return { enabled: false, reason: 'provider', detail };
+    if (s.winmlEnabled !== true) return { enabled: false, reason: 'settingOff', detail };
+    return { enabled: true, reason: 'ok', detail };
 }
 
 /** 解析缓存的键：门控开关 + 显式后端。后端一变，旧缓存立即失效。 */
@@ -968,6 +1023,7 @@ function resetEpState() {
 
 module.exports = {
     isWinmlEnabled,
+    getWinmlGate,
     ensureEpsRegistered,
     getReadyEpLibraries,
     listProviderDevices,

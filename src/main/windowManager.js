@@ -282,6 +282,18 @@ function buildAppMenu() {
             }
           },
         },
+        {
+          // 帮助 → 环境检测：把 Windows 版本 / WinML / CPU / GPU / 内存 / 显存
+          // 汇总成一份可直接复制的纯文本，排障时不用再逐项找用户要配置。
+          // id 供自动化验证直接定位（Menu.getMenuItemById('env-check')）。
+          id: 'env-check',
+          label: t('menu.envCheck'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_ENV_CHECK_REQUEST);
+            }
+          },
+        },
         { type: 'separator' },
         {
           label: t('menu.openLogDir'),

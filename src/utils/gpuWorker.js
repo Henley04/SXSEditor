@@ -55,6 +55,7 @@ async function queryGPUFull() {
             memoryTotal: c.memoryTotal || c.vram || 0,
             memoryUsed: c.memoryUsed || 0,
             vendor: c.vendor || '',
+            driverVersion: c.driverVersion || '',
             deviceType,
             isDiscrete: deviceType === 'discrete-gpu',
             _source: 'si',

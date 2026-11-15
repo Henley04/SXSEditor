@@ -136,8 +136,19 @@ describe('CPU EP 后端 — 全链路接线（源码守卫）', () => {
   });
 
   it('WinML 门控、worker 注入、设置页派生都把 CPU 视为关闭 GPU 路径', () => {
-    expect(readSrc('src/inference/winml/winmlProvider.js'))
-      .to.match(/nativeInferenceBackend === 'dml' \|\| s\.nativeInferenceBackend === 'cpu'/);
+    const provider = readSrc('src/inference/winml/winmlProvider.js');
+    const gate = /function getWinmlGate\([\s\S]*?\n\}/.exec(provider);
+    expect(gate, '未找到 getWinmlGate').to.be.ok;
+    // dml / cpu 拆成两条独立短路，是为了让环境检测能给出不同原因码
+    // （backendDml / backendCpu）。但两者都必须排在 provider 与 winmlEnabled
+    // 判定之前，否则会出现「设了 CPU 后端却被后面的条件提前放行」。
+    const body = gate[0];
+    const dmlAt = body.indexOf("nativeInferenceBackend === 'dml'");
+    const cpuAt = body.indexOf("nativeInferenceBackend === 'cpu'");
+    expect(dmlAt, '缺少 dml 短路').to.be.greaterThan(-1);
+    expect(cpuAt, '缺少 cpu 短路').to.be.greaterThan(dmlAt);
+    expect(cpuAt).to.be.lessThan(body.indexOf('s.inferenceProvider && s.inferenceProvider'));
+    expect(cpuAt).to.be.lessThan(body.indexOf('s.winmlEnabled !== true'));
     expect(readSrc('src/main/svsIpc.js'))
       .to.match(/settings\.nativeInferenceBackend === 'cpu'/);
     expect(readSrc('src/settings.js'))

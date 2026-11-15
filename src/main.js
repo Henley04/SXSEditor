@@ -386,6 +386,11 @@ app.whenReady().then(() => {
   // 零重型依赖，与 get-locale 一起提前注册，避免用户点菜单时 handler 尚未挂载。
   ipcMain.handle(IPC_CHANNELS.MCP_SETUP_GET_INFO, () => require('./main/mcpSetupInfo').getMcpSetupInfo());
 
+  // 帮助 → 环境检测：只读系统信息 + 运行期探测。与 MCP 连接同样提前注册；
+  // envCheckInfo 顶层只依赖 node:os，gpuInfo / winmlProvider 都是惰性 require，
+  // 不会把 onnxruntime 之类的重依赖拖进启动关键路径。
+  require('./main/envCheckIpc').registerEnvCheckIpc();
+
   let resolveHeavyIpcReady;
   const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
   ipcMain.handle(IPC_CHANNELS.APP_WAIT_FOR_HEAVY_IPC, () => heavyIpcReady);

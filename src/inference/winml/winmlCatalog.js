@@ -49,9 +49,30 @@ function getOsBuildNumber() {
     return 0;
 }
 
+/**
+ * 平台支持度分解：把「为什么不支持」拆成可读原因，供环境检测直接展示。
+ * 判定顺序与 isPlatformSupported 完全一致，行为等价。
+ * @returns {{supported:boolean, platform:string, arch:string, build:number, minBuild:number, reason:'ok'|'platform'|'arch'|'build'}}
+ */
+function getPlatformSupport() {
+    const platformOk = isWindows();
+    const archOk = isSupportedArch();
+    const build = getOsBuildNumber();
+    const buildOk = build >= MIN_BUILD;
+    const reason = !platformOk ? 'platform' : (!archOk ? 'arch' : (!buildOk ? 'build' : 'ok'));
+    return {
+        supported: platformOk && archOk && buildOk,
+        platform: process.platform,
+        arch: process.arch,
+        build,
+        minBuild: MIN_BUILD,
+        reason,
+    };
+}
+
 /** Feature gate: platform, arch and OS build checks only (no side effects). */
 function isPlatformSupported() {
-    return isWindows() && isSupportedArch() && getOsBuildNumber() >= MIN_BUILD;
+    return getPlatformSupport().supported;
 }
 
 /**
@@ -542,7 +563,9 @@ async function ensureProviderReady(providerName, onProgress) {
 }
 
 module.exports = {
+    MIN_BUILD,
     isPlatformSupported,
+    getPlatformSupport,
     locateBootstrapDll,
     ensureCatalog,
     listCompatibleProviders,

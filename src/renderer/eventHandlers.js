@@ -15,6 +15,7 @@ import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
 import { exportProjectMidi } from './midiExport.js';
 import { showMcpSetupDialog } from './mcpSetupDialog.js';
+import { showEnvCheckDialog } from './envCheckDialog.js';
 import { appendPluginContextItems, pluginContextItems } from './plugins/contributionContextMenu.js';
 
 // Click-vs-drag tracking for fragment selection
@@ -821,6 +822,12 @@ if (window.electronAPI?.onMainMenuAudioToMidiRequest) {
 if (window.electronAPI?.onMainMenuMcpSetupRequest) {
   const offMcpSetup = window.electronAPI.onMainMenuMcpSetupRequest(() => { void showMcpSetupDialog(); });
   if (state._ipcCleanups) state._ipcCleanups.push(offMcpSetup);
+}
+// 帮助 → 环境检测：弹层自己 invoke 取快照与探测结果，菜单回调只负责「请打开」。
+// 系统信息读取放在异步 invoke 里，不占菜单点击的同步回调。
+if (window.electronAPI?.onMainMenuEnvCheckRequest) {
+  const offEnvCheck = window.electronAPI.onMainMenuEnvCheckRequest(() => { void showEnvCheckDialog(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offEnvCheck);
 }
 
 // 模态设置窗口打开时自动暂停播放：模态窗口会禁用主窗口输入（无法点击
