@@ -122,6 +122,23 @@ function makeChunk(seconds, isLast) {
   };
 }
 
+/**
+ * 带真实采样位置的 chunk（主流水线形态）。
+ * @param {number} relStartSec 相对首音符起点的内容起点
+ * @param {number} durSec 音频时长
+ * @param {boolean} isLast
+ */
+function makeChunkAt(relStartSec, durSec, isLast) {
+  return {
+    chunkIndex: 0,
+    sampleOffset: Math.round(relStartSec * SAMPLE_RATE),
+    sampleEnd: Math.round((relStartSec + durSec) * SAMPLE_RATE),
+    audio: new Float32Array(Math.round(durSec * SAMPLE_RATE)).fill(0.1),
+    totalSamples: Math.round(32 * SAMPLE_RATE),
+    isLast,
+  };
+}
+
 describe('分片编辑器流式播放（underrun 恢复 / 取消推理）', () => {
   let ctx;
   let state;
@@ -337,5 +354,86 @@ describe('分片编辑器流式播放（underrun 恢复 / 取消推理）', () =
     } finally {
       alertStub.restore();
     }
+  });
+
+  // ===== 绝对位置调度（回归：声音重复 / 越播越晚 / 播放头回跳） =====
+
+  it('带重叠的分块：同一段内容只放一次，第二段紧接第一段末端', async () => {
+    // 扩散分块自带 diffStepOverlapFrames 重叠（默认 50 帧 ≈ 1s）：chunk2 的
+    // 内容起点落在 chunk1 末端之前。旧实现按到达顺序"接尾巴"，重叠段会被
+    // 再播一遍（用户听到的"声音重复"），且误差逐块累加（播放头与实际越来越远）。
+    chunkCb(makeChunkAt(0, 4, false));
+    await sleep(60);
+    expect(ctx.sources, '首个 chunk 已开播').to.have.lengthOf(1);
+    const first = ctx.sources[0];
+
+    chunkCb(makeChunkAt(3, 5, true)); // 内容 3..8，与 0..4 重叠 1s
+    await sleep(60);
+    expect(ctx.sources, '第二个 chunk 必须被排程').to.have.lengthOf(2);
+    const second = ctx.sources[1];
+
+    expect(second.startWhen - first.startWhen, '第二段应紧接第一段末端（不重复 1s）')
+      .to.be.closeTo(4, 0.02);
+    // 重叠部分在入队前就被裁掉（subarray），缓冲区只剩 4s
+    expect(second.buffer.duration, '重叠的 1s 必须从头部裁掉').to.be.closeTo(4, 0.02);
+    expect(second.startWhen + second.buffer.duration - second.startOffset, '总时长应为 8s')
+      .to.be.closeTo(first.startWhen + 8, 0.02);
+
+    resolveSynth(new Float32Array(8 * SAMPLE_RATE));
+    await playPromise;
+    await sleep(20);
+  });
+
+  it('迟到 chunk 只裁头、不移动时间基准（播放头不回跳）', async () => {
+    chunkCb(makeChunkAt(0, 4, false));
+    await sleep(60);
+    const base = state.getFragmentPlaybackStartTime();
+    const firstWhen = ctx.sources[0].startWhen;
+
+    // 播放头越过前沿 → underrun 冻结
+    ctx.t = firstWhen + 4 + 0.2;
+    await sleep(150);
+    expect(ctx.state, '应进入等待推理').to.equal('suspended');
+
+    // 真实时钟不随假 ctx.t，迟到量由 ctx.currentTime 决定：把时钟推进到 5.2
+    ctx.t = firstWhen + 5.2;
+    chunkCb(makeChunkAt(4, 4, true));
+    await sleep(120);
+
+    expect(state.getFragmentPlaybackStartTime(), 'underrun 恢复不得重建时间基准').to.equal(base);
+    const second = ctx.sources[1];
+    expect(second.startOffset, '迟到 1.2s 应从头部裁掉，内容位置不变').to.be.closeTo(1.2, 0.05);
+    expect(second.startWhen, '排程时刻 = 当前时钟（不往后推）').to.be.closeTo(ctx.t, 0.05);
+
+    resolveSynth(new Float32Array(8 * SAMPLE_RATE));
+    await playPromise;
+    await sleep(20);
+  });
+
+  it('起播位置之后的第一个 chunk 从起播点开播，之前的整块丢弃（不丢内容、不回跳）', async () => {
+    state.setFragmentPlayStartPosition(8);
+    // 已注册的监听在 playFragment 内；重新起一轮以拾取新的起播位置
+    audioPlayback.cancelFragmentSynthesis();
+    playPromise = audioPlayback.playFragment();
+    await sleep(60);
+    expect(chunkCb, 'chunk 监听应已重新注册').to.be.a('function');
+
+    chunkCb(makeChunkAt(0, 4, false));  // 全在起播点之前 → 丢弃
+    chunkCb(makeChunkAt(4, 4, false));  // 全在起播点之前 → 丢弃
+    await sleep(60);
+    expect(ctx.sources, '起播点之前的 chunk 不应产生音频').to.have.lengthOf(0);
+
+    chunkCb(makeChunkAt(8, 4, true));   // 命中起播点
+    await sleep(60);
+    expect(ctx.sources, '起播点所在的 chunk 必须开播').to.have.lengthOf(1);
+    const src = ctx.sources[0];
+    expect(src.startOffset, '起播点正好是内容起点，无需裁头').to.be.closeTo(0, 0.02);
+    expect(src.startWhen, '开播时刻 = 时间基准（播放头立即从 8s 前进）')
+      .to.be.closeTo(state.getFragmentPlaybackStartTime(), 0.05);
+    expect(state.getFragmentPlaybackStartTime()).to.equal(state.getFragmentPlaybackStartTime());
+
+    resolveSynth(new Float32Array(12 * SAMPLE_RATE));
+    await playPromise;
+    await sleep(20);
   });
 });

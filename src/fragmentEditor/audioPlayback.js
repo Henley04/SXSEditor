@@ -163,9 +163,11 @@ function _buildNoteFadesForRealtime(bpm) {
  * 导出路径 (wavEncoder) 对重叠音符的 fade gain 做乘积，实时路径用单增益曲线，
  * 两者行为在重叠时不同。非重叠 SVS 场景（正常情况）两者一致。
  */
-function _scheduleFadeAutomation(fadeGainNode, ctx, fades, startOffset) {
+function _scheduleFadeAutomation(fadeGainNode, ctx, fades, startOffset, originCtxTime) {
   if (!fades || fades.length === 0) return;
-  const now = ctx.currentTime;
+  // 时间原点：默认"现在"，流式播放传 startTime —— chunk 是按
+  // 「内容位置 − 起播位置」排程的，fade 必须挂在同一条时间轴上。
+  const now = Number.isFinite(originCtxTime) ? originCtxTime : ctx.currentTime;
   fadeGainNode.gain.setValueAtTime(1, now);
   // 按 atSec 排序，确保 restore 事件与后续 fadeIn 事件的调度顺序正确
   const sorted = [...fades].sort((a, b) => a.atSec - b.atSec);
@@ -249,9 +251,25 @@ function _applyFadesToMonoAudio(audioData, bpm) {
 //   也应用 per-note fade（与 playFragmentShared 一致）。
 let streamingSources = [];
 let streamingCleanup = null;
-let streamingNextStart = 0;
 let streamingFinished = false;
 let streamingFadeGainNode = null;
+// 流式会话的坐标基准（只在首个 chunk 时确定一次）：
+//   _streamingFirstNoteStartSec —— chunk sampleOffset 的 0 点（= filledNotes[0].start）
+//   _streamingPlayFromSec       —— 本轮起播位置（分片绝对秒）
+//   _streamingDeliveredEndSec   —— 已排程内容的最远末端（分片绝对秒）
+// 三者一起把"chunk 相对采样位置"换算成"播放头时间"，排程不再依赖累加时长。
+let _streamingFirstNoteStartSec = 0;
+let _streamingPlayFromSec = 0;
+let _streamingDeliveredEndSec = 0;
+// 无采样位置信息时的顺序拼接游标（相对首音符起点）。与 deliveredEnd 不同，
+// 它只要"收到"就前进 —— 被丢弃的块也算占位，否则后续块会被重复裁头。
+let _streamingSeqCursorSec = 0;
+// 最近一次收到 chunk 的时刻（ms）。收尾兜底据此区分"真的没有后续音频了"与
+// "合成结果先到、chunk 还在 IPC 队列里"（缓存快速重放必现）。
+let _streamingLastChunkAtMs = 0;
+// 自愈 resume 的在途标记：设备异常时 resume() 可能长时间不 resolve，
+// 不能每帧都发一次（60 次/秒）。
+let _ctxResumeInFlight = false;
 // 用户主动停止标记：stopFragmentPlayback 置位后，playFragment 的"合成完成兜底播放"
 // 不再自动开播（否则点停止 → 合成完成 → 又自动开始播放）。
 let _streamingUserStopped = false;
@@ -267,7 +285,6 @@ let _playSessionSeq = 0;
 // Buffer underrun protection: shared infrastructure (AudioContext suspend/resume,
 // watchdog, underrun detection, source counting) via StreamingScheduler.
 let _streamingStarted = false;            // true after first chunk initializes playback
-let _streamingFirstChunkAudioOffset = 0; // playStartPosition > firstNoteStartSec 时需跳过的前导音频秒数
 let _scheduler = null;
 
 function _createFragmentScheduler() {
@@ -310,11 +327,22 @@ function _createFragmentScheduler() {
   });
 }
 
+/**
+ * 流式会话自然结束（最后一个 chunk 播完 / 收尾兜底）。
+ *
+ * 幂等：onended 计数与播放头兜底都可能触发，重复进入只会重复重置 UI。
+ */
 function _onFragmentStreamingFinished() {
+  if (streamingFinished) return;
   streamingFinished = true;
   streamingSources = [];
+  _streamingDeliveredEndSec = 0;
   setFragmentIsPlaying(false);
   _cancelFragmentSharedRaf();
+  // 收掉会话：watchdog / suspend 状态必须一起清。旧实现只停 UI，残留的
+  // watchdog 会继续用上一轮的基准判定 underrun，把下一轮刚解冻的上下文
+  // 又挂起（再次播放时"进度条在走却没声音"）。
+  if (_scheduler) _scheduler.deactivate();
   setFragmentCurrentTime(0);
   setFragmentPlayStartPosition(0);
   updateFragmentPlayButton();
@@ -464,7 +492,10 @@ function stopStreamingPlayback() {
   // playFragment 开头会显式重置为 false 启动新一轮流式合成。
   streamingFinished = true;
   _streamingStarted = false;
-  _streamingFirstChunkAudioOffset = 0;
+  _streamingFirstNoteStartSec = 0;
+  _streamingPlayFromSec = 0;
+  _streamingDeliveredEndSec = 0;
+  _streamingSeqCursorSec = 0;
   for (const src of streamingSources) {
     if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
     safeCleanup('fragmentAudio.src.stop', () => { src.onended = null; src.stop(); });
@@ -497,6 +528,37 @@ export async function getFragmentAudioContextInternal() {
     await ctx.resume();
   }
   return ctx;
+}
+
+/**
+ * 取 chunk 排程用的上下文 —— **不**在 underrun 冻结期间偷偷解冻。
+ *
+ * getFragmentAudioContextInternal() 会无条件 resume。流式播放里这很危险：冻结是
+ * StreamingScheduler 做的（它自己记着 _contextSuspended / isWaiting），渲染层绕过
+ * 它把上下文解冻后，scheduler 仍认为在等待 —— 之后的 resumeFromWait 变成空操作，
+ * 而 rAF 已被取消，于是「进度条（若还在走）与声音脱节 / 解冻后再没人管」。
+ * 解冻一律走 _scheduler.resumeFromWait()。
+ */
+async function _getFragmentCtxForChunk() {
+  let ctx = getFragmentAudioContext();
+  if (!ctx || ctx.state === 'closed') {
+    return getFragmentAudioContextInternal();
+  }
+  const waiting = !!(_scheduler && _scheduler.isWaiting);
+  if (ctx.state === 'suspended' && !waiting) {
+    // 非 underrun 造成的挂起（浏览器自动挂起 / 设备切换）：这里补一次解冻
+    try { await ctx.resume(); } catch (_) { /* 失败交给下面的排程与 watchdog */ }
+  }
+  return ctx;
+}
+
+/** 在缓冲区头部叠加一段余弦渐入（裁头处不是内容起点时防爆音）。 */
+function _fadeInHead(samples, sampleRate, sec) {
+  if (!samples || samples.length === 0) return;
+  const n = Math.min(samples.length, Math.max(1, Math.round(sec * sampleRate)));
+  for (let i = 0; i < n; i++) {
+    samples[i] *= 0.5 * (1 - Math.cos((Math.PI * i) / n));
+  }
 }
 
 export async function loadFragmentAudioSettings() {
@@ -671,9 +733,9 @@ function _checkFragmentStreamingUnderrun() {
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   const curTime = getFragmentPlaybackOffset() + elapsed;
   return _scheduler.checkUnderrun(curTime, () => {
-    // Freeze playhead at buffer frontier (not at elapsed which has already
-    // advanced past the received audio into silence).
-    setFragmentCurrentTime(_scheduler.bufferEndSec);
+    // 播放头就地冻结（它已经被 updateFragmentPlayhead 更新到可听位置）。
+    // 旧实现把它直接设成 bufferEndSec —— 前沿是"渲染域"位置，比耳朵听到的
+    // 位置早 outputLatency，跳过去会看到播放头先向前一跳再停住。
     const raf = getFragmentPlayheadRaf();
     if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
     render();
@@ -689,6 +751,16 @@ export function updateFragmentPlayhead() {
   const ctx = getFragmentAudioContext();
   if (!ctx) return;
 
+  // 自愈：不在等推理、也不是用户暂停，上下文却仍是 suspended（设备切换、
+  // 窗口恢复、上一次 suspend 与 resume 竞争留下的悬空状态）→ 补一次 resume。
+  // 旧实现靠 chunk 回调里无条件 resume 掩盖这类悬空；现在解冻收敛到 scheduler，
+  // 必须在这里兜住"没人解冻"的情况，否则时钟冻结 → 播放头卡住且没声音。
+  if (ctx.state === 'suspended' && !(_scheduler && _scheduler.isWaiting) && !_ctxResumeInFlight) {
+    _ctxResumeInFlight = true;
+    ctx.resume().catch(() => {}).then(() => { _ctxResumeInFlight = false; },
+      () => { _ctxResumeInFlight = false; });
+  }
+
   // 播放头取"耳朵听到的位置"：渲染时钟减去设备输出延迟（见 audioOutputClock）。
   const elapsed = getAudibleElapsedSec(ctx, getFragmentPlaybackStartTime());
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
@@ -696,6 +768,19 @@ export function updateFragmentPlayhead() {
   // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
   // 窗口最小化时 rAF 会被挂起，由 StreamingScheduler.watchdog 兜底检测。
   if (_checkFragmentStreamingUnderrun()) return;
+
+  // 收尾兜底：onended 丢失（source 被系统回收）时计数永远不归零，按钮与状态
+  // 会一直停在"播放中"。判据必须足够保守 —— 合成结果走 invoke，chunk 走另一条
+  // IPC 通道，缓存快速重放时结果可能先于最后几个 chunk 到达（那段窗口里
+  // inferenceDone 已为真）：
+  //   · 播放头越过最后一个已交付内容 1s 以上（此刻不可能还有声音在放），且
+  //   · 最近 1.5s 内没有再收到 chunk（队列里不会还有迟到的音频）。
+  if (_streamingStarted && !streamingFinished && _scheduler && _scheduler.inferenceDone
+      && Date.now() - _streamingLastChunkAtMs > 1500
+      && getFragmentCurrentTime() >= _scheduler.bufferEndSec + 1.0) {
+    _onFragmentStreamingFinished();
+    return;
+  }
 
   // 流式播放期间跳过 duration 检查：
   // setFragmentAudioData 在 synthesizeFragmentSVS 返回后才更新，流式期间
@@ -1083,9 +1168,12 @@ export async function playFragment() {
   stopStreamingPlayback();
   streamingFinished = false;
   streamingSources = [];
-  streamingNextStart = 0;
   _streamingStarted = false;
-  _streamingFirstChunkAudioOffset = 0;
+  _streamingFirstNoteStartSec = 0;
+  _streamingPlayFromSec = 0;
+  _streamingDeliveredEndSec = 0;
+  _streamingSeqCursorSec = 0;
+  _streamingLastChunkAtMs = Date.now();
   _streamingUserStopped = false;
   _pendingSeekStartTime = null;
   _createFragmentScheduler();
@@ -1117,55 +1205,66 @@ export async function playFragment() {
     }
 
     // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）。
-    // IPC 按发送顺序派发，但回调体内有 await（getFragmentAudioContextInternal /
-    // resumeFromWait 会让出事件循环）——若并发执行，chunk B 可能在 chunk A 更新
-    // streamingNextStart 之前基于同一个值调度 → 音频错序/重叠（underrun 恢复
-    // 瞬间的高危竞态）。用 promise 链串行化：每个 chunk 完整处理完才处理下一个。
+    // IPC 按发送顺序派发，但回调体内有 await（取上下文 / resumeFromWait 会让出
+    // 事件循环）——若并发执行，chunk B 可能在 chunk A 更新排程状态之前基于同一个
+    // 值调度 → 音频错序/重叠。用 promise 链串行化：每个 chunk 完整处理完才处理下一个。
+    //
+    // 排程模型 = **绝对位置调度**（与主窗口 renderer/audioPlayback.js 一致）：
+    //   · 每个 chunk 自带 sampleOffset/sampleEnd（相对首音符起点的采样位置），
+    //     发声时刻 = startTime + (内容位置 − 起播位置)。**不累加时长**。
+    //   · 迟到（推理慢、调度时刻已过）→ 把 when 钳到当前时刻，并按迟到量裁掉头部
+    //     （source.start(when, offset)），时间基准永不动。
+    //   · 与已交付内容重叠（扩散分块自带 diffStepOverlapFrames 重叠）→ 同样裁头，
+    //     同一段内容只放一次。
+    //
+    // 旧实现按到达顺序"接尾巴"累加 streamingNextStart，并在迟到时重建时间基准：
+    //   · 流水线发的分块带 overlap → 每个接缝把重叠段再放一遍（声音重复），
+    //     误差逐块累加（播放头与声音越差越多、总长比画布长）；
+    //   · 重建基准后 bufferEndSec 仍是旧基准 → underrun 前沿判定失准，播放头
+    //     冲过真实末端继续走（"进度条正常走但没声音"）；
+    //   · 基准反复重建 + 播放头回跳（"进度条卡住/乱跳"）。
     const handleStreamingChunk = async (chunkInfo) => {
       try {
         if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
         if (streamingFinished) return;
-        const ctx = await getFragmentAudioContextInternal();
-        if (streamingFinished) return; // re-check after async: may have been stopped
+        if (mySession !== _playSessionSeq) return;      // 旧会话：新一轮已接管
+        const ctx = await _getFragmentCtxForChunk();
+        if (!ctx) return;
+        if (streamingFinished) return;                  // re-check after async
+        if (mySession !== _playSessionSeq) return;
 
-        // 第一个 chunk 初始化播放：计算首音符偏移和播放起始位置
-        // chunk 音频从 filledNotes[0].start（首音符起点）开始，pipeline 已截掉前导休止符。
-        // 需要让播放头从 playStartPosition 开始移动，而非直接跳到 firstNoteStartSec。
+        const sampleRate = getSampleRate();
+        const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+
+        // 第一个 chunk 初始化播放：确定坐标基准（首音符位置 + 起播位置）。
+        // chunk 音频的 0 点 = filledNotes[0].start（pipeline 已截掉前导休止符），
+        // 播放头从 playStartPosition 开始 —— 两者之差就是前导静音。
         if (!_streamingStarted) {
           _streamingStarted = true;
-          const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
           const clippedNotes = getClippedNotes();
-          const firstNoteStartSec = clippedNotes.length > 0
+          _streamingFirstNoteStartSec = clippedNotes.length > 0
             ? (firstNoteStart(clippedNotes) / bpm) * 60
             : 0;
-          const playStartPosition = getFragmentPlayStartPosition();
+          _streamingPlayFromSec = getFragmentPlayStartPosition();
+          _streamingDeliveredEndSec = 0;
+          _streamingSeqCursorSec = 0;
+          const startTime = ctx.currentTime + 0.05;
 
-          // chunk 音频从 firstNoteStartSec 开始，播放头从 playStartPosition 开始：
-          // - playStartPosition < firstNoteStartSec：延迟 chunk 播放，让播放头先走完
-          //   前导静音段，到达 firstNoteStartSec 时音频正好开始。
-          // - playStartPosition > firstNoteStartSec：跳过 chunk 内前导音频（下方处理）。
-          let chunkDelaySec = 0;
-          if (playStartPosition < firstNoteStartSec) {
-            chunkDelaySec = firstNoteStartSec - playStartPosition;
-          } else if (playStartPosition > firstNoteStartSec) {
-            _streamingFirstChunkAudioOffset = playStartPosition - firstNoteStartSec;
-          }
-          streamingNextStart = ctx.currentTime + 0.05 + chunkDelaySec;
-
-          // per-note fade：atSec 是相对 fragment 起点的绝对时间，
-          // startOffset 传 playStartPosition 使起播位置之前的 fade 事件被跳过。
+          // per-note fade：atSec 是相对分片起点的绝对时间，startOffset 传起播位置
+          // 使起播之前的 fade 事件被跳过；时间原点显式传 startTime，与音频排程
+          // 用同一条时间轴（否则 fade 整体偏 50ms）。
           const fades = _buildNoteFadesForRealtime(bpm);
           if (fades.length > 0) {
             streamingFadeGainNode = ctx.createGain();
             const masterGain = getFragmentGainNode();
             if (masterGain) streamingFadeGainNode.connect(masterGain);
             else streamingFadeGainNode.connect(ctx.destination);
-            _scheduleFadeAutomation(streamingFadeGainNode, ctx, fades, playStartPosition);
+            _scheduleFadeAutomation(streamingFadeGainNode, ctx, fades, _streamingPlayFromSec, startTime);
           }
           setFragmentIsPlaying(true);
-          setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
-          setFragmentPlaybackOffset(playStartPosition);
-          setFragmentCurrentTime(playStartPosition);
+          setFragmentPlaybackStartTime(startTime);
+          setFragmentPlaybackOffset(_streamingPlayFromSec);
+          setFragmentCurrentTime(_streamingPlayFromSec);
           updateFragmentPlayButton();
           // 启动 playhead rAF 动画循环
           updateFragmentPlayhead();
@@ -1174,63 +1273,65 @@ export async function playFragment() {
           _scheduler.activate();
         }
 
-        // 处理 playStartPosition > firstNoteStartSec：跳过 chunk 前导音频
-        let chunkAudio = chunkInfo.audio;
-        if (_streamingFirstChunkAudioOffset > 0) {
-          const skipSec = Math.min(_streamingFirstChunkAudioOffset, chunkAudio.length / getSampleRate());
-          const skipSamples = Math.floor(skipSec * getSampleRate());
-          if (skipSamples >= chunkAudio.length) {
-            // 整个 chunk 都在跳过范围内：不创建 source，减少剩余偏移后跳过此 chunk
-            _streamingFirstChunkAudioOffset -= chunkAudio.length / getSampleRate();
-            // 仍需处理 isLast 标记
-            if (chunkInfo.isLast && _scheduler) {
-              _scheduler.markLastReceived();
-            }
-            return;
-          }
-          chunkAudio = chunkAudio.subarray(skipSamples);
-          _streamingFirstChunkAudioOffset = 0;
+        const startTime = getFragmentPlaybackStartTime();
+        const playFrom = _streamingPlayFromSec;
+
+        // chunk 的相对采样区间 → 分片绝对内容时间。
+        // 采样位置无效（旧版主进程 / 插件后端不带 sampleOffset，sampleEnd=0）时
+        // 退化为顺序拼接：接在已排程内容之后，行为与旧实现一致。
+        const rawStart = Number(chunkInfo.sampleOffset);
+        const rawEnd = Number(chunkInfo.sampleEnd);
+        const hasSampleRange = Number.isFinite(rawStart) && Number.isFinite(rawEnd) && rawEnd > rawStart;
+        const chunkSec = chunkInfo.audio.length / sampleRate;
+        const relStartSec = hasSampleRange ? rawStart / sampleRate : _streamingSeqCursorSec;
+        const relEndSec = hasSampleRange ? rawEnd / sampleRate : relStartSec + chunkSec;
+        // 顺序拼接游标：收到即前进（含后面被丢弃的块），保证每块只占一次位
+        if (!hasSampleRange) _streamingSeqCursorSec = relEndSec;
+        const contentStartSec = _streamingFirstNoteStartSec + relStartSec;
+        const contentEndSec = _streamingFirstNoteStartSec + relEndSec;
+
+        // 前沿 = 已交付内容的最远末端（播放头坐标系，绝对秒）。
+        // **必须在 resumeFromWait 之前更新**：解冻后重启的 rAF 会用新前沿判定，
+        // 否则刚解冻就被旧前沿再次冻结 → 首段之后整段静音。
+        if (_scheduler) _scheduler.updateBufferFrontier(contentEndSec);
+        _streamingLastChunkAtMs = Date.now();
+
+        // 有效起点：避开启播位置之前的部分、以及与已交付内容的重叠部分。
+        const contentFromSec = Math.max(contentStartSec, playFrom, _streamingDeliveredEndSec);
+        if (contentEndSec <= contentFromSec + 1e-6) {
+          // 整块都在有效区间之外（全在起播点之前 / 已被前一 chunk 覆盖）
+          if (chunkInfo.isLast && _scheduler) _scheduler.markLastReceived();
+          return;
         }
 
-        const audioBuffer = ctx.createBuffer(1, chunkAudio.length, getSampleRate());
-        audioBuffer.getChannelData(0).set(chunkAudio);
+        const skipSamples = Math.max(0, Math.round((contentFromSec - contentStartSec) * sampleRate));
+        const chunkAudio = skipSamples > 0 ? chunkInfo.audio.subarray(skipSamples) : chunkInfo.audio;
+        const chunkDurSec = chunkAudio.length / sampleRate;
+        if (chunkDurSec <= 0) {
+          if (chunkInfo.isLast && _scheduler) _scheduler.markLastReceived();
+          return;
+        }
+
+        // 内容位置 X 应在 startTime + (X − playFrom) 出声；迟到量只裁头、不移基准。
+        const wantCtxTime = startTime + (contentFromSec - playFrom);
+        // 迟到量：把 when 钳到"现在"，并把这部分从头部裁掉 —— 内容位置始终等于
+        // 播放头位置。不要用 now+ε 之类的安全余量：underrun 恢复点正好落在
+        // wantCtxTime 上，任何正余量都会让恢复后的段凭空晚 ε 秒（旧 bug）。
+        const lateSec = Math.max(0, ctx.currentTime - wantCtxTime);
+        if (lateSec >= chunkDurSec) {
+          // 整块都已过期（内容已被前沿覆盖，没有可播部分）：丢弃，避免补播成重复
+          if (chunkInfo.isLast && _scheduler) _scheduler.markLastReceived();
+          return;
+        }
+
+        const audioBuffer = ctx.createBuffer(1, chunkAudio.length, sampleRate);
+        const dest = audioBuffer.getChannelData(0);
+        dest.set(chunkAudio);
+        // 裁头处不是内容起点（重叠 / 迟到）：补 10ms 余弦渐入，避免接缝爆音
+        if (skipSamples > 0 || lateSec > 0) _fadeInHead(dest, sampleRate, 0.01);
+
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
-        const effectiveChunkDuration = chunkAudio.length / getSampleRate();
-
-        // Buffer underrun recovery（顺序调度 + 时间基准重置设计）：
-        // - 等待推理恢复：AudioContext 解冻，共享时钟（playbackStartTime）不变。
-        //   chunk 按原位无缝衔接。注意 rAF 是在「播放头到达前沿」处冻结
-        //   （curTime >= bufferEndSec），此刻 ctx.currentTime 已 ≈ streamingNextStart，
-        //   若走下面「迟到重置时间基准」分支会误命中：把第二段凭空推迟 0.05s 并让
-        //   播放头回跳（用户报告的「第二段延迟 + 播放头与实际不符」）。因此恢复时
-        //   只把略微过期的调度时间钳到当前时刻，时间基准不动 → 播放头连续、段间无缝。
-        // - 迟到 chunk（非 underrun 恢复）：调度时间已过 → 钳到当前时刻，并把时间基准
-        //   同步前移，让播放头与音频一起回退 δ 秒。后续 chunk 排在本次之后
-        //   （streamingNextStart += dur），无重叠、无内容丢失。
-        //
-        // 顺序纪律（务必保留）：**先排程 + 推进前沿，最后才解除等待**。
-        // 旧实现先 resumeFromWait 再重启播放头，重启的 rAF 立刻用**旧**前沿判定
-        // underrun（此时 curTime 正好停在前沿上）→ 刚解冻的 context 又被 suspend，
-        // 新 chunk 虽然 start() 了却始终不出声：第一段之后整段静音（长分片尤其明显）。
-        const wasWaiting = !!(_scheduler && _scheduler.isWaiting);
-        if (wasWaiting) {
-          // underrun 恢复：冻结期间 currentTime 停住，streamingNextStart 仍在原位
-          // （≈currentTime）。不动 playbackStartTime，仅钳掉冻结检测的微小过冲。
-          if (streamingNextStart < ctx.currentTime) {
-            streamingNextStart = ctx.currentTime;
-          }
-        } else if (streamingNextStart < ctx.currentTime + 0.01) {
-          // Late chunk: clamp scheduling time to now, adjust time base.
-          const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
-          setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
-          streamingNextStart = ctx.currentTime + 0.05;
-        }
-
-        // Update buffer frontier (furthest audio end in playhead seconds)
-        const chunkEndSec = (getFragmentPlaybackOffset() + (streamingNextStart - getFragmentPlaybackStartTime())) + effectiveChunkDuration;
-        if (_scheduler) _scheduler.updateBufferFrontier(chunkEndSec);
-
         // chunk source 经 streamingFadeGainNode（如有）连接到 master gain，
         // 使流式播放也应用 per-note fade。无 fade 时直接连 master gain。
         if (streamingFadeGainNode) {
@@ -1240,11 +1341,11 @@ export async function playFragment() {
           if (gainNode) source.connect(gainNode);
           else source.connect(ctx.destination);
         }
-        source.start(streamingNextStart);
-        streamingNextStart += effectiveChunkDuration;
+        source.start(wantCtxTime + lateSec, lateSec);
+        _streamingDeliveredEndSec = Math.max(_streamingDeliveredEndSec, contentEndSec);
 
         // 解除推理等待：前沿已覆盖本 chunk，此时重启 rAF 不会再次触发 underrun。
-        if (wasWaiting && _scheduler) {
+        if (_scheduler && _scheduler.isWaiting) {
           await _scheduler.resumeFromWait();
           // 幂等守卫防止与残留循环叠加成双 rAF 链。
           if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) {
