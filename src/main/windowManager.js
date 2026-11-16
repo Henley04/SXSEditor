@@ -8,6 +8,10 @@ const isDev = !require('electron').app.isPackaged;
 const { safeHandle } = require('./ipcSafe');
 const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
+// 社区入口：Reddit 子版块。用户提问、分享预设与作品主要在这里，
+// 与「项目主页（代码）」并列放在帮助菜单顶部，换地址时只改这一处。
+const REDDIT_COMMUNITY_URL = 'https://www.reddit.com/r/SXSEditor/s/7WK9Nnf7fw';
+
 let mainWindow = null;
 let settingsWindow = null;
 let resourceManagerWindow = null;
@@ -242,6 +246,16 @@ function buildAppMenu() {
             } catch (err) {
               console.warn('[Menu] Open website failed:', err.message);
             }
+          },
+        },
+        {
+          // 社区入口：放在项目主页旁边，而不是塞进下面的文档组末尾 ——
+          // 否则用户会把它当成"又一个文档链接"而跳过。
+          label: t('menu.reddit'),
+          click: () => {
+            shell.openExternal(REDDIT_COMMUNITY_URL).catch((err) => {
+              console.warn('[Menu] Open Reddit failed:', err && err.message);
+            });
           },
         },
         {

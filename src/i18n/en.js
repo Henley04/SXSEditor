@@ -1541,6 +1541,7 @@ export default {
     exportMidi: 'Export Project as MIDI...',
     mcpSetup: 'MCP Connection...',
     envCheck: 'Environment Check...',
+    reddit: 'Reddit Community',
     edit: 'Edit',
     undo: 'Undo',
     redo: 'Redo',

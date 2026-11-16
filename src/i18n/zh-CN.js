@@ -1544,6 +1544,7 @@ export default {
     exportMidi: '导出项目为 MIDI...',
     mcpSetup: 'MCP 连接...',
     envCheck: '环境检测...',
+    reddit: 'Reddit 社区',
     edit: '编辑',
     undo: '撤销',
     redo: '重做',
