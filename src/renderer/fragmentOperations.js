@@ -324,7 +324,7 @@ export async function handleAudioToMidi() {
         fragment.pitchCurve.enabled = true;
         console.log(`[audioToMidi] 生成 ${anchors.length} 个锚点 → 归并为 ${segments.length} 个滑音段（保留 ${(keptRatio * 100).toFixed(0)}%，其余交给自动曲线）`);
       } else {
-        console.log(`[audioToMidi] 未发现明显滑音（${anchors.length} 个锚点均在 ±25 音分内），全部交给自动曲线`);
+        console.log(`[audioToMidi] 未发现明显滑音（${anchors.length} 个锚点拟合误差均在容差内），全部交给自动曲线`);
       }
     }
 

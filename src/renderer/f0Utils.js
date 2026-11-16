@@ -5,6 +5,8 @@ import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import { fragmentPitchMode, PITCH_MODE_SCORE } from '../shared/pitchControl.js';
 import { saltFromKey } from '../shared/autoPitchCurve.js';
 import { evaluatePitchCurveFrames } from '../shared/pitchCurveEval.js';
+import { fitPitchCurveAnchors } from '../shared/pitchCurveFit.js';
+import { buildEffectiveValues, evalSortedCurve } from '../fragmentEditor/automationCurve.js';
 
 // 主页面逐 fragment 合成时调用，确保与分片编辑器播放的 f0 轨迹完全一致：
 // 逐帧求值统一走 shared/pitchCurveEval.evaluatePitchCurveFrames（唯一真源），
@@ -59,8 +61,11 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
  *   4. **按音符切桶**：换音若跨桶，旧实现会把两个音高平均成中间值（伪滑音）。
  *      传入 notes 后按"音符索引"分组，换音处不再平均。
  *
- * 另外：写入 strength（默认 80）与随密度自适应的 smoothness（旧实现硬编码 30），
- * 并用 RDP 抽稀 + 上限控制锚点数量（旧实现 3 分钟歌曲产出 4500 个锚点 / 260KB）。
+ * 抽稀与参数不再用 RDP + 固定 strength/smoothness：RDP 的误差模型假设曲线
+ * 穿过锚点，而真实曲线是 eff（strength 拉向基线）+ easeSegment（smoothness）
+ * 插值。现在把分桶点交给 shared/pitchCurveFit.fitPitchCurveAnchors 在
+ * **求值域**上拟合：逐帧 max|Δ|（音分）≤ toleranceCents，每段独立搜
+ * (smoothness, strength)，颤音区按 1/4 周期保点，预算内贪心删点。
  *
  * @param {Array<{time:number,f0:number}>} f0Data 帧序列（秒 / Hz，0=清音）
  * @param {number} bpm 当前工程 BPM（用于把"秒"换算成拍）
@@ -69,9 +74,8 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
  * @param {number} [options.medianWindow=5] 中值窗口（帧，<3 关闭）
  * @param {number} [options.sgWindow=7] SG 窗口（帧，<5 关闭）
  * @param {number} [options.sgOrder=3] SG 阶数
- * @param {number} [options.strength=80] 锚点强度（0..100）
  * @param {number} [options.maxAnchors=4000] 锚点数量上限
- * @param {number} [options.rdpToleranceCents=6] RDP 抽稀容差（音分）
+ * @param {number} [options.toleranceCents=6] 求值域拟合容差（音分）
  * @param {Array} [options.notes] 该分片的音符（启用按音符切桶 + 八度校正）
  * @param {boolean} [options.octaveAlign=true] 与音符中位数比对后做整八度校正
  * @returns {Array<{time:number,pitch:number,strength:number,smoothness:number}>}
@@ -85,9 +89,8 @@ export function f0DataToPitchCurveAnchorPoints(f0Data, bpm, options = {}) {
     medianWindow = 5,
     sgWindow = 7,
     sgOrder = 3,
-    strength = 80,
     maxAnchors = 4000,
-    rdpToleranceCents = 6,
+    toleranceCents = 6,
     notes = null,
     octaveAlign = true,
   } = options;
@@ -131,12 +134,14 @@ export function f0DataToPitchCurveAnchorPoints(f0Data, bpm, options = {}) {
     ? notes.slice().sort((a, b) => a.start - b.start)
     : null;
   const buckets = new Map();
+  const reference = [];   // 逐帧参考（拍/半音），求值域拟合的误差基准
   for (let i = 0; i < n; i++) {
     const f = filtered[i];
     if (!(f > 0)) continue;
     const midi = 69 + 12 * Math.log2(f / 440);
     if (midi < 24 || midi > 108) continue;
     const beat = f0Data[i].time / beatDuration;
+    reference.push({ time: beat, pitch: midi });
     const idx = Math.floor(beat / bucketBeat);
     const noteIdx = sortedNotes ? _noteIndexAt(sortedNotes, beat) : -1;
     const key = idx + '|' + noteIdx;
@@ -155,28 +160,20 @@ export function f0DataToPitchCurveAnchorPoints(f0Data, bpm, options = {}) {
   points.sort((a, b) => a.time - b.time);
   if (points.length === 0) return [];
 
-  // ---- 4) RDP 抽稀：平稳段合并，滑音/颤音段保留（容差单位：音分）
-  if (rdpToleranceCents > 0 && points.length > 2) {
-    points = _rdpSimplify(points, rdpToleranceCents);
-  }
+  // ---- 4) 求值域拟合：抽稀 + 每段 (smoothness, strength) 搜索 + 颤音保点 + 预算删点
+  const { anchors } = fitPitchCurveAnchors({
+    points,
+    reference,
+    bpm,
+    toleranceCents,
+    maxAnchors,
+  });
 
-  // ---- 5) 上限：等距抽样但保留首尾
-  if (points.length > maxAnchors) {
-    const picked = [];
-    const stepIdx = (points.length - 1) / (maxAnchors - 1);
-    for (let i = 0; i < maxAnchors; i++) picked.push(points[Math.round(i * stepIdx)]);
-    points = picked;
-  }
-
-  // ---- 6) smoothness 随密度自适应（桶越密越接近原始数据，缓动应越小）
-  const smoothness = bucketSec <= 0.03 ? 10 : bucketSec <= 0.05 ? 20 : 30;
-  const clampedStrength = Math.max(0, Math.min(100, strength));
-
-  return points.map((p) => ({
-    time: Math.max(0, p.time),
-    pitch: p.pitch,
-    strength: clampedStrength,
-    smoothness,
+  return anchors.map((a) => ({
+    time: Math.max(0, a.time),
+    pitch: a.pitch,
+    strength: a.strength,
+    smoothness: a.smoothness,
   }));
 }
 
@@ -203,46 +200,6 @@ function _noteIndexAt(sortedNotes, beat) {
 }
 
 /**
- * Ramer–Douglas–Peucker 抽稀（以时间为 x、音分 = pitch×100 为 y 的平面）。
- * 只保留对形状有贡献的点，平稳段被合并成直线。
- */
-function _rdpSimplify(points, toleranceCents) {
-  const n = points.length;
-  if (n < 3) return points;
-  const keep = new Uint8Array(n);
-  keep[0] = 1;
-  keep[n - 1] = 1;
-  const tol = toleranceCents / 100; // 换算成半音（y 轴单位）
-  const stack = [[0, n - 1]];
-  while (stack.length > 0) {
-    const [a, b] = stack.pop();
-    if (b - a < 2) continue;
-    const t0 = points[a].time;
-    const p0 = points[a].pitch;
-    const dt = points[b].time - t0;
-    const dp = points[b].pitch - p0;
-    let maxDev = -1;
-    let maxIdx = -1;
-    for (let i = a + 1; i < b; i++) {
-      const t = points[i].time;
-      const p = points[i].pitch;
-      // 点到线段的垂直距离（时间轴退化时退化为纵向距离）
-      const proj = dt > 0 ? p0 + (dp * (t - t0)) / dt : p0;
-      const dev = Math.abs(p - proj);
-      if (dev > maxDev) { maxDev = dev; maxIdx = i; }
-    }
-    if (maxDev > tol && maxIdx > 0) {
-      keep[maxIdx] = 1;
-      stack.push([a, maxIdx]);
-      stack.push([maxIdx, b]);
-    }
-  }
-  const out = [];
-  for (let i = 0; i < n; i++) if (keep[i]) out.push(points[i]);
-  return out;
-}
-
-/**
  * F0 → 派生段（"仅滑音"导入）。
  *
  * 为什么不再直接写入几千个 anchorPoints：
@@ -250,13 +207,16 @@ function _rdpSimplify(points, toleranceCents) {
  *   · 平稳段（F0 与 MIDI 基本一致）本来就不需要手动曲线，交给自动层即可；
  *   · 锚点数组会随音符改动失效（曲线锁死在原调），而派生段是显式手动资产。
  *
- * 做法：只保留"明显偏离音符"（默认 > 25 音分）的连续区间，做成若干
- * bakedSegment；其余交给自动曲线。跨版本时"借用真人滑音 + 保留自己的旋律"。
+ * 做法：不再用 ±25 音分的硬阈值，而是保留"拟合误差超过容差"的区间——
+ * 用拟合后的曲线（真源求值）与"恒定音符音高"模型逐锚点比对，超出
+ * toleranceCents 的连续区间做成 bakedSegment；其余交给自动曲线。
+ * 跨版本时"借用真人滑音 + 保留自己的旋律"。
  *
  * @param {Array<{time:number,f0:number}>} f0Data
  * @param {number} bpm
  * @param {Array} notes 该分片音符（用于判定偏离与切桶）
- * @param {object} [options] 透传给 f0DataToPitchCurveAnchorPoints
+ * @param {object} [options] 透传给 f0DataToPitchCurveAnchorPoints；
+ *   options.slipThresholdCents 可显式覆盖判定阈值（音分），默认 = 拟合容差
  * @returns {{segments:Array, anchors:Array, keptRatio:number}}
  */
 export function f0DataToSlipSegments(f0Data, bpm, notes, options = {}) {
@@ -264,13 +224,17 @@ export function f0DataToSlipSegments(f0Data, bpm, notes, options = {}) {
   if (anchors.length === 0 || !Array.isArray(notes) || notes.length === 0) {
     return { segments: [], anchors, keptRatio: 0 };
   }
-  const threshold = Number.isFinite(options.slipThresholdCents) ? options.slipThresholdCents : 25;
+  const toleranceCents = Number.isFinite(options.toleranceCents) ? options.toleranceCents : 6;
+  const threshold = Number.isFinite(options.slipThresholdCents) ? options.slipThresholdCents : toleranceCents;
   const sortedNotes = notes.slice().sort((a, b) => a.start - b.start);
+  // 求值域比对：锚点 strength<100 时曲线不经过锚点坐标，必须用真源有效值
+  const eff = buildEffectiveValues(anchors, 'pitch');
 
   const keep = anchors.map((a) => {
     const n = _noteAtBeat(sortedNotes, a.time);
     if (!n || !(n.pitch > 0)) return false;
-    return Math.abs(a.pitch - n.pitch) * 100 > threshold;
+    const v = evalSortedCurve(anchors, eff, a.time);
+    return Math.abs(v - n.pitch) * 100 > threshold;
   });
 
   const segments = [];
