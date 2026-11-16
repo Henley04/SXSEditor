@@ -430,12 +430,10 @@ describe('inference/pipeline/preprocessing', () => {
       expect(seq.f0Ids[40]).to.be.greaterThan(0);
     });
 
-    it('中文清辅音声母段自动 unvoiced，韵母段仍跟随曲线', () => {
+    it('中文清辅音声母段不再被切：起音帧跟随曲线（UV 只保留 f0<=0）', () => {
       const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'zh_ba1' }];
       const seq = p.notesToSequences(notes, 120, null, new Float32Array(50).fill(300));
-      let prefix = 0;
-      while (prefix < seq.f0Ids.length && seq.f0Ids[prefix] === 0) prefix++;
-      expect(prefix).to.be.within(2, 6);           // 声母 + 起音过渡
+      expect(seq.f0Ids[0]).to.be.greaterThan(0);   // 声母起音不再置 0
       expect(seq.f0Ids[10]).to.be.greaterThan(0);  // 韵母
       expect(seq.f0Ids[40]).to.be.greaterThan(0);
     });
@@ -449,10 +447,10 @@ describe('inference/pipeline/preprocessing', () => {
       expect(seq.f0Ids[10]).to.be.greaterThan(0);
     });
 
-    it('英文清辅音段自动 unvoiced，元音段仍跟随曲线', () => {
+    it('英文清辅音段不再被切：起音帧跟随曲线（UV 只保留 f0<=0）', () => {
       const notes = [{ start: 0, duration: 2, pitch: 60, lyric: 'en_HH-AE1' }];
       const seq = p.notesToSequences(notes, 120, null, new Float32Array(50).fill(300));
-      expect(seq.f0Ids[5]).to.equal(0);            // HH
+      expect(seq.f0Ids[0]).to.be.greaterThan(0);   // HH 起音不再置 0
       expect(seq.f0Ids[30]).to.be.greaterThan(0);  // AE1 / SEP 延长
     });
 

@@ -6,34 +6,10 @@ const { isRestNote } = require('./audioSegmentation');
 const { resolveChineseContextReadings, CJK_SINGLE } = require('./zhG2pContext');
 const durationStats = require('./durationStats');
 
-// ---- 自动清浊（UV）推导 ----
-// 锚点音高曲线只表达「这一刻唱多高」，清浊由音素结构独立推导（见 _buildUvMask），
-// 用户不需要、也无法在曲线里标注 0。中文音素是整音节 token（zh_ba1），声母/韵母
-// 未拆开，因此要按拼音再切出声母段。长声母必须排在短声母之前。
-const ZH_INITIALS = [
-    'zh', 'ch', 'sh', 'b', 'p', 'm', 'f', 'd', 't', 'n', 'l',
-    'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y', 'w',
-];
-// 清辅音声母（塞音/塞擦音/擦音）：官方真实 F0 在这些帧基本是 unvoiced。
-// 浊声母 m/n/l/r 与零声母（含 y/w 介音写法）保留音高，只在起音给 1 帧过渡。
-const ZH_UNVOICED_INITIALS = new Set([
-    'b', 'p', 'f', 'd', 't', 'g', 'k', 'h', 'j', 'q', 'x',
-    'zh', 'ch', 'sh', 'z', 'c', 's',
-]);
-const ZH_INITIAL_FRAME_RATIO = 0.12;   // 声母占音节时长的比例
-const ZH_INITIAL_MAX_FRAMES = 4;       // 上限 4 帧 = 80ms @ 50fps
-const UV_TAIL_FRAMES = 1;              // 有声音符收尾 1 帧交回模型（起音帧保留曲线）
-// 注意：
-//  · <SEP> 不能算清音：它只是英文词内音素分隔符，_buildMel2token 会给它
-//    分配相当比例的帧，而这些帧在官方真实 F0 里是元音延长（有声）。
-//  · <BOW>/<EOW> 也不算清音：它们各只占音符首尾 1 帧，且零声母音节
-//    （zh_a1 等）在起始帧本来就是直接起元音、有基频。把结构帧置 0 会让
-//    用户曲线在音符第一帧失效，也破坏了以首帧验证 segment offset 的既有测试。
-//    真正需要让位给模型的是辅音/声母段，由下面的音素类型与 initialFrames 处理。
-//  · <UNK> 保守保留，避免歌词解析异常时整段静音。
-const UV_SPECIAL_PHONES = new Set([
-    '<PAD>', '<SP>', '<AP>',
-]);
+// 清浊（UV）判定只保留官方那条：f0 <= 0（见 quantizeF0，与 f0_to_coarse 的
+// uv_mask = f0 <= 0 同构）。休止/换气音符整段 0、曲线自身的 0、音符外 0。
+// 不再按音素结构推导声母/辅音清音段 —— 那会把用户曲线在起音处强行切掉，
+// 与官方真实 F0 分布（擦音起音带短暂音高痕迹）不一致。
 
 /**
  * Pre-processing: note encoding, pitch encoding, F0 encoding, condition embedding
@@ -74,68 +50,6 @@ class Preprocessing {
             return this._jpVowels.has(name.slice(3));
         }
         return false;
-    }
-
-    /**
-     * 从中文整音节音素名解析声母：zh_ba1 → 'b'，zh_ang4 → ''（零声母），
-     * 非中文音素返回 null。zh_lu:4（ü 写成冒号）这类变体同样命中 'l'。
-     */
-    _parseChineseInitial(phoneName) {
-        if (!phoneName || !phoneName.startsWith('zh_')) return null;
-        const m = /^zh_(.+?)([1-5])$/.exec(phoneName);
-        if (!m) return null;
-        for (const ini of ZH_INITIALS) {
-            if (m[1].startsWith(ini)) return ini;
-        }
-        return '';
-    }
-
-    /**
-     * 生成逐帧清浊掩码。1 = 该帧 F0 由音高曲线/音符频率决定；
-     * 0 = unvoiced（f0 bin 0），等价于把这一帧局部交回模型自己决定 —— 与
-     * score 模式的 f0 条件一致，辅音段因此不再被强行「唱」出一个音高。
-     *
-     * 掩码完全由 mel2token（逐帧 token 索引）+ 音素名 + 音符区间推导，
-     * 不读取曲线里的 0，用户画曲线时无需考虑清音。
-     */
-    _buildUvMask(mel2token, newPhonemes, noteRanges, totalFrames) {
-        const uv = new Uint8Array(totalFrames).fill(1);
-
-        // 1) 逐帧音素类型：结构 token / PAD / 英文与日文辅音全部清音。
-        //    中文整音节 token 在这里保留（要按音节内位置切声母，见下）。
-        for (let f = 0; f < totalFrames; f++) {
-            const tokenIdx = mel2token[f];
-            if (tokenIdx === 0) { uv[f] = 0; continue; }
-            const phoneId = newPhonemes[tokenIdx];
-            const name = phoneId === undefined ? null : this._idx2phone[phoneId];
-            if (!name || UV_SPECIAL_PHONES.has(name)) { uv[f] = 0; continue; }
-            if ((name.startsWith('en_') || name.startsWith('jp_')) && !this._isVowelByIdx(phoneId)) {
-                uv[f] = 0;
-            }
-        }
-
-        // 2) 音符级：休止整段清音；中文清辅音声母段；收尾过渡帧。
-        for (const r of noteRanges) {
-            const start = Math.max(0, r.startFrame);
-            const end = Math.min(totalFrames, r.endFrame);
-            if (start >= totalFrames || end <= start) continue;
-            const nf = end - start;
-            if (r.unvoiced) {
-                uv.fill(0, start, end);
-                continue;
-            }
-            if (r.initialFrames > 0) {
-                // 极短音符最多切掉 1/3，保证至少留下韵母段跟曲线
-                const n = Math.min(r.initialFrames, Math.floor(nf / 3));
-                if (n > 0) uv.fill(0, start, Math.min(end, start + n));
-            }
-            // 只切收尾 1 帧（对应官方 F0 里的收音/渐弱短清音段）；
-            // 极短音符不切，避免整段被判成清音。
-            if (UV_TAIL_FRAMES > 0 && nf > UV_TAIL_FRAMES + 1) {
-                uv.fill(0, Math.max(start, end - UV_TAIL_FRAMES), end);
-            }
-        }
-        return uv;
     }
 
     midiToFreq(pitch) {
@@ -513,7 +427,7 @@ class Preprocessing {
             const durationSec = noteDurations[i];
             const startFrame = Math.round(durSumBefore * fps);
             const endFrame = Math.max(startFrame, Math.min(totalFrames, Math.round((durSumBefore + durationSec) * fps)));
-            noteRanges[i] = { startFrame, endFrame, unvoiced: false, initialFrames: 0 };
+            noteRanges[i] = { startFrame, endFrame };
             durSumBefore += durationSec;
         }
 
@@ -534,8 +448,7 @@ class Preprocessing {
             }
             // 休止 / <AP> 换气 / 无有效音高：整段清音
             const noteUnvoiced = this.isUnvoicedNote(note) || !(effectivePitch > 0);
-            range.unvoiced = noteUnvoiced;
-            if (noteUnvoiced) continue; // f0Hz 保持 0，uvMask 也会把这段置 0
+            if (noteUnvoiced) continue; // f0Hz 保持 0（官方 UV 规则：f0 <= 0）
 
             const noteFreq = this.midiToFreq(effectivePitch);
             if (!hasPitchCurve) {
@@ -556,30 +469,6 @@ class Preprocessing {
                 f0Hz[f] = (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0)
                     ? srcData[srcFrame]
                     : 0;
-            }
-        }
-
-        // 自动清浊只在 manual（有曲线内容）时接管。score 模式的 f0Ids 本来全 0、
-        // 默认 vocoder 也不读 f0Hz，保持原行为，避免动到已验证的高质量路径。
-        if (hasPitchCurve || hasEnvelope) {
-            // 中文整音节 token 的声母段：从音符对应的音素名推导，用户完全无感。
-            // 注意 newPhonemes[0] 是 <PAD>，note2origin[t] 对应 newPhonemes[t+1]。
-            for (let t = 0; t < note2origin.length; t++) {
-                const noteIdx = note2origin[t];
-                const range = noteRanges[noteIdx];
-                if (!range || range.initialFrames > 0) continue;
-                const initial = this._parseChineseInitial(this._idx2phone[newPhonemes[t + 1]]);
-                if (initial && ZH_UNVOICED_INITIALS.has(initial)) {
-                    const nf = range.endFrame - range.startFrame;
-                    range.initialFrames = Math.min(
-                        ZH_INITIAL_MAX_FRAMES,
-                        Math.max(1, Math.round(nf * ZH_INITIAL_FRAME_RATIO)),
-                    );
-                }
-            }
-            const uvMask = this._buildUvMask(mel2token, newPhonemes, noteRanges, totalFrames);
-            for (let f = 0; f < totalFrames; f++) {
-                if (uvMask[f] === 0) f0Hz[f] = 0;
             }
         }
 
