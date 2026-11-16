@@ -1,22 +1,21 @@
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 // F2/F3：参与合成的音符集合统一走 shared 真源（过滤未激活重叠 + 裁剪 + 排序）。
 // 之前本文件自己实现一遍、主窗口再实现一遍，两处对 inactive 与排序的处理不一致。
-import { computeActiveClippedNotes, computeInactiveNoteIds, lastNoteEnd } from '../shared/activeNotes.js';
+import { computeActiveClippedNotes, computeInactiveNoteIds } from '../shared/activeNotes.js';
 // 自动/手动统一求值（与主窗口 f0Utils 共用同一引擎）
 import {
   createPitchResolver,
   resolvePitchRanges,
-  applyExpressionToF0,
   buildAutoCurve,
   coverageAt,
   saltFromKey,
   findNoteAtBeat as findNoteAtBeatShared,
 } from '../shared/autoPitchCurve.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { evaluatePitchCurveFrames } from '../shared/pitchCurveEval.js';
 import { resolvePitchMode } from '../shared/pitchControl.js';
 import { readPhonemeField } from '../shared/pluginPhonemes.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
-import { applyGlideOwnership } from '../shared/postprocessCurves.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
 import { t } from '../i18n/index.js';
@@ -70,6 +69,7 @@ import {
   getPhonemeCache,
   getProjectExtSchema,
   getSampleRate,
+  getPostprocess,
   getParamPanelCollapsed,
   getParamPanelMode,
   getDragMode,
@@ -81,9 +81,7 @@ import {
 } from './state.js';
 import { buildEffectiveValues, evalSortedCurve, buildPitchCurveSampleTimes } from './automationCurve.js';
 import { collectCurves, sampleCurve, applyCurveSpec } from '../shared/pluginCurve.js';
-import { applyF0Postprocess } from './f0Smoothing.js';
 import {
-  buildF0ParamArrays,
   hasF0PostprocessEffect,
   getTimbreValueAt,
   getTimbreDefault,
@@ -583,94 +581,22 @@ export function buildPitchCurveF0Data(options = {}) {
 
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const currentFragment = getCurrentFragment();
-  const fragDuration = currentFragment ? currentFragment.duration : Infinity;
   const clippedNotes = getClippedNotes();
   if (clippedNotes.length === 0) return null;
-  // F2：总时长取 max(start+duration)，不再取数组末元素 —— "最晚结束"未必是
-  // 排序后的最后一个（长音符在前、短音符在后时末元素更早结束）。
-  const totalBeats = Math.min(lastNoteEnd(clippedNotes), fragDuration);
-  const totalSeconds = (totalBeats / bpm) * 60;
-  const hopSize = 480;
-  const sampleRate = getSampleRate();
-  const totalFrames = Math.floor(totalSeconds * sampleRate / hopSize);
 
-  // jitterStage='post'：曲线层不含抖动，放到滤波之后叠加（否则会被 SG/中值削掉）。
-  // 自动颤音一律后置（§6.3）：曲线层不含，避免被 f0Smooth 削弱 6%。
-  const jitterPost = autoOn && pcNorm.auto.params.jitterStage === 'post';
-  const seedSalt = saltFromKey(currentFragment ? (currentFragment.id !== undefined
-    ? currentFragment.id : currentFragment.singerId) : 0);
-  const resolver = _getPitchResolver(!jitterPost, false);
-
-  // 逐帧判断"这一帧是否落在某个音符内"。
-  //
-  // 原来是每帧对全部音符跑一次 some() → O(frames × notes)。60s / 300 音符的
-  // 分片约 9 万帧 × 300 ≈ 2700 万次比较，而本函数会被自动推理的签名轮询
-  // 每 400ms 调一次（autoInference），长分片下是实打实的卡顿源。
-  //
-  // frameBeat 随 i 单调递增，改成事件驱动扫描：音符按起点升序入列、按终点出列，
-  // 整体 O(frames + notes)，且天然支持音符重叠（原 some() 语义 = 命中任一音符）。
-  const sortedNotes = clippedNotes.slice().sort((a, b) => a.start - b.start);
-  let nextNote = 0;
-  const active = [];
-
-  let f0Array = new Float32Array(totalFrames);
-  for (let i = 0; i < totalFrames; i++) {
-    const frameBeat = (i * hopSize / sampleRate / 60) * bpm;
-    while (nextNote < sortedNotes.length && sortedNotes[nextNote].start <= frameBeat) {
-      active.push(sortedNotes[nextNote++]);
-    }
-    // 原地压缩剔除已结束的音符，避免每帧 filter 产生新数组
-    if (active.length > 0) {
-      let w = 0;
-      for (let r = 0; r < active.length; r++) {
-        if (frameBeat < active[r].start + active[r].duration) active[w++] = active[r];
-      }
-      active.length = w;
-    }
-    if (active.length === 0) {
-      f0Array[i] = 0;
-      continue;
-    }
-    // 统一求值（手动 > 自动 > 音符音高）+ 颤音叠加
-    let pitch = resolver.pitchAt(frameBeat);
-    const note = _findActiveNoteAtTime(frameBeat);
-    if (note && note.vibrato && note.vibrato.enabled) {
-      if (pitch === null) pitch = note.pitch;
-      pitch += computeVibratoOffset(note, frameBeat);
-    } else if (pitch === null) {
-      pitch = note ? note.pitch : null;
-    }
-    if (pitch !== null && pitch > 0) {
-      f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
-    } else {
-      f0Array[i] = 0;
-    }
-  }
-
-  if (smoothingActive && totalFrames > 0) {
-    const params = buildF0ParamArrays(totalFrames, bpm, getSampleRate(), hopSize);
-    // 重合处理：auto 接管换音过渡时把 f0Glide 置零（与主窗口同一策略）
-    applyGlideOwnership(params, autoOn ? pcNorm.auto : null);
-    if (params.active) {
-      f0Array = applyF0Postprocess(f0Array, params, {
-        sampleRate: getSampleRate(),
-        hopSize,
-      });
-    }
-  }
-
-  // 自动表达后置（与主窗口 f0Utils 同一策略）：抖动 + 颤音放在滤波之后
-  if (autoOn && f0Array.length > 0) {
-    f0Array = applyExpressionToF0(f0Array, {
-      sortedNotes,
-      auto: pcNorm.auto,
-      bpm,
-      ranges: resolvePitchRanges(sortedNotes),
-      seedSalt,
-    }, { sampleRate: getSampleRate(), hopSize }, { jitter: jitterPost, vibrato: true });
-  }
-
-  return f0Array;
+  // 逐帧求值统一走 shared/pitchCurveEval（与主窗口 buildFragmentPitchCurveF0
+  // 同一个真源）：曲线层 → 手动颤音 → 后处理 → 后置抖动/自动颤音，音符外 0。
+  return evaluatePitchCurveFrames({
+    pitchCurve: pcNorm,
+    notes: clippedNotes,
+    bpm,
+    postprocess: smoothingActive ? getPostprocess() : null,
+    seedSalt: saltFromKey(currentFragment ? (currentFragment.id !== undefined
+      ? currentFragment.id : currentFragment.singerId) : 0),
+    sampleRate: getSampleRate(),
+    hopSize: 480,
+    durationBeats: currentFragment ? currentFragment.duration : Infinity,
+  });
 }
 
 export function midiToNoteName(midi) {

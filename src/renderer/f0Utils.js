@@ -1,24 +1,14 @@
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
-import { buildF0PostprocessParams, hasF0PostprocessEffect, applyGlideOwnership } from '../shared/postprocessCurves.js';
-import { applyF0Postprocess, medianFilterFrames, savitzkyGolayFilter } from '../fragmentEditor/f0Smoothing.js';
-// 锚点"强度 / 平滑"的唯一数学真源。强度/平滑的求值现在统一走
-// shared/autoPitchCurve.createPitchResolver（主窗口与分片编辑器共用），
-// 这里保留 autoCurve 的 import 仅供 @internal 的 computePitchCurveF0 使用。
-import { buildEffectiveValues, evalSortedCurve } from '../fragmentEditor/automationCurve.js';
+import { hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
+import { medianFilterFrames, savitzkyGolayFilter } from '../fragmentEditor/f0Smoothing.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import { fragmentPitchMode, PITCH_MODE_SCORE } from '../shared/pitchControl.js';
-import {
-  createPitchResolver,
-  applyExpressionToF0,
-  resolvePitchRanges,
-  saltFromKey,
-} from '../shared/autoPitchCurve.js';
-import { lastNoteEnd } from '../shared/activeNotes.js';
+import { saltFromKey } from '../shared/autoPitchCurve.js';
+import { evaluatePitchCurveFrames } from '../shared/pitchCurveEval.js';
 
-// 复用分片编辑器 buildPitchCurveF0Data + getPitchAtTime + generateAutoPitchPoints 的逻辑，
-// 但接受 fragment 参数（不依赖分片编辑器全局 state）。
 // 主页面逐 fragment 合成时调用，确保与分片编辑器播放的 f0 轨迹完全一致：
-// 锚点求值（强度 / 平滑）直接走 shared 真源 automationCurve.js，不再本地复刻。
+// 逐帧求值统一走 shared/pitchCurveEval.evaluatePitchCurveFrames（唯一真源），
+// 这里只负责"该不该产出曲线"的门控与 fragment 参数适配。
 export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   if (!fragment || !fragment.pitchCurve) return null;
   // 归一化兜底：旧工程没有 auto/bakedSegments 字段时补默认（auto 关闭），
@@ -30,13 +20,10 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   // "编辑器里听着是 Score、主页播放却按平直曲线唱"。
   if (fragmentPitchMode(fragment, hasF0PostprocessEffect) === PITCH_MODE_SCORE) return null;
 
-  const sortedNotes = clippedNotes
-    .slice()
-    .sort((a, b) => a.start - b.start || b.duration - a.duration);
   const hasManual = pc.anchorPoints.length > 0
     || pc.brushSegments.length > 0
     || (pc.bakedSegments && pc.bakedSegments.length > 0);
-  const hasVibrato = sortedNotes.some((n) => n.vibrato && n.vibrato.enabled);
+  const hasVibrato = clippedNotes.some((n) => n.vibrato && n.vibrato.enabled);
   // F0 后处理（中值 / Savitzky-Golay / 贝塞尔过渡）即使没有手绘音高曲线也必须生效，
   // 否则用户在"音色"lane 里开的平滑只对改过音高的分片有效（与分片编辑器一致）。
   const ppActive = hasF0PostprocessEffect(fragment.postprocess || null);
@@ -44,212 +31,17 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   const autoOn = !!(pc.auto && pc.auto.enabled);
   if (!hasManual && !hasVibrato && !ppActive && !autoOn) return null;
 
-  const fragDuration = fragment.duration || Infinity;
-  // F2：总时长取 max(start+duration)，不取数组末元素
-  const totalBeats = Math.min(lastNoteEnd(sortedNotes), fragDuration);
-  const totalSeconds = (totalBeats / bpm) * 60;
-  const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / SVS_HOP_SIZE);
-
-  const ranges = resolvePitchRanges(sortedNotes);
-  // 轨道 salt：多轨同度叠唱时抖动/颤音相位必须互不相同，否则"一起抖"比不抖更假
-  const seedSalt = saltFromKey(fragment.id !== undefined ? fragment.id : fragment.singerId);
-  // jitterStage='post'：曲线层不含抖动，改在后处理之后叠加（避免被平滑削掉）；
-  // 自动颤音同理（§6.3）——曲线层不含，后处理之后统一叠加，深度不被 SG 削弱。
-  const jitterPost = autoOn && pc.auto.params.jitterStage === 'post';
-  const resolver = createPitchResolver({
+  return evaluatePitchCurveFrames({
     pitchCurve: pc,
-    auto: pc.auto,
-    sortedNotes,
+    notes: clippedNotes,
     bpm,
-    ranges,
-    seedSalt,
-    includeJitter: !jitterPost,
-    includeVibrato: false,
+    postprocess: ppActive ? (fragment.postprocess || null) : null,
+    // 轨道 salt：多轨同度叠唱时抖动/颤音相位必须互不相同，否则"一起抖"比不抖更假
+    seedSalt: saltFromKey(fragment.id !== undefined ? fragment.id : fragment.singerId),
+    sampleRate: SAMPLE_RATE,
+    hopSize: SVS_HOP_SIZE,
+    durationBeats: fragment.duration || Infinity,
   });
-
-  const f0Array = new Float32Array(totalFrames);
-  for (let i = 0; i < totalFrames; i++) {
-    const frameTimeSec = (i * SVS_HOP_SIZE) / SAMPLE_RATE;
-    const frameBeat = (frameTimeSec / 60) * bpm;
-    const note = _findNoteAtBeat(sortedNotes, frameBeat);
-    if (!note) {
-      f0Array[i] = 0;
-      continue;
-    }
-    // 统一求值：手动（作用域内）> 自动 > note.pitch 回退。
-    // 与分片编辑器 canvasRenderer.getPitchAtTime 走同一个 resolver。
-    let pitch = resolver.pitchAt(frameBeat);
-    if (pitch === null) pitch = note.pitch;
-    if (note.vibrato && note.vibrato.enabled) {
-      pitch += _computeVibratoOffset(note, frameBeat, bpm);
-    }
-    if (pitch !== null && pitch > 0) {
-      f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
-    } else {
-      f0Array[i] = 0;
-    }
-  }
-
-  // F0 后处理：与分片编辑器 buildPitchCurveF0Data 相同的三步链（中值→SG→贝塞尔）
-  let out = f0Array;
-  if (ppActive && totalFrames > 0) {
-    const params = buildF0PostprocessParams(fragment.postprocess || null, totalFrames, bpm, SAMPLE_RATE, SVS_HOP_SIZE);
-    // 重合处理：auto 接管换音过渡时把 f0Glide 置零，避免双重过冲
-    applyGlideOwnership(params, autoOn ? pc.auto : null);
-    if (params.active) {
-      out = applyF0Postprocess(out, params, { sampleRate: SAMPLE_RATE, hopSize: SVS_HOP_SIZE });
-    }
-  }
-
-  // 自动表达后置：抖动（jitterStage='post'）与自动颤音都在中值/SG/贝塞尔之后
-  // 叠加，避免被削掉（实测 SG 会把抖动削到 51%、5.5Hz 颤音削到 94%）。
-  if (autoOn && out.length > 0) {
-    out = applyExpressionToF0(out, {
-      sortedNotes, auto: pc.auto, bpm, ranges, seedSalt,
-    }, {
-      sampleRate: SAMPLE_RATE,
-      hopSize: SVS_HOP_SIZE,
-    }, { jitter: jitterPost, vibrato: true });
-  }
-  return out;
-}
-
-function _findNoteAtBeat(notes, beat) {
-  let lo = 0;
-  let hi = notes.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
-    const note = notes[mid];
-    if (beat < note.start) hi = mid - 1;
-    else if (beat >= note.start + note.duration) lo = mid + 1;
-    else return note;
-  }
-  return null;
-}
-
-function _computeVibratoOffset(note, beat, bpm) {
-  const v = note.vibrato;
-  if (!v || !v.enabled || note.duration <= 0) return 0;
-  const start = note.start + v.start * note.duration;
-  const length = v.length * note.duration;
-  if (length <= 0 || beat < start || beat > start + length) return 0;
-  const pos = (beat - start) / length;
-  const env = v.fadeIn > 0 && pos < v.fadeIn ? pos / v.fadeIn : 1;
-  const seconds = ((beat - start) / bpm) * 60;
-  return (v.depth / 100) * Math.sin(2 * Math.PI * v.rate * seconds) * env;
-}
-
-/**
- * @internal 仅由 test/rendererPostprocessParity.test.js 引用（同源复刻守护），
- * 生产代码请用 buildFragmentPitchCurveF0。
- */
-export function computePitchCurveF0(singerFragments, allNotes, bpm) {
-  const pitchCurveFrags = singerFragments.filter(f => f.pitchCurve && f.pitchCurve.enabled &&
-    (f.pitchCurve.anchorPoints.length > 0 || f.pitchCurve.brushSegments.length > 0));
-
-  if (pitchCurveFrags.length === 0) return null;
-  if (allNotes.length === 0) return null;
-
-  const lastNote = allNotes[allNotes.length - 1];
-  const totalBeatsAll = lastNote.start + lastNote.duration;
-  const totalSecondsAll = (totalBeatsAll / bpm) * 60;
-  const totalFrames = Math.floor(totalSecondsAll * SAMPLE_RATE / SVS_HOP_SIZE);
-  const f0Arr = new Float32Array(totalFrames);
-
-  // 每个分片缓存"已排序锚点 + 强度生效后数值"（与 buildFragmentPitchCurveF0 一致，
-  // 真源同为 automationCurve.buildEffectiveValues）——强度 < 100 的锚点在此被拉向
-  // 前后邻居连线，主窗口路径与分片编辑器逐位一致。
-  const sortedAnchorsCache = new Map();
-  for (const frag of pitchCurveFrags) {
-    const pc = frag.pitchCurve;
-    if (pc.anchorPoints.length > 0 && !sortedAnchorsCache.has(frag.id)) {
-      const sorted = [...pc.anchorPoints].sort((a, b) => a.time - b.time);
-      sortedAnchorsCache.set(frag.id, { sorted, eff: buildEffectiveValues(sorted, 'pitch') });
-    }
-  }
-
-  // Pre-compute fragment frame ranges
-  const fragFrameRanges = [];
-  for (const frag of pitchCurveFrags) {
-    const fragStartBeat = frag.startTime || 0;
-    const fragEndBeat = fragStartBeat + (frag.duration || 0);
-    const fragStartSec = (fragStartBeat / bpm) * 60;
-    const fragEndSec = (fragEndBeat / bpm) * 60;
-    const startFrame = Math.floor(fragStartSec * SAMPLE_RATE / SVS_HOP_SIZE);
-    const endFrame = frag.duration ? Math.floor(fragEndSec * SAMPLE_RATE / SVS_HOP_SIZE) : totalFrames;
-    fragFrameRanges.push({ frag, startFrame, endFrame });
-  }
-
-  // Pre-sort notes by start beat for binary search
-  const sortedNotes = allNotes.slice().sort((a, b) => a.start - b.start);
-
-  for (let i = 0; i < totalFrames; i++) {
-    const frameTimeSec = (i * SVS_HOP_SIZE) / SAMPLE_RATE;
-    const frameBeat = (frameTimeSec / 60) * bpm;
-    let pitch = null;
-
-    for (const { frag, startFrame, endFrame } of fragFrameRanges) {
-      if (i < startFrame || i >= endFrame) continue;
-
-      const pc = frag.pitchCurve;
-      const fragStartBeat = frag.startTime || 0;
-      const localBeat = frameBeat - fragStartBeat;
-
-      if (pitch === null && pc.anchorPoints.length > 0) {
-        const { sorted, eff } = sortedAnchorsCache.get(frag.id);
-        if (localBeat < sorted[0].time || localBeat > sorted[sorted.length - 1].time) {
-          // outside anchor range, skip
-        } else {
-          // 强度 + 平滑统一走 shared 真源（与分片编辑器 getPitchAtTime 同函数）
-          const v = evalSortedCurve(sorted, eff, localBeat);
-          if (v !== null && Number.isFinite(v)) pitch = v;
-        }
-      }
-
-      if (pitch === null) {
-        for (const seg of pc.brushSegments) {
-          if (seg.points.length >= 2 && localBeat >= seg.points[0].time && localBeat <= seg.points[seg.points.length - 1].time) {
-            for (let j = 0; j < seg.points.length - 1; j++) {
-              if (localBeat >= seg.points[j].time && localBeat <= seg.points[j + 1].time) {
-                const t = (seg.points[j + 1].time - seg.points[j].time) > 0
-                  ? (localBeat - seg.points[j].time) / (seg.points[j + 1].time - seg.points[j].time) : 0;
-                pitch = seg.points[j].pitch + t * (seg.points[j + 1].pitch - seg.points[j].pitch);
-                break;
-              }
-            }
-            break;
-          }
-        }
-      }
-
-      if (pitch !== null) break;
-    }
-
-    if (pitch === null) {
-      // Binary search in sorted notes
-      let lo = 0, hi = sortedNotes.length - 1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        const note = sortedNotes[mid];
-        if (frameBeat >= note.start && frameBeat < note.start + note.duration) {
-          pitch = note.pitch;
-          break;
-        }
-        if (note.start + note.duration <= frameBeat) {
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
-      }
-    }
-
-    if (pitch !== null && pitch > 0) {
-      f0Arr[i] = 440 * Math.pow(2, (pitch - 69) / 12);
-    } else {
-      f0Arr[i] = 0;
-    }
-  }
-  return Array.from(f0Arr);
 }
 
 /**
