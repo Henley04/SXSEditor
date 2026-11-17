@@ -732,6 +732,20 @@ const SCENARIOS = [
     regions: [{ startSec: 0, endSec: 60, chunkSec: 10, overlapSec: 1, inferSec: 20 }],
   },
   {
+    name: 'K-EXTREME 长分片60s,推理3x,控制延迟300ms(GPU争用)',
+    mode: 'single', controlDelayMs: 300,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 62, playFromSec: 0,
+    startupSec: 1.2, totalWallSec: 175,
+    regions: [{ startSec: 0, endSec: 60, chunkSec: 10, overlapSec: 1, inferSec: 20 }],
+  },
+  {
+    name: 'K-EXT2 长分片60s,推理3x,控制延迟500ms(极端)',
+    mode: 'single', controlDelayMs: 500,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 62, playFromSec: 0,
+    startupSec: 1.2, totalWallSec: 175,
+    regions: [{ startSec: 0, endSec: 60, chunkSec: 10, overlapSec: 1, inferSec: 20 }],
+  },
+  {
     name: 'H 流式中点停止 → 重播',
     mode: 'single',
     bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 22, playFromSec: 0,
