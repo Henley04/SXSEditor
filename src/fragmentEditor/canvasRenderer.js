@@ -78,6 +78,7 @@ import {
   getSelectedTimbreAnchors,
   getTimbreDragAnchorIdx,
   getAnchorDragHud,
+  getTimbreVersion,
 } from './state.js';
 import { buildEffectiveValues, evalSortedCurve, buildPitchCurveSampleTimes } from './automationCurve.js';
 import { collectCurves, sampleCurve, applyCurveSpec } from '../shared/pluginCurve.js';
@@ -2285,6 +2286,40 @@ function _getPitchCurveSampleTimes(startBeat, endBeat, w, pitchCurve) {
   return times;
 }
 
+// ---- 实际 F0 叠画（阶段 3）----
+// 主曲线仍按锚点求值（编辑语义），这里叠一条"模型真正收到的 F0"：
+// 统一求值入口 buildPitchCurveF0Data（含后处理 / 抖动 / 自动颤音）的逐帧
+// 结果 Hz → MIDI 半音，细半透明线。渲染循环只画缓存数组，绝不逐帧求值。
+// 缓存键 = pitchCurveVersion | notesVersion | bpm | timbreVersion(后处理)
+//          | sampleRate | fragment(id:duration)。任何输入变化都会失效。
+let _actualF0OverlayCache = null;
+let _actualF0DiffCents = 0;
+
+/** "仅显示与主曲线差异 > X 音分"开关：0 / 非正数 / 非有限值 = 显示全部。 */
+export function setActualF0DiffThreshold(cents) {
+  _actualF0DiffCents = Number.isFinite(cents) && cents > 0 ? cents : 0;
+}
+
+/** 取实际 F0 叠画缓存（导出供测试）：{ key, midi, beatPerFrame }，midi=null 表示无曲线。 */
+export function getActualF0Overlay() {
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const frag = getCurrentFragment();
+  const sampleRate = getSampleRate();
+  const key = `${getPitchCurveVersion()}|${getNotesVersion()}|${bpm}|${getTimbreVersion()}|${sampleRate}|${frag ? `${frag.id}:${frag.duration}` : ''}`;
+  if (_actualF0OverlayCache && _actualF0OverlayCache.key === key) return _actualF0OverlayCache;
+  const hzFrames = buildPitchCurveF0Data();
+  let midi = null;
+  if (hzFrames && hzFrames.length > 0) {
+    midi = new Float32Array(hzFrames.length);
+    for (let i = 0; i < hzFrames.length; i++) {
+      midi[i] = hzFrames[i] > 0 ? 69 + 12 * Math.log2(hzFrames[i] / 440) : 0;
+    }
+  }
+  const beatPerFrame = (480 / sampleRate) / (60 / bpm);
+  _actualF0OverlayCache = { key, midi, beatPerFrame };
+  return _actualF0OverlayCache;
+}
+
 function renderPitchCurve(c) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return;
@@ -2428,10 +2463,44 @@ function renderPitchCurve(c) {
     ctx.restore();
   }
 
+  /**
+   * 实际 F0 叠画：统一求值入口的逐帧结果（含后处理/抖动/颤音），细半透明线。
+   * 只画缓存数组；音符外（F0=0）断线不画，与"模型收到静音"一致。
+   * _actualF0DiffCents > 0 时仅画与主曲线差异超过阈值的帧段。
+   */
+  function drawActualF0Overlay() {
+    const ov = getActualF0Overlay();
+    if (!ov.midi) return;
+    const { midi, beatPerFrame } = ov;
+    const i0 = Math.max(0, Math.floor((startBeat - 1) / beatPerFrame));
+    const i1 = Math.min(midi.length - 1, Math.ceil((endBeat + 1) / beatPerFrame));
+    ctx.save();
+    ctx.strokeStyle = c.pitchActualF0 || 'rgba(255, 183, 77, 0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let drawing = false;
+    for (let i = i0; i <= i1; i++) {
+      const m = midi[i];
+      if (!(m > 0)) { drawing = false; continue; }
+      const beat = i * beatPerFrame;
+      if (_actualF0DiffCents > 0) {
+        const main = getPitchAtTime(beat);
+        if (main === null || Math.abs(m - main) * 100 <= _actualF0DiffCents) { drawing = false; continue; }
+      }
+      const px = timeToX(beat);
+      const py = pitchToY(m);
+      if (!drawing) { ctx.moveTo(px, py); drawing = true; }
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   if (!hasCustom) {
     // 没有手动内容时：自动层就是唯一曲线，直接画真实曲线；auto 关闭则保留旧虚线
     if (autoOn) drawAutoCurve();
     else drawAutoPoints(c.pitchAutoPoint, 2, [6, 4]);
+    drawActualF0Overlay();
 
     for (const note of notes) {
       const startX = timeToX(note.start);
@@ -2468,6 +2537,7 @@ function renderPitchCurve(c) {
   // 有手动内容时：先画自动层（灰/白），再由手动曲线与锚点覆盖其上
   if (autoOn) drawAutoCurve();
   else drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
+  drawActualF0Overlay();
 
   // autoPoints 现在只在 note 起始/末端有拟合点（breakAfter 阻止 note 内部插值），
   // drawAutoPoints 仅做 moveTo 不会画出线段，这里补画拟合点小圆点保持视觉参考。
@@ -2500,7 +2570,12 @@ function renderPitchCurve(c) {
     for (let i = 0; i < ts.length; i++) {
       const t = ts[i];
       const pitch = getPitchAtTime(t);
-      if (pitch === null) continue;
+      // 音符外不画（与 F0=0 一致）：锚点曲线会在音符空隙内外推插值，
+      // 必须按音符覆盖断开路径，不能把空隙两侧连成直线。
+      if (pitch === null || !_findActiveNoteAtTime(t)) {
+        if (!first) { ctx.stroke(); ctx.beginPath(); first = true; }
+        continue;
+      }
       const px = timeToX(t);
       const py = pitchToY(pitch);
       if (first) { ctx.moveTo(px, py); first = false; }

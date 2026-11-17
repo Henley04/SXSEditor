@@ -133,6 +133,8 @@ export function getCanvasColors() {
         pitchAutoActive:   v('--pitch-auto-active')   || (isLightBg ? '#1f2937' : '#ffffff'),
         pitchAutoMuted:    v('--pitch-auto-muted')    || (isLightBg ? 'rgba(107, 114, 128, 0.55)' : 'rgba(170, 178, 194, 0.55)'),
         pitchManualRegion: v('--pitch-manual-region') || 'rgba(91, 141, 239, 0.07)',
+        // 实际 F0 叠画（统一求值入口的逐帧结果，含后处理/抖动/颤音）：细半透明线
+        pitchActualF0:     v('--pitch-actual-f0')     || (isLightBg ? 'rgba(217, 119, 6, 0.55)' : 'rgba(255, 183, 77, 0.55)'),
 
         // Envelope / parameter lines
         paramVol:       v('--accent')          || '#5b8def',
