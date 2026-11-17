@@ -1487,6 +1487,8 @@ export default {
     platform: 'Platform',
     notSupported: 'Not supported on this platform',
     detecting: 'Detecting…',
+    // Probing animation: dialog cycles ... / .. / . every 320ms; plainText snapshot keeps the stable detecting wording
+    probeFrame: 'Probing ({dots})',
     timeout: 'Timed out',
     unknown: 'Unknown',
     none: 'None',

@@ -1490,6 +1490,8 @@ export default {
     platform: '平台',
     notSupported: '当前平台不支持',
     detecting: '检测中…',
+    // 探测中动画：弹层每 320ms 在 ... / .. / . 之间切换；plainText 快照仍用 detecting 的稳定文案
+    probeFrame: '探测中（{dots}）',
     timeout: '检测超时',
     unknown: '未知',
     none: '无',

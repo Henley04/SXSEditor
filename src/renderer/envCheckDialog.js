@@ -17,6 +17,11 @@ import {
   GPU_POLL_DEADLINE_MS,
 } from './envCheckFormat.js';
 
+// 「探测中（...）（..）（.）」省略号动画的三帧。只作用于 DOM，不进 plainText，
+// 所以复制出来的报告始终是稳定的 `detecting` 文案，不会抓到某个中间帧。
+const PROBE_FRAMES = ['...', '..', '.'];
+const PROBE_TICK_MS = 400;
+
 async function copyText(text, textarea) {
   try {
     if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
@@ -149,6 +154,46 @@ export async function showEnvCheckDialog() {
   let gpuTimedOut = false;
   let pollTimer = null;
   let restoreTimer = null;
+  let probeTimer = null;
+  let probeFrame = 0;
+
+  /** 探测中文案：带省略号动画，仅用于 DOM 展示，绝不写入 plainText。 */
+  const probeLabel = () => t('envCheck.probeFrame', { dots: PROBE_FRAMES[probeFrame] });
+
+  /**
+   * 启动/停止省略号动画。所有处于等待态的 value 节点共用一个定时器：每次 tick
+   * 只更新带 `data-probe` 标记的节点，不整表重绘，避免滚动位置跳动。
+   */
+  const syncProbeAnimation = () => {
+    const nodes = body.querySelectorAll('[data-probe]');
+    if (nodes.length === 0 || disposed) {
+      if (probeTimer) {
+        clearInterval(probeTimer);
+        probeTimer = null;
+      }
+      return;
+    }
+    if (probeTimer) return;
+    probeTimer = setInterval(() => {
+      if (disposed) {
+        clearInterval(probeTimer);
+        probeTimer = null;
+        return;
+      }
+      probeFrame = (probeFrame + 1) % PROBE_FRAMES.length;
+      const label = probeLabel();
+      body.querySelectorAll('[data-probe]').forEach((node) => {
+        node.textContent = label;
+      });
+    }, PROBE_TICK_MS);
+  };
+
+  /** 生成一个等待态 value 节点：初值即动画文案，并打标记交给 syncProbeAnimation。 */
+  const probeNode = () => {
+    const node = el('span', null, probeLabel());
+    node.setAttribute('data-probe', '1');
+    return node;
+  };
 
   const render = () => {
     if (disposed) return;
@@ -156,7 +201,8 @@ export async function showEnvCheckDialog() {
     body.textContent = '';
 
     if (!report) {
-      body.appendChild(el('div', null, t('envCheck.loading')));
+      body.appendChild(probeNode());
+      syncProbeAnimation();
       return;
     }
 
@@ -183,7 +229,10 @@ export async function showEnvCheckDialog() {
         const label = el('span', null, row.label);
         label.style.cssText = 'flex: 0 0 120px; color: var(--fg-muted);';
 
-        const value = el('span', null, row.value);
+        // 只有「检测中…」是进行态，用省略号动画节点；「检测超时」是终态，
+        // 保持静态文案。plainText 始终取 row.value，不受动画帧影响。
+        const pending = row.value === t('envCheck.detecting');
+        const value = pending ? probeNode() : el('span', null, row.value);
         value.style.cssText = 'flex: 1 1 auto; color: var(--fg-primary); word-break: break-word;';
 
         line.appendChild(label);
@@ -197,6 +246,7 @@ export async function showEnvCheckDialog() {
     previewArea.value = view.plainText;
     copyBtn.disabled = false;
     copyBtn.style.opacity = '1';
+    syncProbeAnimation();
   };
 
   const api = typeof window !== 'undefined' ? window.electronAPI : null;
@@ -266,6 +316,10 @@ export async function showEnvCheckDialog() {
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+    if (probeTimer) {
+      clearInterval(probeTimer);
+      probeTimer = null;
     }
     if (restoreTimer) {
       clearTimeout(restoreTimer);

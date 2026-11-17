@@ -69,10 +69,35 @@ const WINDOWS_11_MIN_BUILD = 22000;
 /** 单项探测的硬超时：EP 枚举在冷启动时会扫 catalog + 注册 DLL，可能很久。 */
 const PROBE_TIMEOUT_MS = 4000;
 
-/** require 失败一律当作「该能力不可用」，不让环境检测因为某个模块缺依赖而整体崩掉。 */
+/**
+ * 可选模块的加载器表（字面量 require）。
+ *
+ * 绝对不能写回 `require(variablePath)`：webpack 对变量 require 会生成一个
+ * 空的 sync context（见 `.webpack/main/index.js` 里的 webpackEmptyContext），
+ * 打包后**任何 key 都抛 MODULE_NOT_FOUND**。envCheck 里的 `./settings` /
+ * `./gpuInfo` / `../inference/winml/winmlProvider` 于是全部静默返回 null —— 
+ * 表现就是「设置里明明开了 WinML，环境检测却永远显示未启用」「GPU fast
+ * 阶段已经探到 2 个设备，报告里却永远是空」。这条坑与 Q-Drift 的
+ * CORRECTION_LOADERS 同源：动态 require 在 webpack 里会被静默丢弃。
+ *
+ * 用字面量 require 的函数表，webpack 才能静态收集依赖；每个 loader 仍是惰性
+ * 调用，require 失败继续当作「该能力不可用」，不让环境检测整体崩掉。
+ * 新增可选依赖时在这里登记一个字面量 loader，不要引入变量 require。
+ */
+const OPTIONAL_LOADERS = {
+    './settings': () => require('./settings'),
+    './ipcSafe': () => require('./ipcSafe'),
+    './gpuInfo': () => require('./gpuInfo'),
+    '../inference/winml/winmlCatalog': () => require('../inference/winml/winmlCatalog'),
+    '../inference/winml/winmlProvider': () => require('../inference/winml/winmlProvider'),
+    '../inference/winml/ortBridge': () => require('../inference/winml/ortBridge'),
+};
+
 function _tryRequire(rel) {
+    const load = OPTIONAL_LOADERS[rel];
+    if (typeof load !== 'function') return null;
     try {
-        return require(rel);
+        return load();
     } catch (_e) {
         return null;
     }

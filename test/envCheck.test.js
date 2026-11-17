@@ -113,7 +113,7 @@ describe('帮助 → 环境检测', () => {
         'gpu', 'gpuModel', 'gpuIndexed', 'gpuStatus', 'vram', 'vramUsage', 'vramUsageValue', 'driverVersion',
         'winml', 'winmlReasonLabel', 'winmlProviders', 'npu', 'backend',
         'appVersion', 'electronVersion', 'nodeVersion', 'platform',
-        'notSupported', 'detecting', 'timeout', 'unknown', 'none',
+        'notSupported', 'detecting', 'probeFrame', 'timeout', 'unknown', 'none',
         'deviceDiscrete', 'deviceIntegrated', 'deviceNpu', 'deviceCpu', 'deviceUnknown',
         'providerReady', 'providerOnDemand', 'providerDevices',
       ];
@@ -190,6 +190,34 @@ describe('帮助 → 环境检测', () => {
 
     it('isWinmlEnabled 与 gate.enabled 等价（行为未因重构漂移）', () => {
       expect(isWinmlEnabled()).to.equal(getWinmlGate().enabled);
+    });
+  });
+
+  describe('可选模块加载（webpack 打包约束）', () => {
+    it('envCheckInfo 的可选 require 必须是字面量映射，禁止 require(变量)', () => {
+      // 变量 require 在 webpack 里会编译成空的 sync context，打包后所有 key
+      // 都 MODULE_NOT_FOUND —— 曾导致「WinML 恒显示未启用 + GPU 永远空白」。
+      // 与 Q-Drift 的 CORRECTION_LOADERS 同一条硬约定。
+      const src = read('src/main/envCheckInfo.js');
+      const block = src.match(/const OPTIONAL_LOADERS = \{[\s\S]*?\n\};/);
+      expect(block, 'OPTIONAL_LOADERS 应存在').to.not.equal(null);
+      const body = block[0];
+      // 关键依赖逐个在表里，且都是字面量
+      for (const lit of [
+        "require('./settings')",
+        "require('./gpuInfo')",
+        "require('../inference/winml/winmlProvider')",
+        "require('../inference/winml/winmlCatalog')",
+        "require('../inference/winml/ortBridge')",
+        "require('./ipcSafe')",
+      ]) {
+        expect(body, `缺少字面量 ${lit}`).to.include(lit);
+      }
+      expect(body).to.not.match(/require\(\s*[A-Za-z_$]/);
+      // _tryRequire 只能查表，不能再出现 require(rel) 这种动态形式
+      const tryRequire = src.match(/function _tryRequire\(rel\) \{[\s\S]*?\n\}/);
+      expect(tryRequire, '_tryRequire 应存在').to.not.equal(null);
+      expect(tryRequire[0]).to.not.match(/require\(\s*rel\s*\)/);
     });
   });
 
@@ -605,6 +633,49 @@ describe('帮助 → 环境检测', () => {
 
       const body = document.querySelector('[data-testid="env-check-body"]');
       expect(body.textContent).to.equal(t('envCheck.loadFailed'));
+    });
+
+    it('等待态显示「探测中（...）」省略号动画，且动画帧不进 plainText', async () => {
+      // GPU 仍在 fast/none 阶段 → 显存行是进行态，应挂 data-probe 并滚动省略号。
+      const pendingReport = envCheckInfo.getEnvReport({
+        platform: 'win32', arch: 'x64', release: '10.0.26320',
+        settings: WIN_SETTINGS, now: 1731670000000,
+        gpuSnapshot: { phase: 'none', controllers: [] },
+        npuSnapshot: NPU_SNAPSHOT_EMPTY,
+      });
+      window.electronAPI = {
+        envCheckGetReport: async () => pendingReport,
+        // probes 永不返回：让「执行提供者」行也保持进行态
+        envCheckGetProbes: () => new Promise(() => {}),
+      };
+
+      const clock = sinon.useFakeTimers();
+      try {
+        const mod = await import('../src/renderer/envCheckDialog.js');
+        close = await mod.showEnvCheckDialog();
+
+        const probes = document.querySelectorAll('[data-probe]');
+        expect(probes.length).to.be.above(0);
+        expect(probes[0].textContent).to.equal(t('envCheck.probeFrame', { dots: '...' }));
+
+        clock.tick(400);
+        expect(document.querySelector('[data-probe]').textContent)
+          .to.equal(t('envCheck.probeFrame', { dots: '..' }));
+        clock.tick(400);
+        expect(document.querySelector('[data-probe]').textContent)
+          .to.equal(t('envCheck.probeFrame', { dots: '.' }));
+        clock.tick(400);
+        expect(document.querySelector('[data-probe]').textContent)
+          .to.equal(t('envCheck.probeFrame', { dots: '...' }));
+
+        // 复制的纯文本不含任何动画帧，始终是稳定的 detecting 文案
+        expect(document.querySelector('[data-testid="env-check-preview"]').value)
+          .to.include(t('envCheck.detecting'));
+        expect(document.querySelector('[data-testid="env-check-preview"]').value)
+          .to.not.include('探测中');
+      } finally {
+        clock.restore();
+      }
     });
   });
 });
