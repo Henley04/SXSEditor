@@ -295,7 +295,15 @@ describe('分片编辑器流式播放（underrun 恢复 / 取消推理）', () =
     ctx.t = 14.2;
     await sleep(150);
     expect(ctx.state, '到达缓冲前沿后应冻结 context').to.equal('suspended');
-    expect(state.getFragmentPlayheadRaf(), '冻结期间播放头 rAF 应已取消').to.equal(null);
+
+    // 旧断言是「冻结期间 rAF 应已取消」——那是实现细节，不是要保的性质。
+    // suspend 是异步控制消息：落地之前音频照常出声，此刻掐掉循环会让播放头
+    // 比声音早停一段控制延迟（极端负载实测 0.3–0.5s），正是"播放头卡住 +
+    // 声画错位"。现在循环保持存活，要保的性质改为：时钟冻结 ⇒ 播放头原地不动。
+    const headAtFreeze = state.getFragmentCurrentTime();
+    await sleep(120);
+    expect(state.getFragmentCurrentTime(), '时钟冻结期间播放头必须原地停住（不得冲进静音区）')
+      .to.equal(headAtFreeze);
 
     // 这一段就是最后一个 chunk：不会再有回调来解冻，只能靠 setInferenceDone
     resolveSynth(new Float32Array(14 * SAMPLE_RATE));

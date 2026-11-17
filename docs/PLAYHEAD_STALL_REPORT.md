@@ -156,3 +156,66 @@ SIM_DEBUG=1 node scripts/sim_fragment_playback.js K-EXT2   # 逐事件时序
 1. 暴露一个隐藏开关（如 `SXSE_DIAG=1`）打印每帧 playhead / audible / 估计延迟 / underrun 次数，便于用户自证。
 2. 扩展虚拟时钟脚本：新增"控制延迟 300/500ms"和"动态输出延迟"场景进 CI 回归，把本次两个 FAIL 场景固化为测试。（**已完成**：`K-EXTREME` / `K-EXT2` 已并入 `scripts/sim_fragment_playback.js`，当前 master 上二者稳定 FAIL，可作为修复验收基准。）
 3. 检测到持续高延迟时，UI 给出"设备繁忙，播放可能不同步"提示，而非静默错位。
+
+## 六、已实施修复（P0 · 问题 2）
+
+实现落在三处，全部由虚拟时钟模拟器验收：
+
+**1. 提前量随实测控制延迟自适应**（`src/shared/streamingScheduler.js`）
+`suspend()` 的 promise 落地时记录"发出 → 真正冻结时钟"的耗时，按 **快升缓降**
+（新观测值立即采信，旧值每次 ×0.9）维护每个 AudioContext 的延迟估计，并暴露
+`requiredUnderrunMarginSec(allowanceSec)`：
+
+```js
+margin = clamp(max(0.3 /*原下限*/, measuredLatency + 检测量化误差), 0, 2.0)
+```
+
+分片编辑器的 rAF 检测原来传 `marginSec = 0`（注释写着"frame-accurate 调用方可传 0"
+—— 这个假设正是被极端负载打破的那一层），现在与 watchdog 一样取自适应提前量。
+延迟估计挂在 ctx 上（WeakMap）而非 scheduler 实例上：它是设备+负载的属性，
+重播不必从零再学一次，换设备则自然作废。
+
+**2. 裁头前必须等时钟真正冻结**（`fragmentEditor/audioPlayback.js`）
+`handleStreamingChunk` 在读 `ctx.currentTime` 算 `lateSec` 之前先
+`await _scheduler.awaitSuspendSettled()`，消除"控制消息在途 → 假迟到"的窗口。
+
+**3. 解冻合并 + 播放头不再提前停住**
+`_resumeContext()` / `_abortContext()` 合并并发 resume（实测每个接缝曾发两次
+`ctx.resume()`）；播放头自愈 resume 增加 `isResuming` 互斥。进入等待时不再
+`cancelAnimationFrame`：控制消息落地前音频仍在放，提前掐掉循环正是"播放头卡住 +
+比声音早停 0.3–0.5s"的来源；现在循环跟着时钟走到真正冻结处自然停住。
+
+### 修复前后（同一模拟器、同一场景表，仅源码不同）
+
+| 场景 | 指标 | 修复前 | 修复后 |
+|---|---|---|---|
+| A–J、K（11 个原场景） | gaps / loss / drift / stalls | 全部 0 | 全部 0（无回归） |
+| K-EXTREME 300ms | 静音缝 | 6 / 0.82s | **0** |
+| | 内容缺失 | 0.82s（每缝 54–242ms） | **0** |
+| | 声画错位 | 0.26s | **0** |
+| K-EXT2 500ms | 静音缝 | 6 / 2.02s | 1 / 0.21s |
+| | 内容缺失 | 2.02s（每缝 270–440ms） | 0.21s（仅首缝） |
+| | 播放头卡住 | 6 次 / 0.35s | **0** |
+| | 声画错位 | 0.26s | **0** |
+| N 负载回落 500→8ms | 内容缺失 | 每缝 0.23–0.27s | 0.21s（仅首缝） |
+| O 病态排队 1200ms | 内容缺失 | ≈0.6–1.0s / 缝（24s 片段丢 3.5s+） | 0.91s（仅首缝） |
+
+### 已知残差（本质限制，非漏修）
+
+**负载变化的第一个接缝**仍会丢"延迟 − 0.3s"那么多：在该次 `suspend()` 落地之前
+无法预知这段延迟，而设备已经在冻结在途的窗口里输出了静音。之后的每个接缝完全
+干净，且估计值跨播放会话保留（场景 L 的重播第二轮零丢失）。要连这一缝也消除，
+只能提高固定下限（代价是每次 underrun 都提前冻结更多），或播放前先做一次
+suspend/resume 探测（代价是启动延迟 ≈ 2× 控制延迟，极端下会接近 1 秒 —— 不建议）。
+
+场景表用 `allowLossSec / allowGapSec` 显式登记了这个残差预算，其余判据保持零容忍。
+
+### 未实施：问题 1（输出延迟锁死）
+
+保持现状，原因是**它无法在当前架构里被验证**：`ctx.outputLatency` 在 Chromium 中
+不反映运行期缓冲堆积，模拟器同样没有任何信号能表示"实际输出延迟变了"——若我在
+模拟器里造一个"真实延迟"再让代码去估计它，那只是在验证自己的假设。P1 需要实机
+数据（`AudioWorklet` 渲染队列深度，或 `source.start(when)` 与 `onended` 的实测偏差）
+才能定标。渲染层（主编辑器）本次也未改动：其播放头循环不在模拟器覆盖范围内，
+不做无法验证的改动。
+

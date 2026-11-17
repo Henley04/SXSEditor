@@ -13,6 +13,23 @@
  * - playbackStartTime adjustment during recovery
  * - UI updates (button text, playhead drawing)
  */
+
+// suspend()/resume() 是异步控制消息：从发出到设备真正冻结时钟之间，渲染时钟照常
+// 前进。提前量必须覆盖这段延迟，否则冻结点落在 buffer 前沿之后，晚到的 chunk 会
+// 被按"迟到量"裁头 —— 每个接缝永久丢掉一段音频（静音缝 + 内容缺失）。
+// 正常机器上这段延迟约 8ms，0.3s 提前量绰绰有余；GPU 被训练/nvcodec 抢占时
+// 实测可达 300–500ms，固定提前量必然失效（见 docs/PLAYHEAD_STALL_REPORT.md）。
+const WATCHDOG_TICK_MS = 250;
+const MAX_UNDERRUN_MARGIN_SEC = 2.0;
+// 观测到新延迟立即采信（快升）；旧延迟按此系数逐次衰减（缓降），
+// 避免一次性尖峰把提前量永久钉死在大值上。
+const SUSPEND_LATENCY_DECAY = 0.9;
+
+// 延迟估计按 AudioContext 归属，而不是按 scheduler 实例：控制消息延迟是"这台
+// 设备的音频栈在当前系统负载下"的属性，与播放会话无关。挂在实例上时每次重播都
+// 要从零学起，第一个接缝必然再丢一次（换设备时 ctx 变化，估计自然作废）。
+const _suspendLatencyByCtx = new WeakMap();
+
 export class StreamingScheduler {
   /**
    * @param {Object} opts
@@ -26,6 +43,8 @@ export class StreamingScheduler {
    *   with a margin >= tick period means the freeze lands BEFORE the frontier: the
    *   next chunk's original schedule time is still in the future at resume, so
    *   playback continues with zero drift and zero overlap.
+   *   This value is the FLOOR of the margin: the effective margin also grows with the
+   *   measured AudioContext.suspend() commit latency (see requiredUnderrunMarginSec).
    * @param {() => number} [opts.getPacingFrontier] - Optional pacing frontier in
    *   seconds (defaults to bufferEndSec). Multi-stream playback (interleaved
    *   fragments/regions) MUST return the MINIMUM delivered end across all active
@@ -55,10 +74,43 @@ export class StreamingScheduler {
     this._waitingForInference = false;
     this._contextSuspended = false;
     this._suspendInFlight = null;
+    this._resumeInFlight = null;
     this._watchdogTimer = null;
   }
 
   get isWaiting() { return this._waitingForInference; }
+
+  /** 已有一次 resume 正在落地（设备尚未真正解冻）——自愈路径据此不要重复发。 */
+  get isResuming() { return !!this._resumeInFlight; }
+
+  /** 当前设备实测的 suspend 控制消息落地延迟（秒）。 */
+  _suspendLatencySec() {
+    const ctx = this._getCtx();
+    return ctx ? (_suspendLatencyByCtx.get(ctx) || 0) : 0;
+  }
+
+  /**
+   * underrun 冻结提前量（秒）。调用方（rAF / watchdog）都应用它，而不是写死常量：
+   * 提前量至少要覆盖 suspend 真正冻结时钟所需的控制消息延迟。
+   *
+   * @param {number} [allowanceSec] - 调用方自身的检测量化误差（rAF 一帧 ≈ 0.017s，
+   *   watchdog 一个 tick = 0.25s）。
+   */
+  requiredUnderrunMarginSec(allowanceSec = 0) {
+    const need = this._suspendLatencySec() + allowanceSec;
+    return Math.min(MAX_UNDERRUN_MARGIN_SEC, Math.max(this._watchdogMarginSec, need));
+  }
+
+  /**
+   * 等 suspend 真正落地（时钟已冻结）。chunk 回调必须在读 ctx.currentTime 计算
+   * 迟到量之前调用它：in-flight 期间时钟仍在走，直接读会把"控制消息还没送到"
+   * 误判成"内容迟到了"，从而裁掉本来没迟的音频头。
+   */
+  async awaitSuspendSettled() {
+    if (this._suspendInFlight) {
+      try { await this._suspendInFlight; } catch (_) {}
+    }
+  }
 
   updateBufferFrontier(endSec) {
     if (endSec > this.bufferEndSec) this.bufferEndSec = endSec;
@@ -158,6 +210,7 @@ export class StreamingScheduler {
     this._waitingForInference = false;
     this._contextSuspended = false;
     this._suspendInFlight = null;
+    this._resumeInFlight = null;
     this._clearWatchdog();
   }
 
@@ -169,11 +222,12 @@ export class StreamingScheduler {
       if (!this._active) { this._watchdogTimer = null; return; }
       try {
         const elapsed = this._getElapsed();
-        this.checkUnderrun(elapsed, undefined, this._watchdogMarginSec);
+        // 提前量含一个 tick 的量化误差：watchdog 看到前沿时播放头已经冲过去了。
+        this.checkUnderrun(elapsed, undefined, this.requiredUnderrunMarginSec(WATCHDOG_TICK_MS / 1000));
       } catch (_) {}
-      this._watchdogTimer = setTimeout(tick, 250);
+      this._watchdogTimer = setTimeout(tick, WATCHDOG_TICK_MS);
     };
-    this._watchdogTimer = setTimeout(tick, 250);
+    this._watchdogTimer = setTimeout(tick, WATCHDOG_TICK_MS);
   }
 
   _clearWatchdog() {
@@ -190,8 +244,15 @@ export class StreamingScheduler {
     this._contextSuspended = true;
     const ctx = this._getCtx();
     if (ctx && ctx.state === 'running') {
+      const t0 = Date.now();
       const p = ctx.suspend().catch(err => {
         console.warn('[StreamingScheduler] Failed to suspend context:', err.message);
+      }).then(() => {
+        // 观测"发出 suspend"到"设备真正冻结时钟"之间的控制消息延迟。
+        // 这段时间里渲染时钟照常前进，正是裁头量下限 —— 必须计入提前量。
+        const sec = Math.max(0, Date.now() - t0) / 1000;
+        const prev = _suspendLatencyByCtx.get(ctx) || 0;
+        _suspendLatencyByCtx.set(ctx, Math.max(sec, prev * SUSPEND_LATENCY_DECAY));
       });
       this._suspendInFlight = p;
       try { await p; } finally {
@@ -201,16 +262,28 @@ export class StreamingScheduler {
   }
 
   async _resumeContext() {
+    // 合并并发的解冻请求：resumeFromWait 与播放头自愈循环可能同一时刻各发一次
+    // resume()，双倍控制消息只会加重排队（极端负载下实测每个接缝出现两次）。
+    if (this._resumeInFlight) {
+      try { await this._resumeInFlight; } catch (_) {}
+      return;
+    }
     if (!this._contextSuspended) return;
     if (this._suspendInFlight) {
       try { await this._suspendInFlight; } catch (_) {}
     }
     this._contextSuspended = false;
     const ctx = this._getCtx();
-    if (ctx && ctx.state === 'suspended') {
-      try { await ctx.resume(); } catch (err) {
-        console.warn('[StreamingScheduler] Failed to resume context:', err.message);
+    const p = (async () => {
+      if (ctx && ctx.state === 'suspended') {
+        try { await ctx.resume(); } catch (err) {
+          console.warn('[StreamingScheduler] Failed to resume context:', err.message);
+        }
       }
+    })();
+    this._resumeInFlight = p;
+    try { await p; } finally {
+      if (this._resumeInFlight === p) this._resumeInFlight = null;
     }
   }
 
@@ -220,6 +293,9 @@ export class StreamingScheduler {
     const inflight = this._suspendInFlight;
     this._suspendInFlight = null;
     if (inflight) { try { await inflight; } catch (_) {} }
+    // 已有 resume 在落地时不要第二次 resume()：等它，效果一样，控制消息少一条。
+    const resuming = this._resumeInFlight;
+    if (resuming) { try { await resuming; } catch (_) {} return; }
     const ctx = this._getCtx();
     if (ctx && ctx.state === 'suspended') {
       try { await ctx.resume(); } catch (_) {}

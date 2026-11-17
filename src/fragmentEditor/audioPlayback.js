@@ -302,10 +302,11 @@ function _createFragmentScheduler() {
     onWaitStateChange: (isWaiting) => {
       if (isWaiting) {
         // 进入等待推理（rAF / watchdog 两条路径统一入口）：
-        // 取消 playhead rAF（恢复时由 chunk 回调重启，避免双循环叠加），
-        // 并在按钮上给出"等待推理"反馈——否则用户只会看到播放头无端冻住。
-        const raf = getFragmentPlayheadRaf();
-        if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+        // 不再取消 playhead rAF，只更新按钮反馈。
+        // suspend 是异步控制消息，落地前音频仍在照常出声（提前量让冻结点落在
+        // buffer 前沿之前），此刻把播放头停在原地会让它比声音早停 0.3–0.5s ——
+        // 正是用户看到的"播放头卡住 + 声画错位"。让循环跟着时钟走到真正冻结的
+        // 那一刻自然停下：时钟不动 ⇒ elapsed 不动 ⇒ 播放头不动。
         const btn = document.getElementById('btn-play-fragment');
         if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
       } else {
@@ -732,14 +733,14 @@ function _checkFragmentStreamingUnderrun() {
   // 同基准用 ctx.currentTime；不要换成可听时间（见 audioOutputClock 使用边界）。
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   const curTime = getFragmentPlaybackOffset() + elapsed;
+  // 提前量必须覆盖 suspend 的控制消息延迟 + 一帧量化误差：rAF 虽然逐帧检测，
+  // 但"发出 suspend"到"时钟真冻结"之间的窗口里时钟照常前进，冻结点会落到前沿
+  // 之后，晚到的 chunk 就按这段时间裁头（极端负载下每缝丢 74–440ms）。
   return _scheduler.checkUnderrun(curTime, () => {
-    // 播放头就地冻结（它已经被 updateFragmentPlayhead 更新到可听位置）。
-    // 旧实现把它直接设成 bufferEndSec —— 前沿是"渲染域"位置，比耳朵听到的
-    // 位置早 outputLatency，跳过去会看到播放头先向前一跳再停住。
-    const raf = getFragmentPlayheadRaf();
-    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+    // 播放头不在此处掐断循环（见 onWaitStateChange 的说明）：控制消息落地前
+    // 音频仍在放，播放头必须跟着走，直到时钟真正冻结后自行停住。
     render();
-  });
+  }, _scheduler.requiredUnderrunMarginSec(0.05));
 }
 
 export function updateFragmentPlayhead() {
@@ -755,7 +756,11 @@ export function updateFragmentPlayhead() {
   // 窗口恢复、上一次 suspend 与 resume 竞争留下的悬空状态）→ 补一次 resume。
   // 旧实现靠 chunk 回调里无条件 resume 掩盖这类悬空；现在解冻收敛到 scheduler，
   // 必须在这里兜住"没人解冻"的情况，否则时钟冻结 → 播放头卡住且没声音。
-  if (ctx.state === 'suspended' && !(_scheduler && _scheduler.isWaiting) && !_ctxResumeInFlight) {
+  // isResuming：scheduler 已有一次 resume 正在落地时不能再发第二次 —— resume 的
+  // promise 要等控制延迟才 resolve，而那之后 ctx.state 才变 running，中间这一帧
+  // 看上去仍是"suspended 且不在等待"（极端负载下实测每个接缝发两次 resume）。
+  if (ctx.state === 'suspended' && !(_scheduler && _scheduler.isWaiting)
+      && !(_scheduler && _scheduler.isResuming) && !_ctxResumeInFlight) {
     _ctxResumeInFlight = true;
     ctx.resume().catch(() => {}).then(() => { _ctxResumeInFlight = false; },
       () => { _ctxResumeInFlight = false; });
@@ -767,7 +772,9 @@ export function updateFragmentPlayhead() {
 
   // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
   // 窗口最小化时 rAF 会被挂起，由 StreamingScheduler.watchdog 兜底检测。
-  if (_checkFragmentStreamingUnderrun()) return;
+  // 这里不能 return：进入等待后循环必须继续跟着时钟走（时钟冻结后 elapsed 自然
+  // 不再变化），提前退出会把播放头停在控制消息落地之前的位置上。
+  _checkFragmentStreamingUnderrun();
 
   // 收尾兜底：onended 丢失（source 被系统回收）时计数永远不归零，按钮与状态
   // 会一直停在"播放中"。判据必须足够保守 —— 合成结果走 invoke，chunk 走另一条
@@ -1311,6 +1318,11 @@ export async function playFragment() {
           if (chunkInfo.isLast && _scheduler) _scheduler.markLastReceived();
           return;
         }
+
+        // suspend 是异步控制消息：in-flight 期间设备时钟仍在走。必须先等它真正
+        // 落地再读 ctx.currentTime，否则这段"控制消息还没送到"的时间会被算成
+        // chunk 迟到，把本来没迟的音频头裁掉（极端负载下每缝丢 74–440ms）。
+        if (_scheduler) await _scheduler.awaitSuspendSettled();
 
         // 内容位置 X 应在 startTime + (X − playFrom) 出声；迟到量只裁头、不移基准。
         const wantCtxTime = startTime + (contentFromSec - playFrom);

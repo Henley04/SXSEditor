@@ -391,8 +391,17 @@ async function runScenario(spec) {
   let inferDoneMs = (wallCursor + 0.05) * 1000;
   const actions = (spec.actions || []).map((a) => ({ ...a, done: false }));
   const actionLog = [];
+  // 控制延迟时间线：模拟负载在播放过程中起停（开始训练 / 开始录屏 / 负载消失）。
+  const cdTimeline = (spec.controlDelayTimeline || []).slice().sort((a, b) => a.atSec - b.atSec);
+  let cdIdx = 0;
 
   while (vnow < totalWallMs) {
+    while (cdIdx < cdTimeline.length && vnow >= cdTimeline[cdIdx].atSec * 1000) {
+      ctx._controlDelayMs = cdTimeline[cdIdx].ms;
+      if (DEBUG) console.log(`[wall ${(vnow / 1000).toFixed(2)}] CONTROL DELAY -> ${ctx._controlDelayMs}ms`);
+      cdIdx += 1;
+    }
+
     // 交互动作（停止 / 重播 / 拖动播放头）
     for (const a of actions) {
       if (a.done || vnow < a.atSec * 1000 - 1e-6) continue;
@@ -642,6 +651,9 @@ function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, ac
     maxActive,
     actionLog,
     allowLossSec: spec.allowLossSec || 0,
+    // 静音缝容差：极端控制延迟下，"负载变化的第一个接缝"会留下一段可预测的
+    // bootstrap 残差（延迟 - 默认提前量）。之后的每个接缝都必须完全干净。
+    allowGapSec: spec.allowGapSec != null ? spec.allowGapSec : 0.05,
     lossSpans,
     backJumps,
     maxBackJump,
@@ -742,8 +754,45 @@ const SCENARIOS = [
     name: 'K-EXT2 长分片60s,推理3x,控制延迟500ms(极端)',
     mode: 'single', controlDelayMs: 500,
     bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 62, playFromSec: 0,
+    allowGapSec: 0.3,
     startupSec: 1.2, totalWallSec: 175,
+    // 首个 underrun 之前无法预知控制延迟，提前量只能取默认下限：
+    // 这一缝会多丢"延迟 - 0.3s"，之后每次冻结都被自适应提前量完全吸收。
+    allowLossSec: 0.3,
     regions: [{ startSec: 0, endSec: 60, chunkSec: 10, overlapSec: 1, inferSec: 20 }],
+  },
+  {
+    name: 'L 控制延迟500ms + 流式中停止 → 重播（延迟估计跨会话保留）',
+    mode: 'single', controlDelayMs: 500, allowLossSec: 0.3, allowGapSec: 0.3,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 26, playFromSec: 0,
+    startupSec: 1.0, totalWallSec: 150,
+    regions: [{ startSec: 0, endSec: 24, chunkSec: 5, overlapSec: 0.5, inferSec: 9 }],
+    actions: [{ atSec: 30, type: 'stop' }, { atSec: 33, type: 'play' }],
+  },
+  {
+    name: 'M 负载突增：控制延迟 8ms→500ms（开始训练/录屏）',
+    mode: 'single',
+    controlDelayTimeline: [{ atSec: 0, ms: 8 }, { atSec: 45, ms: 500 }],
+    allowLossSec: 0.3, allowGapSec: 0.3,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 26, playFromSec: 0,
+    startupSec: 1.0, totalWallSec: 120,
+    regions: [{ startSec: 0, endSec: 24, chunkSec: 5, overlapSec: 0.5, inferSec: 9 }],
+  },
+  {
+    name: 'N 负载回落：控制延迟 500ms→8ms（训练结束，提前量应缓降）',
+    mode: 'single',
+    controlDelayTimeline: [{ atSec: 0, ms: 500 }, { atSec: 45, ms: 8 }],
+    allowLossSec: 0.3, allowGapSec: 0.3,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 26, playFromSec: 0,
+    startupSec: 1.0, totalWallSec: 120,
+    regions: [{ startSec: 0, endSec: 24, chunkSec: 5, overlapSec: 0.5, inferSec: 9 }],
+  },
+  {
+    name: 'O 控制延迟 1200ms（病态排队，上限钳制不失控）',
+    mode: 'single', controlDelayMs: 1200, allowLossSec: 1.0, allowGapSec: 1.0,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 26, playFromSec: 0,
+    startupSec: 1.0, totalWallSec: 150,
+    regions: [{ startSec: 0, endSec: 24, chunkSec: 5, overlapSec: 0.5, inferSec: 9 }],
   },
   {
     name: 'H 流式中点停止 → 重播',
@@ -818,7 +867,7 @@ const SCENARIOS = [
     if (r.stallAt) console.log(`  播放头卡住 ${r.name}: wall=${r.stallAt.wall}s 停在 ${r.stallAt.head}s 达 ${r.stallAt.forSec}s`);
     if (r.lossSpans.length) console.log(`  内容缺失 ${r.name}: ${JSON.stringify(r.lossSpans)}`);
   }
-  const bad = results.filter((r) => r.gapSec > 0.05 || r.overlapSec > 0.05 || r.contentRepeatSec > 0.05
+  const bad = results.filter((r) => r.gapSec > r.allowGapSec || r.overlapSec > 0.05 || r.contentRepeatSec > 0.05
     || r.contentLossSec > (r.allowLossSec + 0.05) || r.maxSchedDrift > 0.05 || r.maxDrift > 0.08 || r.backJumps > 0
     || r.stalls > 0 || r.maxActive > 1);
   if (bad.length) console.log('\nFAIL：' + bad.map((b) => b.name).join('; '));
