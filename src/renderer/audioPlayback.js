@@ -13,7 +13,7 @@ import { fragmentPitchMode } from '../shared/pitchControl.js';
 // F2/F3：主窗口参与合成的音符集合必须与分片编辑器同一套（过滤未激活重叠 + 排序）。
 import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes.js';
 import { formatTime } from './uiControls.js';
-import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
+import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, tickPlayheadFollow, resetPlayheadFollow, settlePlayheadFollow } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
 import { registerAccompanimentGain, clearAccompanimentGains } from './accompanimentMixer.js';
 // 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
@@ -1585,6 +1585,8 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
     }
 
     setTimeDisplay(formatTime(elapsed));
+    // 与共享播放同一套分页跟随（顺序：先滚视口，再画播放头）
+    tickPlayheadFollow(elapsed);
     drawPlayheadLine(elapsed);
     state.exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
   }
@@ -1593,6 +1595,8 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
   // 先取消可能残留的旧循环：没有幂等保护时直接赋值会叠出第二条循环，而
   // stop 只能取消最后存下的那个 id（另一条永久泄漏并继续画播放头）。
   _cancelExclusiveRaf();
+  // 独占输出同样要跟随（与共享播放共用同一个跟随器实例）
+  resetPlayheadFollow({ reveal: true });
   state.exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
 }
 
@@ -1618,6 +1622,8 @@ export function pausePlayback() {
   // 判断会漏掉它，表现就是暂停/停止都按不动、清唱停不下来。
   // stopExclusivePlayback 是幂等的，共享模式下调用只是清一次空 listener。
   stopExclusivePlayback();
+  // 暂停：分页动画就地落地（下面几个分支都会提前 return，只能在这里统一处理）
+  settlePlayheadFollow();
   if (!state.isPlaying) {
     return;
   }
@@ -1867,6 +1873,9 @@ export function startPlayheadAnimation() {
     state.playheadRaf = null;
   }
   _ensureVisibilityHandler();
+  // 起播/续播：清掉上一次会话残留的跟随动画；若播放头整个在视口外，第一帧就回填，
+  // 否则用户会先听 3 秒"看不见的播放"才等到分页跟随生效。
+  resetPlayheadFollow({ reveal: true });
   function updatePlayhead() {
     _sharedUpdateFn = updatePlayhead;
     if (!state.isPlaying) {
@@ -1935,6 +1944,9 @@ export function startPlayheadAnimation() {
     }
 
     setTimeDisplay(formatTime(elapsed));
+    // 分页跟随先改滚动、再画播放头：播放头的屏幕 x 是 (时间->x) - scrollX，
+    // 顺序反了会让播放头比内容早一帧（快速分页时能看出一次"错位"）。
+    tickPlayheadFollow(elapsed);
     drawPlayheadLine(elapsed);
     state.playheadRaf = requestAnimationFrame(updatePlayhead);
   }
@@ -1951,6 +1963,9 @@ export function stopPlayheadAnimation() {
   // 心跳清零：否则下一次起播的第一帧还没跑时，旧时间戳会被误判成"还在跑"
   // 而让看门狗跳过重启。
   _lastSharedTickAt = 0;
+  // 播放结束/停止：把在途的分页动画落到终点。停在半程会让画面停在两页之间，
+  // 看起来像"滚动卡住了"。
+  settlePlayheadFollow();
   clearPlayheadLine();
 }
 

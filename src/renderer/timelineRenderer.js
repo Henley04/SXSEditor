@@ -18,6 +18,7 @@ import { describeTrackBackend, ensurePluginCatalog, hasPluginCatalog } from './p
 import { isPluginTrack } from '../editor/trackManager.js';
 import { pitchCurveBadgeKind, PITCH_BADGE_MIXED } from '../shared/pitchControl.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
+import { createPlayheadFollower } from '../shared/playheadFollow.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
@@ -441,6 +442,9 @@ function _computeTimelineMetrics(singers, fragments, beatWidth) {
 }
 
 let _lastCanvasTransform = '';
+// 最近一次渲染时的视口宽度（px）。播放头的分页跟随每帧都要它，而
+// `dom.fragmentContainer.clientWidth` 会触发同步 layout —— 缓存下来只在渲染时刷新。
+let _lastViewportWidth = 0;
 
 export function syncFragmentScroll(metrics) {
   let m = metrics;
@@ -487,6 +491,9 @@ export function renderFragmentTimeline() {
   const contentHeight = metrics.contentHeight;
   const viewportWidth = Math.max(1, dom.fragmentContainer.clientWidth || 1);
   const viewportHeight = Math.max(1, dom.fragmentContainer.clientHeight || contentHeight || 1);
+  // 供播放头的分页跟随复用（它每帧都要视口宽度）：clientWidth 是同步 layout 读取，
+  // 在播放循环里每帧读一次会平白多一次强制重排。渲染时记下来，跟随只读缓存。
+  _lastViewportWidth = viewportWidth;
 
   // Keep the backing stores bounded by the viewport. Long MIDI projects only
   // increase virtualWidth, not canvas.width, avoiding Chromium's canvas limit.
@@ -872,6 +879,90 @@ export function xToPlaybackTime(x) {
   return (beat * 60) / (state.project?.bpm || 120);
 }
 
+// ==================== 播放头分页跟随 ====================
+// 逻辑本体在 shared/playheadFollow.js（与分片编辑器同一套），这里只做"窗口侧接线"：
+// 提供滚动读写、滚动上限、视口宽度，并在跟随真的改写了 scrollX 时重画时间轴。
+//
+// 与历史 bug 的区别（曾经"播放头钉在屏幕上"）：那条路径是**每帧**把 scrollX 对齐到
+// 播放头（连续跟随），播放头相对视口永远不动。这里是分页：只在播放头到临界、且用户
+// 3s 内没操作时，用一段短动画把视口往前挪一页，播放头在视口里照常前进。
+let _follow = null;
+
+function _getMaxScrollX() {
+  const w = _lastViewportWidth || (dom.fragmentContainer ? dom.fragmentContainer.clientWidth : 0);
+  if (!(w > 0)) return 0;
+  // 与 renderFragmentTimeline 的 clamp 同源：虚拟宽度 - 视口宽度。
+  // 虚拟宽度自带 256 拍 padding，播放头永远能走到锚点位置，不会卡在末尾。
+  const metrics = _computeTimelineMetrics(trackManager.getSingers(), trackManager.getFragments(), getBeatWidth());
+  return Math.max(0, metrics.canvasWidth - w);
+}
+
+function _ensureFollow() {
+  if (_follow) return _follow;
+  _follow = createPlayheadFollower({
+    getScrollX: () => state.fragmentScrollX,
+    setScrollX: (v) => { state.fragmentScrollX = v; },
+    getMaxScrollX: _getMaxScrollX,
+  });
+  return _follow;
+}
+
+/**
+ * 播放循环每帧调用：按需把视口分页前移，让播放头始终落在可见范围内。
+ *
+ * 必须在 `drawPlayheadLine(elapsed)` **之前**调用：播放头的屏幕 x 是
+ * `playbackTimeToX(t) - scrollX`，先改滚动再画，播放头与内容才是同一帧的同一位置。
+ *
+ * @param {number} elapsedSeconds 可听域播放位置（与时间码同源）
+ * @returns {boolean} 是否改写了滚动位置（改了就重画了整条时间轴）
+ */
+export function tickPlayheadFollow(elapsedSeconds) {
+  if (!Number.isFinite(elapsedSeconds)) return false;
+  const w = _lastViewportWidth;
+  if (!(w > 0)) return false;
+  const changed = _ensureFollow().tick(playbackTimeToX(elapsedSeconds), w);
+  if (changed) renderFragmentTimeline();
+  return changed;
+}
+
+/** 起播 / seek：清掉在途动画；reveal=true 时若播放头在视口外会立即回填到 1/5。 */
+export function resetPlayheadFollow(options) {
+  _ensureFollow().reset(options);
+}
+
+/** 暂停/停止：在途动画直接落到终点（停在半程会像"卡住"）。 */
+export function settlePlayheadFollow() {
+  if (!_follow) return false;
+  const changed = _follow.settle();
+  if (changed) renderFragmentTimeline();
+  return changed;
+}
+
+/** 任意用户操作（点击/按键）：清零 3s 空闲计时。 */
+export function markPlayheadFollowActivity() {
+  _ensureFollow().markActivity();
+}
+
+/** 用户直接操作视口（滚轮/缩放/画布拖拽）：清零计时并立即终止在途动画。 */
+export function markPlayheadFollowViewportGesture() {
+  _ensureFollow().markViewportGesture();
+}
+
+/** 指针按住状态（拖拽期间禁止跟随）。 */
+export function setPlayheadFollowPointerDown(down) {
+  _ensureFollow().setPointerDown(down);
+}
+
+/** 兜底解除按住状态（不动空闲计时，见 follower.clearPointerDown）。 */
+export function clearPlayheadFollowPointerDown() {
+  if (_follow) _follow.clearPointerDown();
+}
+
+/** 诊断/测试用。 */
+export function getPlayheadFollowSnapshot() {
+  return _follow ? _follow.snapshot() : null;
+}
+
 export function drawPlayheadLine(elapsedSeconds, options = {}) {
   if (!dom.fragmentPlayheadCanvas) return;
   // 记下位置：等待推理/暂停时若发生缩放或横向滚动，重绘要画在同一个时间点上
@@ -881,8 +972,9 @@ export function drawPlayheadLine(elapsedSeconds, options = {}) {
   const w = dom.fragmentPlayheadCanvas.width / dpr;
   const h = dom.fragmentPlayheadCanvas.height / dpr;
 
-  // The playhead is positioned solely by timeline time. Playback must not
-  // mutate scrollX, otherwise the indicator appears pinned to the viewport.
+  // 播放头的位置只由时间决定，绘制时减去 scrollX。滚动本身是"分页跟随"改的
+  // （见 tickPlayheadFollow / shared/playheadFollow.js），不是这里逐帧对齐 ——
+  // 逐帧对齐会让指示器看起来钉死在视口上。
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);

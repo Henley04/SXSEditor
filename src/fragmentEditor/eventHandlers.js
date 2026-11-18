@@ -98,6 +98,8 @@ import {
   // ReferenceError 而不是派生，功能等于不可用。eslint no-undef 抓到了）
   hitAutoCurveAt, createBakedSegmentAt,
   isScorePitchMode,
+  markPlayheadFollowActivity, markPlayheadFollowViewportGesture,
+  setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown,
 } from './canvasRenderer.js';
 import { computeMultiDragResult, findAdjacentBoundary, notesInRange } from './notesIndex.js';
 import {
@@ -3597,6 +3599,51 @@ export function setupEventListeners() {
   _setupPitchContextMenuListeners();
   _setupKanjiContextMenuListeners();
   _setupNoteContextMenuListeners();
+  _setupPlayheadFollowActivityTracking();
+}
+
+/**
+ * 播放头分页跟随的用户活动门控（与主窗口 eventHandlers 同一套语义）。
+ *
+ * 跟随的规则是"用户前 3s 内无操作才许动视口"，所以必须能回答：
+ *   1) 最后一次操作是什么时候；2) 指针是否正按着（拖音符 >3s 也不能被拽走）。
+ *
+ * window 捕获阶段监听：捕获先于元素自己的 handler，事件被 stopPropagation 也不漏；
+ * 这里只观察，不改事件流。
+ */
+function _setupPlayheadFollowActivityTracking() {
+  const isViewportTarget = (target) => {
+    if (!target) return false;
+    if (target === canvas) return true;
+    const parent = canvas.parentElement;
+    return !!(parent && parent.contains(target));
+  };
+
+  window.addEventListener('pointerdown', (e) => {
+    markPlayheadFollowActivity();
+    setPlayheadFollowPointerDown(true);
+    // 在画布上按下（新建音符/拖音符/拖播放头）会立刻改变视口内容，动画必须让位
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+  }, true);
+
+  const release = () => setPlayheadFollowPointerDown(false);
+  window.addEventListener('pointerup', release, true);
+  window.addEventListener('pointercancel', release, true);
+  // 焦点被原生窗口/对话框抢走时 pointerup 可能永远不到：失焦即视为松手
+  window.addEventListener('blur', () => clearPlayheadFollowPointerDown());
+
+  // 自愈：左键已不在按下状态却收到移动（pointerup 丢失）。不能走
+  // setPointerFollowPointerDown(false) —— 那会把"光标在窗口里晃"记成用户操作。
+  window.addEventListener('mousemove', (e) => {
+    if (e.buttons === 0) clearPlayheadFollowPointerDown();
+  }, true);
+
+  window.addEventListener('wheel', (e) => {
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+    else markPlayheadFollowActivity();
+  }, { capture: true, passive: true });
+
+  window.addEventListener('keydown', () => markPlayheadFollowActivity(), true);
 }
 
 /**

@@ -16,6 +16,7 @@ import { evaluatePitchCurveFrames } from '../shared/pitchCurveEval.js';
 import { resolvePitchMode } from '../shared/pitchControl.js';
 import { readPhonemeField } from '../shared/pluginPhonemes.js';
 import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
+import { createPlayheadFollower, PLAYHEAD_FOLLOW_DEFAULTS } from '../shared/playheadFollow.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
 import { t } from '../i18n/index.js';
@@ -34,7 +35,7 @@ import {
   notesInRange,
 } from './notesIndex.js';
 import {
-  getScrollX, getScrollY, getZoomX,
+  getScrollX, getScrollY, getZoomX, setScrollX,
   getCurrentParamMode,
   getNotes,
   getSnapGrid,
@@ -154,6 +155,115 @@ function _getParentWidth() {
  */
 export function getParentHeightCached() {
   return _getParentHeight();
+}
+
+// ==================== 播放头分页跟随 ====================
+// 逻辑本体在 shared/playheadFollow.js（与主窗口时间轴同一套），这里只做窗口侧接线：
+// 提供 scrollX 读写、滚动上限、视口宽度，并在跟随改写了滚动位置时重绘。
+//
+// 与主窗口的差别仅在坐标：钢琴卷帘的 timeToX() 返回的是**视口**坐标（已减 scrollX），
+// 跟随器要的是世界坐标，所以这里直接用 beat × beatWidth 算。
+let _follow = null;
+// 最近一次渲染的视口宽度（px）：clientWidth 是同步 layout 读取，播放循环里每帧
+// 读一次会平白多一次强制重排。渲染时记下来，跟随只读缓存。
+let _lastViewportWidth = 0;
+
+export function getPlayheadViewportWidth() {
+  if (_lastViewportWidth > 0) return _lastViewportWidth;
+  return _getParentWidth();
+}
+
+/** 内容右端（拍）：分片时长与最后一个音符末端取大者 —— 播放头不会超过它。 */
+function _contentEndBeat() {
+  const fragment = getCurrentFragment();
+  let end = fragment && Number.isFinite(fragment.duration) ? fragment.duration : 0;
+  for (const n of getNotes()) {
+    const noteEnd = n.start + n.duration;
+    if (noteEnd > end) end = noteEnd;
+  }
+  return end;
+}
+
+/**
+ * 滚动上限：让"内容末端"正好停在锚点（左侧 1/5）处。
+ * 再往右自动滚动就只剩空白；而播放头 ≤ 内容末端，所以它永远能落到锚点，
+ * 不会在末尾被上限挡住、停在屏幕右侧。
+ */
+function _maxScrollXForFollow() {
+  const w = getPlayheadViewportWidth();
+  if (!(w > 0)) return 0;
+  const contentPx = _contentEndBeat() * BEAT_WIDTH * getZoomX();
+  return Math.max(0, contentPx - w * PLAYHEAD_FOLLOW_DEFAULTS.anchorRatio);
+}
+
+function _ensureFollow() {
+  if (_follow) return _follow;
+  _follow = createPlayheadFollower({
+    getScrollX: () => getScrollX(),
+    setScrollX: (v) => setScrollX(v),
+    getMaxScrollX: _maxScrollXForFollow,
+  });
+  return _follow;
+}
+
+function _playheadWorldX(currentTimeSec) {
+  const project = getCurrentProject();
+  const bpm = project ? project.bpm : 120;
+  return (currentTimeSec / 60) * bpm * BEAT_WIDTH * getZoomX();
+}
+
+/**
+ * 播放循环每帧调用：按需把视口分页前移，让播放头始终落在可见范围内。
+ * 必须在 render() 之前调用（播放头与内容用同一个 scrollX 画）。
+ *
+ * @param {number} currentTimeSec 当前播放位置（秒，与画布播放头同源）
+ * @returns {boolean} 是否改写了滚动位置（改了会排一帧重绘）
+ */
+export function tickPlayheadFollow(currentTimeSec) {
+  if (!Number.isFinite(currentTimeSec)) return false;
+  const w = getPlayheadViewportWidth();
+  if (!(w > 0)) return false;
+  const changed = _ensureFollow().tick(_playheadWorldX(currentTimeSec), w);
+  if (changed) render();
+  return changed;
+}
+
+/** 起播 / seek：清掉在途动画；reveal=true 时若播放头在视口外会立即回填到 1/5。 */
+export function resetPlayheadFollow(options) {
+  _ensureFollow().reset(options);
+}
+
+/** 暂停/停止：在途动画直接落到终点（停在半程会像"卡住"）。 */
+export function settlePlayheadFollow() {
+  if (!_follow) return false;
+  const changed = _follow.settle();
+  if (changed) render();
+  return changed;
+}
+
+/** 任意用户操作（点击/按键）：清零 3s 空闲计时。 */
+export function markPlayheadFollowActivity() {
+  _ensureFollow().markActivity();
+}
+
+/** 用户直接操作视口（滚轮/缩放/画布拖拽）：清零计时并立即终止在途动画。 */
+export function markPlayheadFollowViewportGesture() {
+  _ensureFollow().markViewportGesture();
+}
+
+/** 指针按住状态（拖拽期间禁止跟随）。 */
+export function setPlayheadFollowPointerDown(down) {
+  _ensureFollow().setPointerDown(down);
+}
+
+/** 兜底解除按住状态（不动空闲计时）。 */
+export function clearPlayheadFollowPointerDown() {
+  if (_follow) _follow.clearPointerDown();
+}
+
+/** 诊断/测试用。 */
+export function getPlayheadFollowSnapshot() {
+  return _follow ? _follow.snapshot() : null;
 }
 
 export function timeToX(beats) {
@@ -3063,6 +3173,7 @@ function _doRender() {
   if (!canvas.parentElement) return;
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
+  _lastViewportWidth = w;
   // 缓存 clientHeight/Width 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
   _cachedParentHeight = h;
   _cachedParentWidth = w;

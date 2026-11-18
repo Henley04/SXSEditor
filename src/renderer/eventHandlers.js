@@ -9,7 +9,7 @@ import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSin
 import { playAll, pausePlayback, stopPlayback, resynthesizePlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
 import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt, markPlayheadFollowActivity, markPlayheadFollowViewportGesture, setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
@@ -737,6 +737,49 @@ function _pushWheel(e, target) {
 dom.fragmentContainer.addEventListener('wheel', (e) => _pushWheel(e, dom.fragmentContainer), { passive: false });
 
 dom.singerListEl.addEventListener('wheel', (e) => _pushWheel(e, dom.singerListEl), { passive: false });
+
+// ==================== 播放头分页跟随的用户活动门控 ====================
+// 跟随的规则是"用户前 3s 内无操作才许动视口"，所以窗口侧必须能回答两个问题：
+//   1) 用户最后一次操作是什么时候？
+//   2) 指针是否正按着（拖音符 / 拖播放头 / 拖区间 >3s 也不能被拽走）？
+//
+// 用 window 捕获阶段监听：捕获先于各元素自己的 handler 触发，事件被
+// stopPropagation 也不会漏。这里只观察，不改事件流、不 preventDefault。
+(function _installPlayheadFollowActivityTracking() {
+  // 只有真正作用于时间轴/画布的操作才算"动视口"（会立刻终止在途动画）；
+  // 点按钮、按键只算"用户在场"，同样等 3s。
+  const isViewportTarget = (target) => {
+    if (!target) return false;
+    if (target === dom.fragmentCanvas) return true;
+    return !!(dom.fragmentContainer && dom.fragmentContainer.contains(target));
+  };
+
+  window.addEventListener('pointerdown', (e) => {
+    markPlayheadFollowActivity();
+    setPlayheadFollowPointerDown(true);
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+  }, true);
+
+  const release = () => setPlayheadFollowPointerDown(false);
+  window.addEventListener('pointerup', release, true);
+  window.addEventListener('pointercancel', release, true);
+  // 焦点被原生窗口/对话框抢走时 pointerup 可能永远不到：失焦即视为松手。
+  window.addEventListener('blur', () => clearPlayheadFollowPointerDown());
+
+  // 自愈：左键已不在按下状态却收到移动（pointerup 丢失）。**不能**走
+  // setPointerDown(false) —— 那会把"光标在窗口里晃"记成用户操作，
+  // 于是一直晃就一直不跟随。clearPointerDown 不碰空闲计时。
+  window.addEventListener('mousemove', (e) => {
+    if (e.buttons === 0) clearPlayheadFollowPointerDown();
+  }, true);
+
+  window.addEventListener('wheel', (e) => {
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+    else markPlayheadFollowActivity();
+  }, { capture: true, passive: true });
+
+  window.addEventListener('keydown', () => markPlayheadFollowActivity(), true);
+})();
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {

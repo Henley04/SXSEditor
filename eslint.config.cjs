@@ -188,6 +188,8 @@ module.exports = [
             'src/shared/pluginContract.js',
             // 流式调度器：ESM，被渲染层 bundle（watchdog 用 setTimeout/console）
             'src/shared/streamingScheduler.js',
+            // 播放头分页跟随：ESM 纯逻辑，两个渲染窗口共用（默认时钟用 performance.now）
+            'src/shared/playheadFollow.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',

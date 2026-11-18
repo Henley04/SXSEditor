@@ -39,7 +39,10 @@ import {
   getEnvelopes,
   getTrackBackend,
 } from './state.js';
-import { getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render } from './canvasRenderer.js';
+import {
+  getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render,
+  tickPlayheadFollow, resetPlayheadFollow, settlePlayheadFollow,
+} from './canvasRenderer.js';
 import { firstNoteStart } from '../shared/activeNotes.js';
 // 哈希算法与主进程合成缓存键、主窗口播放签名共用一份（src/shared/hashSignature.js）。
 import { hashNumberArray, hashString } from '../shared/hashSignature.js';
@@ -614,6 +617,8 @@ export function stopFragmentPlayback() {
     cancelAnimationFrame(raf);
     setFragmentPlayheadRaf(null);
   }
+  // 停止/暂停：把在途的分页动画落到终点，否则画面会停在两页之间（像滚动卡住）
+  settlePlayheadFollow();
   updateFragmentPlayButton();
 }
 
@@ -656,6 +661,8 @@ export function cancelFragmentSynthesis() {
  * 需要先停止当前播放（source.stop / audioStop），再用现有 audioData 重启。
  */
 export async function seekFragmentPlayback(newStartTime) {
+  // 用户刚拖动过播放头 = 一次明确的"人在这里"，视口应当跟上（不受 3s 门控）
+  resetPlayheadFollow({ reveal: true });
   // 合成进行中的拖拽：不能用旧缓存音频重启播放。
   // 流式合成期间 getFragmentAudioData 是上一次合成的旧音频，与新音符不匹配
   // （拖拽后立刻听到旧音频 → 与画布音符错位），且稍后合成完成时的兜底播放会
@@ -769,6 +776,8 @@ export function updateFragmentPlayhead() {
   // 播放头取"耳朵听到的位置"：渲染时钟减去设备输出延迟（见 audioOutputClock）。
   const elapsed = getAudibleElapsedSec(ctx, getFragmentPlaybackStartTime());
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
+  // 分页跟随：先改滚动、再画（render 里播放头与内容用同一个 scrollX）
+  tickPlayheadFollow(getFragmentCurrentTime());
 
   // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
   // 窗口最小化时 rAF 会被挂起，由 StreamingScheduler.watchdog 兜底检测。
@@ -1025,6 +1034,8 @@ function updateFragmentExclusivePlayhead(removeEndedListener) {
     }
 
     setFragmentCurrentTime(elapsed);
+    // 独占输出的播放循环也要跟随（与共享播放共用同一个跟随器实例）
+    tickPlayheadFollow(elapsed);
     render();
     setFragmentExclusiveRaf(requestAnimationFrame(update));
   }
@@ -1167,6 +1178,9 @@ export async function playFragment() {
   // 重入保护：防止连续调用导致前一次 finally 提前把 fragmentIsSynthesizing
   // 置 false，使后续进度回调失效（进度百分比偶发不显示的根因之一）。
   if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
+  // 新一轮播放：清掉上一次会话残留的分页动画；若播放头在视口外，第一帧就回填，
+  // 否则用户会先听 3 秒"看不见的播放"才等到跟随生效。
+  resetPlayheadFollow({ reveal: true });
   // 本次播放的会话号：取消推理 / 新一轮播放会让它失效（见 _playSessionSeq）。
   const mySession = ++_playSessionSeq;
   setFragmentIsSynthesizing(true);
