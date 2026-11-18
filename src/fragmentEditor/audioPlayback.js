@@ -9,6 +9,10 @@ import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
+// 流式 chunk 有序交付队列：借鉴 sokuji ModernAudioPlayer 的乱序重排 + 超时兜底，
+// 用采样区间（sampleOffset/sampleEnd）代替整数序号以适配本地 GPU 推理模型。
+// 插在 chunk 回调与真正消费之间，处理乱序/重复/丢包，不动已验证的调度/竞态修复。
+const SequencedChunkQueue = require('../shared/sequencedChunkQueue.js');
 // 播放头必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
 // （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
 import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
@@ -286,6 +290,9 @@ let _playSessionSeq = 0;
 // watchdog, underrun detection, source counting) via StreamingScheduler.
 let _streamingStarted = false;            // true after first chunk initializes playback
 let _scheduler = null;
+// 流式 chunk 有序交付队列（每轮流式会话重建）。consumer 回调把通过排序/去重的
+// chunk 交给原来的 handleStreamingChunk —— 后者只负责绝对位置排程，不再处理乱序。
+let _chunkQueue = null;
 
 function _createFragmentScheduler() {
   _scheduler = new StreamingScheduler({
@@ -327,6 +334,42 @@ function _createFragmentScheduler() {
     onFinish: _onFragmentStreamingFinished,
   });
 }
+
+/**
+ * 重建有序交付队列。consumer 只在需要真正排程播放时才被创建（见 chunk 监听器），
+ * 因为 handleStreamingChunk 定义在本函数之后；首轮会话用它占位，随后补全 consumer。
+ * @param {number} frontier - 采样前沿起点（新会话 0；seek 重锚传目标采样位置）
+ */
+function _resetChunkQueue(frontier = 0) {
+  if (!_chunkQueue) {
+    _chunkQueue = new SequencedChunkQueue({
+      gapTimeoutMs: 100,
+      toleranceSamples: 0,
+      onChunk: (chunkInfo) => {
+        // __lastOnly：重复/过时块携带的 isLast 标记，仅透传给 scheduler 收尾，不排程播放。
+        if (chunkInfo && chunkInfo.__lastOnly) {
+          if (chunkInfo.isLast && _scheduler) _scheduler.markLastReceived();
+          return;
+        }
+        if (_chunkConsumer) _chunkConsumer(chunkInfo);
+      },
+      onOutOfOrder: (chunk, gapSamples) => {
+        if (chunk && chunk.isLast) {
+          // 乱序 isLast 也入缓冲，靠排序保证它最后到达（见 finish/flush）。
+        }
+      },
+      onGap: (info) => {
+        // 缺口超时：承认不可弥补，让播放继续。诊断留痕，便于定位推理掉块。
+        console.warn('[FragmentAudio] chunk gap flushed:', JSON.stringify(info));
+      },
+    });
+  } else {
+    _chunkQueue.reset(frontier);
+  }
+}
+
+// 真正消费有序 chunk 的回调（chunk 监听器创建时注入 handleStreamingChunk）。
+let _chunkConsumer = null;
 
 /**
  * 流式会话自然结束（最后一个 chunk 播完 / 收尾兜底）。
@@ -513,12 +556,15 @@ function stopStreamingPlayback() {
   }
   // 停止 scheduler：解除 AudioContext 冻结 + 取消 watchdog
   if (_scheduler) _scheduler.deactivate();
+  // 有序队列随会话停止而清空（含未触发的 gap 定时器），避免旧会话的暂存块
+  // 在新一轮播放里被错误冲刷出来。
+  if (_chunkQueue) _chunkQueue.reset(0);
 }
 
 export async function getFragmentAudioContextInternal() {
   let ctx = getFragmentAudioContext();
   if (!ctx || ctx.state === 'closed') {
-    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: getSampleRate() });
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: getSampleRate(), latencyHint: 'interactive' }); // latencyHint:'interactive' 请求最小输出缓冲以降低出声延迟；不改 sampleRate，旧内核忽略；回退删此选项
     setFragmentAudioContext(ctx);
     const gainNode = ctx.createGain();
     gainNode.connect(ctx.destination);
@@ -656,6 +702,12 @@ export function cancelFragmentSynthesis() {
  * 需要先停止当前播放（source.stop / audioStop），再用现有 audioData 重启。
  */
 export async function seekFragmentPlayback(newStartTime) {
+  // seek 精确跳转：本分片编辑器的 seek 不消费流式缓冲（合成中 → 整段重合成后从
+  // 新位置播；合成完成 → 用缓存 audioData 从新位置整段播），因此会经
+  // stopStreamingPlayback 重置有序队列。SequencedChunkQueue.rebase() 保留了 moq
+  // "parking the playhead" 能力（跳跃重锚前缀、留存未来块），供未来"流式 seek 直接
+  // 复用已缓冲 chunk"时启用；当前架构下播放头的采样级精度由 AudioBufferSource 的
+  // start(when, offset) / 整段播放的 offset 参数保证。
   // 合成进行中的拖拽：不能用旧缓存音频重启播放。
   // 流式合成期间 getFragmentAudioData 是上一次合成的旧音频，与新音符不匹配
   // （拖拽后立刻听到旧音频 → 与画布音符错位），且稍后合成完成时的兜底播放会
@@ -1184,6 +1236,9 @@ export async function playFragment() {
   _streamingUserStopped = false;
   _pendingSeekStartTime = null;
   _createFragmentScheduler();
+  // 有序交付队列在每轮会话重建：新会话的采样前沿从 0 开始。真正消费者在下方
+  // chunk 监听器里注入（此时 handleStreamingChunk 已定义）。
+  _resetChunkQueue(0);
 
   try {
     if (!getPipelineInitialized()) {
@@ -1386,11 +1441,19 @@ export async function playFragment() {
         console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
       }
     };
+    // 串行消费队列：同一时刻只排程一个 chunk，避免并发读 ctx.currentTime 造成
+    // 迟到量竞态。有序队列只决定"何时交付"，消费仍走这里保证时序。
     let chunkQueue = Promise.resolve();
-    streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
+    _chunkConsumer = (chunkInfo) => {
       chunkQueue = chunkQueue
         .then(() => handleStreamingChunk(chunkInfo))
         .catch((e) => console.warn('[FragmentAudio] Streaming chunk queue error:', e && e.message));
+    };
+    streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
+      if (!_chunkQueue) return;
+      // 先过有序队列：乱序暂存、重复/过时丢弃、缺口超时兜底；只有判定可交付的
+      // chunk 才进入 _chunkConsumer → handleStreamingChunk 做绝对位置排程。
+      _chunkQueue.push(chunkInfo);
     });
 
     const pitchCurveF0 = buildPitchCurveF0Data();
@@ -1481,6 +1544,10 @@ export async function playFragment() {
     // 合成结果可能先于最后几个 chunk 到达渲染进程。立即摘监听会把仍在队列里的
     // chunk 永久丢弃 —— 表现为"前面有声音、后面整段静音"（与主页面 playAll 同一处理）。
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // 推理已完成：有序队列不再等缺口，按采样序排空残余暂存块。这样即使
+    // isLast 先于某个 gap chunk 到达（乱序），缓冲里的块也会在收尾时全部交付，
+    // 不会因"监听器已摘除"而整段静音。
+    if (_chunkQueue) _chunkQueue.finish();
     if (streamingCleanup) {
       safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
       streamingCleanup = null;

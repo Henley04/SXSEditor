@@ -1187,7 +1187,7 @@ export async function playAll() {
 
 export function getAudioContext() {
   if (!state.audioContext || state.audioContext.state === 'closed') {
-    state.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+    state.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE, latencyHint: 'interactive' }); // latencyHint:'interactive' 请求最小输出缓冲以降低出声延迟；不改采样率，旧内核忽略
     if (state.audioContext.sampleRate !== SAMPLE_RATE) {
       console.warn(`[Audio] AudioContext actual sample rate: ${state.audioContext.sampleRate}Hz, target: ${SAMPLE_RATE}Hz, will auto-resample`);
     }
