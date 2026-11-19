@@ -88,3 +88,23 @@
 `latencyHint` 只是「请求」而非保证；真正的确定性低延迟仍需第二项（AudioWorklet + ring buffer）或第三项（clip-node 式 playhead）。`audioOutputClock.js` 的延迟补偿不受影响——它读的是 `ctx.outputLatency` 实测值，缓冲变小后读数自然变小，播放头会自动跟上。
 
 验证：两文件语法检查通过；队列单测 42/42、集成测试 16/16 无回归。
+
+## 七、流式时序细粒度日志（2026-11-19 追加）
+
+为端到端排查「Seg 推理完成 → 开始播放 → 播放完成」时序，在推理侧与播放侧共加 15 条英文日志。统一前缀 + 绝对毫秒时间戳 `t=`（跨进程可对齐）：
+
+| 前缀 | 进程 | 含义 |
+|---|---|---|
+| `[SegInfer][FRAG]` | 主进程 | 分片预览：单 segment 推理完成 / chunk 发射 |
+| `[SegInfer][MAIN]` | 主进程 | 主页面 multi-stream：chunk 发射 / 整体推理完成 |
+| `[FragPlay]` | 分片渲染进程 | 分片播放：起播 / chunk 排程 / 末块 / 推理返回 / 完成 |
+| `[MainPlay]` | 主渲染进程 | 主页面播放：起播 / Seg 流完成 / chunk 排程 / 全部块 / 推理返回 / 完成 |
+
+关键事件（均可直接 grep）：`segment inference done`、`chunk emitted`、`PLAYBACK START`、`SEG STREAM DONE`、`LAST CHUNK RECEIVED` / `ALL SEGS RECEIVED`、`INFERENCE RETURNED`、`PLAYBACK FINISHED`。日志只新增 `console.log`，复用已声明变量，不引入新依赖、不改变任何调度逻辑。
+
+完整日志点（15 处）：
+- `src/inference/pipeline/index.js:3252 / :3312 / :4007 / :4285`
+- `src/fragmentEditor/audioPlayback.js:382 / :1337 / :1415 / :1433 / :1507`
+- `src/renderer/audioPlayback.js:463 / :817 / :841 / :943 / :951 / :979`
+
+典型时序（分片）：`[SegInfer][FRAG] segment inference done` → `chunk emitted` → `[FragPlay] PLAYBACK START` → `chunk scheduled` → `LAST CHUNK RECEIVED` → `INFERENCE RETURNED` → `PLAYBACK FINISHED`。

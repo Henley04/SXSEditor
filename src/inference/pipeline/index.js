@@ -3249,6 +3249,7 @@ class OnnxSVSPipeline {
                     isLast,
                 });
             } catch (_) {}
+            console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${frontier} end=${frontier + audio.length} isLast=${isLast} t=${Date.now()}`);
             frontier += audio.length;
             return true;
         };
@@ -3307,7 +3308,9 @@ class OnnxSVSPipeline {
                 if (finished) return;
                 const meta = metas.get(segIdx);
                 if (!meta || meta.audio) return; // 未知 segment / 重复完成
-                meta.audio = (audio && audio.length > 0) ? audio : new Float32Array(0);
+                const samples = (audio && audio.length > 0) ? audio.length : 0;
+                console.log(`[SegInfer][FRAG] segment inference done | seg=${segIdx}/${timeOrder.length} samples=${samples} relStart=${meta.relStart} relEnd=${meta.relEnd} t=${Date.now()}`);
+                meta.audio = samples > 0 ? audio : new Float32Array(0);
                 tryEmit();
             },
         };
@@ -4001,6 +4004,7 @@ class OnnxSVSPipeline {
             this._silenceNonVocalRegions(audio, p.filledNotes, bpm, relativeStartBeat);
             const safeChunk = { ...chunkInfo, audio, streamManifest };
             emittedChunks.push({ ...safeChunk, audio: audio.slice() });
+            console.log(`[SegInfer][MAIN] chunk emitted | stream=${chunkInfo.streamKey} frag=${p.fragIdx} region=${p.regionIdx} offset=${chunkInfo.sampleOffset} end=${chunkInfo.sampleEnd} samples=${audio.length} streamLast=${!!chunkInfo.streamLast} isLast=${!!chunkInfo.isLast} cached=${!!chunkInfo.cached} t=${Date.now()}`);
             onChunkAudio(safeChunk);
         };
 
@@ -4278,7 +4282,7 @@ class OnnxSVSPipeline {
             audio: mixedAudio.slice(),
             chunks: emittedChunks.map(chunk => ({ ...chunk, audio: chunk.audio.slice() })),
         };
-        console.log(`[MultiStream] Complete: ${prepared.length} fragments, ${globalChunks.length} chunks, ${totalMixedSamples} samples`);
+        console.log(`[SegInfer][MAIN] synthesis complete | fragments=${prepared.length} chunks=${globalChunks.length} samples=${totalMixedSamples} t=${Date.now()}`);
         onProgress(100);
         await this._recreateHeavySessionsAfterSynthesis();
         return mixedAudio;

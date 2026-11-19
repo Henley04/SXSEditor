@@ -379,6 +379,7 @@ let _chunkConsumer = null;
 function _onFragmentStreamingFinished() {
   if (streamingFinished) return;
   streamingFinished = true;
+  console.log(`[FragPlay] PLAYBACK FINISHED | t=${Date.now()}`);
   streamingSources = [];
   _streamingDeliveredEndSec = 0;
   setFragmentIsPlaying(false);
@@ -1333,6 +1334,7 @@ export async function playFragment() {
           // 启动后台 watchdog：窗口最小化时 rAF 挂起，需用定时器兜底
           // 检测 buffer underrun，保证等待推理在后台同样生效。
           _scheduler.activate();
+          console.log(`[FragPlay] PLAYBACK START | session=${mySession} playFromSec=${_streamingPlayFromSec.toFixed(3)} firstNoteStartSec=${_streamingFirstNoteStartSec.toFixed(3)} t=${Date.now()}`);
         }
 
         const startTime = getFragmentPlaybackStartTime();
@@ -1410,6 +1412,7 @@ export async function playFragment() {
         }
         source.start(wantCtxTime + lateSec, lateSec);
         _streamingDeliveredEndSec = Math.max(_streamingDeliveredEndSec, contentEndSec);
+        console.log(`[FragPlay] chunk scheduled | session=${mySession} seg=${chunkInfo.chunkIndex ?? '-'} offset=${rawStart} end=${rawEnd} lateSec=${lateSec.toFixed(4)} durSec=${chunkDurSec.toFixed(3)} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
         // 解除推理等待：前沿已覆盖本 chunk，此时重启 rAF 不会再次触发 underrun。
         if (_scheduler && _scheduler.isWaiting) {
@@ -1427,6 +1430,7 @@ export async function playFragment() {
         // playing when the isLast chunk ends, we correctly wait for it.
         if (_scheduler) _scheduler.addSource();
         if (chunkInfo.isLast && _scheduler) {
+          console.log(`[FragPlay] LAST CHUNK RECEIVED | session=${mySession} offset=${rawStart} end=${rawEnd} t=${Date.now()}`);
           _scheduler.markLastReceived();
         }
         const sourceIdx = streamingSources.length;
@@ -1500,6 +1504,7 @@ export async function playFragment() {
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
     // 合成成功后更新签名，后续播放可复用此缓存
     setFragmentAudioDataSignature(currentSignature);
+    console.log(`[FragPlay] INFERENCE RETURNED | session=${mySession} streamingStarted=${_streamingStarted} pendingSeek=${_pendingSeekStartTime !== null} t=${Date.now()}`);
 
     // 合成期间用户拖拽了播放头（seekFragmentPlayback 的合成中分支）：
     // 流式播放已停止、后续 chunk 已丢弃，这里直接从新位置开始播放新音频。
