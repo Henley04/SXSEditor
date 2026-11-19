@@ -539,6 +539,8 @@
         <span data-lang="en">Parameters</span>
         <span data-lang="zh">参数</span>
       </h3>
+      <p data-lang="en">The panel shows friendly names (e.g. <em>Skip removal</em>, <em>Denoise</em>). Each row keeps its original technical name in small text below, so you can match it to older guides; the "What it does" column still documents the underlying method in full.</p>
+      <p data-lang="zh">面板显示的是通俗名称（如「抑制跳音」「平滑去噪」）。每一项下方以小字保留原技术名，方便你对照旧资料；「作用」一栏仍完整说明其技术原理。</p>
       <table class="doc-table">
         <thead>
           <tr>
@@ -549,37 +551,37 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en">Smoothing <span class="badge">F0</span></span><span data-lang="zh">平滑强度 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Pitch stability <span class="badge">Pitch</span><br><small>was "Smoothing" · Savitzky-Golay</small></span><span data-lang="zh">音高稳定 <span class="badge">音高</span><br><small>原「平滑强度」· Savitzky-Golay</small></span></td>
             <td>0–100%</td>
             <td><span data-lang="en">Blends the raw F0 with a <strong>Savitzky-Golay</strong> filtered copy (7-frame window, cubic order). SG fits a local polynomial, so the overall pitch trend — vibrato, drawn slides — survives while frame-to-frame jitter is removed. The filter runs in the cents domain and never crosses a silent gap.</span><span data-lang="zh">把原始 F0 与 <strong>Savitzky-Golay</strong> 滤波结果（7 帧窗口、三次多项式）按比例混合。SG 拟合局部多项式，因此整体音高趋势（颤音、手绘滑音）得以保留，只消除帧间抖动。滤波在 cents 域进行，且绝不跨越静音段。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Outlier removal <span class="badge">F0</span></span><span data-lang="zh">异常值抑制 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Skip removal <span class="badge">Pitch</span><br><small>was "Outlier removal" · median filter</small></span><span data-lang="zh">抑制跳音 <span class="badge">音高</span><br><small>原「异常值抑制」· 中值滤波</small></span></td>
             <td>0–9 <span data-lang="en">frames</span><span data-lang="zh">帧</span></td>
             <td><span data-lang="en"><strong>Median filter</strong> window. Removes isolated pitch spikes (octave errors, detection glitches) without smearing the note. 0 = off, 3–5 = typical.</span><span data-lang="zh"><strong>中值滤波</strong>窗口。消除孤立的音高跳点（倍频错误、检测毛刺），且不会把音符抹平。0 = 关闭，通常取 3–5。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Transition overshoot <span class="badge">F0</span></span><span data-lang="zh">过渡过冲 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Slide <span class="badge">Pitch</span><br><small>was "Transition overshoot" · cubic Bézier</small></span><span data-lang="zh">滑音 <span class="badge">音高</span><br><small>原「过渡过冲」· 三次贝塞尔</small></span></td>
             <td>0–100%</td>
 <td><span data-lang="en">At every detected pitch jump the step is replaced by a <strong>cubic Bézier</strong> transition that overshoots the target and settles back — the way a real singer leans into a leap. A candidate jump must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, <em>and</em> the median pitch level well before and well after the jump differs by at least 75 cents (vibrato oscillates back to its midline, a real step does not). Higher = more visible overshoot (up to 35% of the interval). 0 leaves the jump untouched.</span><span data-lang="zh">对每一个检出的音高跳变用<strong>三次贝塞尔</strong>过渡替换阶跃：先冲过目标再回落，模拟真人跳进大音程时的处理。候选跳变必须通过两级判定，保证自然颤音完全不被触碰：相邻帧相差超过 50 音分，<em>且</em>跳变点远离两侧的中值电平相差至少 75 音分（颤音是振荡会回到中线，真跳变不会）。值越大过冲越明显（最多为音程的 35%）。0 表示不处理，保留原始跳变。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Transition length <span class="badge">F0</span></span><span data-lang="zh">过渡时长 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Slide length <span class="badge">Pitch</span><br><small>was "Transition length"</small></span><span data-lang="zh">滑音时长 <span class="badge">音高</span><br><small>原「过渡时长」</small></span></td>
             <td>0–300 ms</td>
             <td><span data-lang="en">How long the Bézier transition lasts. Only meaningful when <em>Transition overshoot</em> is above 0. Shorter = crisper attack, longer = rounder portamento.</span><span data-lang="zh">贝塞尔过渡占用的时长，仅在<em>过渡过冲</em>大于 0 时生效。越短起音越干脆，越长滑音越圆润。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Spectral interpolation <span class="badge">mel</span></span><span data-lang="zh">频谱插值 <span class="badge">mel</span></span></td>
+            <td><span data-lang="en">Timbre blend <span class="badge">Timbre</span><br><small>was "Spectral interpolation"</small></span><span data-lang="zh">音色衔接 <span class="badge">音色</span><br><small>原「频谱插值」</small></span></td>
             <td>0–100%</td>
             <td><span data-lang="en">At every note / phoneme boundary the frames in a ±3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised-cosine window. This makes the spectral envelope change continuously across the transition instead of jumping in one frame.</span><span data-lang="zh">在每个音符 / 音素边界处，把 ±3 帧窗口内的频谱按升余弦权重混向"两侧平均频谱的线性插值"。这样频谱包络跨过渡连续变化，而不是在一帧内跳变。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Time–freq smoothing · time <span class="badge">mel</span></span><span data-lang="zh">时频平滑·时间 <span class="badge">mel</span></span></td>
+            <td><span data-lang="en">Denoise <span class="badge">Timbre</span><br><small>was "Time–freq smoothing · time" · Gaussian σ</small></span><span data-lang="zh">平滑去噪 <span class="badge">音色</span><br><small>原「时频平滑·时间」· 高斯 σ</small></span></td>
             <td>0–6 σ</td>
             <td><span data-lang="en">Gaussian σ along the Mel <strong>time</strong> axis (units: mel frames). Light values (0.8–1.5) tame diffusion grit and breath noise; high values blur consonants.</span><span data-lang="zh">沿 Mel <strong>时间</strong>轴的高斯 σ（单位：mel 帧）。0.8–1.5 可压制扩散噪声与气声毛刺；取值过大会糊掉辅音。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Time–freq smoothing · freq <span class="badge">mel</span></span><span data-lang="zh">时频平滑·频率 <span class="badge">mel</span></span></td>
+            <td><span data-lang="en">Soft highs <span class="badge">Timbre</span><br><small>was "Time–freq smoothing · freq" · Gaussian σ</small></span><span data-lang="zh">高频柔化 <span class="badge">音色</span><br><small>原「时频平滑·频率」· 高斯 σ</small></span></td>
             <td>0–6 σ</td>
             <td><span data-lang="en">Gaussian σ along the Mel <strong>frequency</strong> axis. Smooths harmonic edges and removes the "buzzy" high-frequency fringe.</span><span data-lang="zh">沿 Mel <strong>频率</strong>轴的高斯 σ。平滑谐波边缘，去掉高频"发毛"的毛刺。</span></td>
           </tr>
