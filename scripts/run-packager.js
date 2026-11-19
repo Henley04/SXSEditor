@@ -26,7 +26,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const packager = require('@electron/packager');
 
-const ELECTRON_VERSION = '42.4.1';
+// Read from the installed electron package so this stays in sync with
+// package.json (was hardcoded to 42.4.1, which packaged the wrong Electron
+// version after the Electron 45 upgrade).
+const ELECTRON_VERSION = require('electron/package.json').version;
 const ELECTRON_CACHE = process.env.LOCALAPPDATA
   ? path.join(process.env.LOCALAPPDATA, 'electron', 'Cache')
   : '';

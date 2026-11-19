@@ -159,23 +159,23 @@ module.exports = {
     // Prune Chromium locale .pak files that the app does not ship translations
     // for (src/i18n only carries 'zh-CN' and 'en'). Each .pak is ~0.8-1 MB and
     // there are 50+ of them, so this saves ~40 MB.
+    // Electron Forge 8 / @electron/packager 20 changed hook signatures from
+    // positional args + callback to a single options object + Promise/return:
+    //   old: (buildPath, electronVersion, platform, arch, callback)
+    //   new: ({ buildPath, electronVersion, platform, arch }) => void|Promise
+    // The old form crashes on Forge 8 with "callback is not a function".
     afterExtract: [
-      (buildPath, electronVersion, platform, arch, callback) => {
-        try {
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const keep = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'en-GB.pak']);
-          const localesDir = path.join(buildPath, 'locales');
-          if (fs.existsSync(localesDir)) {
-            for (const file of fs.readdirSync(localesDir)) {
-              if (file.endsWith('.pak') && !keep.has(file)) {
-                fs.unlinkSync(path.join(localesDir, file));
-              }
+      ({ buildPath }) => {
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const keep = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'en-GB.pak']);
+        const localesDir = path.join(buildPath, 'locales');
+        if (fs.existsSync(localesDir)) {
+          for (const file of fs.readdirSync(localesDir)) {
+            if (file.endsWith('.pak') && !keep.has(file)) {
+              fs.unlinkSync(path.join(localesDir, file));
             }
           }
-          callback();
-        } catch (err) {
-          callback(err);
         }
       },
     ],
