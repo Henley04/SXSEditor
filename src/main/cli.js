@@ -620,7 +620,7 @@ async function cmdSynthProject(opts) {
     globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = false;
     globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'dml';
   }
-  log(`[ep] 请求: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(智能) NV TRT-RTX 优先'}${!opts.winmlEp && settings.winmlPreferredDevice ? '|' + settings.winmlPreferredDevice : ''}`);
+  log(`[ep] requested: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(auto) NV TRT-RTX preferred'}${!opts.winmlEp && settings.winmlPreferredDevice ? '|' + settings.winmlPreferredDevice : ''}`);
 
   const pipeline = new OnnxSVSPipeline(modelDir, {
     deviceId: settings.preferredDeviceId ?? settings.deviceId ?? undefined,
@@ -665,11 +665,11 @@ async function cmdSynthProject(opts) {
     }
     if (Number.isInteger(opts.seed)) {
         synthOpts.seed = opts.seed;
-        log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
+        log(`seed       : ${opts.seed} (fixed initial noise, for precision/EP comparison)`);
     }
     if (opts.pitchControl === 'score' || opts.pitchControl === 'manual') {
         synthOpts.pitchControl = opts.pitchControl;
-        log(`pitchCtrl  : ${opts.pitchControl}（score=模型自生成F0，manual=跟随曲线；缺省 manual）`);
+        log(`pitchCtrl  : ${opts.pitchControl} (score=model-generated F0, manual=follow curve; default manual)`);
     }
 
     const tSynth = Date.now();
@@ -685,7 +685,7 @@ async function cmdSynthProject(opts) {
     const durationSec = audio.length / SAMPLE_RATE;
     log(`\n[OK] ${synthMs}ms  samples=${audio.length}  ${durationSec.toFixed(3)}s @${SAMPLE_RATE}Hz  peak=${peak.toFixed(4)}  mean=${(sum / audio.length).toFixed(6)}`);
     eps = pipeline.sessionEPs || {};
-    log(`[ep] 实际使用: diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
+    log(`[ep] actually used: diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
 
     if (opts.out) {
       const { encodeWav } = require('../audio/wavEncoder');

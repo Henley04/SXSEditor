@@ -565,7 +565,7 @@ class Diffusion {
             cfgRescale = _qd.params.cfgRescale;
             cfgScheduleOpts = _qd.params.cfgScheduleOpts;
             dynamicThresholdOpts = _qd.params.dynamicThresholdOpts;
-            console.log(`[Q-Drift] 已启用（${_qd.precision}，${_qd.correction.length} 个通道因子）。强制锁定：${_qd.notes.join('；')}`);
+            console.log(`[Q-Drift] enabled (${_qd.precision}, ${_qd.correction.length} channel factors). Forced lock: ${_qd.notes.join('; ')}`);
         }
         const qdriftCtx = buildQDriftCtx(_qd.active, _qd.correction);
         // useCfg 必须在 Q-Drift 覆盖 cfgStrength 之后再判定：若用户原本关闭了 CFG，

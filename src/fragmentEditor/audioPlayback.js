@@ -635,7 +635,7 @@ async function applyFragmentAudioSettings() {
       try {
         await ctx.setSinkId(sinkId);
       } catch (err) {
-        console.warn('[FragmentAudio] 设置输出设备失败:', err.message);
+        console.warn('[FragmentAudio] Failed to set output device:', err.message);
       }
     }
   }
@@ -1013,7 +1013,7 @@ async function playFragmentExclusive() {
     const result = await window.electronAPI.audioPlay(audioData, options);
 
     if (!result.success) {
-      console.warn('[FragmentAudio] WASAPI 独占模式失败，回退到共享模式:', result.error);
+      console.warn('[FragmentAudio] WASAPI exclusive mode failed, falling back to shared mode:', result.error);
       setFragmentUseExclusiveMode(false);
       await playFragmentShared();
       return;
@@ -1042,7 +1042,7 @@ async function playFragmentExclusive() {
     updateFragmentExclusivePlayhead(_detachFragmentEndedListener);
     updateFragmentPlayButton();
   } catch (err) {
-    console.error('[FragmentAudio] 独占模式启动失败，回退到共享模式:', err);
+    console.error('[FragmentAudio] Exclusive mode startup failed, falling back to shared mode:', err);
     setFragmentUseExclusiveMode(false);
     await playFragmentShared();
   }

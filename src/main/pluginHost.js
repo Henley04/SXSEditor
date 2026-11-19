@@ -400,11 +400,11 @@ function validateModule(mod, manifestValue) {
   // getVoices 缺失只降级不拒绝：插件仍可作为合成后端使用，UI 不显示音色列表即可。
   if (capabilities.voices && typeof mod.getVoices !== 'function') {
     capabilities.voices = false;
-    console.warn(`[plugins] [${manifestValue.id}] capabilities.voices=true 但没有 getVoices()，已降级为 false`);
+    console.warn(`[plugins] [${manifestValue.id}] capabilities.voices=true but no getVoices() found, downgraded to false`);
   }
   if (!capabilities.synthesize && typeof mod.synthesize !== 'function') {
     // 纯音色/纯面板插件：允许存在，只是不能当合成后端。
-    console.warn(`[plugins] [${manifestValue.id}] 未声明 synthesize 能力，将不会作为合成后端`);
+    console.warn(`[plugins] [${manifestValue.id}] synthesize capability not declared, will not be used as a synthesis backend`);
   }
   if (mod.initialize !== undefined && typeof mod.initialize !== 'function') {
     return { ok: false, error: 'initialize 必须是函数' };

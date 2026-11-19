@@ -347,7 +347,7 @@ function buildAppMenu() {
       if (fragment) menuTemplate.splice(3, 0, fragment);
     }
   } catch (err) {
-    console.warn('[Menu] 构建插件菜单失败:', err && err.message);
+    console.warn('[Menu] Failed to build plugin menu:', err && err.message);
   }
 
   const menu = Menu.buildFromTemplate(menuTemplate);
@@ -362,7 +362,7 @@ function rebuildAppMenu() {
   try {
     buildAppMenu();
   } catch (err) {
-    console.warn('[Menu] 重建失败:', err && err.message);
+    console.warn('[Menu] Rebuild failed:', err && err.message);
   }
 }
 

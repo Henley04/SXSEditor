@@ -82,7 +82,7 @@ function readJson(file, fallback) {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data && typeof data === 'object' ? data : fallback;
   } catch (err) {
-    console.warn(`[plugins] 读取 ${path.basename(file)} 失败，使用默认值:`, err && err.message);
+    console.warn(`[plugins] Failed to read ${path.basename(file)}, using defaults:`, err && err.message);
     return fallback;
   }
 }

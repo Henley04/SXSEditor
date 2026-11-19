@@ -1302,7 +1302,7 @@ class OnnxSVSPipeline {
     async _doInit() {
         // 每次初始化都从 0 开始（单调保护会把上一次的 100 当成起点，否则重载时进度条不动）
         this._loadProgressPct = 0;
-        console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime + DirectML)...');
+        console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime)...');
         console.log('[OnnxSVSPipeline] Model directory:', this.modelDir);
         if (this.languageOverride === 'ja') {
             if (this.jpModelDir) {
@@ -1505,7 +1505,7 @@ class OnnxSVSPipeline {
             if (settings.vocoderType === 'sifigan') vocoderType = 'sifigan';
             if (settings.sifiganPrecision === 'fp16') sifiganPrecision = 'fp16';
         } catch (e) {
-            console.warn('[OnnxSVSPipeline] 读取 vocoderType/sifiganPrecision 设置失败，默认使用 default/fp32:', e.message);
+            console.warn('[OnnxSVSPipeline] Failed to read vocoderType/sifiganPrecision settings, defaulting to default/fp32:', e.message);
         }
         this.vocoderType = vocoderType;
         this.sifiganPrecision = sifiganPrecision;
@@ -1582,7 +1582,7 @@ class OnnxSVSPipeline {
                 if (!sifiganStatsExists) {
                     // stats 缺失时强制回退默认 vocoder，避免用户听到失真音频
                     // （SiFiGAN ONNX 内部归一化常量依赖 stats，缺失会导致输入分布严重失配）
-                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
+                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx exists but stats file is missing, forcing fallback to default vocoder to avoid distortion');
                     return false;
                 }
                 this._resolvedVocoderFile = fileName;
@@ -1607,7 +1607,7 @@ class OnnxSVSPipeline {
             } else if (sifiganPlainExists) {
                 pickSifigan('sifigan_vocoder.onnx', 'FP32 plain');
             } else {
-                console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
+                console.warn('[OnnxSVSPipeline] SiFiGAN model missing, falling back to default vocoder');
                 // 落入默认 vocoder 回退逻辑
             }
             // stats 文件路径与缺失标志（仅 onnx+stats 均存在时 sifiganOnnxResolved=true）
@@ -1903,9 +1903,8 @@ class OnnxSVSPipeline {
         try {
             const modelSizes = new Map(modelStats.map((s, i) => [i, s.size]));
             loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys, modelSizes);
-            const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
-            const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
-            console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            const epCounts = this.sessionEPs;
+            console.log(`[OnnxSVSPipeline] Init complete: ${this._formatEpReport(epCounts)}`);
             // Flush ORT native debug logs after init complete
             if (typeof globalThis._flushOrtDebugLogs === 'function') {
                 globalThis._flushOrtDebugLogs();
@@ -1942,9 +1941,7 @@ class OnnxSVSPipeline {
         let loadedSessions = [];
         try {
             loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys);
-            const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
-            const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
-            console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            console.log(`[OnnxSVSPipeline] Fallback init complete: ${this._formatEpReport(this.sessionEPs)}`);
             if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], this._getModelPath(this._resolvedVocoderFile || 'vocoder_dml.onnx'));
             this._detectDiffStepPrecision();
         } catch (err) {
@@ -2292,7 +2289,7 @@ class OnnxSVSPipeline {
                 const modelIsStatic = typeof seqDim === 'number' && seqDim > 0;
                 this.diffStepSeqLen = modelIsStatic ? seqDim : null;
                 if (this.diffStepStaticShapes !== modelIsStatic) {
-                    console.log(`[OnnxSVSPipeline] diff_step 形状自适应: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}, diffStepSeqLen=${this.diffStepSeqLen ?? 'dynamic'}`);
+                    console.log(`[OnnxSVSPipeline] diff_step shape adaptation: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}, diffStepSeqLen=${this.diffStepSeqLen ?? 'dynamic'}`);
                     this.diffStepStaticShapes = modelIsStatic;
                 }
             }
@@ -2371,9 +2368,6 @@ class OnnxSVSPipeline {
         const chunkFrames = this._resolveVocoderChunkFrames();
         const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
-        if (this.sessionEPs.vocoder !== 'dml') {
-            console.warn(`[OnnxSVSPipeline] WARNING: Vocoder is NOT on DML (EP=${this.sessionEPs.vocoder}), will be slow and may explain low GPU usage!`);
-        }
         if (!this.sessions.vocoder) {
             console.error('[OnnxSVSPipeline] CRITICAL: sessions.vocoder is missing! Vocoder inference will throw.');
         }
@@ -5101,6 +5095,25 @@ class OnnxSVSPipeline {
         // 合成完成后重建重型 DML session，释放内存池，防止连续推理 OOM
         await this._recreateHeavySessionsAfterSynthesis();
         return audioData;
+    }
+
+    /**
+     * Build an accurate, dynamic EP breakdown for init/summary logs.
+     * Counts every execution provider actually present in sessionEPs (including
+     * WinML vendor EPs such as `winml:NvTensorRTRTX`) instead of hardcoding only
+     * DML/CPU — the old report showed "0 DML, 0 CPU" when models ran on TRTRTX.
+     */
+    _formatEpReport(sessionEPs) {
+        const groups = new Map();
+        for (const ep of Object.values(sessionEPs || {})) {
+            const key = ep || 'unknown';
+            groups.set(key, (groups.get(key) || 0) + 1);
+        }
+        if (groups.size === 0) return '0 model(s) loaded';
+        const parts = [...groups.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .map(([ep, count]) => `${count} model(s) using ${ep}`);
+        return parts.join(', ');
     }
 
     getHardwareInfo() {

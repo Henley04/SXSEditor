@@ -80,7 +80,7 @@ function pluginMethodDefs() {
     return pluginAutomation.list() || {};
   } catch (err) {
     // 插件服务自己坏了不能连带整张 MCP 方法表一起消失
-    console.warn('[MCP] 读取插件自动化方法失败:', err && err.message);
+    console.warn('[MCP] Failed to read plugin automation methods:', err && err.message);
     return {};
   }
 }

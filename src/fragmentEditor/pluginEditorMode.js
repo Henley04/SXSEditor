@@ -295,7 +295,7 @@ export async function applyPluginEditorLayout() {
     await applyEditorLayout(layout, { kind, backend });
   } catch (err) {
     // 形态裁剪是"锦上添花"，失败绝对不能让分片编辑器打不开
-    console.warn('[plugins] 应用插件编辑器形态失败，已回退到默认形态：', err && err.message ? err.message : err);
+    console.warn('[plugins] Failed to apply plugin editor layout, reverted to default:', err && err.message ? err.message : err);
   }
 }
 

@@ -28,7 +28,7 @@ import { registerPluginMessages, unregisterPluginMessages } from '../../i18n/ind
 export function installPluginHost(options = {}) {
   const api = window.electronAPI?.pluginHost;
   if (!api || typeof api.onSync !== 'function') {
-    console.warn('[plugin-host] 未安装：pluginHost API 不可用');
+    console.warn('[plugin-host] Not installed: pluginHost API unavailable');
     return () => {};
   }
 

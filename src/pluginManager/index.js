@@ -848,7 +848,7 @@ async function refresh() {
   try {
     state.admin = await api.admin();
   } catch (err) {
-    console.warn('[plugin-manager] 读取插件列表失败:', err && err.message);
+    console.warn('[plugin-manager] Failed to read plugin list:', err && err.message);
     return;
   }
   render();
@@ -859,7 +859,7 @@ async function refreshLog() {
   try {
     state.log = await api.getLog(200);
   } catch (err) {
-    console.warn('[plugin-manager] 读取日志失败:', err && err.message);
+    console.warn('[plugin-manager] Failed to read logs:', err && err.message);
     state.log = [];
   }
   if (state.tab === 'log') renderLog();
@@ -993,13 +993,13 @@ async function boot() {
     await initI18n();
     applyLocale();
   } catch (err) {
-    console.warn('[plugin-manager] i18n 初始化失败:', err && err.message);
+    console.warn('[plugin-manager] i18n initialization failed:', err && err.message);
   }
 
   try {
     await initWindowTheme(cleanups);
   } catch (err) {
-    console.warn('[plugin-manager] 主题初始化失败:', err && err.message);
+    console.warn('[plugin-manager] Theme initialization failed:', err && err.message);
   }
 
   if (!api) {

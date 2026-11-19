@@ -57,7 +57,7 @@ function scanPlugins() {
       real = fs.realpathSync(dir);
       const realRoot = fs.realpathSync(plugins);
       if (!real.startsWith(realRoot + path.sep)) {
-        console.warn(`[plugins] 跳过软链或越界目录：${entry.name}`);
+        console.warn(`[plugins] Skipping symlink or out-of-bounds directory: ${entry.name}`);
         continue;
       }
     } catch (_) {
@@ -428,7 +428,7 @@ function writePackageRecord(id, record) {
   try {
     store.writeJsonAtomic(packageRecordFile(id), record);
   } catch (err) {
-    console.warn(`[plugins] 写入 ${id} 的包记录失败:`, err && err.message);
+    console.warn(`[plugins] Failed to write package record for ${id}:`, err && err.message);
   }
 }
 
@@ -499,7 +499,7 @@ function uninstall(id, options = {}) {
       // "已经卸载成功"的操作报失败，还跳过了后面的泄漏断言。
       // 正确做法是如实报告"目录残留"，下次启动扫描时它会被当成未启用插件。
       fileError = String((err && err.message) || err);
-      console.warn(`[plugins] 删除 ${id} 的安装目录失败:`, fileError);
+      console.warn(`[plugins] Failed to delete install directory for ${id}:`, fileError);
     }
   }
 
@@ -507,7 +507,7 @@ function uninstall(id, options = {}) {
     try {
       fs.rmSync(path.join(p.data, id), { recursive: true, force: true });
     } catch (err) {
-      console.warn(`[plugins] 清理 ${id} 的用户数据失败:`, err && err.message);
+      console.warn(`[plugins] Failed to clean up user data for ${id}:`, err && err.message);
     }
   }
 

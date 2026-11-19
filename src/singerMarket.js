@@ -12,11 +12,6 @@ initI18n().then(() => {
 
 initWindowTheme();
 
-// Build marker: verify in the market window's DevTools console that the
-// running bundle includes the region-aware error state (vs. stale builds
-// that still show "No singers found" on network failures).
-console.log('[SingerMarket] UI build 2026-09-26.3 (detail loading state + tags/license fix)');
-
 // ==================== State ====================
 const state = {
   user: null,             // { id, username, is_admin } or null

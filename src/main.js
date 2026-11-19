@@ -723,7 +723,7 @@ app.whenReady().then(() => {
                 getPluginService().runtimes.sendEvent(subject.slice(7), 'models.event', evt);
               }
             } catch (err) {
-              console.warn('[models] 事件路由失败:', err && err.message);
+              console.warn('[models] Event routing failed:', err && err.message);
             }
           },
         });
@@ -743,7 +743,7 @@ app.whenReady().then(() => {
               .some((w) => !w.isDestroyed() && w.isVisible() && w.isFocused()),
           });
         } catch (err) {
-          console.error('[models] IPC 注册失败:', err && err.message);
+          console.error('[models] IPC registration failed:', err && err.message);
         }
 
         // 契约 v1 的歌声后端 → builtin:singing.* 端点。插件什么时候加载完成不确定
@@ -755,18 +755,18 @@ app.whenReady().then(() => {
           const syncLocalSinging = () => {
             try {
               const r = syncSynthesisEndpoints({ service: modelService, host: getPluginHost(), logger: console });
-              if (r.added || r.removed) console.log('[models] 歌声端点同步:', r);
+              if (r.added || r.removed) console.log('[models] Singing endpoint sync:', r);
             } catch (err) {
-              console.warn('[models] 歌声端点同步失败:', err && err.message);
+              console.warn('[models] Singing endpoint sync failed:', err && err.message);
             }
           };
           require('./main/pluginIpc').setAfterPluginsLoaded(syncLocalSinging);
           syncLocalSinging();
         } catch (err) {
-          console.warn('[models] 歌声后端接线失败:', err && err.message);
+          console.warn('[models] Singing backend wiring failed:', err && err.message);
         }
       } catch (err) {
-        console.error('[models] 初始化失败:', err && err.message);
+        console.error('[models] Initialization failed:', err && err.message);
       }
 
       // 随包分发的内置插件（official-project-import：VOCALOID / Synthesizer V 工程）
@@ -790,7 +790,7 @@ app.whenReady().then(() => {
         try {
           require('./main/windowManager').rebuildAppMenu();
         } catch (err) {
-          console.warn('[plugins] 菜单重建失败:', err && err.message);
+          console.warn('[plugins] Menu rebuild failed:', err && err.message);
         }
       });
       // 菜单在 buildAppMenuDeferred()（见本文件上方）就建好了，那时插件服务还是
@@ -808,7 +808,7 @@ app.whenReady().then(() => {
         const { setPipelineHookRunner } = require('./main/plugins/PipelineHooks');
         setPipelineHookRunner((stage, audio, meta) => pluginService.pipelineHooks.run(stage, audio, meta));
       } catch (err) {
-        console.warn('[plugins] pipeline hook 接线失败:', err && err.message);
+        console.warn('[plugins] Pipeline hook wiring failed:', err && err.message);
       }
       // 插件贡献的自动化方法进 MCP 方法表。注入的是**函数**而不是快照：
       // 插件随时可装卸，桥接层每次请求现取，才不会有"装完插件还要重启"的空窗。
@@ -820,12 +820,12 @@ app.whenReady().then(() => {
           run: (name, params, options) => pluginService.runAutomationMethod(name, params, options),
         });
       } catch (err) {
-        console.warn('[plugins] 自动化方法接线失败:', err && err.message);
+        console.warn('[plugins] Automation method wiring failed:', err && err.message);
       }
       console.log(`[plugins] loaded: ${JSON.stringify(pluginService.registry.stats())}`);
     } catch (err) {
       // 插件系统坏了不能拖垮主程序
-      console.error('[plugins] 初始化失败:', err && err.stack ? err.stack : err);
+      console.error('[plugins] Initialization failed:', err && err.stack ? err.stack : err);
     }
 
     resolveHeavyIpcReady({ success: true });
@@ -996,7 +996,7 @@ app.on('before-quit', (event) => {
         require('./inference/pipeline/sessionValidationCache').flushSync();
         require('./inference/winml/winmlDetectionCache').flushSync();
       } catch (err) {
-        console.warn('[Main] 推理缓存落盘失败:', err && err.message);
+        console.warn('[Main] Failed to persist inference cache:', err && err.message);
       }
       resetSvsPipeline();
       resetRmvpe();
@@ -1011,7 +1011,7 @@ app.on('before-quit', (event) => {
         const { getPluginService } = require('./main/plugins/PluginService');
         await getPluginService().disposeAll();
       } catch (err) {
-        console.warn('[Main] 插件清理失败:', err && err.message);
+        console.warn('[Main] Plugin cleanup failed:', err && err.message);
       }
       const { getFragmentWindows } = require('./main/windowManager');
       const fragmentWindows = getFragmentWindows();

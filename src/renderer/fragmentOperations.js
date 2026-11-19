@@ -322,9 +322,9 @@ export async function handleAudioToMidi() {
       if (segments.length > 0) {
         fragment.pitchCurve.bakedSegments = segments;
         fragment.pitchCurve.enabled = true;
-        console.log(`[audioToMidi] 生成 ${anchors.length} 个锚点 → 归并为 ${segments.length} 个滑音段（保留 ${(keptRatio * 100).toFixed(0)}%，其余交给自动曲线）`);
+        console.log(`[audioToMidi] Generated ${anchors.length} anchors -> merged into ${segments.length} glide segments (kept ${(keptRatio * 100).toFixed(0)}%, rest left to auto curve)`);
       } else {
-        console.log(`[audioToMidi] 未发现明显滑音（${anchors.length} 个锚点拟合误差均在容差内），全部交给自动曲线`);
+        console.log(`[audioToMidi] No significant glide found (${anchors.length} anchors all within fit tolerance), leaving all to auto curve`);
       }
     }
 

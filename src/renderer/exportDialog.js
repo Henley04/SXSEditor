@@ -1425,7 +1425,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       if (Array.isArray(res.warnings) && res.warnings.length) {
         // 插件说"有些东西没能完整写进去"必须让用户看见，不能只 console：
         // 导出是终点，用户拿到的文件就是最终产物。
-        console.warn('[ExportDialog] 插件导出警告:\n' + res.warnings.join('\n'));
+        console.warn('[ExportDialog] Plugin export warnings:\n' + res.warnings.join('\n'));
         form._exportWarnings = res.warnings;
       }
     } else {

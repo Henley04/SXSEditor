@@ -27,8 +27,8 @@ function _note(label, err) {
   _counts.set(label, n);
   const msg = (err && err.message) ? err.message : String(err);
   if (n <= MAX_VERBOSE_PER_LABEL || n % SUPPRESS_FACTOR === 0) {
-    const suffix = n > MAX_VERBOSE_PER_LABEL ? `（第 ${n} 次，已抑制同类日志）` : '';
-    console.warn(`[safeCall] ${label} 失败${suffix}：${msg}`);
+    const suffix = n > MAX_VERBOSE_PER_LABEL ? ` (occurrence #${n}, similar logs suppressed)` : '';
+    console.warn(`[safeCall] ${label} failed${suffix}: ${msg}`);
   }
   return n;
 }

@@ -27,7 +27,7 @@ export async function listRecentProjects() {
     const res = await recents.list();
     return res && Array.isArray(res.items) ? res.items : [];
   } catch (err) {
-    console.warn('[recents] 读取最近工程失败:', err && err.message);
+    console.warn('[recents] Failed to read recent projects:', err && err.message);
     return [];
   }
 }
@@ -45,7 +45,7 @@ export async function recordRecentProject(filePath) {
     const res = await recents.record(filePath);
     return !!res && res.success === true;
   } catch (err) {
-    console.warn('[recents] 记录最近工程失败:', err && err.message);
+    console.warn('[recents] Failed to record recent project:', err && err.message);
     return false;
   }
 }
@@ -58,7 +58,7 @@ export async function removeRecentProject(filePath) {
     const res = await recents.remove(filePath);
     return !!res && res.success === true;
   } catch (err) {
-    console.warn('[recents] 移除最近工程失败:', err && err.message);
+    console.warn('[recents] Failed to remove recent project:', err && err.message);
     return false;
   }
 }

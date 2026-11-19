@@ -324,7 +324,7 @@ async function enumerateDMLDevicesInProcess(modelDir) {
     // DxgiVideoMemory 所在的那一行，显存检测反而失效 —— 宁可多收一点。
     // ------------------------------------------------------------------
     if (_stderrCaptureActive) {
-        console.warn('[OnnxSVSPipeline] DML 设备探测已在进行中，跳过并发调用（避免 stderr 劫持重入）');
+        console.warn('[OnnxSVSPipeline] DML device detection already in progress, skipping concurrent call (avoid stderr hijack reentry)');
         return [];
     }
     _stderrCaptureActive = true;
@@ -786,7 +786,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             const winmlProvider = require('../winml/winmlProvider');
             if (winmlProvider.isWinmlEnabled()) {
                 if (trtRtxExcluded) {
-                    console.log(`[Model][select] name=${modelName} winml=yes trt-rtx=excluded (whitelisted, pinned to DML)`);
+                    console.log(`[Model][select] name=${modelName} winml=yes trt-rtx=excluded (whitelisted, other WinML EPs still allowed, DML fallback kept)`);
                 }
                 const winmlRes = await winmlProvider.tryCreateWinMLSession(
                     modelPath, useStaticShapes, isDiffStepOrVocoder, { excludeTrtRtx: trtRtxExcluded });

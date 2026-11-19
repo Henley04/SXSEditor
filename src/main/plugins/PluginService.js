@@ -205,10 +205,10 @@ class PluginService {
       // 装/卸/停用之后，系统里"哪些扩展名归我"也跟着变了。这个调用在非
       // Windows 或未打包时直接返回 —— 开发机上不该碰注册表。
       syncWindowsPluginFileAssociations().catch((err) => {
-        console.warn('[plugins] 同步系统文件关联失败:', err && err.message);
+        console.warn('[plugins] Failed to sync system file associations:', err && err.message);
       });
     } catch (err) {
-      console.warn('[plugins] 同步文件关联失败:', err && err.message);
+      console.warn('[plugins] Failed to sync file associations:', err && err.message);
     }
   }
 
@@ -1861,7 +1861,7 @@ class PluginService {
       const { openPluginManagerWindow } = require('../windowManager');
       openPluginManagerWindow(options);
     } catch (err) {
-      console.warn('[plugins] 打开管理器失败:', err && err.message);
+      console.warn('[plugins] Failed to open manager:', err && err.message);
     }
   }
 
@@ -1888,7 +1888,7 @@ class PluginService {
     try {
       await this.runtimes.stopAll();
     } catch (err) {
-      console.warn('[plugins] 停止运行时失败:', err && err.message);
+      console.warn('[plugins] Failed to stop runtime:', err && err.message);
     }
     if (this.ipc) {
       try { this.ipc.dispose(); } catch (_) { /* ignore */ }
