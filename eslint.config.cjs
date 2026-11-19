@@ -188,6 +188,8 @@ module.exports = [
             'src/shared/pluginContract.js',
             // 流式调度器：ESM，被渲染层 bundle（watchdog 用 setTimeout/console）
             'src/shared/streamingScheduler.js',
+            // 流式 chunk 有序队列：被 fragmentEditor 渲染层 require，用 setTimeout/clearTimeout + module.exports
+            'src/shared/sequencedChunkQueue.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',
