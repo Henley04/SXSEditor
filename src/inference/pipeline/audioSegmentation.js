@@ -379,7 +379,51 @@ class AudioSegmentation {
      * computeSynthCacheKey = 本键 + `_mp${melPostprocessHash}`，两者字段构成
      * 必须保持一致（新增影响 mel 的选项时两处同步）。
      */
-    computeMelCacheKey(notes, bpm, options, _interpolateEnvelope) {
+    /**
+     * 只算缓存键里「随音符变化」的那一段（前导整数）。
+     *
+     * 拆分的动机（性能）：参考音频 / F0 曲线 / prompt cond 的哈希很贵，
+     * 但它们只取决于 bpm + options，与具体音符无关。长音频分成 N 个 segment
+     * 时，旧实现为每个 segment 各算两遍这段昂贵哈希（synth 键一遍 + mel 键一遍），
+     * 共 2N 次，全部发生在首个 chunk 发射之前 —— 这正是「分片启动延迟」的来源。
+     * 拆出本方法后，调用方每段只算一次 notesHash，选项段复用一份。
+     */
+    computeNotesHash(notes) {
+        let notesHash = 0;
+        if (!notes) return 0;
+        for (let i = 0; i < notes.length; i++) {
+            const n = notes[i];
+            // phonemeAdjustments 影响合成结果（durationRatios 决定 mel2token 帧分配，
+            // volumePoints 决定音量包络），必须纳入缓存键，否则编辑音素边界/音量后
+            // 会命中旧缓存返回过期音频。
+            // noteType 同样影响合成结果：3=连音（不重新起音）。MIDI 导入的连音音符
+            // 只有 noteType、没有 isSlur 标志，漏掉它会命中"重新起音"的旧缓存。
+            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
+            if (n.phonemeAdjustments) {
+                for (const adj of n.phonemeAdjustments) {
+                    s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
+                    if (adj.volumePoints) {
+                        for (const vp of adj.volumePoints) {
+                            s += `:${vp.t}:${vp.v}`;
+                        }
+                    }
+                }
+            }
+            for (let j = 0; j < s.length; j++) {
+                notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
+            }
+        }
+        return notesHash;
+    }
+
+    /**
+     * 只算缓存键里「随 bpm + options 变化」的那一段（含前导下划线）。
+     *
+     * 与 computeNotesHash() 拼接即得完整 mel 键：
+     *   computeMelCacheKey(notes,bpm,options) === notesHash + computeOptionKeyPart(bpm,options)
+     * 该恒等式由 test/cacheKeyFactorization.test.js 用黄金值守护，改动任一段都要同步。
+     */
+    computeOptionKeyPart(bpm, options) {
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
@@ -408,30 +452,6 @@ class AudioSegmentation {
         // 用户主动「重新合成」时渲染层注入的一次性 nonce。只用来让缓存失配，
         // 不参与任何推理参数；缺省时不追加后缀，保持默认可命中。
         const retakeSuffix = options.retakeNonce ? `_rt${options.retakeNonce}` : '';
-
-        let notesHash = 0;
-        for (let i = 0; i < notes.length; i++) {
-            const n = notes[i];
-            // phonemeAdjustments 影响合成结果（durationRatios 决定 mel2token 帧分配，
-            // volumePoints 决定音量包络），必须纳入缓存键，否则编辑音素边界/音量后
-            // 会命中旧缓存返回过期音频。
-            // noteType 同样影响合成结果：3=连音（不重新起音）。MIDI 导入的连音音符
-            // 只有 noteType、没有 isSlur 标志，漏掉它会命中"重新起音"的旧缓存。
-            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
-            if (n.phonemeAdjustments) {
-                for (const adj of n.phonemeAdjustments) {
-                    s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
-                    if (adj.volumePoints) {
-                        for (const vp of adj.volumePoints) {
-                            s += `:${vp.t}:${vp.v}`;
-                        }
-                    }
-                }
-            }
-            for (let j = 0; j < s.length; j++) {
-                notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
-            }
-        }
 
         const f0EnvHash = f0Envelope ? this.hashArray(
             f0Envelope.keyframes ? f0Envelope.keyframes.flatMap(kf => [kf.time, kf.value * 1000]) : []
@@ -489,7 +509,15 @@ class AudioSegmentation {
         //     见 shared/promptCondSignature.js；
         //   · _pm/_be —— 权重集合（fp32/fp16/int8）与推理后端，同一输入换权重
         //     输出音频不同；_rt<n> 是「重新合成」注入的一次性 nonce。
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}_pm${modelPrecision}_be${inferBackend}_jpm${jpMapVersion}${retakeSuffix}`;
+        return `_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}_pm${modelPrecision}_be${inferBackend}_jpm${jpMapVersion}${retakeSuffix}`;
+    }
+
+    /**
+     * Compute mel cache key = notesHash + optionKeyPart.
+     * 数值恒等式：与拆分前的逐字段拼接逐字节一致（黄金值见 cacheKeyFactorization 测试）。
+     */
+    computeMelCacheKey(notes, bpm, options, _interpolateEnvelope) {
+        return `${this.computeNotesHash(notes)}${this.computeOptionKeyPart(bpm, options)}`;
     }
 
     /**
@@ -503,6 +531,24 @@ class AudioSegmentation {
     computeSynthCacheKey(notes, bpm, options, _interpolateEnvelope) {
         const base = this.computeMelCacheKey(notes, bpm, options, _interpolateEnvelope);
         return `${base}_mp${this.computeMelPostprocessHash(options)}`;
+    }
+
+    /**
+     * 一次算出 mel 键与音频键，共享同一份 optionKeyPart / mp 哈希。
+     *
+     * 缓存命中检查需要 synth 键（`_synthCacheGet`）与 mel 键（MISS 后的
+     * `_melCacheGet`）两个键；旧实现调用 computeSynthCacheKey + computeMelCacheKey，
+     * 把昂贵的 reference/F0/prompt 哈希重复算了两遍。本方法只算一遍 optionKeyPart，
+     * 返回两条互不相同的键，供调用方直接使用。
+     *
+     * @returns {{ melKey: string, synthKey: string, optionPart: string, mpHash: string }}
+     */
+    computeCacheKeyParts(notes, bpm, options) {
+        const notesHash = this.computeNotesHash(notes);
+        const optionPart = this.computeOptionKeyPart(bpm, options);
+        const mpHash = this.computeMelPostprocessHash(options);
+        const melKey = `${notesHash}${optionPart}`;
+        return { melKey, synthKey: `${melKey}_mp${mpHash}`, optionPart, mpHash };
     }
 
     /**

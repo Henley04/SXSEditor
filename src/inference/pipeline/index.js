@@ -656,10 +656,10 @@ class OnnxSVSPipeline {
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
     _splitLongRestRegions(notes, bpm) { return this._audioSegmentation.splitLongRestRegions(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
-    _computeSynthCacheKey(notes, bpm, options) {
-        const base = this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this));
+    /** pipeline 级 seed/qdrift 后缀：覆盖全曲/分段/chunk 各级缓存的派生键。 */
+    _cacheKeyStateSuffix() {
         // seed 与 qdrift 改变合成结果，但 audioSegmentation 不感知 pipeline 状态，
-        // 无法纳入 base 键 —— 在此统一追加，覆盖全曲/分段/chunk 各级缓存的派生键：
+        // 无法纳入 base 键 —— 在此统一追加：
         //   - seed：CLI --seed / 固定种子设置用于精度与 EP 的 A/B 对比，换 seed 后
         //     初始噪声不同，缓存键不含 seed 会命中上一次的音频，对比结论失真。
         //   - qdrift：Q-Drift 开启时强制改写 solver/steps/CFG/rescale 并关闭 CFG
@@ -667,7 +667,26 @@ class OnnxSVSPipeline {
         const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
             ? this._diffusion.getNoiseSeed()
             : 'auto';
-        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+        return `_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+    }
+
+    /**
+     * 一次算出带 pipeline 状态后缀的 synth/mel 两个缓存键，共享昂贵的 optionKeyPart。
+     * 用于缓存命中检查：旧代码分别调用 _computeSynthCacheKey + _computeMelCacheKey，
+     * 把 reference/F0/prompt 哈希算两遍（可见的命中延迟）。
+     */
+    _computeCacheKeyPair(notes, bpm, options) {
+        const parts = this._audioSegmentation.computeCacheKeyParts(notes, bpm, options);
+        const suffix = this._cacheKeyStateSuffix();
+        return {
+            melKey: `${parts.melKey}${suffix}`,
+            synthKey: `${parts.synthKey}${suffix}`,
+        };
+    }
+
+    _computeSynthCacheKey(notes, bpm, options) {
+        const base = this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this));
+        return `${base}${this._cacheKeyStateSuffix()}`;
     }
     _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
         // 复用 _computeSynthCacheKey（已含 seed/qdrift 后缀）
@@ -682,14 +701,37 @@ class OnnxSVSPipeline {
      */
     _computeMelCacheKey(notes, bpm, options) {
         const base = this._audioSegmentation.computeMelCacheKey(notes, bpm, options);
-        const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
-            ? this._diffusion.getNoiseSeed()
-            : 'auto';
-        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+        return `${base}${this._cacheKeyStateSuffix()}`;
     }
     _computeSegmentMelKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
         const base = this._computeMelCacheKey(segNotes, bpm, options);
         return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
+
+    /**
+     * 批量算出每个 segment 的 synth/mel 缓存键，共享同一份 optionKeyPart / mp / 状态后缀。
+     *
+     * 长音频分成 N 段时，旧实现在首个 chunk 发射前对每段各调用
+     * _computeSegmentCacheKey + _computeSegmentMelKey —— 两个键各自重算 reference WAV /
+     * F0 曲线 / prompt cond 的 FNV 哈希，共 2N 次昂贵哈希全压在「分片启动」阶段。
+     * 这些哈希对 N 段完全相同（bpm/options 一致），只有 notesHash 与 sb/fs/pt 逐段不同。
+     * 本方法把不变量提到循环外算一次，段内只剩轻量的 notesHash + 字符串拼接。
+     *
+     * @returns {Array<{synthKey:string, melKey:string}>} 与入参 segments 等长、同序
+     */
+    _computeSegmentKeyBatch(segments, bpm, options, segF0Shifts, ptFrameCount) {
+        const optionPart = this._audioSegmentation.computeOptionKeyPart(bpm, options);
+        const mpHash = this._audioSegmentation.computeMelPostprocessHash(options);
+        const suffix = this._cacheKeyStateSuffix();
+        const seg = this._audioSegmentation;
+        return segments.map((s, i) => {
+            const notesHash = seg.computeNotesHash(s.notes);
+            const tail = `_sb${s.startBeat}_fs${segF0Shifts[i]}_pt${ptFrameCount || 0}`;
+            return {
+                melKey: `${notesHash}${optionPart}${suffix}${tail}`,
+                synthKey: `${notesHash}${optionPart}_mp${mpHash}${suffix}${tail}`,
+            };
+        });
     }
     _median(arr) { return this._audioSegmentation.median(arr); }
     _isRestNote(note) { return this._audioSegmentation._isRestNote(note); }
@@ -4352,9 +4394,11 @@ class OnnxSVSPipeline {
 
         const filledNotes = this._fillNoteGaps(notes);
 
-        const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
-        // mel 级缓存键：不含 melPostprocess（音色曲线只改 vocoder 输入，diffstep 产物与它无关）
-        const melKey = this._computeMelCacheKey(notes, bpm, options);
+        // 一次算出 synth/mel 两个缓存键，共享昂贵的 optionKeyPart（参考音频/F0/prompt 哈希）。
+        // 旧实现 computeSynthCacheKey + computeMelCacheKey 各算一遍这段哈希，缓存命中检查
+        // 便付出双倍成本 —— 表现为「命中缓存仍有可见延迟」。
+        // melKey 不含 melPostprocess（音色曲线只改 vocoder 输入，diffstep 产物与它无关）。
+        const { synthKey: cacheKey, melKey } = this._computeCacheKeyPair(notes, bpm, options);
         const cachedAudio = this._synthCacheGet(cacheKey);
         if (cachedAudio) {
             console.warn(`[OnnxSVSPipeline] >>> CACHE HIT <<< key=${cacheKey.substring(0, 32)}... | Returning CACHED audio, vocoder will NOT run! (Clear cache: switch model or restart app)`);
@@ -4846,18 +4890,21 @@ class OnnxSVSPipeline {
         //     的 segF0Shift 变化 → _fs 后缀变化 → 全部分片失效（此时输出确实不同，失效正确）。
         //   - 自定义音高曲线（pitchCurveF0 非空）随音符 start/duration 变化 → f0Hash 变化 →
         //     全部分片失效。这两种场景下退化为整曲重算，行为与未引入分片缓存时一致。
+        // 每段的 sF0Shift 只算一次，缓存键批量生成共享同一份 optionKeyPart/mp/状态后缀：
+        // 旧的逐段 _computeSegmentCacheKey + _computeSegmentMelKey 会为 N 段各做 2 次
+        // 昂贵的 reference/F0/prompt 哈希，全压在首个 chunk 前的「分片启动」阶段。
+        const segF0Shifts = segments.map(s => this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes));
+        const segKeyParts = this._computeSegmentKeyBatch(segments, bpm, options, segF0Shifts, ptFrameCount);
         const segCacheKeys = new Array(segments.length);
         const segMelCacheKeys = new Array(segments.length);
         const segCachedAudios = new Array(segments.length);
         let segCacheHits = 0;
         for (let i = 0; i < segments.length; i++) {
-            const s = segments[i];
-            const sF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes);
-            const sKey = this._computeSegmentCacheKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
+            const sKey = segKeyParts[i].synthKey;
             segCacheKeys[i] = sKey;
             // mel 级键（不含 melPostprocess）：音色曲线变化时 segment 原始 mel 仍可复用，
             // 跳过该 segment 的 encoder+diffusion，仅重跑 vocoder。
-            segMelCacheKeys[i] = this._computeSegmentMelKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
+            segMelCacheKeys[i] = segKeyParts[i].melKey;
             const hit = this._segCacheGet(sKey);
             segCachedAudios[i] = hit;
             if (hit) segCacheHits++;
