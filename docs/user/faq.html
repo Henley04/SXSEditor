@@ -87,7 +87,7 @@
         <span data-lang="zh">支持哪些平台？</span>
       </h3>
       <ul>
-        <li><span data-lang="en"><strong>Windows</strong>: Primary target with pre-built installers. Windows 10/11 64-bit required.</span><span data-lang="zh"><strong>Windows</strong>：主要平台，提供预构建安装包。需要 Windows 10/11 64 位。</span></li>
+        <li><span data-lang="en"><strong>Windows</strong>: Primary target with pre-built installers. Windows 10/11 64-bit required. The installer also sets up the <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong>, which native inference requires.</span><span data-lang="zh"><strong>Windows</strong>：主要平台，提供预构建安装包。需要 Windows 10/11 64 位。安装包还会一并安装原生推理所需的 <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong>。</span></li>
         <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source with Electron Forge; CPU inference only, without DirectML or Windows ML. No official binaries are provided. See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建，仅支持 CPU 推理，不支持 DirectML / Windows ML，官方不提供预编译二进制。详见开发者指南。</span></li>
       </ul>
 
@@ -467,6 +467,18 @@
         <span data-lang="en">Troubleshooting</span>
         <span data-lang="zh">故障排查</span>
       </h2>
+
+      <h3>
+        <span data-lang="en">Synthesis fails with "native module not found" / "binding not found"</span>
+        <span data-lang="zh">合成失败，提示 "native module not found" / "binding 未找到"</span>
+      </h3>
+      <p data-lang="en">This almost always means the <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong> is missing or outdated — ONNX Runtime and the native inference bridge are MSVC-built and need <code>vcruntime140.dll</code>, <code>vcruntime140_1.dll</code> and <code>msvcp140.dll</code>. Stripped-down or long-unupdated Windows installs may lack these, and the loader reports a generic "binding not found" instead of the real cause.</p>
+      <p data-lang="zh">这几乎总是因为缺少或过旧的 <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong>——ONNX Runtime 与原生推理桥接由 MSVC 编译，需要 <code>vcruntime140.dll</code>、<code>vcruntime140_1.dll</code> 和 <code>msvcp140.dll</code>。精简版或长期未更新的 Windows 可能没有这些 DLL，加载器只会笼统报 "binding 未找到"，掩盖真实原因。</p>
+      <ol>
+        <li><span data-lang="en">Install the redistributable from <a href="https://aka.ms/vc14/vc_redist.x64.exe">aka.ms/vc14/vc_redist.x64.exe</a> and restart the app.</span><span data-lang="zh">从 <a href="https://aka.ms/vc14/vc_redist.x64.exe">aka.ms/vc14/vc_redist.x64.exe</a> 安装运行库后重启应用。</span></li>
+        <li><span data-lang="en">Open <strong>Help → Environment Check</strong> and check the <em>Visual C++ runtime</em> row: it shows "MISSING" with the exact DLL names when the runtime is incomplete.</span><span data-lang="zh">打开<strong>帮助 → 环境检测</strong>，查看 <em>Visual C++ 运行库</em> 一行：运行库不完整时会显示 "MISSING" 并列出缺失的 DLL 名称。</span></li>
+        <li><span data-lang="en">Re-run the latest installer, which bundles and auto-installs the redistributable.</span><span data-lang="zh">重新运行最新版安装包，它会自带并自动安装该运行库。</span></li>
+      </ol>
 
       <h3>
         <span data-lang="en">The app crashes on startup</span>

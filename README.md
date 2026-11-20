@@ -29,6 +29,8 @@ Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese
 
 **Platform support**: Windows is the primary platform (installer + DirectML/WebNN acceleration). macOS/Linux are **source-build only** — CPU inference, no DirectML/Windows ML, and **not covered by CI or released binaries**. See the [Developer Docs](https://henley04.github.io/SXSEditor/dev/build.html).
 
+**Windows runtime requirement**: ONNX Runtime and the native inference bridge are MSVC-built and depend on the **Microsoft Visual C++ Redistributable 2015-2022 (x64)** (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`). The installer installs it automatically; on a stripped-down/older system where native modules fail with "binding not found", install it manually from [aka.ms/vc14/vc_redist.x64.exe](https://aka.ms/vc14/vc_redist.x64.exe) and restart. Help → Environment Check shows the detected VC++ runtime status.
+
 - [Website](https://henley04.github.io/SXSEditor/)
 - [User Docs](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [Developer Docs](https://henley04.github.io/SXSEditor/dev/build.html)
@@ -56,6 +58,8 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 支持的合成语言：**中文（普通话）**、**英语** 和 **日语**。
 
 **平台支持**：Windows 是主要平台（提供安装包与 DirectML/WebNN 加速）。macOS/Linux **需从源码构建**，仅支持 CPU 推理，不含 DirectML/Windows ML 加速，且**无 CI 覆盖、无官方二进制**。详见[开发者文档](https://henley04.github.io/SXSEditor/dev/build.html)。
+
+**Windows 运行库依赖**：ONNX Runtime 与原生推理桥接模块均由 MSVC 编译，依赖 **Microsoft Visual C++ Redistributable 2015-2022 (x64)**（`vcruntime140.dll`、`vcruntime140_1.dll`、`msvcp140.dll`）。安装包会自动安装；若在精简/老旧系统上遇到原生模块加载失败、提示 "binding 未找到"，请手动安装该运行库（[aka.ms/vc14/vc_redist.x64.exe](https://aka.ms/vc14/vc_redist.x64.exe)）后重启。「帮助 → 环境检测」会显示检测到的 VC++ 运行库状态。
 
 - [官网](https://henley04.github.io/SXSEditor/)
 - [用户文档](https://henley04.github.io/SXSEditor/user/quick-start.html)

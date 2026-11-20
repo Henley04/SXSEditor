@@ -457,6 +457,22 @@ app.whenReady().then(() => {
   // calls buildAppMenu(), which uses t() for menu labels.
   loadMainLocale();
 
+  // 启动期 VC++ 运行库探测（旧机器静默失败的可操作提示）。
+  // 只写日志、不弹窗、不阻断启动 —— 缺运行库时推理会在加载原生模块时失败，
+  // 但应用本身仍应能打开（帮助→环境检测会显式显示 "Missing"）。三枚 fs.existsSync
+  // 开销可忽略，且非 Windows 直接返回 supported:false，不触碰文件系统。
+  try {
+    const { probeVcRuntime } = require('./shared/vcRuntime.js');
+    const vc = probeVcRuntime();
+    if (vc.supported && !vc.ok) {
+      console.warn(
+        `[vc-runtime] Missing Visual C++ runtime DLLs: ${vc.missing.join(', ')}. `
+        + 'Native inference (ONNX Runtime / ort_bridge.node) may fail to load. '
+        + `Install Microsoft Visual C++ 2015-2022 Redistributable (x64): ${vc.redistUrl}`
+      );
+    }
+  } catch (_) { /* 探测失败不影响启动 */ }
+
   // ========================================================================
   // STEP 3: Create the main window (hidden) so its renderer starts loading
   // IN PARALLEL with the heavy requires in STEP 4. The renderer runs in a

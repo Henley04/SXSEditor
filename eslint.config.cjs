@@ -119,6 +119,8 @@ module.exports = [
             'src/shared/safeCall.js',
             // .sxssinger 解析（主进程用，纯函数便于单测）
             'src/shared/singerFileEdit.js',
+            // VC++ 运行库探测与原生加载错误归类（主进程 / 独立加载器 / 单测共用，CJS）
+            'src/shared/vcRuntime.js',
             'src/modelManager.js',
             'src/modelRegistry.js',
             'src/preload.js',

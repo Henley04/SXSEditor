@@ -207,6 +207,29 @@ export function buildEnvCheckView(report, probes, t, options = {}) {
   });
 
   // ---- 运行时 ----
+  // VC++ 运行库一行：缺 DLL 是旧机器"binding 未找到"的根因，必须在报告里
+  // 明示，而不是藏在 WinML 失败的 failureReason 里。
+  const rawVc = runtime.vcRuntime;
+  // 旧报告（升级前）没有 vcRuntime 字段：Windows 上不能显示成"不适用"，
+  // 按 platform 兜底成未知，非 Windows 才真正 NA。
+  const vc = rawVc || {
+    supported: r.platform === 'win32',
+    ok: false,
+    missing: [],
+    status: 'unknown',
+  };
+  let vcRuntimeValue;
+  if (!vc.supported) {
+    vcRuntimeValue = t('envCheck.vcRuntime.na');
+  } else if (vc.status === 'unknown') {
+    vcRuntimeValue = t('envCheck.unknown');
+  } else if (vc.ok) {
+    vcRuntimeValue = t('envCheck.vcRuntime.ok');
+  } else {
+    vcRuntimeValue = t('envCheck.vcRuntime.missing', {
+      dlls: (vc.missing || []).join(', '),
+    });
+  }
   const runtimeRows = [
     { label: t('envCheck.appVersion'), value: runtime.app || unknown },
     { label: t('envCheck.electronVersion'), value: runtime.electron || unknown },
@@ -215,6 +238,7 @@ export function buildEnvCheckView(report, probes, t, options = {}) {
       label: t('envCheck.platform'),
       value: `${r.platform || ''} ${r.arch || ''}`.trim() || unknown,
     },
+    { label: t('envCheck.vcRuntimeLabel'), value: vcRuntimeValue },
   ];
 
   const sections = [

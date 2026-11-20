@@ -1488,6 +1488,12 @@ export default {
     electronVersion: 'Electron',
     nodeVersion: 'Node',
     platform: '平台',
+    vcRuntimeLabel: 'Visual C++ 运行库',
+    vcRuntime: {
+      ok: '已安装（VC++ 2015-2022 x64）',
+      missing: '缺失：{dlls} —— 请安装 VC++ 2015-2022 x64 运行库',
+      na: '不适用（非 Windows）',
+    },
     notSupported: '当前平台不支持',
     detecting: '检测中…',
     // 探测中动画：弹层每 320ms 在 ... / .. / . 之间切换；plainText 快照仍用 detecting 的稳定文案

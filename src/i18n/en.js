@@ -1485,6 +1485,12 @@ export default {
     electronVersion: 'Electron',
     nodeVersion: 'Node',
     platform: 'Platform',
+    vcRuntimeLabel: 'Visual C++ runtime',
+    vcRuntime: {
+      ok: 'Installed (VC++ 2015-2022 x64)',
+      missing: 'MISSING: {dlls} — install VC++ 2015-2022 x64 redistributable',
+      na: 'Not applicable (non-Windows)',
+    },
     notSupported: 'Not supported on this platform',
     detecting: 'Detecting…',
     // Probing animation: dialog cycles ... / .. / . every 320ms; plainText snapshot keeps the stable detecting wording

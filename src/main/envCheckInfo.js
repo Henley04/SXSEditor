@@ -19,6 +19,7 @@
 'use strict';
 
 const os = require('node:os');
+const { probeVcRuntime } = require('../shared/vcRuntime.js');
 
 // ---------------------------------------------------------------------------
 // 状态码。渲染层按 `envCheck.<group>.<code>` 取文案，测试遍历这些值断言
@@ -348,6 +349,11 @@ function getEnvReport(overrides = {}) {
             app: _appVersion(o.appVersion),
             electron: String((process.versions && process.versions.electron) || ''),
             node: String((process.versions && process.versions.node) || ''),
+            // 显式探测 VC++ 2015-2022 运行库。旧机器缺这三枚 DLL 时原生桥
+            // （ort_bridge.node / onnxruntime.dll）会在加载阶段静默失败，
+            // 用户只看到"binding 未找到"；这里把根因直接暴露出来。
+            // o.vcRuntime 仅供单测注入，避免 CI(Linux) 触碰真实文件系统判定。
+            vcRuntime: o.vcRuntime !== undefined ? o.vcRuntime : probeVcRuntime({ platform }),
         },
     };
 }
