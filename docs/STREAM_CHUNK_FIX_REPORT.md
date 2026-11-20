@@ -108,3 +108,49 @@
 - `src/renderer/audioPlayback.js:463 / :817 / :841 / :943 / :951 / :979`
 
 典型时序（分片）：`[SegInfer][FRAG] segment inference done` → `chunk emitted` → `[FragPlay] PLAYBACK START` → `chunk scheduled` → `LAST CHUNK RECEIVED` → `INFERENCE RETURNED` → `PLAYBACK FINISHED`。
+
+## 八、有序队列的两处缺陷修复 + 模拟器全量验证（2026-11-20 追加）
+
+第五节当时因 npm 网络不可用未能运行完整模拟器。本次在可运行环境补跑，并对新增队列做了针对性审查，修掉两处缺陷。
+
+### 8.1 `reset()` 没有真正取消未触发的 gap 定时器
+
+`reset()` 原先只把 `_gapTimer = null`，没调 `_clearTimer`。句柄丢了、定时器还活着：停止→重播时，旧会话的兜底定时器会在新会话里到期，强制冲刷新会话的缓冲并跳跃前沿。第三节"停止时清空队列（含未触发的 gap 定时器）"的描述在修复前并不成立。`finish()` 走 `_clearGapTimer()` 是对的，只有 `reset()` 漏了。
+
+修复：`reset()` 开头调用 `this._clearGapTimer()`。回归用例 T9（注入式虚拟定时器，断言 `pending() === 0`）。
+
+### 8.2 会话守卫排在 `_chunkQueue.push()` 之后
+
+`streamingFinished` / `mySession !== _playSessionSeq` 两道守卫在 `handleStreamingChunk` 内部，而 `push()` 在 IPC 监听器里、守卫之前。`stopStreamingPlayback` 自己的注释就写明"监听器虽已移除，但已派发的回调仍可能到达"——这正是它防的场景。
+
+实测后果比"前沿污染"更重：`_chunkConsumer` 是模块级变量、每轮会话重新赋值，队列的 `onChunk` 在调用时才读它。因此旧会话监听器推进的块会被**新会话的 consumer 真正排程播放**（旧会话的守卫根本没机会执行），同时前沿被推进，新会话真正的首块随后被判为 `duplicate` 整块丢弃。
+
+修复：把两道守卫提到监听器里 `push()` 之前。回归用例见 `test/fragmentStreamingPlayback.test.js`（"旧会话已在途的 chunk 不得污染有序队列"）——修复前该用例在"旧会话的块不得排程"处失败（实际排出了 1 个 source）。
+
+### 8.3 模拟器全量验证
+
+`scripts/sim_fragment_playback.js` 与 `cb6eec8` 逐字节相同，17 个工况（A–J、K、K-EXTREME 300ms、K-EXT2 500ms、L 停止→重播、M 突增、N 回落、O 1200ms）全部通过，判定 `OK：无静音缝 / 无重复 / 无漂移 / 播放头连续`。剥掉新增 `[FragPlay]` 日志行后，输出与 `54c5344`、与 `cb6eec8` 均**逐字节相同**——本次修复不改变任何已覆盖工况的行为。
+
+队列分支普查（preload 包装 `push`，不改仓库文件）：
+
+```
+[QUEUE-PROBE] push 分支计数 = {"consumed":94}
+[QUEUE-PROBE] 非空强制冲刷次数 = 0
+```
+
+94 个 chunk 全部走"正好接续"，`buffered` / `duplicate` / `empty` 各 0 次。原因在发射器：`_createSegmentStreamEmitter`（`src/inference/pipeline/index.js`）的 `frontier` 是单调游标，`emitChunk` 发完立即 `frontier += audio.length`，`tryEmit` 遇到未完成 segment 即 `break`，isLast 另有 1 样本兜底。**内置管线的 chunk 在构造上就是连续、单调、无重叠、无重复的**，单一 IPC 通道保序。
+
+结论：有序队列在内置链路上是直通（pass-through），它兜的是网络流式场景的乱序/丢包，而本地 GPU 管线已在上游结构性排除这些故障。它的价值在于插件后端可能发出非连续区间时的保险，以及 `rebase()` 为将来"流式 seek 复用已缓冲 chunk"预留的能力；**它不修复调查报告里实际复现的播放头卡顿根因**（那由 `cb6eec8` 的自适应冻结提前量解决，本次未动）。8.1 / 8.2 两处缺陷在内置链路上属潜伏（分支 2 从不触发），但一旦有非连续区间输入即成为活缺陷。
+
+### 8.4 验证汇总
+
+| 项目 | 结果 |
+|---|---|
+| `scripts/test_sequenced_chunk_queue.js` | 50 passed, 0 failed（原 42 + T9 的 8 条断言） |
+| `scripts/test_stream_chunk_integration.js` | 16 passed, 0 failed |
+| `test/fragmentStreamingPlayback.test.js` | 9 passing（原 8 + 1 条跨会话回归） |
+| `audioOutputClock` / `exclusivePlaybackRecovery` / `zzRendererPlaybackSupersede` | 14 / 7 / 3 passing |
+| `scripts/sim_fragment_playback.js` | 17 工况全过，与基线逐字节相同 |
+| eslint | 0 errors（1 条 `gapSamples` unused warning 为既有代码，未在本次改动范围内） |
+
+`multiSegmentStreamEmitter` / `streamingSynthesis` 两个 mocha 文件因沙箱无法安装 `onnxruntime-node` 而加载失败，基线同样失败，非本次回归。

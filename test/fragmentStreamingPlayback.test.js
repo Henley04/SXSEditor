@@ -444,4 +444,31 @@ describe('分片编辑器流式播放（underrun 恢复 / 取消推理）', () =
     await playPromise;
     await sleep(20);
   });
+
+  it('旧会话已在途的 chunk 不得污染有序队列：新会话首块不能被当成重复丢弃', async () => {
+    // 监听器移除后，已派发的 IPC 回调仍可能到达（见 stopStreamingPlayback 注释）。
+    // 会话守卫若排在 _chunkQueue.push 之后，旧会话块会先推进队列前沿再被下游拒掉，
+    // 新会话首块随后被误判为 duplicate 整块丢弃 → 起播静音。
+    const staleCb = chunkCb;
+    expect(staleCb, '会话 1 监听应已注册').to.be.a('function');
+
+    audioPlayback.cancelFragmentSynthesis();
+    playPromise = audioPlayback.playFragment();
+    await sleep(60);
+    expect(chunkCb, '会话 2 监听应已重新注册').to.be.a('function');
+    expect(chunkCb, '应是新一轮的监听器').to.not.equal(staleCb);
+
+    // 旧会话在途块：内容区间与新会话首块完全相同
+    staleCb(makeChunkAt(0, 4, false));
+    await sleep(30);
+    expect(ctx.sources, '旧会话的块不得排程').to.have.lengthOf(0);
+
+    chunkCb(makeChunkAt(0, 4, false));
+    await sleep(60);
+    expect(ctx.sources, '新会话首块必须开播，不能被旧会话污染成重复').to.have.lengthOf(1);
+
+    resolveSynth(new Float32Array(4 * SAMPLE_RATE));
+    await playPromise;
+    await sleep(20);
+  });
 });

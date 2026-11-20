@@ -51,9 +51,11 @@ class SequencedChunkQueue {
 
   /** 新会话/重播：清空前沿、缓冲与定时器。 */
   reset(frontier = 0) {
+    // 未触发的兜底定时器必须真正取消：只把句柄置 null 会让它活到下一轮会话，
+    // 到期后强制冲刷新会话的缓冲并跳跃前沿（停止→重播时的跨会话污染）。
+    this._clearGapTimer();
     this.frontier = Number.isFinite(frontier) ? frontier : 0;
     this.buffer = new Map();          // sampleOffset -> chunkInfo
-    this._gapTimer = null;
     this._finished = false;
     this._stats = {
       received: 0, consumed: 0, duplicate: 0,

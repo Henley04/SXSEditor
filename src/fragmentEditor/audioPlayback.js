@@ -1455,6 +1455,12 @@ export async function playFragment() {
     };
     streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
       if (!_chunkQueue) return;
+      // 会话守卫必须在 push 之前：push 会改写队列的 frontier / 去重状态，而
+      // handleStreamingChunk 里的同名守卫只能拒掉排程，拒不掉已被污染的前沿。
+      // 监听器移除后已派发的回调仍可能到达（见 stopStreamingPlayback 注释）：
+      // 旧会话在途块若先推进 frontier，新会话首块会被误判为 duplicate 而整块丢弃。
+      if (streamingFinished) return;
+      if (mySession !== _playSessionSeq) return;
       // 先过有序队列：乱序暂存、重复/过时丢弃、缺口超时兜底；只有判定可交付的
       // chunk 才进入 _chunkConsumer → handleStreamingChunk 做绝对位置排程。
       _chunkQueue.push(chunkInfo);

@@ -12,6 +12,7 @@
  *   T6 seek rebase → 丢弃目标前、保留目标后（moq parking playhead）
  *   T7 finish 排空
  *   T8 无采样区间 → 退化为到达顺序
+ *   T9 reset 取消未触发的兜底定时器（停止→重播不得跨会话冲刷）
  */
 'use strict';
 
@@ -182,6 +183,27 @@ function makeQueue(clock, extra = {}) {
   q.push({ audio: new Float32Array(20) });
   eq(consumed.length, 2, 'T8 无区间块按到达顺序消费');
   eq(q.frontier, 0, 'T8 前沿不推进');
+}
+
+// ============ T9 reset 必须取消未触发的兜底定时器（跨会话污染） ============
+{
+  const clock = makeClock();
+  const { q, consumed } = makeQueue(clock);
+  q.push(chunk(100, 200));            // 缺口 → 暂存 + 启动 100ms 兜底
+  eq(clock.pending(), 1, 'T9 暂存后应有 1 个待触发定时器');
+
+  q.reset(0);                         // 停止 / 新一轮会话
+  eq(clock.pending(), 0, 'T9 reset 必须真正取消定时器，而不是只把句柄置 null');
+  eq(q.size, 0, 'T9 reset 清空缓冲');
+  eq(q.frontier, 0, 'T9 reset 前沿归零');
+
+  // 新会话暂存一个"未来"块；旧定时器若还活着，会把它强制冲刷并跳跃前沿
+  q.push(chunk(500, 600));
+  eq(consumed.length, 0, 'T9 新会话的超前块应仍在缓冲里');
+  clock.advance(200);
+  eq(q.frontier, 600, 'T9 新会话自己的兜底到期后正常冲刷');
+  eq(consumed.length, 1, 'T9 只冲刷一次');
+  eq(q.stats().gaps, 1, 'T9 只记一次缺口（旧会话的定时器不得额外触发）');
 }
 
 // ============ 汇总 ============
