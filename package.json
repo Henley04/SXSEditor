@@ -47,6 +47,9 @@
     "email": "dev@sxseditor.local"
   },
   "license": "MIT",
+  "engines": {
+    "node": "24.x"
+  },
   "devDependencies": {
     "@babel/core": "^7.29.0",
     "@babel/preset-env": "^7.29.2",
