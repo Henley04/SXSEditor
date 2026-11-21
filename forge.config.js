@@ -229,6 +229,17 @@ module.exports = {
       name: '@electron-forge/plugin-webpack',
       config: {
         mainConfig: './webpack.main.config.js',
+        // Forge 8 的 devServer 默认 hot:true，webpack-dev-server 5 会把
+        // `webpack-dev-server/client` + `webpack/hot/dev-server` 注入**所有**
+        // webpack entry，包括各窗口的 preload。preload 编译成 electron-preload
+        // target 时，HMR client 依赖的 webpack/hot/emitter.js 里的
+        // require('events') 在隔离世界解析不到，preload 直接加载失败
+        // （electronAPI 全部缺失）。本项目 preload/renderer 都不依赖 HMR，
+        // 关掉注入即可；改代码后重启 npm start（打包路径本来就没有 dev server）。
+        devServer: {
+          hot: false,
+          client: false,
+        },
         renderer: {
           config: './webpack.renderer.config.js',
           // ⚠️ 这里**故意没有** splash_window 入口。
