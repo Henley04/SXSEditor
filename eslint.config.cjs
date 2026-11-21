@@ -119,6 +119,8 @@ module.exports = [
             'src/shared/safeCall.js',
             // .sxssinger 解析（主进程用，纯函数便于单测）
             'src/shared/singerFileEdit.js',
+            // VC++ 运行库探测与原生加载错误归类（主进程 / 独立加载器 / 单测共用，CJS）
+            'src/shared/vcRuntime.js',
             'src/modelManager.js',
             'src/modelRegistry.js',
             'src/preload.js',
@@ -190,6 +192,8 @@ module.exports = [
             'src/shared/streamingScheduler.js',
             // 播放头分页跟随：ESM 纯逻辑，两个渲染窗口共用（默认时钟用 performance.now）
             'src/shared/playheadFollow.js',
+            // 流式 chunk 有序队列：被 fragmentEditor 渲染层 require，用 setTimeout/clearTimeout + module.exports
+            'src/shared/sequencedChunkQueue.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',

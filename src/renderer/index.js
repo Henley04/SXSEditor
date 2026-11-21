@@ -146,7 +146,7 @@ if (state._ipcCleanups) {
     const version = await window.electronAPI.getAppVersion();
     if (dom.versionDisplay && version) dom.versionDisplay.textContent = `v${version}`;
   } catch (err) {
-    console.warn('[Renderer] 读取应用版本失败：', err && err.message ? err.message : err);
+    console.warn('[Renderer] Failed to read app version:', err && err.message ? err.message : err);
   }
 })();
 

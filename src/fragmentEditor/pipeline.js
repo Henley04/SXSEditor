@@ -79,7 +79,7 @@ function bindLoadProgress(overlay) {
   try {
     _loadingProgressCleanup = window.electronAPI.onSVSLoadProgress(renderLoadProgress);
   } catch (err) {
-    console.warn('[FragmentEditor] 订阅加载进度失败:', err);
+    console.warn('[FragmentEditor] Failed to subscribe to load progress:', err);
   }
 
   const btn = document.getElementById('btn-loading-background');
@@ -120,7 +120,7 @@ async function notifyModelMissing() {
     }
   } catch (err) {
     // 对话框本身失败不能盖掉原始错误（那是用户真正需要排障的信息）
-    console.warn('[FragmentEditor] 显示模型缺失提示失败:', err);
+    console.warn('[FragmentEditor] Failed to show missing-model notice:', err);
   }
 }
 

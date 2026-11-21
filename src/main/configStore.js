@@ -58,7 +58,7 @@ function readJsonConfig(name, fallback = null) {
     const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     return (data && typeof data === 'object') ? data : fallback;
   } catch (err) {
-    console.warn(`[ConfigStore] 读取 ${name} 配置失败，使用默认值:`, err && err.message);
+    console.warn(`[ConfigStore] Failed to read ${name} config, using defaults:`, err && err.message);
     return fallback;
   }
 }
@@ -141,7 +141,7 @@ async function _writeJsonConfigNow(name, data) {
     await _renameWithRetry(tmpPath, configPath);
     return true;
   } catch (err) {
-    console.warn(`[ConfigStore] 写入 ${name} 配置失败:`, err && err.message);
+    console.warn(`[ConfigStore] Failed to write ${name} config:`, err && err.message);
     if (tmpPath) {
       try { await fs.promises.unlink(tmpPath); } catch (_) { /* 临时文件本来就没建成 */ }
     }
@@ -181,7 +181,7 @@ function writeJsonConfigSync(name, data) {
     fs.renameSync(tmpPath, configPath);
     return true;
   } catch (err) {
-    console.warn(`[ConfigStore] 写入 ${name} 配置失败:`, err && err.message);
+    console.warn(`[ConfigStore] Failed to write ${name} config:`, err && err.message);
     if (tmpPath) {
       try { fs.unlinkSync(tmpPath); } catch (_) { /* 同上 */ }
     }

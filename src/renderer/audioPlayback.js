@@ -494,6 +494,7 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
 // 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
 // 提取为独立函数供人声 chunk 与伴奏 source 的 onended 共用，避免重复逻辑。
 function _finishStreamingPlayback() {
+  console.log(`[MainPlay] PLAYBACK FINISHED | t=${Date.now()}`);
   state.streamingFinished = true;
   state.isPlaying = false;
   // 流式路径不经过 stopAudioSource，需在这里清掉伴奏增益表，
@@ -845,7 +846,10 @@ export async function playAll() {
               _streamingStreamEnds.set(streamKey, streamState);
             }
             if (chunkEndSec > streamState.end) streamState.end = chunkEndSec;
-            if (chunkInfo.streamLast) streamState.done = true;
+            if (chunkInfo.streamLast) {
+              streamState.done = true;
+              console.log(`[MainPlay] SEG STREAM DONE | stream=${streamKey} endSec=${chunkEndSec.toFixed(3)} t=${Date.now()}`);
+            }
             // 所有计算使用全局秒（项目时间线上的绝对位置）：
             // playhead 在 drawPlayheadLine 中也以全局秒绘制，与 MIDI note 的
             // global beat 位置对齐。pipeline 已将 chunk 的 sampleOffset 调整为
@@ -868,6 +872,7 @@ export async function playAll() {
               setTransport(TRANSPORT.PLAYING);
               clearTransportStatus();
               startPlayheadAnimation();
+              console.log(`[MainPlay] PLAYBACK START | firstChunkOffsetSec=${chunkStartSec.toFixed(3)} stream=${streamKey} t=${Date.now()}`);
 
               // Schedule accompaniment tracks as independent BufferSources
               // alongside the streaming vocal chunks. They connect to the same
@@ -969,6 +974,7 @@ export async function playAll() {
               }
             } else {
               source.start(startCtxTime, lateSec);
+              console.log(`[MainPlay] chunk scheduled | stream=${streamKey} offset=${chunkStartSec.toFixed(3)} end=${chunkEndSec.toFixed(3)} lateSec=${lateSec.toFixed(4)} durSec=${chunkDurSec.toFixed(3)} streamLast=${!!chunkInfo.streamLast} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
               // 统一的 onended：递减活跃 source 计数，释放引用，
               // 当 isLast 已收到且所有 source 均结束时标记流式完成。
@@ -976,6 +982,7 @@ export async function playAll() {
               // 若非末 chunk 因音频更长而晚于 isLast chunk 结束，也能正确等待。
               _scheduler.addSource();
               if (chunkInfo.isLast) {
+                console.log(`[MainPlay] ALL SEGS RECEIVED (isLast) | stream=${streamKey} t=${Date.now()}`);
                 _scheduler.markLastReceived();
               }
 
@@ -1003,6 +1010,7 @@ export async function playAll() {
         // 被新一轮播放取代的旧会话：推理可能刚好跑完（取消没赶上），这时绝不能
         // 覆盖共享状态 —— currentAudioData / 时间基准都属于新会话。
         throwIfCancelled();
+        console.log(`[MainPlay] INFERENCE RETURNED | streamingStarted=${streamingStarted} t=${Date.now()}`);
 
         // The main process may replay a cached stream much faster than realtime.
         // Let queued svs:chunk-audio IPC messages run before removing the listener.
@@ -1221,7 +1229,7 @@ export async function playAll() {
 
 export function getAudioContext() {
   if (!state.audioContext || state.audioContext.state === 'closed') {
-    state.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+    state.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE, latencyHint: 'interactive' }); // latencyHint:'interactive' 请求最小输出缓冲以降低出声延迟；不改采样率，旧内核忽略
     if (state.audioContext.sampleRate !== SAMPLE_RATE) {
       console.warn(`[Audio] AudioContext actual sample rate: ${state.audioContext.sampleRate}Hz, target: ${SAMPLE_RATE}Hz, will auto-resample`);
     }

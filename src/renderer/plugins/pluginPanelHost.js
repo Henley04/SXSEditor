@@ -247,7 +247,7 @@ export function installPluginPanelHost() {
   function openPanel(payload) {
     if (!payload || !payload.pluginId || !payload.panelId) return;
     if (!isPluginUrl(payload.url)) {
-      console.warn('[plugin-panel] 拒绝非 plugin:// 面板地址:', payload.url);
+      console.warn('[plugin-panel] Rejected non-plugin:// panel address:', payload.url);
       return;
     }
     // 已经开着同一个面板 → 只把它顶到前面，不重载（重载会丢掉面板内状态）

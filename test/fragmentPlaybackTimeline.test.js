@@ -134,4 +134,51 @@ describe('StreamTimeline（流式播放时间轴）', () => {
     expect(t.plan(chunkAt(2, 2), SR, 0).startedNow).to.equal(false);
     expect(t.plan(chunkAt(0, 2), SR, 0).action, '重复内容整块丢弃').to.equal('drop');
   });
+
+  /**
+   * 乱序到达（后段先到、前段后到）。单一前沿（旧的 deliveredEndSec）会把
+   * 后到的前段整块判成 duplicate —— 表现为"偶发缺一句、播放头照走"。
+   * 区间账本让前段仍能按**它自己的**绝对时刻排进去。
+   */
+  it('乱序回填：后段先到只占自己的区间，前段后到仍按原时刻排程', () => {
+    const t = new StreamTimeline({ startPositionSec: 0, firstNoteStartSec: 0 });
+    const b = t.plan(chunkAt(2, 2), SR, 0);          // 2..4 先到
+    expect(b.action).to.equal('schedule');
+    expect(b.startedNow).to.equal(true);
+    expect(b.when).to.be.closeTo(STREAM_LEAD_SEC + 2, EPS);
+
+    const a = t.plan(chunkAt(0, 2), SR, 0);          // 0..2 后到
+    expect(a.action, '旧实现会判 duplicate 并丢掉整块').to.equal('schedule');
+    expect(a.when).to.be.closeTo(STREAM_LEAD_SEC, EPS);
+    expect(a.skipSamples).to.equal(0);
+    expect(a.offsetSec).to.equal(0);
+    expect(t.backfillCount).to.equal(1);
+    expect(t.deliveredEndSec, '最远末端不变').to.be.closeTo(4, EPS);
+    // 时间轴原点仍是第一次锚定的位置：播放头不回跳
+    expect(t.positionAt(STREAM_LEAD_SEC + 1, 0)).to.be.closeTo(1, EPS);
+  });
+
+  it('乱序回填超过块时长：只裁头不丢块，播放头仍然连续', () => {
+    const t = new StreamTimeline({ startPositionSec: 0, firstNoteStartSec: 0 });
+    t.plan(chunkAt(2, 2), SR, 0);                    // 锚点 = lead(0.05)
+    const late = t.plan(chunkAt(0, 2), SR, 1.0);      // 理想 0.05s 出声，实际已到 1.0s
+    expect(late.action).to.equal('schedule');
+    expect(late.offsetSec).to.be.closeTo(1.0 - STREAM_LEAD_SEC, 1e-3);
+    expect(late.when).to.be.closeTo(1.0, 1e-3);
+    expect(late.durationSec).to.be.closeTo(2 - (1.0 - STREAM_LEAD_SEC), 1e-3);
+  });
+
+  it('块被已排区间从中间切开：逐段排程，不丢任何一段', () => {
+    const t = new StreamTimeline({ startPositionSec: 0, firstNoteStartSec: 0 });
+    t.plan(chunkAt(0, 2), SR, 0);                    // 0..2
+    t.plan(chunkAt(4, 2), SR, 0);                    // 4..6（先占后段）
+    const split = t.plan(chunkAt(0, 8), SR, 0);      // 0..8，被 0..2 / 4..6 切成两段
+    expect(split.action).to.equal('schedule');
+    expect(split.splitParts).to.equal(2);
+    const starts = split.segments.map((s) => +s.contentStartSec.toFixed(3));
+    expect(starts).to.deep.equal([2, 6]);
+    expect(split.segments[0].skipSamples).to.equal(2 * SR);
+    expect(split.segments[1].skipSamples).to.equal(6 * SR);
+    expect(split.contentEndSec).to.be.closeTo(8, EPS);
+  });
 });

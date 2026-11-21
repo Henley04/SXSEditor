@@ -244,16 +244,16 @@ function pruneRetiredBuiltinPlugins() {
       const res = installer.uninstall(id);
       if (res && res.ok) {
         pruned.push(id);
-        console.log(`[plugins] 已清理下架的内置插件：${id}`);
+        console.log(`[plugins] Removed delisted built-in plugin: ${id}`);
       } else {
         const error = String((res && res.error) || 'uninstall failed');
         failed.push({ id, error });
-        console.warn(`[plugins] 清理下架内置插件 ${id} 失败：${error}`);
+        console.warn(`[plugins] Failed to clean up delisted built-in plugin ${id}: ${error}`);
       }
     } catch (err) {
       const error = String((err && err.message) || err);
       failed.push({ id, error });
-      console.warn(`[plugins] 清理下架内置插件 ${id} 异常：${error}`);
+      console.warn(`[plugins] Exception cleaning up delisted built-in plugin ${id}: ${error}`);
     }
   }
   return { pruned, failed };
@@ -307,28 +307,28 @@ function installBuiltinOnStartup(appVersion) {
     try {
       pruned = pruneRetiredBuiltinPlugins().pruned;
     } catch (err) {
-      console.warn('[plugins] 清理下架内置插件异常：', (err && err.message) || err);
+      console.warn('[plugins] Exception cleaning up delisted built-in plugin:', (err && err.message) || err);
     }
 
     const summary = ensureAllBuiltinPlugins({ appVersion });
     for (const result of summary.results) {
       const id = result.id || '?';
       if (result.ok && result.upgraded) {
-        console.log(`[plugins] 内置插件已升级：${id}@${result.version || ''}`);
+        console.log(`[plugins] Built-in plugin upgraded: ${id}@${result.version || ''}`);
       } else if (result.ok && result.installed) {
-        console.log(`[plugins] 内置插件已安装：${id}@${result.version || ''}`);
+        console.log(`[plugins] Built-in plugin installed: ${id}@${result.version || ''}`);
       } else if (result.ok) {
         // already-installed：用户可能已停用或自行装过，保持原样。
-        console.log(`[plugins] 内置插件已存在，未覆盖：${id}`);
+        console.log(`[plugins] Built-in plugin already exists, not overwritten: ${id}`);
       } else if (result.reason === 'source-not-found') {
-        console.log(`[plugins] 未随包分发内置插件源码，跳过：${id}`);
+        console.log(`[plugins] Built-in plugin source not shipped with package, skipping: ${id}`);
       } else {
-        console.warn(`[plugins] 内置插件 ${id} 安装失败：${result.error || result.reason}`);
+        console.warn(`[plugins] Built-in plugin ${id} install failed: ${result.error || result.reason}`);
       }
     }
     return { ...summary, pruned };
   } catch (err) {
-    console.warn('[plugins] 内置插件安装异常：', (err && err.message) || err);
+    console.warn('[plugins] Built-in plugin install exception:', (err && err.message) || err);
     return { ok: false, installed: false, results: [], pruned: [], error: String((err && err.message) || err) };
   }
 }

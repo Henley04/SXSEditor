@@ -283,7 +283,7 @@ function registerSettingsIpc() {
         const { syncWindowsPluginFileAssociations } = require('./fileAssociation');
         await syncWindowsPluginFileAssociations();
       } catch (err) {
-        console.warn('[Main] 同步插件文件关联失败:', err && err.message);
+        console.warn('[Main] Failed to sync plugin file associations:', err && err.message);
       }
     }
 
@@ -426,22 +426,22 @@ function registerSettingsIpc() {
       await require('../inference/pipeline/sessionValidationCache').clearValidationCache();
       result.validation = true;
     } catch (err) {
-      console.warn('[Settings] 清理 session 校验缓存失败:', err && err.message);
+      console.warn('[Settings] Failed to clear session validation cache:', err && err.message);
     }
     try {
       await require('../inference/winml/winmlDetectionCache').clear();
       result.detection = true;
     } catch (err) {
-      console.warn('[Settings] 清理 WinML 探测缓存失败:', err && err.message);
+      console.warn('[Settings] Failed to clear WinML probe cache:', err && err.message);
     }
     try {
       result.trtEngines = require('../inference/winml/winmlProvider').clearTRTEngineCache();
     } catch (err) {
-      console.warn('[Settings] 清理 TRT engine 缓存失败:', err && err.message);
+      console.warn('[Settings] Failed to clear TRT engine cache:', err && err.message);
     }
     // 内存里的 _validatedSessionModels / EP 状态不清：它们描述的是当前进程
     // 已建好的 session，清掉只会让正在使用的管线重复校验，不会改变磁盘缓存。
-    console.log('[Settings] 推理缓存已清理:', result);
+    console.log('[Settings] Inference cache cleared:', result);
     return result;
   });
 

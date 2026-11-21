@@ -38,7 +38,7 @@ function notifyAfterLoad(result) {
   try {
     _afterLoad(result);
   } catch (err) {
-    console.warn('[plugins] afterLoad 回调失败：', err && err.message);
+    console.warn('[plugins] afterLoad callback failed:', err && err.message);
   }
 }
 
@@ -49,7 +49,7 @@ function notifyAfterLoad(result) {
 function ensurePluginsLoaded() {
   if (!_loadPromise) {
     _loadPromise = getPluginHost().loadPlugins().catch((err) => {
-      console.error('[Main] 插件扫描失败：', err && err.message ? err.message : err);
+      console.error('[Main] Plugin scan failed:', err && err.message ? err.message : err);
       return { success: false, plugins: [], errors: [{ pluginId: null, stage: 'scan', message: String(err && err.message || err) }] };
     }).then((result) => {
       notifyAfterLoad(result);
@@ -98,14 +98,14 @@ function toBuiltinAudio(result, expectedSampleRate) {
   let mono;
   if (Array.isArray(pcm)) {
     // Float32Array[]：按声道分离存放，取第一声道（内置链路是单声道）
-    if (pcm.length > 1) console.warn(`[Main] 插件返回 ${pcm.length} 声道，内置链路仅取第一声道`);
+    if (pcm.length > 1) console.warn(`[Main] Plugin returned ${pcm.length} channels, built-in chain uses only the first channel`);
     mono = pcm[0];
   } else if (result.channels > 1) {
     // 交错存放：抽取出第 0 声道
     const frames = Math.floor(pcm.length / result.channels);
     mono = new Float32Array(frames);
     for (let i = 0; i < frames; i++) mono[i] = pcm[i * result.channels];
-    console.warn(`[Main] 插件返回 ${result.channels} 声道交错数据，内置链路仅取第一声道`);
+    console.warn(`[Main] Plugin returned ${result.channels} channels of interleaved data, built-in chain uses only the first channel`);
   } else {
     mono = pcm;
   }
@@ -114,7 +114,7 @@ function toBuiltinAudio(result, expectedSampleRate) {
 
   if (Number.isFinite(expectedSampleRate) && result.sampleRate !== expectedSampleRate) {
     // 不做重采样（会引入额外分配与延迟），只记录：调用方应让插件输出工程采样率。
-    console.warn(`[Main] 插件采样率 ${result.sampleRate} 与工程采样率 ${expectedSampleRate} 不一致，按原样返回`);
+    console.warn(`[Main] Plugin sample rate ${result.sampleRate} differs from project sample rate ${expectedSampleRate}, returning as-is`);
   }
 
   const leading = Number.isInteger(result.leadingSamples) ? result.leadingSamples : 0;
@@ -242,7 +242,7 @@ function registerPluginIpc() {
     try {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     } catch (err) {
-      console.warn('[Main] 创建插件目录失败：', err && err.message ? err.message : err);
+      console.warn('[Main] Failed to create plugin directory:', err && err.message ? err.message : err);
     }
     // eslint-disable-next-line global-require
     const { shell } = require('electron');

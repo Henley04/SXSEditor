@@ -30,11 +30,11 @@ import {
   getFragmentAudioSource, setFragmentAudioSource,
   getFragmentIsPlaying, setFragmentIsPlaying,
   getFragmentPlaybackStartTime, setFragmentPlaybackStartTime,
-  getFragmentPlaybackOffset, setFragmentPlaybackOffset,
+  setFragmentPlaybackOffset,
   getFragmentPlayheadRaf, setFragmentPlayheadRaf,
-  getFragmentCurrentTime, setFragmentCurrentTime,
+  setFragmentCurrentTime,
   getFragmentGainNode, setFragmentGainNode,
-  getFragmentUseExclusiveMode, setFragmentUseExclusiveMode,
+  setFragmentUseExclusiveMode,
   getFragmentExclusiveRaf, setFragmentExclusiveRaf,
   getFragmentAudioSettings, setFragmentAudioSettings,
   getFragmentPlayStartPosition, setFragmentPlayStartPosition,
@@ -157,7 +157,13 @@ function _bindVisibility() {
 export async function getFragmentAudioContextInternal() {
   let ctx = getFragmentAudioContext();
   if (!ctx || ctx.state === 'closed') {
-    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: getSampleRate() });
+    // latencyHint: 'interactive' 请求最小输出缓冲：播放头按"耳朵听到的位置"走
+    // （见 audioOutputClock），输出延迟越小，拖播放头/起播的跟手度越好。
+    // 不改 sampleRate —— 内核忽略该选项时会回退默认值，不影响下面的重采样判断。
+    ctx = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: getSampleRate(),
+      latencyHint: 'interactive',
+    });
     setFragmentAudioContext(ctx);
     const gainNode = ctx.createGain();
     gainNode.connect(ctx.destination);
@@ -403,6 +409,7 @@ class Session {
   finish() {
     if (this.finished || this.disposed || !this.isCurrent) return;
     this.finished = true;
+    console.log(`[FragPlay] PLAYBACK FINISHED | session=${this.id} kind=${this.kind} deliveredEndSec=${this.timeline ? this.timeline.deliveredEndSec.toFixed(3) : '-'} t=${Date.now()}`);
     setFragmentIsPlaying(false);
     _cancelLoop();
     if (this.scheduler) this.scheduler.deactivate();
@@ -512,10 +519,12 @@ class Session {
       // inferenceDone 抹掉 → 末尾 underrun 冻结后无人解冻 → 全程静音 + 卡死。
       if (this.scheduler) this.scheduler.activate();
       _bindVisibility();
+      console.log(`[FragPlay] PLAYBACK START | session=${this.id} playFromSec=${this.startPositionSec.toFixed(3)} firstNoteStartSec=${this.timeline.firstNoteStartSec.toFixed(3)} t=${Date.now()}`);
       playheadTick();
     }
 
     if (plan.action === 'drop') {
+      console.log(`[FragPlay] chunk dropped | session=${this.id} reason=${plan.reason} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} t=${Date.now()}`);
       if (chunkInfo.isLast && this.scheduler) this.scheduler.markLastReceived();
       this._maybeFinish();
       return;
@@ -525,43 +534,59 @@ class Session {
     // 否则刚解冻又被旧前沿冻结 → 首段之后整段静音。
     if (this.scheduler) this.scheduler.updateBufferFrontier(plan.contentEndSec);
 
-    const chunkAudio = plan.skipSamples > 0 ? chunkInfo.audio.subarray(plan.skipSamples) : chunkInfo.audio;
-    if (chunkAudio.length === 0) {
-      if (chunkInfo.isLast && this.scheduler) this.scheduler.markLastReceived();
-      this._maybeFinish();
-      return;
+    const segments = plan.segments && plan.segments.length > 0
+      ? plan.segments
+      : [{ skipSamples: plan.skipSamples, when: plan.when, offsetSec: plan.offsetSec, durationSec: plan.durationSec }];
+
+    // 一个块可能被已排程区间切成多段（乱序/重叠），逐段排 —— 少排一段就是丢一句。
+    for (const seg of segments) {
+      const startSample = seg.skipSamples;
+      // 按"该段完整长度"切片，迟到量只在 start(when, offset) 里扣一次。
+      const fullSec = Number.isFinite(seg.sourceDurationSec) ? seg.sourceDurationSec : seg.durationSec + seg.offsetSec;
+      const sliceSamples = Math.min(Math.round(fullSec * sampleRate), chunkInfo.audio.length - startSample);
+      if (sliceSamples <= 0) continue;
+
+      const slice = chunkInfo.audio.subarray(startSample, startSample + sliceSamples);
+      const buffer = ctx.createBuffer(1, slice.length, sampleRate);
+      const dest = buffer.getChannelData(0);
+      dest.set(slice);
+      if (startSample > 0 || seg.offsetSec > 0) fadeInHead(dest, sampleRate, 0.01);
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      if (this.fadeGain) source.connect(this.fadeGain);
+      else {
+        const master = getFragmentGainNode();
+        source.connect(master || ctx.destination);
+      }
+      source.start(seg.when, seg.offsetSec);
+
+      if (!this.isCurrent) {
+        safeCleanup('fragmentPlayback.lateSrc.stop', () => { source.onended = null; source.stop(); });
+        return;
+      }
+      const sched = this.scheduler;
+      if (sched) sched.addSource();
+      const idx = this.sources.length;
+      this.sources.push(source);
+      source.onended = () => {
+        if (sched) sched.sourceEnded();
+        if (this.sources[idx] === source) this.sources[idx] = null;
+        this._maybeFinish();
+      };
     }
 
-    const buffer = ctx.createBuffer(1, chunkAudio.length, sampleRate);
-    const dest = buffer.getChannelData(0);
-    dest.set(chunkAudio);
-    if (plan.skipSamples > 0 || plan.offsetSec > 0) fadeInHead(dest, sampleRate, 0.01);
-
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    if (this.fadeGain) source.connect(this.fadeGain);
-    else {
-      const master = getFragmentGainNode();
-      source.connect(master || ctx.destination);
-    }
-    source.start(plan.when, plan.offsetSec);
+    console.log(`[FragPlay] chunk scheduled | session=${this.id} seg=${chunkInfo.chunkIndex ?? '-'} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} lateSec=${plan.offsetSec.toFixed(4)} durSec=${plan.durationSec.toFixed(3)} parts=${segments.length} started=${plan.startedNow} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
     if (this.scheduler && this.scheduler.isWaiting) {
       await this.scheduler.resumeFromWait();
       if (this.isCurrent && getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
     }
-    if (!this.isCurrent) { safeCleanup('fragmentPlayback.lateSrc.stop', () => { source.onended = null; source.stop(); }); return; }
 
-    const sched = this.scheduler;
-    if (sched) sched.addSource();
-    if (chunkInfo.isLast && sched) sched.markLastReceived();
-    const idx = this.sources.length;
-    this.sources.push(source);
-    source.onended = () => {
-      if (sched) sched.sourceEnded();
-      if (this.sources[idx] === source) this.sources[idx] = null;
-      this._maybeFinish();
-    };
+    if (chunkInfo.isLast && this.scheduler) {
+      console.log(`[FragPlay] LAST CHUNK RECEIVED | session=${this.id} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} t=${Date.now()}`);
+      this.scheduler.markLastReceived();
+    }
     this._maybeFinish();
   }
 

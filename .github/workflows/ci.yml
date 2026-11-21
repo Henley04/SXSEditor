@@ -70,7 +70,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies (no native build)
@@ -109,7 +109,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -153,7 +153,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Determine version and tag
@@ -234,7 +234,11 @@ jobs:
         shell: pwsh
         run: |
           $electronExe = "node_modules\electron\dist\electron.exe"
-          $electronVersion = "42.4.1"
+          # Read from the installed electron package so this never drifts from
+          # package.json again (was previously hardcoded to 42.4.1, which broke
+          # the zip-cache download after the Electron 45 upgrade).
+          $electronVersion = node -p "require('electron/package.json').version"
+          Write-Host "Electron version (from installed package): $electronVersion"
           $cacheDir = "$env:LOCALAPPDATA\electron\Cache"
           $zipName = "electron-v$electronVersion-win32-x64.zip"
 
@@ -413,6 +417,39 @@ jobs:
             return
           }
           choco install innosetup -y --no-progress --force
+
+      - name: Download VC++ 2015-2022 Redistributable (x64)
+        shell: pwsh
+        run: |
+          # 随安装包分发 VC++ 运行库：旧机器缺这套 DLL 时原生模块（onnxruntime.dll /
+          # ort_bridge.node）会在加载阶段失败，用户只看到 "binding not found"。
+          # 下载到 inno\ 供 ISCC 打包；aka.ms/vc14 是微软官方永久链接（最新版）。
+          # 二进制被 .gitignore(*.exe) 忽略，不入库，仅 CI 构建期获取。
+          $dest = "inno\vc_redist.x64.exe"
+          $urls = @(
+            "https://aka.ms/vc14/vc_redist.x64.exe",
+            "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            try {
+              Write-Host "Downloading VC++ redist from $u ..."
+              Invoke-WebRequest -Uri $u -OutFile $dest -UseBasicParsing -TimeoutSec 180
+              $size = (Get-Item $dest).Length
+              if ($size -gt 10MB) {
+                Write-Host "VC++ redist OK: $dest ($size bytes)"
+                $ok = $true
+                break
+              }
+              Write-Warning "Downloaded file too small ($size bytes); trying next URL"
+            } catch {
+              Write-Warning "Download from $u failed: $($_.Exception.Message)"
+            }
+          }
+          if (-not $ok) {
+            Write-Error "Failed to download vc_redist.x64.exe from all URLs"
+            exit 1
+          }
 
       - name: Compile installer with Inno Setup
         shell: pwsh

@@ -195,7 +195,7 @@ async function applyPipelineHooks(stage, audio, meta) {
   try {
     return await _runner(stage, audio, meta);
   } catch (err) {
-    console.warn('[pipeline] hook 执行器异常：', err && err.message);
+    console.warn('[pipeline] Hook executor exception:', err && err.message);
     return audio;
   }
 }

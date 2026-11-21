@@ -57,7 +57,7 @@ function officialKeys() {
         fingerprint: keyIdFor(pem).replace(/^[a-z0-9]+-/, ''),
       });
     } catch (err) {
-      console.warn(`[plugins] 内置官方公钥无法解析，已跳过：${err.message}`);
+      console.warn(`[plugins] Built-in official key could not be parsed, skipped: ${err.message}`);
     }
   }
   cache = out;

@@ -101,7 +101,7 @@ function loadSplashImage() {
       added += 1;
     } catch (err) {
       // Missing bitmap = no splash (degraded), not a launch failure.
-      console.warn(`[splash] 读取 ${rep.file} 失败：${err.message}`);
+      console.warn(`[splash] Failed to read ${rep.file}: ${err.message}`);
     }
   }
   return added > 0 ? image : null;
@@ -126,14 +126,14 @@ function createSplashWindow() {
 
   // Capability guard: ImageView landed in Electron 32 and is still experimental.
   if (typeof BaseWindow !== 'function' || typeof ImageView !== 'function') {
-    console.warn('[splash] 当前 Electron 不提供 BaseWindow/ImageView，跳过启动画面');
+    console.warn('[splash] Current Electron does not provide BaseWindow/ImageView, skipping splash screen');
     markSplashReady();
     return null;
   }
 
   const image = loadSplashImage();
   if (!image) {
-    console.warn('[splash] 没有可用的启动画面位图（构建期应先跑 npm run splash:image），跳过');
+    console.warn('[splash] No splash bitmap available (run npm run splash:image at build time), skipping');
     markSplashReady();
     return null;
   }
@@ -167,7 +167,7 @@ function createSplashWindow() {
   } catch (err) {
     // 视图构建失败必须仍然标记 ready 并放弃 splash，否则 waitForSplashReady()
     // 的等待者会挂住（见该函数的超时说明）。这里直接把 splash 退化成"无 splash"。
-    console.warn('[splash] 启动画面视图创建失败，跳过:', err && err.message);
+    console.warn('[splash] Failed to create splash view, skipping:', err && err.message);
     try { splashWindow.destroy(); } catch (_) {}
     splashWindow = null;
     splashView = null;

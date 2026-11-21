@@ -355,6 +355,7 @@ export async function playFragment() {
     const padded = padAudioToFragmentDuration(audioData);
     setFragmentAudioData(padded);
     setFragmentAudioDataSignature(currentSignature);
+    console.log(`[FragPlay] INFERENCE RETURNED | session=${sess.id} streamingStarted=${sess.streamStarted} pendingSeek=${sess.pendingSeek !== null} t=${Date.now()}`);
 
     // 标记推理完成：后续不再触发 buffer underrun 等待；已在等待则立即解冻。
     await sess.setInferenceDone();

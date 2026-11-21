@@ -434,6 +434,55 @@ describe('帮助 → 环境检测', () => {
       expect(view.plainText).to.include('Windows 11 (10.0.26100)');
     });
 
+    it('运行时分区显示 VC++ 运行库状态，缺失时点名 DLL', () => {
+      const base = winReport();
+      const missing = envCheckFormat.buildEnvCheckView({
+        ...base,
+        runtime: {
+          ...base.runtime,
+          vcRuntime: {
+            supported: true,
+            ok: false,
+            status: 'missing',
+            missing: ['vcruntime140_1.dll'],
+            system32: 'C:\\Windows\\System32',
+            redistUrl: 'https://aka.ms/vc14/vc_redist.x64.exe',
+          },
+        },
+      }, null, t);
+      const vcRow = missing.sections.find((s) => s.key === 'runtime').rows
+        .find((r) => r.label === t('envCheck.vcRuntimeLabel'));
+      expect(vcRow, 'VC++ 运行库行缺失').to.be.ok;
+      expect(vcRow.value).to.include('vcruntime140_1.dll');
+
+      const okReport = envCheckFormat.buildEnvCheckView({
+        ...base,
+        runtime: {
+          ...base.runtime,
+          vcRuntime: {
+            supported: true,
+            ok: true,
+            status: 'ok',
+            missing: [],
+            system32: 'C:\\Windows\\System32',
+            redistUrl: 'https://aka.ms/vc14/vc_redist.x64.exe',
+          },
+        },
+      }, null, t);
+      const okRow = okReport.sections.find((s) => s.key === 'runtime').rows
+        .find((r) => r.label === t('envCheck.vcRuntimeLabel'));
+      expect(okRow.value).to.not.include('MISSING');
+
+      const linuxReport = envCheckFormat.buildEnvCheckView({
+        ...base,
+        platform: 'linux',
+        runtime: { ...base.runtime, vcRuntime: { supported: false, ok: true, missing: [] } },
+      }, null, t);
+      const linuxRow = linuxReport.sections.find((s) => s.key === 'runtime').rows
+        .find((r) => r.label === t('envCheck.vcRuntimeLabel'));
+      expect(linuxRow.value).to.include(t('envCheck.vcRuntime.na'));
+    });
+
     it('单卡用「型号」避免与分区标题重复，多卡才带序号', () => {
       const single = envCheckFormat.buildEnvCheckView(winReport(), null, t);
       expect(single.sections.find((s) => s.key === 'gpu').rows[0].label)

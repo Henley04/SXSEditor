@@ -83,10 +83,10 @@ function warmupOrt() {
     try {
         const p = ensureOrt();
         if (p && typeof p.catch === 'function') {
-            p.catch((e) => console.warn('[WebNN] onnxruntime-web preload failed (不影响 WebNN 检测):', e.message));
+            p.catch((e) => console.warn('[WebNN] onnxruntime-web preload failed (WebNN detection unaffected):', e.message));
         }
     } catch (e) {
-        console.warn('[WebNN] onnxruntime-web preload failed (不影响 WebNN 检测):', e.message);
+        console.warn('[WebNN] onnxruntime-web preload failed (WebNN detection unaffected):', e.message);
     }
 }
 

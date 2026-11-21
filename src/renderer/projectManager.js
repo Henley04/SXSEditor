@@ -1343,7 +1343,7 @@ export async function loadProject(filePath = null) {
     }
     if (compat.unknownFeatures.length > 0) {
       // 前向兼容：未知特性不阻断，只记录（将来可在 UI 上提示）
-      console.warn('[project] 未知特性（可能来自更新版本）:', compat.unknownFeatures.join(', '));
+      console.warn('[project] Unknown features (possibly from a newer version):', compat.unknownFeatures.join(', '));
     }
     await applyProjectDocument(obj, targetPath);
     return { loaded: true };
@@ -1388,7 +1388,7 @@ export async function createNewProjectFile() {
       filters: [{ name: 'SXSEditor Project', extensions: BUILTIN_PROJECT_EXTENSIONS }],
     });
   } catch (err) {
-    console.error('[project] 新建工程对话框失败:', err);
+    console.error('[project] New project dialog failed:', err);
     return { created: false, canceled: false, error: err.message };
   }
   if (!result || result.canceled || !result.filePath) return { created: false, canceled: true };
@@ -1417,7 +1417,7 @@ export async function createNewProjectFile() {
     console.log('New project created at', filePath);
     return { created: true, filePath };
   } catch (err) {
-    console.error('[project] 新建工程失败:', err);
+    console.error('[project] Failed to create new project:', err);
     showAlertDialog(`${t('main.newProjectFailed')}: ${err.message || ''}`);
     return { created: false, canceled: false, error: err.message };
   }
@@ -1442,7 +1442,7 @@ async function openProjectViaPlugin(targetPath) {
   try {
     res = await api.openDocument(targetPath);
   } catch (err) {
-    console.warn('[project] 插件打开失败:', err && err.message);
+    console.warn('[project] Failed to open plugin:', err && err.message);
     return null;
   }
   if (!res || res.code === 'FILE_NOT_HANDLED') return null;
@@ -1451,7 +1451,7 @@ async function openProjectViaPlugin(targetPath) {
     return { loaded: false, canceled: false, error: res };
   }
   if (Array.isArray(res.warnings) && res.warnings.length) {
-    console.warn('[project] 插件解码警告:\n' + res.warnings.join('\n'));
+    console.warn('[project] Plugin decode warnings:\n' + res.warnings.join('\n'));
   }
   await applyProjectDocument(res.document, targetPath, { pluginId: res.pluginId, ext: res.ext });
   return { loaded: true, pluginId: res.pluginId, warnings: res.warnings || [] };
@@ -1669,7 +1669,7 @@ export async function exportLegacyProject() {
     await window.electronAPI.writeFile(result.filePath, json);
     return { saved: true, filePath: result.filePath };
   } catch (err) {
-    console.error('[project] 导出旧版兼容工程失败:', err);
+    console.error('[project] Failed to export legacy-compatible project:', err);
     showAlertDialog(t('main.projectSaveFailed') + ': ' + (err.message || ''));
     return { saved: false };
   }

@@ -545,28 +545,32 @@ All seven are **off by default**, so existing projects sound exactly as before u
 
 | Group | Runs in | Affects |
 | --- | --- | --- |
-| **F0** (smoothing, outlier removal, transition overshoot, transition length) | The editor, on the F0 curve sent to the model | Preview **and** export identically |
-| **Spectral** (spectral interpolation, time sigma, frequency sigma) | The inference pipeline, on the Mel spectrogram just before the vocoder | Preview **and** export identically |
+| **Pitch** (pitch stability, skip removal, slide, slide length) | The editor, on the F0 curve sent to the model | Preview **and** export identically |
+| **Timbre** (timbre blend, denoise, soft highs) | The inference pipeline, on the Mel spectrogram just before the vocoder | Preview **and** export identically |
+
+> Names above are the friendly names shown in the app. The technical terms are kept in the parameter table below for reference.
 
 Mel frame rate is 24 kHz / 480 = **50 frames per second** (20 ms per frame); frame-based values use those frames.
 
 ### Parameters
 
+The app labels these with friendly names; the original technical term follows each in parentheses.
+
 | Parameter | Range | What it does |
 | --- | --- | --- |
-| Smoothing (F0) | 0–100% | Blends the raw F0 with a Savitzky-Golay filtered copy (7-frame window, cubic order). The local polynomial fit keeps the overall pitch trend (vibrato, drawn slides) while removing frame-to-frame jitter. Runs in the cents domain and never crosses a silent gap. |
-| Outlier removal (F0) | 0–9 frames | Median filter window. Removes isolated pitch spikes (octave errors, detector glitches) without smearing the note. 0 = off; 3–5 is typical. |
-| Transition overshoot (F0) | 0–100% | At every detected pitch jump the step is replaced by a cubic Bezier that overshoots the target and settles back, like a singer leaning into a leap. A candidate must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, and the median level well before/after the jump differs by at least 75 cents (vibrato oscillates back to its midline; a step does not). Higher = more overshoot (up to 35% of the interval). 0 leaves the jump untouched. |
-| Transition length (F0) | 0–300 ms | Duration of the Bezier transition. Only meaningful when overshoot is above 0. |
-| Spectral interpolation (mel) | 0–100% | At every note / phoneme boundary, frames in a +/-3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised cosine. The spectral envelope then changes continuously across the transition instead of jumping in one frame. |
-| Time-freq smoothing, time (mel) | 0–6 sigma | Gaussian sigma along the Mel time axis. Light values (0.8–1.5) tame diffusion grit and breath noise; large values blur consonants. |
-| Time-freq smoothing, freq (mel) | 0–6 sigma | Gaussian sigma along the Mel frequency axis. Smooths harmonic edges and removes the buzzy high-frequency fringe. |
+| Pitch stability (was *Smoothing*, Savitzky-Golay) | 0–100% | Blends the raw F0 with a Savitzky-Golay filtered copy (7-frame window, cubic order). The local polynomial fit keeps the overall pitch trend (vibrato, drawn slides) while removing frame-to-frame jitter. Runs in the cents domain and never crosses a silent gap. |
+| Skip removal (was *Outlier removal*, median filter) | 0–9 frames | Median filter window. Removes isolated pitch spikes (octave errors, detector glitches) without smearing the note. 0 = off; 3–5 is typical. |
+| Slide (was *Transition overshoot*, cubic Bézier) | 0–100% | At every detected pitch jump the step is replaced by a cubic Bezier that overshoots the target and settles back, like a singer leaning into a leap. A candidate must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, and the median level well before/after the jump differs by at least 75 cents (vibrato oscillates back to its midline; a step does not). Higher = more overshoot (up to 35% of the interval). 0 leaves the jump untouched. |
+| Slide length (was *Transition length*) | 0–300 ms | Duration of the Bezier transition. Only meaningful when slide is above 0. |
+| Timbre blend (was *Spectral interpolation*) | 0–100% | At every note / phoneme boundary, frames in a +/-3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised cosine. The spectral envelope then changes continuously across the transition instead of jumping in one frame. |
+| Denoise (was *Time-freq smoothing, time*, Gaussian sigma) | 0–6 sigma | Gaussian sigma along the Mel time axis. Light values (0.8–1.5) tame diffusion grit and breath noise; large values blur consonants. |
+| Soft highs (was *Time-freq smoothing, freq*, Gaussian sigma) | 0–6 sigma | Gaussian sigma along the Mel frequency axis. Smooths harmonic edges and removes the buzzy high-frequency fringe. |
 
 ### One Curve per Parameter
 
 The seven values are **not** drawn on one shared lane — percentages, integer frame counts and Gaussian sigmas have different units and ranges. Each parameter owns its own automation curve:
 
-- The **chips** in the lane header (grouped *F0 smoothing* / *Spectral*) switch the active curve; the lane always shows only the active parameter, in its own units.
+- The **chips** in the lane header (grouped *Pitch* / *Timbre*) switch the active curve; the lane always shows only the active parameter, in its own units.
 - An **empty curve means "constant"** — the value comes from the inspector slider. Add an anchor and the curve takes over between the first and last anchor; outside that span the endpoint value holds.
 - The inspector banner reads **Manual** (constant) or **Auto** (curve active).
 

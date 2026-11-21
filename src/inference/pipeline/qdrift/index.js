@@ -71,7 +71,7 @@ function getCorrection(precision = 'fp16') {
         try {
             asset = CORRECTION_LOADERS.int8();
         } catch (e) {
-            console.warn(`[Q-Drift] INT8 校正表资产缺失（${e && e.message}），本次不启用`);
+            console.warn(`[Q-Drift] INT8 correction table asset missing (${e && e.message}), disabled for this run`);
             _correctionCache.int8 = false;
             return null;
         }
@@ -82,23 +82,23 @@ function getCorrection(precision = 'fp16') {
         // 占位资产（校准未跑完时仓库里保留的全零表）：显式拒绝，否则"启用成功"
         // 会连带锁死步数/CFG 却完全不产生校正，比禁用更难排查。
         if (meta.placeholder === true) {
-            console.warn(`[Q-Drift:${precision}] 校准产物尚未生成（占位表），本次不启用`);
+            console.warn(`[Q-Drift:${precision}] Calibration artifact not yet generated (placeholder table), disabled for this run`);
             _correctionCache[precision] = false;
             return null;
         }
         if (meta.n_steps !== CONTRACT.nSteps) {
-            console.warn(`[Q-Drift:${precision}] 校准步数 ${meta.n_steps} ≠ 合约 ${CONTRACT.nSteps}，已禁用`);
+            console.warn(`[Q-Drift:${precision}] Calibration steps ${meta.n_steps} != contract ${CONTRACT.nSteps}, disabled`);
             _correctionCache[precision] = false;
             return null;
         }
         if (String(meta.solver) !== CONTRACT.solver) {
-            console.warn(`[Q-Drift:${precision}] 校准求解器 ${meta.solver} ≠ 合约 ${CONTRACT.solver}，已禁用`);
+            console.warn(`[Q-Drift:${precision}] Calibration solver ${meta.solver} != contract ${CONTRACT.solver}, disabled`);
             _correctionCache[precision] = false;
             return null;
         }
         const buf = Buffer.from(asset.base64, 'base64');
         if (buf.length !== CONTRACT.nSteps * CONTRACT.melDim * 4) {
-            console.warn(`[Q-Drift:${precision}] 校正表字节数异常 ${buf.length}，已禁用`);
+            console.warn(`[Q-Drift:${precision}] Correction table byte length abnormal ${buf.length}, disabled`);
             _correctionCache[precision] = false;
             return null;
         }
@@ -106,7 +106,7 @@ function getCorrection(precision = 'fp16') {
         _correctionCache[precision] = arr;
         return arr;
     } catch (e) {
-        console.warn(`[Q-Drift:${precision}] 校正表解码失败，已禁用:`, e && e.message);
+        console.warn(`[Q-Drift:${precision}] Correction table decode failed, disabled:`, e && e.message);
         _correctionCache[precision] = false;
         return null;
     }
@@ -136,7 +136,7 @@ const MEASURED_EP_PATTERNS = [/dml/i, /tensorrt/i];
  */
 function isEpMeasured(ep) {
     if (!ep) {
-        console.warn('[Q-Drift] diffStep EP 信号缺失，无法核验校准匹配性，按匹配处理（请检查 sessionEPs 记录）');
+        console.warn('[Q-Drift] diffStep EP signal missing, cannot verify calibration match, treating as matched (check sessionEPs records)');
         return true;
     }
     const s = String(ep);
@@ -194,22 +194,22 @@ function resolveQDrift(req) {
     else if (diffStepPrecision === 'fp16' || (diffStepPrecision === undefined && isFP16)) precision = 'fp16';
     else precision = null;
     if (!precision) {
-        notes.push(`Q-Drift 仅对 FP16/INT8 DiT 有意义（当前 diffStepPrecision=${diffStepPrecision || (isFP16 ? 'fp16' : 'fp32')}），本次不启用`);
+        notes.push(`Q-Drift only applies to FP16/INT8 DiT (current diffStepPrecision=${diffStepPrecision || (isFP16 ? 'fp16' : 'fp32')}), disabled for this run`);
         return inactive('precision-unsupported');
     }
 
     const correction = getCorrection(precision);
     if (!correction) return inactive('correction-unavailable');
     if (!isEpMeasured(diffStepEp)) {
-        notes.push(`diffStep 跑在 ${diffStepEp} 上，Δv 统计与校准时实测的 DML / NvTensorRtRtx 不一致，本次不启用`);
+        notes.push(`diffStep is running on ${diffStepEp}, whose dV statistics do not match the DML / NvTensorRtRtx measured during calibration, disabled for this run`);
         return inactive('ep-not-measured');
     }
 
     if (samplerName !== CONTRACT.solver) {
-        notes.push(`求解器 ${samplerName} → ${CONTRACT.solver}`);
+        notes.push(`solver ${samplerName} -> ${CONTRACT.solver}`);
     }
     if (totalSteps !== CONTRACT.nSteps) {
-        notes.push(`采样步数 ${totalSteps} → ${CONTRACT.nSteps}`);
+        notes.push(`sampling steps ${totalSteps} -> ${CONTRACT.nSteps}`);
     }
     if (Math.abs((cfgStrength || 0) - CONTRACT.cfgStrength) > 1e-6) {
         notes.push(`CFG ${cfgStrength} → ${CONTRACT.cfgStrength}`);
@@ -217,9 +217,9 @@ function resolveQDrift(req) {
     if (Math.abs((cfgRescale || 0) - CONTRACT.cfgRescale) > 1e-6) {
         notes.push(`CFG rescale ${cfgRescale} → ${CONTRACT.cfgRescale}`);
     }
-    if (cfgScheduleOpts) notes.push('CFG 调度已关闭（Q-Drift 要求固定 CFG）');
-    if (dynamicThresholdOpts) notes.push('动态阈值已关闭（Q-Drift 要求标准 CFG + rescale）');
-    notes.push('SDEdit 局部修复已关闭（会改变速度场分布）');
+    if (cfgScheduleOpts) notes.push('CFG schedule disabled (Q-Drift requires fixed CFG)');
+    if (dynamicThresholdOpts) notes.push('dynamic threshold disabled (Q-Drift requires standard CFG + rescale)');
+    notes.push('SDEdit local repair disabled (it changes the velocity field distribution)');
 
     return {
         active: true,

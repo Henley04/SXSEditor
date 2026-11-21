@@ -17,7 +17,9 @@
  *      就锚定，若它整块在起播点之前，后续每块都被算成"迟到"，头部被裁光，
  *      表现为"从中段起播没有声音 / 播放头空跑"。
  *   2. 锚定之后永不重建。迟到只裁头（`offsetSec`），不改 `when` 的斜率。
- *   3. 已交付末端只前进，且与内容坐标同源 —— 重叠块 / 迟到块都只裁头。
+ *   3. 占位按**已排程区间集合**（`coveredRanges`）判定，不是单一前沿。
+ *      重叠块裁头、重复块丢弃、乱序块回填 —— 后段先到时它只占自己的区间，
+ *      前段随后到达仍能按原时刻排进去（旧的"单一前沿"会把前段整块误判为重复）。
  *
  * 纯函数式对象：不碰 DOM、不碰 AudioContext，可在单测里直接驱动。
  */
@@ -39,6 +41,9 @@ const EPS_SEC = 1e-6;
  * @property {number} contentStartSec 实际发声内容起点（分片绝对秒）
  * @property {number} contentEndSec chunk 内容末端（分片绝对秒）
  * @property {number} durationSec 剩余可播时长
+ * @property {Array<{skipSamples:number,when:number,offsetSec:number,durationSec:number,contentStartSec:number,contentEndSec:number}>} segments
+ *   实际要排程的片段（通常一段；块被已排区间切成多段时逐段排，避免静默丢音频）
+ * @property {number} [splitParts] 该块被已排程区间切成了几段
  */
 
 export class StreamTimeline {
@@ -51,14 +56,17 @@ export class StreamTimeline {
     this.leadSec = Number.isFinite(leadSec) ? leadSec : STREAM_LEAD_SEC;
     /** 内容位置 startPositionSec 对应的 ctx 时刻；未起播为 null。 */
     this.anchorCtxTime = null;
-    /** 已排程内容的最远末端（分片绝对秒）。 */
+    /** 已排程内容的最远末端（分片绝对秒）—— 收尾判定 / UI 前沿用。 */
     this.deliveredEndSec = this.startPositionSec;
+    /** 已排程内容区间 [{start,end}]，升序且互不重叠（乱序回填 / 去重的判据）。 */
+    this.coveredRanges = [];
     /** 无 sampleOffset 时的顺序拼接游标（相对首音符）。 */
     this.seqCursorSec = 0;
-    /** 已排程块数 / 丢弃块数（诊断用）。 */
+    /** 已排程块数 / 丢弃块数 / 迟到块数 / 乱序回填块数（诊断用）。 */
     this.scheduledCount = 0;
     this.droppedCount = 0;
     this.lateCount = 0;
+    this.backfillCount = 0;
   }
 
   /** 时间基准是否已建立（= 是否已经开始出声）。 */
@@ -95,6 +103,55 @@ export class StreamTimeline {
   }
 
   /**
+   * 把已排程区间 [from, to) 记入账本（与相邻区间合并）。
+   * 只增不减：区间代表"这段时间轴已经被占用"，与是否真的播完无关。
+   *
+   * @param {number} from
+   * @param {number} to
+   */
+  _cover(from, to) {
+    if (!(to > from)) return;
+    const ranges = this.coveredRanges;
+    let i = 0;
+    while (i < ranges.length && ranges[i].end < from) i++;
+    let start = from;
+    let end = to;
+    let j = i;
+    while (j < ranges.length && ranges[j].start <= end) {
+      start = Math.min(start, ranges[j].start);
+      end = Math.max(end, ranges[j].end);
+      j++;
+    }
+    ranges.splice(i, j - i, { start, end });
+    this.deliveredEndSec = Math.max(this.deliveredEndSec, end);
+  }
+
+  /**
+   * 求 [from, to) 中**尚未被占用**的片段（升序）。
+   *
+   * 这是"乱序回填"的关键：后段先到时只登记自己的区间，前段随后到达仍能看到
+   * 一段空白并原样排进去。若改用单一前沿（旧的 deliveredEndSec），前段会被
+   * 整块当成重复丢掉 —— 表现为"偶发缺一句、播放头照走"。
+   *
+   * @param {number} from
+   * @param {number} to
+   * @returns {Array<{start:number,end:number}>}
+   */
+  _uncoveredParts(from, to) {
+    const parts = [];
+    let cursor = from;
+    for (const r of this.coveredRanges) {
+      if (r.end <= cursor) continue;
+      if (r.start >= to) break;
+      if (r.start > cursor) parts.push({ start: cursor, end: Math.min(r.start, to) });
+      cursor = Math.max(cursor, r.end);
+      if (cursor >= to) break;
+    }
+    if (cursor < to) parts.push({ start: cursor, end: to });
+    return parts;
+  }
+
+  /**
    * 规划一个 chunk。
    *
    * @param {{sampleOffset?: number, sampleEnd?: number, audio?: Float32Array}} chunkInfo
@@ -110,14 +167,11 @@ export class StreamTimeline {
     }
 
     const { contentStartSec, contentEndSec } = this._contentRange(chunkInfo, sampleRate);
-    // 有效起点 = 起播点之后、且未被已排程内容覆盖的部分
-    const effectiveStartSec = Math.max(
-      contentStartSec,
-      this.startPositionSec,
-      this.deliveredEndSec,
-    );
+    const fromSec = Math.max(contentStartSec, this.startPositionSec);
+    const deliveredBeforeSec = this.deliveredEndSec;
+    const parts = this._uncoveredParts(fromSec, contentEndSec);
 
-    if (contentEndSec <= effectiveStartSec + EPS_SEC) {
+    if (parts.length === 0) {
       // 整块都在起播点之前 / 已被前一块覆盖：丢弃。**不建立时间基准** ——
       // 否则后续块会被按"从首个收到块算起"的迟到量裁头。
       const reason = contentEndSec <= this.startPositionSec + EPS_SEC ? 'before-start' : 'duplicate';
@@ -129,38 +183,66 @@ export class StreamTimeline {
     const startedNow = !this.started;
     if (startedNow) this.anchorCtxTime = ctxNow + this.leadSec;
 
-    const skipSamples = Math.max(0, Math.round((effectiveStartSec - contentStartSec) * sampleRate));
-    const trimmedDurSec = (audioLength - skipSamples) / sampleRate;
-    if (trimmedDurSec <= 0) {
-      this.droppedCount += 1;
-      return this._drop('no-audio', startedNow);
+    // 一个块被已排程区间切成多段时逐段排程 —— 少排一段就是静默丢一句歌词，
+    // 而 WebAudio 完全支持同一块音频按不同 offset 排多个 source。
+    const segments = [];
+    let scheduledEndSec = 0;
+    for (const part of parts) {
+      const skipSamples = Math.max(0, Math.round((part.start - contentStartSec) * sampleRate));
+      const availableSamples = audioLength - skipSamples;
+      if (availableSamples <= 0) continue;
+      // 只播到本段末端（被后面的已排区间截断时不能越界播放）。
+      const durSec = Math.min(availableSamples / sampleRate, part.end - part.start);
+      if (durSec <= EPS_SEC) continue;
+
+      // 内容位置 X 应在 anchor + (X − startPosition) 出声。
+      const wantCtxTime = this.anchorCtxTime + (part.start - this.startPositionSec);
+      // 迟到只裁头、不移基准：把这部分从头部裁掉，内容位置始终等于播放头位置。
+      const lateSec = Math.max(0, ctxNow - wantCtxTime);
+      if (lateSec >= durSec - EPS_SEC) {
+        this.lateCount += 1;
+        continue;
+      }
+      segments.push({
+        skipSamples,
+        when: wantCtxTime + lateSec,
+        offsetSec: lateSec,
+        durationSec: durSec - lateSec,
+        // 该段完整长度（未扣迟到）。排程时按它切片、用 offsetSec 表示迟到裁头；
+        // 若按 durationSec 切片再传 offsetSec，late 会被扣两次（尾部被吃掉）。
+        sourceDurationSec: durSec,
+        contentStartSec: part.start,
+        contentEndSec: part.start + durSec,
+      });
+      scheduledEndSec = Math.max(scheduledEndSec, part.start + durSec);
     }
 
-    // 内容位置 X 应在 anchor + (X − startPosition) 出声。
-    const wantCtxTime = this.anchorCtxTime + (effectiveStartSec - this.startPositionSec);
-    // 迟到只裁头、不移基准：把这部分从头部裁掉，内容位置始终等于播放头位置。
-    const lateSec = Math.max(0, ctxNow - wantCtxTime);
-    if (lateSec >= trimmedDurSec - EPS_SEC) {
+    if (segments.length === 0) {
       this.droppedCount += 1;
-      this.lateCount += 1;
       // 丢掉整块但保留基准：基准代表时间轴原点，丢了它下一块会重新锚定，
       // 播放头会凭空回跳。
       return this._drop('late', startedNow);
     }
 
-    this.deliveredEndSec = Math.max(this.deliveredEndSec, contentEndSec);
+    this._cover(fromSec, scheduledEndSec);
     this.scheduledCount += 1;
-    if (lateSec > 0) this.lateCount += 1;
+    if (segments.some((s) => s.offsetSec > 0)) this.lateCount += 1;
+    // 乱序回填 = 排到了"已交付末端之前"的位置（后段先到、前段后到）。
+    if (!startedNow && fromSec + EPS_SEC < deliveredBeforeSec) this.backfillCount += 1;
 
+    const first = segments[0];
     return {
       action: 'schedule',
       startedNow,
-      when: wantCtxTime + lateSec,
-      offsetSec: lateSec,
-      skipSamples,
-      contentStartSec: effectiveStartSec,
-      contentEndSec,
-      durationSec: trimmedDurSec - lateSec,
+      // 以下字段是"第一段"的等价描述（兼容既有调用方 / 测试）。
+      when: first.when,
+      offsetSec: first.offsetSec,
+      skipSamples: first.skipSamples,
+      contentStartSec: first.contentStartSec,
+      contentEndSec: scheduledEndSec,
+      durationSec: first.durationSec,
+      segments,
+      splitParts: parts.length,
     };
   }
 
@@ -175,6 +257,7 @@ export class StreamTimeline {
       contentStartSec: 0,
       contentEndSec: 0,
       durationSec: 0,
+      segments: [],
     };
   }
 

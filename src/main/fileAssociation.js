@@ -262,7 +262,7 @@ async function ensureWindowsFileAssociations() {
   try {
     await syncWindowsPluginFileAssociations();
   } catch (err) {
-    console.warn('[fileAssoc] 插件关联同步失败:', err && err.message);
+    console.warn('[fileAssoc] Plugin association sync failed:', err && err.message);
   }
 }
 
@@ -385,7 +385,7 @@ async function syncWindowsPluginFileAssociations() {
       await unregisterPluginProgId(progId);
       removed++;
     } catch (err) {
-      console.warn('[fileAssoc] 清理插件关联失败:', progId, err.message);
+      console.warn('[fileAssoc] Failed to clean up plugin association:', progId, err.message);
     }
   }
   for (const [progId, type] of desired) {
@@ -395,7 +395,7 @@ async function syncWindowsPluginFileAssociations() {
       await registerWindowsType({ ...type, progId, icon: 'project' });
       registered++;
     } catch (err) {
-      console.warn('[fileAssoc] 注册插件关联失败:', type.ext, err.message);
+      console.warn('[fileAssoc] Failed to register plugin association:', type.ext, err.message);
     }
   }
   if (registered || removed) refreshShellIcons();

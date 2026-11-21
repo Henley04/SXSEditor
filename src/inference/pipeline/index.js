@@ -656,10 +656,10 @@ class OnnxSVSPipeline {
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
     _splitLongRestRegions(notes, bpm) { return this._audioSegmentation.splitLongRestRegions(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
-    _computeSynthCacheKey(notes, bpm, options) {
-        const base = this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this));
+    /** pipeline 级 seed/qdrift 后缀：覆盖全曲/分段/chunk 各级缓存的派生键。 */
+    _cacheKeyStateSuffix() {
         // seed 与 qdrift 改变合成结果，但 audioSegmentation 不感知 pipeline 状态，
-        // 无法纳入 base 键 —— 在此统一追加，覆盖全曲/分段/chunk 各级缓存的派生键：
+        // 无法纳入 base 键 —— 在此统一追加：
         //   - seed：CLI --seed / 固定种子设置用于精度与 EP 的 A/B 对比，换 seed 后
         //     初始噪声不同，缓存键不含 seed 会命中上一次的音频，对比结论失真。
         //   - qdrift：Q-Drift 开启时强制改写 solver/steps/CFG/rescale 并关闭 CFG
@@ -667,7 +667,26 @@ class OnnxSVSPipeline {
         const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
             ? this._diffusion.getNoiseSeed()
             : 'auto';
-        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+        return `_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+    }
+
+    /**
+     * 一次算出带 pipeline 状态后缀的 synth/mel 两个缓存键，共享昂贵的 optionKeyPart。
+     * 用于缓存命中检查：旧代码分别调用 _computeSynthCacheKey + _computeMelCacheKey，
+     * 把 reference/F0/prompt 哈希算两遍（可见的命中延迟）。
+     */
+    _computeCacheKeyPair(notes, bpm, options) {
+        const parts = this._audioSegmentation.computeCacheKeyParts(notes, bpm, options);
+        const suffix = this._cacheKeyStateSuffix();
+        return {
+            melKey: `${parts.melKey}${suffix}`,
+            synthKey: `${parts.synthKey}${suffix}`,
+        };
+    }
+
+    _computeSynthCacheKey(notes, bpm, options) {
+        const base = this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this));
+        return `${base}${this._cacheKeyStateSuffix()}`;
     }
     _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
         // 复用 _computeSynthCacheKey（已含 seed/qdrift 后缀）
@@ -682,14 +701,37 @@ class OnnxSVSPipeline {
      */
     _computeMelCacheKey(notes, bpm, options) {
         const base = this._audioSegmentation.computeMelCacheKey(notes, bpm, options);
-        const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
-            ? this._diffusion.getNoiseSeed()
-            : 'auto';
-        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+        return `${base}${this._cacheKeyStateSuffix()}`;
     }
     _computeSegmentMelKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
         const base = this._computeMelCacheKey(segNotes, bpm, options);
         return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
+
+    /**
+     * 批量算出每个 segment 的 synth/mel 缓存键，共享同一份 optionKeyPart / mp / 状态后缀。
+     *
+     * 长音频分成 N 段时，旧实现在首个 chunk 发射前对每段各调用
+     * _computeSegmentCacheKey + _computeSegmentMelKey —— 两个键各自重算 reference WAV /
+     * F0 曲线 / prompt cond 的 FNV 哈希，共 2N 次昂贵哈希全压在「分片启动」阶段。
+     * 这些哈希对 N 段完全相同（bpm/options 一致），只有 notesHash 与 sb/fs/pt 逐段不同。
+     * 本方法把不变量提到循环外算一次，段内只剩轻量的 notesHash + 字符串拼接。
+     *
+     * @returns {Array<{synthKey:string, melKey:string}>} 与入参 segments 等长、同序
+     */
+    _computeSegmentKeyBatch(segments, bpm, options, segF0Shifts, ptFrameCount) {
+        const optionPart = this._audioSegmentation.computeOptionKeyPart(bpm, options);
+        const mpHash = this._audioSegmentation.computeMelPostprocessHash(options);
+        const suffix = this._cacheKeyStateSuffix();
+        const seg = this._audioSegmentation;
+        return segments.map((s, i) => {
+            const notesHash = seg.computeNotesHash(s.notes);
+            const tail = `_sb${s.startBeat}_fs${segF0Shifts[i]}_pt${ptFrameCount || 0}`;
+            return {
+                melKey: `${notesHash}${optionPart}${suffix}${tail}`,
+                synthKey: `${notesHash}${optionPart}_mp${mpHash}${suffix}${tail}`,
+            };
+        });
     }
     _median(arr) { return this._audioSegmentation.median(arr); }
     _isRestNote(note) { return this._audioSegmentation._isRestNote(note); }
@@ -1341,7 +1383,7 @@ class OnnxSVSPipeline {
     async _doInit() {
         // 每次初始化都从 0 开始（单调保护会把上一次的 100 当成起点，否则重载时进度条不动）
         this._loadProgressPct = 0;
-        console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime + DirectML)...');
+        console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime)...');
         console.log('[OnnxSVSPipeline] Model directory:', this.modelDir);
         if (this.languageOverride === 'ja') {
             if (this.jpModelDir) {
@@ -1544,7 +1586,7 @@ class OnnxSVSPipeline {
             if (settings.vocoderType === 'sifigan') vocoderType = 'sifigan';
             if (settings.sifiganPrecision === 'fp16') sifiganPrecision = 'fp16';
         } catch (e) {
-            console.warn('[OnnxSVSPipeline] 读取 vocoderType/sifiganPrecision 设置失败，默认使用 default/fp32:', e.message);
+            console.warn('[OnnxSVSPipeline] Failed to read vocoderType/sifiganPrecision settings, defaulting to default/fp32:', e.message);
         }
         this.vocoderType = vocoderType;
         this.sifiganPrecision = sifiganPrecision;
@@ -1621,7 +1663,7 @@ class OnnxSVSPipeline {
                 if (!sifiganStatsExists) {
                     // stats 缺失时强制回退默认 vocoder，避免用户听到失真音频
                     // （SiFiGAN ONNX 内部归一化常量依赖 stats，缺失会导致输入分布严重失配）
-                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
+                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx exists but stats file is missing, forcing fallback to default vocoder to avoid distortion');
                     return false;
                 }
                 this._resolvedVocoderFile = fileName;
@@ -1646,7 +1688,7 @@ class OnnxSVSPipeline {
             } else if (sifiganPlainExists) {
                 pickSifigan('sifigan_vocoder.onnx', 'FP32 plain');
             } else {
-                console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
+                console.warn('[OnnxSVSPipeline] SiFiGAN model missing, falling back to default vocoder');
                 // 落入默认 vocoder 回退逻辑
             }
             // stats 文件路径与缺失标志（仅 onnx+stats 均存在时 sifiganOnnxResolved=true）
@@ -1942,9 +1984,8 @@ class OnnxSVSPipeline {
         try {
             const modelSizes = new Map(modelStats.map((s, i) => [i, s.size]));
             loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys, modelSizes);
-            const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
-            const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
-            console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            const epCounts = this.sessionEPs;
+            console.log(`[OnnxSVSPipeline] Init complete: ${this._formatEpReport(epCounts)}`);
             // Flush ORT native debug logs after init complete
             if (typeof globalThis._flushOrtDebugLogs === 'function') {
                 globalThis._flushOrtDebugLogs();
@@ -1981,9 +2022,7 @@ class OnnxSVSPipeline {
         let loadedSessions = [];
         try {
             loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys);
-            const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
-            const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
-            console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            console.log(`[OnnxSVSPipeline] Fallback init complete: ${this._formatEpReport(this.sessionEPs)}`);
             if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], this._getModelPath(this._resolvedVocoderFile || 'vocoder_dml.onnx'));
             this._detectDiffStepPrecision();
         } catch (err) {
@@ -2331,7 +2370,7 @@ class OnnxSVSPipeline {
                 const modelIsStatic = typeof seqDim === 'number' && seqDim > 0;
                 this.diffStepSeqLen = modelIsStatic ? seqDim : null;
                 if (this.diffStepStaticShapes !== modelIsStatic) {
-                    console.log(`[OnnxSVSPipeline] diff_step 形状自适应: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}, diffStepSeqLen=${this.diffStepSeqLen ?? 'dynamic'}`);
+                    console.log(`[OnnxSVSPipeline] diff_step shape adaptation: seq_dim=${seqDim} -> diffStepStaticShapes=${modelIsStatic}, diffStepSeqLen=${this.diffStepSeqLen ?? 'dynamic'}`);
                     this.diffStepStaticShapes = modelIsStatic;
                 }
             }
@@ -2410,9 +2449,6 @@ class OnnxSVSPipeline {
         const chunkFrames = this._resolveVocoderChunkFrames();
         const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
-        if (this.sessionEPs.vocoder !== 'dml') {
-            console.warn(`[OnnxSVSPipeline] WARNING: Vocoder is NOT on DML (EP=${this.sessionEPs.vocoder}), will be slow and may explain low GPU usage!`);
-        }
         if (!this.sessions.vocoder) {
             console.error('[OnnxSVSPipeline] CRITICAL: sessions.vocoder is missing! Vocoder inference will throw.');
         }
@@ -3288,6 +3324,7 @@ class OnnxSVSPipeline {
                     isLast,
                 });
             } catch (_) {}
+            console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${frontier} end=${frontier + audio.length} isLast=${isLast} t=${Date.now()}`);
             frontier += audio.length;
             return true;
         };
@@ -3346,7 +3383,9 @@ class OnnxSVSPipeline {
                 if (finished) return;
                 const meta = metas.get(segIdx);
                 if (!meta || meta.audio) return; // 未知 segment / 重复完成
-                meta.audio = (audio && audio.length > 0) ? audio : new Float32Array(0);
+                const samples = (audio && audio.length > 0) ? audio.length : 0;
+                console.log(`[SegInfer][FRAG] segment inference done | seg=${segIdx}/${timeOrder.length} samples=${samples} relStart=${meta.relStart} relEnd=${meta.relEnd} t=${Date.now()}`);
+                meta.audio = samples > 0 ? audio : new Float32Array(0);
                 tryEmit();
             },
         };
@@ -4040,6 +4079,7 @@ class OnnxSVSPipeline {
             this._silenceNonVocalRegions(audio, p.filledNotes, bpm, relativeStartBeat);
             const safeChunk = { ...chunkInfo, audio, streamManifest };
             emittedChunks.push({ ...safeChunk, audio: audio.slice() });
+            console.log(`[SegInfer][MAIN] chunk emitted | stream=${chunkInfo.streamKey} frag=${p.fragIdx} region=${p.regionIdx} offset=${chunkInfo.sampleOffset} end=${chunkInfo.sampleEnd} samples=${audio.length} streamLast=${!!chunkInfo.streamLast} isLast=${!!chunkInfo.isLast} cached=${!!chunkInfo.cached} t=${Date.now()}`);
             onChunkAudio(safeChunk);
         };
 
@@ -4317,7 +4357,7 @@ class OnnxSVSPipeline {
             audio: mixedAudio.slice(),
             chunks: emittedChunks.map(chunk => ({ ...chunk, audio: chunk.audio.slice() })),
         };
-        console.log(`[MultiStream] Complete: ${prepared.length} fragments, ${globalChunks.length} chunks, ${totalMixedSamples} samples`);
+        console.log(`[SegInfer][MAIN] synthesis complete | fragments=${prepared.length} chunks=${globalChunks.length} samples=${totalMixedSamples} t=${Date.now()}`);
         onProgress(100);
         await this._recreateHeavySessionsAfterSynthesis();
         return mixedAudio;
@@ -4393,9 +4433,11 @@ class OnnxSVSPipeline {
 
         const filledNotes = this._fillNoteGaps(notes);
 
-        const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
-        // mel 级缓存键：不含 melPostprocess（音色曲线只改 vocoder 输入，diffstep 产物与它无关）
-        const melKey = this._computeMelCacheKey(notes, bpm, options);
+        // 一次算出 synth/mel 两个缓存键，共享昂贵的 optionKeyPart（参考音频/F0/prompt 哈希）。
+        // 旧实现 computeSynthCacheKey + computeMelCacheKey 各算一遍这段哈希，缓存命中检查
+        // 便付出双倍成本 —— 表现为「命中缓存仍有可见延迟」。
+        // melKey 不含 melPostprocess（音色曲线只改 vocoder 输入，diffstep 产物与它无关）。
+        const { synthKey: cacheKey, melKey } = this._computeCacheKeyPair(notes, bpm, options);
         const cachedAudio = this._synthCacheGet(cacheKey);
         if (cachedAudio) {
             console.warn(`[OnnxSVSPipeline] >>> CACHE HIT <<< key=${cacheKey.substring(0, 32)}... | Returning CACHED audio, vocoder will NOT run! (Clear cache: switch model or restart app)`);
@@ -4890,18 +4932,21 @@ class OnnxSVSPipeline {
         //     的 segF0Shift 变化 → _fs 后缀变化 → 全部分片失效（此时输出确实不同，失效正确）。
         //   - 自定义音高曲线（pitchCurveF0 非空）随音符 start/duration 变化 → f0Hash 变化 →
         //     全部分片失效。这两种场景下退化为整曲重算，行为与未引入分片缓存时一致。
+        // 每段的 sF0Shift 只算一次，缓存键批量生成共享同一份 optionKeyPart/mp/状态后缀：
+        // 旧的逐段 _computeSegmentCacheKey + _computeSegmentMelKey 会为 N 段各做 2 次
+        // 昂贵的 reference/F0/prompt 哈希，全压在首个 chunk 前的「分片启动」阶段。
+        const segF0Shifts = segments.map(s => this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes));
+        const segKeyParts = this._computeSegmentKeyBatch(segments, bpm, options, segF0Shifts, ptFrameCount);
         const segCacheKeys = new Array(segments.length);
         const segMelCacheKeys = new Array(segments.length);
         const segCachedAudios = new Array(segments.length);
         let segCacheHits = 0;
         for (let i = 0; i < segments.length; i++) {
-            const s = segments[i];
-            const sF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes);
-            const sKey = this._computeSegmentCacheKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
+            const sKey = segKeyParts[i].synthKey;
             segCacheKeys[i] = sKey;
             // mel 级键（不含 melPostprocess）：音色曲线变化时 segment 原始 mel 仍可复用，
             // 跳过该 segment 的 encoder+diffusion，仅重跑 vocoder。
-            segMelCacheKeys[i] = this._computeSegmentMelKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
+            segMelCacheKeys[i] = segKeyParts[i].melKey;
             const hit = this._segCacheGet(sKey);
             segCachedAudios[i] = hit;
             if (hit) segCacheHits++;
@@ -5139,6 +5184,25 @@ class OnnxSVSPipeline {
         // 合成完成后重建重型 DML session，释放内存池，防止连续推理 OOM
         await this._recreateHeavySessionsAfterSynthesis();
         return audioData;
+    }
+
+    /**
+     * Build an accurate, dynamic EP breakdown for init/summary logs.
+     * Counts every execution provider actually present in sessionEPs (including
+     * WinML vendor EPs such as `winml:NvTensorRTRTX`) instead of hardcoding only
+     * DML/CPU — the old report showed "0 DML, 0 CPU" when models ran on TRTRTX.
+     */
+    _formatEpReport(sessionEPs) {
+        const groups = new Map();
+        for (const ep of Object.values(sessionEPs || {})) {
+            const key = ep || 'unknown';
+            groups.set(key, (groups.get(key) || 0) + 1);
+        }
+        if (groups.size === 0) return '0 model(s) loaded';
+        const parts = [...groups.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .map(([ep, count]) => `${count} model(s) using ${ep}`);
+        return parts.join(', ');
     }
 
     getHardwareInfo() {

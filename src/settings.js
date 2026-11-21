@@ -2462,7 +2462,7 @@ initUpdateSection().catch(() => {});
         const version = await window.electronAPI.getAppVersion();
         if (version) document.getElementById('settings-version').textContent = `v${version}`;
     } catch (err) {
-        console.warn('[Settings] 读取应用版本失败：', err && err.message ? err.message : err);
+        console.warn('[Settings] Failed to read app version:', err && err.message ? err.message : err);
     }
 })();
 
@@ -3538,7 +3538,7 @@ async function installPluginSettings() {
     try {
         snapshot = await api.list();
     } catch (err) {
-        console.warn('[settings] 读取插件列表失败:', err && err.message);
+        console.warn('[settings] Failed to read plugin list:', err && err.message);
         return;
     }
 
@@ -3629,7 +3629,7 @@ async function installPluginSettings() {
                 const current = await api.settingsGet(plugin.id);
                 if (current && current.ok) values = current.values || {};
             } catch (err) {
-                console.warn('[settings] 读取插件设置失败:', err && err.message);
+                console.warn('[settings] Failed to read plugin settings:', err && err.message);
             }
             const status = document.createElement('p');
             status.className = 'hint';
@@ -3658,7 +3658,7 @@ async function installPluginSettings() {
 }
 
 installPluginSettings().catch((err) => {
-    console.warn('[settings] 插件设置分区初始化失败:', err && err.message);
+    console.warn('[settings] Plugin settings section init failed:', err && err.message);
 });
 
 // ==================== 模型端点 / 任务绑定 / 访问控制 ====================
@@ -3696,7 +3696,7 @@ async function installModelSettings() {
         try {
             snapshot = await api.snapshot();
         } catch (err) {
-            console.warn('[settings] 读取模型配置失败:', err && err.message);
+            console.warn('[settings] Failed to read model config:', err && err.message);
             return;
         }
         renderEndpoints();
@@ -4001,5 +4001,5 @@ async function installModelSettings() {
 }
 
 installModelSettings().catch((err) => {
-    console.warn('[settings] 模型设置分区初始化失败:', err && err.message);
+    console.warn('[settings] Model settings section init failed:', err && err.message);
 });
