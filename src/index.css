@@ -807,6 +807,13 @@
   flex: 0 0 auto;
 }
 
+/* 这四个按钮只有图标、没有文字：媒体查询里给「图标+文字」按钮准备的
+   margin-right 会被 flex 一起计入居中，图标因此整体偏左。这里对纯图标
+   按钮归零（选择器特异性高于 `#toolbar button > .icon`，无需 !important）。 */
+#toolbar .transport-btn > .icon {
+  margin-right: 0;
+}
+
 #toolbar .transport-btn:disabled {
   opacity: 0.35;
   cursor: default;
