@@ -172,6 +172,40 @@ let _loopWatchdogTimer = null;
 // stop/pause/seek 会先 cancel rAF，导致退订永不执行——每次播放泄漏一个
 // IPC 监听器。所有拆除路径都经过 stopExclusivePlayback()，在那里统一退订。
 let _exclusiveRemoveEndedListener = null;
+
+/**
+ * 独占播放的 UI 会话号（单调递增）。
+ *
+ * 每一次独占 start 取一个新号；任何拆除动作（停止/暂停/跳转）也会把号推进。
+ * start 是 async 的（audioPlay 要跨进程、等设备打开、等 worker 回执），期间
+ * 用户完全可能已经停止或又点了播放。回执回来时若号已过期：
+ *   · 不能改 state / 传输条 —— 那会让"已经停止"的界面自己跳回播放态；
+ *   · 不能回退到共享播放 —— 那正是"按了停止，声音自己又响一遍"的成因；
+ *   · 若它其实已经在出声，按**本次**号补一条停止（更新的会话会让它被丢弃）。
+ *
+ * 主进程侧用同一个号做裁决（见 main/audioIpc.js 的 _acceptUiSession），
+ * 所以"排队中的旧 play 在 stop 之后才执行"也会被直接丢弃。
+ */
+let _exclusiveSessionToken = 0;
+
+function _invalidateExclusiveSession() {
+  _exclusiveSessionToken += 1;
+  return _exclusiveSessionToken;
+}
+
+function _isStaleExclusiveSession(token) {
+  return token !== _exclusiveSessionToken;
+}
+
+function _sendExclusiveStop(token) {
+  const stopPromise = window.electronAPI?.audioStop?.(token);
+  if (stopPromise && typeof stopPromise.catch === 'function') {
+    stopPromise.catch(err => {
+      console.warn('[Audio] Failed to stop exclusive playback:', err);
+    });
+  }
+}
+
 function _detachExclusiveEndedListener() {
   if (_exclusiveRemoveEndedListener) {
     safeCleanup('audioPlayback.detachExclusiveEndedListener', _exclusiveRemoveEndedListener);
@@ -1463,6 +1497,9 @@ export function startSharedPlayback(offset) {
 export async function startExclusivePlayback(offset) {
   stopAudioSource();
   stopExclusivePlayback();
+  // 本次 start 的会话号：stopExclusivePlayback() 已经推进过一次，这里取最新值。
+  // 之后任何停止/暂停/跳转/更新的播放都会让它过期。
+  const myToken = _invalidateExclusiveSession();
 
   try {
     const options = {
@@ -1475,10 +1512,18 @@ export async function startExclusivePlayback(offset) {
       exclusiveMode: true,
       volume: state.audioSettings?.audioVolume ?? 1.0,
       offset: offset,
+      sessionId: myToken,
     };
 
     // 独占输出没有 WebAudio 侧的伴奏 source，必须送一份已混伴奏的 PCM。
     const result = await window.electronAPI.audioPlay(_buildExclusiveMonoMix(), options);
+
+    if (_isStaleExclusiveSession(myToken)) {
+      // 这次 start 已被用户后来的操作取代。它可能已经在出声（start 的回执
+      // 只说明"PCM 已交给设备"），按本次号补一条停止；更新的会话会让它被丢弃。
+      if (result && result.success) _sendExclusiveStop(myToken);
+      return;
+    }
 
     if (!result.success) {
       console.warn('[Audio] WASAPI exclusive mode failed, falling back to shared:', result.error);
@@ -1537,6 +1582,11 @@ export async function startExclusivePlayback(offset) {
 
     startExclusivePlayheadAnimation(_detachExclusiveEndedListener, playbackStartWallTime);
   } catch (err) {
+    if (_isStaleExclusiveSession(myToken)) {
+      // 同上：被取代的会话失败不能触发"回退到共享播放"，否则停止/暂停之后
+      // 会凭空多出一路声音。
+      return;
+    }
     console.warn('Exclusive audio playback failed; using shared playback:', err);
     state.useExclusiveMode = false;
     stopExclusivePlayback();
@@ -1606,14 +1656,10 @@ export function stopExclusivePlayback() {
   // through this function, whereas the rAF that used to own the unsubscribe
   // has already been cancelled on those paths (listener leak).
   _detachExclusiveEndedListener();
+  // 推进会话号：在途的独占 start 全部作废（回执不再改状态、也不会回退到共享）。
   // 现在所有 stop/pause/seek 路径都会无条件调用本函数（包括从未用过独占
   // 输出的会话），因此这里必须容忍缺失的 API；共享模式下它就是一个 no-op。
-  const stopPromise = window.electronAPI?.audioStop?.();
-  if (stopPromise && typeof stopPromise.catch === 'function') {
-    stopPromise.catch(err => {
-      console.warn('[Audio] Failed to stop exclusive playback:', err);
-    });
-  }
+  _sendExclusiveStop(_invalidateExclusiveSession());
 }
 
 export function pausePlayback() {
@@ -1688,6 +1734,10 @@ export function stopPlayback() {
   //     Play 重新跑一遍 encoder+diffusion+vocoder —— 这是"按了停止就得重推"的
   //     根因，长工程上代价是几十秒。
   const wasSynthesizing = state.isSynthesizing;
+  // 作废在途的 playAll 会话：它的 finally 会按 isPlaying 重新派生传输条状态，
+  // 若用户在"最后一步 startAudioPlayback 还挂着"时按了停止，旧代码会把刚复位
+  // 成 IDLE 的界面又拽回 PAUSED（Play/Stop 亮着但什么都没在播）。
+  _playGeneration += 1;
   // 解除推理等待冻结（等待在途 suspend 落地后再 resume，避免冻结泄漏）
   if (_scheduler) _scheduler.deactivate();
   if (state.isSynthesizing) {

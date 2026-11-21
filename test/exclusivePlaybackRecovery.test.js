@@ -24,6 +24,48 @@ if (!global.requestAnimationFrame) {
 const { AudioOutputManager } = require('../src/audio/audioOutputManager');
 const { state, trackManager } = require('../src/renderer/state.js');
 const { stopPlayback, startExclusivePlayback } = require('../src/renderer/audioPlayback.js');
+const { TRANSPORT, getTransportState } = require('../src/renderer/transport.js');
+
+/**
+ * jsdom 没有 AudioContext：给一个最小替身。
+ * 用途是让"回退到共享播放"这条错误路径可观察 —— 若它被走到，
+ * startSharedPlayback 会真的建 buffer/source 并置 isPlaying。
+ */
+function installFakeAudioContext() {
+  class FakeGain {
+    constructor() { this.gain = { value: 1, setValueAtTime() {}, setTargetAtTime() {} }; }
+    connect() { return this; }
+    disconnect() {}
+  }
+  class FakeBuffer {
+    constructor(length) { this.duration = length / 24000; this._length = length; }
+    getChannelData() { return new Float32Array(this._length); }
+  }
+  class FakeSource {
+    constructor() { this.onended = null; }
+    connect() { return this; }
+    start() {}
+    stop() {}
+  }
+  class FakeCtx {
+    constructor() {
+      this.state = 'running';
+      this.currentTime = 0;
+      this.sampleRate = 24000;
+      this.destination = {};
+      this.outputLatency = 0;
+      this.baseLatency = 0;
+    }
+    createGain() { return new FakeGain(); }
+    createBuffer(channels, length) { return new FakeBuffer(length); }
+    createBufferSource() { return new FakeSource(); }
+    resume() { return Promise.resolve(); }
+  }
+  global.window.AudioContext = FakeCtx;
+  global.AudioContext = FakeCtx;
+  state.audioContext = null;
+  state.gainNode = null;
+}
 
 function createFakeWorker() {
   const handlers = {};
@@ -150,6 +192,7 @@ describe('渲染层：停止路径与独占输出混音', () => {
     state.isPlaying = false;
     state.playbackPauseOffset = 0;
     state.currentAudioSource = null;
+    state.audioContext = null;
     state.currentAudioData = null;
     state.currentAudioChannels = null;
     state.currentAudioBuffer = null;
@@ -212,5 +255,62 @@ describe('渲染层：停止路径与独占输出混音', () => {
     expect(sent.length).to.equal(vocal.length);
     // 人声 0.1 + 伴奏 0.5（两声道下混后不变）= 0.6
     expect(sent[0], '独占模式必须预混伴奏，否则用户只听到清唱').to.be.closeTo(0.6, 1e-5);
+  });
+
+  /**
+   * 暂停/停止之后"声音自己又响一遍"的回归。
+   *
+   * start 是 async 的：audioPlay 回执迟到时，用户早已按了停止。旧实现拿到
+   * 失败结果就直接 startSharedPlayback() 回退 —— 相当于把刚停掉的声音重新
+   * 放出来（用户看到的就是停止后又循环播放一小段）。
+   */
+  it('停止之后迟到的 start 失败不得回退成共享播放', async () => {
+    installFakeAudioContext();
+    let resolvePlay;
+    global.window.electronAPI = {
+      audioStop: async () => ({ success: true }),
+      audioPlay: () => new Promise((resolve) => { resolvePlay = resolve; }),
+      onAudioEnded: () => () => {},
+    };
+
+    state.currentAudioData = new Float32Array(24000).fill(0.1);
+    state.playbackPauseOffset = 0;
+
+    const pending = startExclusivePlayback(0);
+    // playhead 还停在暂停位置时用户按了停止
+    stopPlayback();
+    const transportAfterStop = getTransportState();
+
+    resolvePlay({ success: false, error: 'Command timeout: start' });
+    await pending;
+
+    expect(state.isPlaying, '停止后不得自己恢复播放').to.be.false;
+    expect(getTransportState(), '传输条不能被迟到的回执改回播放/暂停态').to.equal(transportAfterStop);
+    expect(state.currentAudioSource, '不得创建共享播放的 source').to.be.null;
+  });
+
+  it('停止之后迟到的 start 成功必须被立即掐掉，且不改播放状态', async () => {
+    installFakeAudioContext();
+    const stops = [];
+    let resolvePlay;
+    global.window.electronAPI = {
+      audioStop: async (token) => { stops.push(token); return { success: true }; },
+      audioPlay: () => new Promise((resolve) => { resolvePlay = resolve; }),
+      onAudioEnded: () => () => {},
+    };
+
+    state.currentAudioData = new Float32Array(24000).fill(0.1);
+    state.playbackPauseOffset = 0;
+
+    const pending = startExclusivePlayback(0);
+    const stopsBefore = stops.length;
+    stopPlayback();
+    resolvePlay({ success: true });
+    await pending;
+
+    expect(state.isPlaying).to.be.false;
+    expect(getTransportState()).to.equal(TRANSPORT.IDLE);
+    // 停止本身一条 + 迟到成功后的补救一条：后者保证设备里那一路不会继续出声
+    expect(stops.length, '迟到的成功必须补一条停止').to.be.greaterThan(stopsBefore);
   });
 });

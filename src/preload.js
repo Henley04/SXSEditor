@@ -253,7 +253,10 @@ const _fullElectronAPI = {
   getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_VERSION),
   getAudioDevices: () => invokeHeavy('audio:getDevices'),
   audioPlay: (audioData, options) => invokeHeavy('audio:play', { audioData, options }),
-  audioStop: () => invokeHeavy('audio:stop'),
+  // sessionId：本次 stop 所属的 UI 会话号（见 renderer/audioPlayback.js 的
+  // _exclusiveSessionToken）。主进程据此丢弃"已被更新命令取代"的旧 stop，
+  // 避免它把新会话刚开始的声音掐掉；不传则保持旧行为（无条件停止）。
+  audioStop: (sessionId) => invokeHeavy('audio:stop', { sessionId }),
   audioGetPosition: () => invokeHeavy('audio:getPosition'),
   audioIsAvailable: () => invokeHeavy('audio:isAvailable'),
   onAudioEnded: (callback) => {

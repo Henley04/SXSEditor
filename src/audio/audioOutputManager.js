@@ -50,6 +50,10 @@ class AudioOutputManager {
     // Set when the worker announced its own idle auto-shutdown, so the
     // following 'exit' event is not treated as an unexpected crash.
     this._idleExitExpected = false;
+    // 用户停止计数器：每次 forceStop() 推进一次。start() 在进入时拍快照，
+    // 在每个 await 之后重新比对 —— 排队中的 start（play 锁、worker ready）
+    // 不能因为"回执晚到"就在用户已经停止之后把声音放出来。
+    this._stopGeneration = 0;
   }
 
   _ensureWorker() {
@@ -282,6 +286,9 @@ class AudioOutputManager {
   }
 
   async start(audioData, options = {}) {
+    // 快照必须取在第一个 await 之前：本次 start 可能已经在 play 锁里排队，
+    // 或正在等 worker ready，期间用户完全可能按了停止。
+    const stopGeneration = this._stopGeneration;
     await this.stop();
 
     // S12: Clear crash flag so start() can fork a fresh worker; reset ended
@@ -289,10 +296,13 @@ class AudioOutputManager {
     this._workerCrashed = false;
     this._endedSent = false;
 
+    // sessionId 只用于主进程判断"这条 play 是否已被更新的命令取代"，
+    // 不该下发给 worker（它不需要知道 UI 会话）。
+    const { sessionId: _sessionId, ...workerOptions } = options;
     const {
       volume = 1.0,
       offset = 0,
-    } = options;
+    } = workerOptions;
 
     this._volume = Math.max(0, Math.min(1, volume));
     this._playbackOffset = offset;
@@ -301,7 +311,7 @@ class AudioOutputManager {
     // C14: 时长必须按源采样率换算。audioData 是源采样率下的样本，worker 会先
     // resample 到 options.sampleRate 再播放（见 audioWorker.js handleStart 的
     // sourceDuration）。用目标采样率除源长度会在 24k→48k 时把时长减半。
-    this._duration = audioData.length / (options.sourceSampleRate || options.sampleRate || 24000);
+    this._duration = audioData.length / (workerOptions.sourceSampleRate || workerOptions.sampleRate || 24000);
 
     const audioArray = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
 
@@ -310,10 +320,25 @@ class AudioOutputManager {
       await this._readyPromise;
     }
 
+    if (this._stopGeneration !== stopGeneration) {
+      this._isPlaying = false;
+      return { success: false, error: 'Audio start cancelled by stop' };
+    }
+
     const result = await this._sendCommand('start', {
       audioData: audioArray,
-      options: { ...options, volume: this._volume },
+      options: { ...workerOptions, volume: this._volume },
     }, [audioArray.buffer], START_COMMAND_TIMEOUT_MS);
+
+    if (this._stopGeneration !== stopGeneration) {
+      // 回执回来之前用户已经按了停止：这一路可能真的在出声（start 无回执
+      // ≠ 没在播），必须立刻掐掉，并且不能把 _isPlaying 置回 true。
+      this._isPlaying = false;
+      try {
+        await this._sendCommand('stop', {}, null, STOP_COMMAND_TIMEOUT_MS);
+      } catch (_) {}
+      return { success: false, error: 'Audio start cancelled by stop' };
+    }
 
     if (result.success) {
       this._isPlaying = true;
@@ -343,6 +368,8 @@ class AudioOutputManager {
    * 这里不看状态，只要 worker 还在就发 stop；不响应就按失联处理直接终止。
    */
   async forceStop() {
+    // 先推进停止代：正在排队/等待回执的 start 会在下一个检查点自行放弃。
+    this._stopGeneration += 1;
     this._isPlaying = false;
     this._lastPosition = 0;
     // 从未 fork 过 worker（一直在共享 WebAudio 模式）时，不要为了一个 no-op
