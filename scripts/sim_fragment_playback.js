@@ -89,6 +89,14 @@ const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
 });
 global.window = dom.window;
 global.document = dom.window.document;
+// 最小化/恢复：Chromium 在 document.hidden 期间挂起 rAF（且不保证恢复后重新
+// 派发）。用虚拟时钟驱动这个标志，才能测"没有 visibilitychange 事件"的最坏情况。
+let _hiddenFrom = Infinity;
+let _hiddenUntil = -Infinity;
+Object.defineProperty(global.document, 'hidden', {
+  configurable: true,
+  get: () => vnow >= _hiddenFrom && vnow < _hiddenUntil,
+});
 global.localStorage = dom.window.localStorage;
 global.HTMLCanvasElement = dom.window.HTMLCanvasElement;
 Object.defineProperty(global, 'navigator', { value: dom.window.navigator, writable: true, configurable: true });
@@ -148,9 +156,39 @@ const chunkByMark = new Map();   // mark -> { idx, relStart, dur }
 let simSession = 0;              // 播放会话号（重播/拖动后递增）
 
 class FakeGain {
-  constructor() { this.gain = { value: 1, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {} }; }
+  constructor(ctx) {
+    this._ctx = ctx;
+    this._events = [];
+    const self = this;
+    this.gain = {
+      value: 1,
+      setValueAtTime(v, t) { self._events.push({ type: 'set', v, t }); return this; },
+      linearRampToValueAtTime(v, t) { self._events.push({ type: 'ramp', v, t }); return this; },
+      cancelScheduledValues() { self._events.length = 0; return this; },
+    };
+  }
   connect(n) { return n; }
-  disconnect() {}
+  disconnect() { this._disconnected = true; }
+  /** WebAudio 自动化求值：按事件时间顺序，ramp 从前一个事件值线性插值。 */
+  valueAt(t) {
+    const ev = this._events.slice().sort((a, b) => a.t - b.t);
+    if (ev.length === 0) return this.gain.value;
+    let prev = { type: 'set', v: this.gain.value, t: -Infinity };
+    if (t < ev[0].t) return ev[0].type === 'ramp' ? this.gain.value : ev[0].v;
+    for (let i = 0; i < ev.length; i++) {
+      const e = ev[i];
+      if (e.t > t) {
+        if (e.type === 'ramp') {
+          const span = e.t - prev.t;
+          const k = span > 0 ? (t - prev.t) / span : 1;
+          return prev.v + (e.v - prev.v) * Math.max(0, Math.min(1, k));
+        }
+        return prev.v;
+      }
+      prev = e;
+    }
+    return prev.v;
+  }
 }
 class FakePanner {
   constructor() { this.pan = { value: 0, setValueAtTime() {}, linearRampToValueAtTime() {} }; }
@@ -168,8 +206,16 @@ class FakeBufferSource {
     this._ended = false;
     this._meta = null;
   }
-  connect(n) { return n; }
+  connect(n) { (this._chain || (this._chain = [])).push(n); return n; }
   disconnect() {}
+  /** 本 source 在 ctx 时刻 t 的总增益（链路各级 gain 乘积）。 */
+  gainAt(t) {
+    let g = 1;
+    for (const n of (this._chain || [])) {
+      if (n && typeof n.valueAt === 'function') g *= n.valueAt(t);
+    }
+    return g;
+  }
   start(when, offset) {
     if (this._when !== null) throw new Error('start() called twice');
     this._when = when;
@@ -200,22 +246,33 @@ class FakeBufferSource {
   }
 }
 class FakeAudioContext {
-  constructor() {
+  constructor(opts = {}) {
     this.sampleRate = SR;
     this._controlDelayMs = 0;   // suspend()/resume() 的真实异步时延（控制消息）
-    this.state = 'running';
+    // 冷启动：新建的 AudioContext 处于 suspended，resume() 要等设备就绪；
+    // setSinkId 也是一次异步设备切换。两者都发生在首个 chunk 的处理途中，
+    // invoke 回执完全可能在此期间先到达（真实竞态）。
+    this._coldStartMs = opts.coldStartMs || 0;
+    this._sinkIdMs = opts.sinkIdMs || 0;
+    this.state = this._coldStartMs > 0 ? 'suspended' : 'running';
     this.destination = { _isDestination: true };
     this.outputLatency = OUTPUT_LATENCY;
     this.baseLatency = 0.01;
     this._clock = 0;
     this._sources = [];
+    this._gains = [];
     this.suspendCalls = 0;
     this.resumeCalls = 0;
     this.log = [];
   }
   get currentTime() { return this._clock; }
-  createGain() { return new FakeGain(); }
+  createGain() { const g = new FakeGain(this); this._gains.push(g); return g; }
   createStereoPanner() { return new FakePanner(); }
+  setSinkId(id) {
+    this._sinkId = id;
+    if (this._sinkIdMs > 0) return new Promise((res) => setTimeout(res, this._sinkIdMs));
+    return Promise.resolve();
+  }
   createBuffer(ch, len, rate) {
     const data = new Float32Array(len);
     return {
@@ -240,9 +297,11 @@ class FakeAudioContext {
     this.resumeCalls += 1;
     this.log.push({ t: this._clock, ev: 'resume' });
     if (DEBUG) console.log(`  [ctx ${this._clock.toFixed(3)}] ctx.resume()`);
-    if (this._controlDelayMs > 0) {
+    let delay = this._controlDelayMs;
+    if (this._coldStartMs > 0) { delay = Math.max(delay, this._coldStartMs); this._coldStartMs = 0; }
+    if (delay > 0) {
       return new Promise((res) => {
-        setTimeout(() => { this.state = 'running'; res(); }, this._controlDelayMs);
+        setTimeout(() => { this.state = 'running'; res(); }, delay);
       });
     }
     this.state = 'running';
@@ -276,7 +335,7 @@ async function runScenario(spec) {
   chunkByMark.clear();
   const bpm = spec.bpm || 120;
   const firstNoteStartSec = spec.firstNoteStartSec;
-  const ctx = new FakeAudioContext();
+  const ctx = new FakeAudioContext({ coldStartMs: spec.coldStartMs, sinkIdMs: spec.sinkIdMs });
   ctx._controlDelayMs = spec.controlDelayMs || 0;
 
   const state = require('../src/fragmentEditor/state.js');
@@ -293,7 +352,11 @@ async function runScenario(spec) {
     const startBeat = (seg.startSec / 60) * bpm;
     const endBeat = (seg.endSec / 60) * bpm;
     for (let b = startBeat; b < endBeat - 1e-6; b += 4) {
-      notes.push({ id: nid++, pitch: 60 + (nid % 3), start: b, duration: 4, lyric: 'la', fadeIn: 0, fadeOut: 0 });
+      notes.push({
+        id: nid++, pitch: 60 + (nid % 3), start: b, duration: 4, lyric: 'la',
+        fadeIn: spec.noteFade ? spec.noteFade.fadeIn : 0,
+        fadeOut: spec.noteFade ? spec.noteFade.fadeOut : 0,
+      });
     }
   }
   state.setPipelineInitialized(true);
@@ -321,7 +384,16 @@ async function runScenario(spec) {
   //       区间之间补静音 chunk、segment 之间的重叠由主进程裁掉 → 严格连续。
   const chunks = [];
   let ci = 0;
-  if (spec.mode === 'multi') {
+  if (spec.mode === 'cache') {
+    // 整段音频缓存命中：主进程把整段按 2s 切块**一次性**重放（burst），
+    // invoke 几乎同时返回。渲染层必须逐块排程、且不能因为"回执先到"再整段播一遍。
+    let p = 0;
+    while (p < spec.fragmentDurationSec - 1e-6) {
+      const dur = Math.min(2, spec.fragmentDurationSec - p);
+      chunks.push({ idx: ci++, absStartSec: p, dur, inferSec: 0 });
+      p += dur;
+    }
+  } else if (spec.mode === 'multi') {
     let frontier = spec.regions[0].startSec;
     for (const seg of spec.regions) {
       const gap = seg.startSec - frontier;
@@ -362,7 +434,11 @@ async function runScenario(spec) {
   const fullSamples = Math.round(spec.fragmentDurationSec * SR);
 
   global.window.electronAPI = {
-    getSettings: async () => ({ audioOutputMode: 'shared', audioVolume: 1 }),
+    getSettings: async () => ({
+      audioOutputMode: 'shared', audioVolume: 1,
+      // 设了输出设备才会走 ctx.setSinkId（冷启动竞态的另一半）
+      audioOutputDevice: spec.sinkIdMs ? 2 : -1,
+    }),
     onFragmentSVSChunkAudio: (cb) => { chunkCb = cb; return () => { chunkCb = null; }; },
     synthesizeFragmentSVS: () => synthPromise,
     onAudioEnded: () => () => {},
@@ -391,11 +467,19 @@ async function runScenario(spec) {
   let inferDoneMs = (wallCursor + 0.05) * 1000;
   const actions = (spec.actions || []).map((a) => ({ ...a, done: false }));
   const actionLog = [];
+  _hiddenFrom = spec.hidden ? spec.hidden.fromSec * 1000 : Infinity;
+  _hiddenUntil = spec.hidden ? spec.hidden.toSec * 1000 : -Infinity;
   // 控制延迟时间线：模拟负载在播放过程中起停（开始训练 / 开始录屏 / 负载消失）。
   const cdTimeline = (spec.controlDelayTimeline || []).slice().sort((a, b) => a.atSec - b.atSec);
   let cdIdx = 0;
+  let wasHidden = false;
 
   while (vnow < totalWallMs) {
+    // 进入最小化：Chromium 会把已排队的 rAF 回调直接丢掉（恢复后也不补发）。
+    // 只清队列、不清 state 里的 id —— 这才是"id 非空但回调永远不会跑"的真实
+    // 情形，只有心跳看门狗能救回来。
+    if (document.hidden && !wasHidden) rafQueue.clear();
+    wasHidden = document.hidden;
     while (cdIdx < cdTimeline.length && vnow >= cdTimeline[cdIdx].atSec * 1000) {
       ctx._controlDelayMs = cdTimeline[cdIdx].ms;
       if (DEBUG) console.log(`[wall ${(vnow / 1000).toFixed(2)}] CONTROL DELAY -> ${ctx._controlDelayMs}ms`);
@@ -421,6 +505,11 @@ async function runScenario(spec) {
         nextArrival = 0;
         inferenceDone = false;
         playPromise = playback.playFragment();
+      } else if (a.type === 'setpos') {
+        // 时间轴点一下（不播放）：只改起播位置 + 视觉播放头
+        if (state.getFragmentIsPlaying()) playback.stopFragmentPlayback();
+        state.setFragmentPlayStartPosition(a.pos);
+        state.setFragmentCurrentTime(a.pos);
       } else if (a.type === 'seek') {
         playback.seekFragmentPlayback(a.pos);
       } else if (a.type === 'seek-drag') {
@@ -458,13 +547,17 @@ async function runScenario(spec) {
     runDueTimers();
     ctx.advance(DT_MS / 1000);
     runDueTimers();
-    runDueRaf();
+    // 最小化期间 Chromium 不派发 rAF（且恢复后不保证补发）；音频线程照常出声。
+    if (!document.hidden) runDueRaf();
 
     const playhead = state.getFragmentCurrentTime();
     const audibleCtxT = ctx.currentTime - OUTPUT_LATENCY;
     let contentPos = null;
     let activeVocal = 0;
+    let mutedByGain = 0;
     for (const s of ctx.activeAt(audibleCtxT)) {
+      // gain 自动化把声音压到 0 = 听不见（fade 卡死 / 包络错误必须能被测出来）
+      if (s.gainAt(audibleCtxT) < 1e-4) { mutedByGain += 1; continue; }
       activeVocal += 1;
       if (s._meta.kind === 'chunk') {
         contentPos = s._meta.relStart + s._meta.trimmedSec + (audibleCtxT - s._when) + s._offset;
@@ -479,8 +572,10 @@ async function runScenario(spec) {
       playhead,
       contentPos,
       activeVocal,
+      mutedByGain,
       playing: state.getFragmentIsPlaying(),
       ctxState: ctx.state,
+      hidden: document.hidden,
     });
 
     await new Promise((r) => setImmediate(r));
@@ -488,16 +583,33 @@ async function runScenario(spec) {
     vnow += DT_MS;
   }
 
+  // 收尾前的真实状态：停止动作会解冻上下文 / 复位播放标志，
+  // 之后再读就把"挂死"掩盖掉了（必须在 stop 之前取样）。
+  const endState = {
+    playing: state.getFragmentIsPlaying(),
+    synthesizing: state.getFragmentIsSynthesizing(),
+    ctxState: ctx.state,
+    playhead: state.getFragmentCurrentTime(),
+    inferenceDone,
+    wall: vnow / 1000,
+    frozenTail: (() => {
+      const tail = samples.filter((s) => s.wall >= vnow / 1000 - 2);
+      if (tail.length < 2) return false;
+      const heads = tail.map((s) => s.playhead);
+      return Math.max(...heads) - Math.min(...heads) < 0.005;
+    })(),
+  };
+
   playback.stopFragmentPlayback();
   // 合成 promise 可能一直没被 resolve（推理时间表比总时长还长）：直接放弃等待，
   // 否则顶层 await 挂住、进程在没有待处理句柄时静默退出。
   if (!inferenceDone) { try { synthResolve(new Float32Array(fullSamples)); } catch (_) {} }
   await Promise.race([playPromise.catch(() => {}), new Promise((r) => setImmediate(r))]);
 
-  return analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, actionLog });
+  return analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, actionLog, endState });
 }
 
-function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, actionLog }) {
+function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, actionLog, endState }) {
   const played = [];
   for (const s of ctx._sources) {
     if (!s._meta || s._when === null) continue;
@@ -556,8 +668,12 @@ function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, ac
 
   let maxDrift = 0;
   let driftAt = null;
+  // 最小化刚恢复的 ≤0.5s 内播放头还没被看门狗唤醒：这是有界的视觉延迟
+  // （声音一直在放），不计入"声画错位"。
+  const hiddenEndSec = spec.hidden ? spec.hidden.toSec : -1;
   for (const s of samples) {
-    if (s.contentPos === null || !s.playing) continue;
+    if (s.contentPos === null || !s.playing || s.hidden) continue;
+    if (hiddenEndSec >= 0 && s.wall < hiddenEndSec + 0.5) continue;
     const head = s.playhead - firstNoteStartSec;
     const d = Math.abs(head - s.contentPos);
     if (d > maxDrift) { maxDrift = d; driftAt = { wall: s.wall, head: +head.toFixed(2), expect: +s.contentPos.toFixed(2) }; }
@@ -614,11 +730,12 @@ function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, ac
   let maxBackJump = 0;
   let stalls = 0;
   let stallAt = null;
+  const stallSamples = [];
   let prevHead = null;
   let lastMoveWall = null;
   let lastHead = null;
   for (const s of samples) {
-    if (!s.playing || s.ctxState !== 'running') { prevHead = null; lastMoveWall = null; lastHead = null; continue; }
+    if (!s.playing || s.ctxState !== 'running' || s.hidden) { prevHead = null; lastMoveWall = null; lastHead = null; continue; }
     const head = s.playhead;
     if (prevHead !== null && head < prevHead - 0.05) {
       backJumps += 1;
@@ -629,10 +746,23 @@ function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, ac
       lastMoveWall = s.wall;
     } else if (lastMoveWall !== null && s.wall - lastMoveWall > 0.35) {
       stalls += 1;
+      if (stallSamples.length < 8) stallSamples.push({ wall: +s.wall.toFixed(2), head: +head.toFixed(2), hidden: s.hidden });
       if (!stallAt) stallAt = { wall: s.wall, head: +head.toFixed(2), forSec: +(s.wall - lastMoveWall).toFixed(2) };
       lastMoveWall = s.wall; // 不重复计
     }
     prevHead = head;
+  }
+
+  // 最小化恢复耗时：恢复后播放头多久重新开始动（看门狗 400ms 一轮）。
+  let recoverSec = null;
+  if (spec.hidden) {
+    const t0 = spec.hidden.toSec;
+    let head0 = null;
+    for (const s of samples) {
+      if (s.wall < t0 || !s.playing) continue;
+      if (head0 === null) { head0 = s.playhead; continue; }
+      if (Math.abs(s.playhead - head0) > 0.005) { recoverSec = s.wall - t0; break; }
+    }
   }
 
   return {
@@ -651,6 +781,12 @@ function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, ac
     maxActive,
     actionLog,
     allowLossSec: spec.allowLossSec || 0,
+    // gain 自动化把正在排程的音频压成静音的累计时长（fade 卡死 / 包络错误）
+    mutedSec: samples.filter((s) => s.mutedByGain > 0 && s.activeVocal === 0).length * (DT_MS / 1000),
+    // 挂死：推理早已结束，墙钟跑完却仍停在"播放中"且播放头不再前进
+    // （上下文被冻结无人解冻 / rAF 循环停摆）。这是"后面全程静音"的直接判据。
+    hung: !!(endState && endState.inferenceDone && endState.playing && endState.frozenTail),
+    endState,
     // 静音缝容差：极端控制延迟下，"负载变化的第一个接缝"会留下一段可预测的
     // bootstrap 残差（延迟 - 默认提前量）。之后的每个接缝都必须完全干净。
     allowGapSec: spec.allowGapSec != null ? spec.allowGapSec : 0.05,
@@ -659,6 +795,8 @@ function analyze({ spec, ctx, samples, chunkEvents, state, firstNoteStartSec, ac
     maxBackJump,
     stalls,
     stallAt,
+    stallSamples,
+    recoverSec,
     suspends: ctx.suspendCalls,
     resumes: ctx.resumeCalls,
     finalPlaying: state.getFragmentIsPlaying(),
@@ -818,6 +956,77 @@ const SCENARIOS = [
     regions: [{ startSec: 0, endSec: 12, chunkSec: 6, inferSec: 4 }],
     actions: [{ atSec: 20, type: 'play' }],
   },
+  {
+    name: 'P 全局缓存命中：整段 2s 分块 burst 重放（不得再整段叠一遍）',
+    mode: 'cache',
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 30, playFromSec: 0,
+    startupSec: 0.2, totalWallSec: 40,
+    regions: [],
+  },
+  {
+    name: 'Q 最小化 6s 后恢复：无 visibilitychange 事件，看门狗必须重启播放头',
+    mode: 'single',
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 24, playFromSec: 0,
+    startupSec: 0.6, totalWallSec: 45,
+    regions: [{ startSec: 0, endSec: 22, chunkSec: 4, inferSec: 1.2 }],
+    hidden: { fromSec: 6, toSec: 12 },
+  },
+  {
+    name: 'R 暂停后从中段 10s 再播：起播点之前的块丢弃且不锚定',
+    mode: 'single',
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 24, playFromSec: 0,
+    startupSec: 0.6, totalWallSec: 60,
+    // 6s 处停止、把播放头点到 10s：4.15→10 是用户主动跳过的区间，不算内容丢失。
+    allowLossSec: 6,
+    regions: [{ startSec: 0, endSec: 22, chunkSec: 4, inferSec: 1.2 }],
+    actions: [
+      { atSec: 6, type: 'stop' },
+      { atSec: 7, type: 'setpos', pos: 10 },
+      { atSec: 7.5, type: 'play' },
+    ],
+  },
+  {
+    name: 'S 缓存命中 + 从中段 16s 起播（burst 里前 8 块应全部丢弃）',
+    mode: 'cache',
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 30, playFromSec: 16,
+    startupSec: 0.2, totalWallSec: 30,
+    regions: [],
+  },
+  {
+    // 真实竞态：AudioContext 冷启动（resume 120ms + setSinkId 80ms）期间，
+    // invoke 回执先到达 → setInferenceDone() 被随后的 scheduler.activate() 抹掉。
+    name: 'T 缓存 burst + 冷启动 AudioContext（回执先于首块处理）',
+    mode: 'cache', coldStartMs: 120, sinkIdMs: 80,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 30, playFromSec: 0,
+    startupSec: 0.2, totalWallSec: 45,
+    regions: [],
+  },
+  {
+    name: 'U 多段推理 + 冷启动 AudioContext',
+    mode: 'multi', coldStartMs: 150, sinkIdMs: 60,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 34, playFromSec: 0,
+    startupSec: 0.6, totalWallSec: 70,
+    regions: [
+      { startSec: 0, endSec: 10, chunkSec: 4, inferSec: 6.4 },
+      { startSec: 18, endSec: 30, chunkSec: 4, inferSec: 6.4 },
+    ],
+  },
+  {
+    name: 'V 缓存 burst + 冷启动 + 中段 16s 起播',
+    mode: 'cache', coldStartMs: 120, sinkIdMs: 80,
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 30, playFromSec: 16,
+    startupSec: 0.2, totalWallSec: 30,
+    regions: [],
+  },
+  {
+    // per-note fade：gain 自动化必须与 chunk 排程同一条时间轴，
+    // 且 fadeOut 之后要恢复 1（否则后续音符全程静音）。
+    name: 'W 每音符淡入淡出 + 推理 1.6x（gain 自动化不得卡死）',
+    mode: 'single', noteFade: { fadeIn: 120, fadeOut: 150 },
+    bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 22, playFromSec: 0,
+    startupSec: 0.6, totalWallSec: 45,
+    regions: [{ startSec: 0, endSec: 20, chunkSec: 4, inferSec: 6.4 }],
+  },
 ];
 
 (async () => {
@@ -865,11 +1074,14 @@ const SCENARIOS = [
     if (r.maxSchedDrift > 0.02 && r.schedDriftAt) console.log(`  调度漂移 ${r.name}: c${r.schedDriftAt.chunk} 应为 +${r.schedDriftAt.expect}s，实际 +${r.schedDriftAt.actual}s`);
     if (r.maxDrift > 0.08 && r.driftAt) console.log(`  声画错位 ${r.name}: wall=${r.driftAt.wall}s 播放头=${r.driftAt.head} 声音=${r.driftAt.expect}`);
     if (r.stallAt) console.log(`  播放头卡住 ${r.name}: wall=${r.stallAt.wall}s 停在 ${r.stallAt.head}s 达 ${r.stallAt.forSec}s`);
+    if (r.stalls > 0 && process.env.SIM_DEBUG) console.log(`  stall samples ${r.name}: ${JSON.stringify(r.stallSamples)}`);
+    if (r.recoverSec !== null && r.recoverSec !== undefined) console.log(`  最小化恢复 ${r.name}: 播放头 ${r.recoverSec.toFixed(2)}s 后重新开始动`);
     if (r.lossSpans.length) console.log(`  内容缺失 ${r.name}: ${JSON.stringify(r.lossSpans)}`);
   }
   const bad = results.filter((r) => r.gapSec > r.allowGapSec || r.overlapSec > 0.05 || r.contentRepeatSec > 0.05
     || r.contentLossSec > (r.allowLossSec + 0.05) || r.maxSchedDrift > 0.05 || r.maxDrift > 0.08 || r.backJumps > 0
-    || r.stalls > 0 || r.maxActive > 1);
-  if (bad.length) console.log('\nFAIL：' + bad.map((b) => b.name).join('; '));
+    || r.stalls > 0 || r.maxActive > 1 || r.hung || r.mutedSec > 0.05
+    || (r.recoverSec !== null && r.recoverSec !== undefined && r.recoverSec > 0.8));
+  if (bad.length) console.log('\nFAIL：' + bad.map((b) => `${b.name}${b.hung ? '[挂死]' : ''}${b.mutedSec > 0.05 ? `[gain静音${b.mutedSec.toFixed(2)}s]` : ''}`).join('; '));
   else console.log('\nOK：无静音缝 / 无重复 / 无漂移 / 播放头连续');
 })().catch((e) => { console.error(e); process.exit(1); });

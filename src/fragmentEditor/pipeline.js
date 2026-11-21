@@ -177,6 +177,10 @@ export function initPipeline() {
 export function getFragmentPreviewInferenceOptions() {
   const settings = getFragmentAudioSettings();
   return {
+    // 模型精度必须随 options 下发：主进程缓存键把精度折进 `pm` 段，缺省为
+    // 'base'。主窗口传的是 'fp32'/'fp16'/'int8' —— 分片编辑器不传时两边键
+    // 永不相等，同一分片的"全局缓存"一次也用不上（每次播放都整段重推）。
+    modelPrecision: settings?.modelPrecision || 'fp32',
     nSteps: settings?.previewDiffSteps ?? 32,
     cfg: settings?.previewCfgStrength ?? 3.0,
     cfgRescale: settings?.previewCfgRescale ?? 0.75,
@@ -194,6 +198,7 @@ export function getFragmentPreviewInferenceOptions() {
 export function getFragmentExportInferenceOptions() {
   const settings = getFragmentAudioSettings();
   return {
+    modelPrecision: settings?.modelPrecision || 'fp32',
     nSteps: settings?.exportDiffSteps ?? 32,
     cfg: settings?.exportCfgStrength ?? 3.0,
     cfgRescale: settings?.exportCfgRescale ?? 0.75,

@@ -1112,6 +1112,45 @@ class OnnxSVSPipeline {
     }
 
     /**
+     * 把整段缓存音频按固定时长切块，走流式回调"重放"。
+     *
+     * 为什么需要：整段音频缓存命中时 `_synthesizeImpl` 直接 return，一个 chunk
+     * 都不发。渲染层（分片编辑器）据此认为"流式从未启动"，只能等 invoke 把整段
+     * Float32Array 跨进程序列化完再整段开播 —— 用户看到的是"明明有缓存，点播放
+     * 却既不流式、也要等一下才出声"，而且从中段起播时必须先等整段传输。
+     *
+     * 缓存音频的语义与实时 chunk 一致：`audio[0]` ↔ 首音符起点，因此
+     * sampleOffset 从 0 开始按块递增即可，接收端用同一套绝对位置排程。
+     *
+     * @param {Float32Array} audio 缓存音频（已按首音符裁齐）
+     * @param {function} onChunkAudio
+     * @param {number} [chunkSec]
+     */
+    _emitCachedAudioAsChunks(audio, onChunkAudio, chunkSec = 2) {
+        if (!onChunkAudio || !audio || audio.length === 0) return;
+        const step = Math.max(1, Math.round(chunkSec * SAMPLE_RATE));
+        const total = audio.length;
+        let idx = 0;
+        for (let off = 0; off < total; off += step, idx++) {
+            const end = Math.min(total, off + step);
+            try {
+                onChunkAudio({
+                    chunkIndex: idx,
+                    sampleOffset: off,
+                    sampleEnd: end,
+                    audio: audio.subarray(off, end),
+                    totalSamples: total,
+                    isLast: end >= total,
+                    cached: true,
+                });
+            } catch (e) {
+                console.warn(`[OnnxSVSPipeline] cached chunk emit failed: ${e.message}`);
+                return;
+            }
+        }
+    }
+
+    /**
      * LRU 写入：若 key 已存在则更新并移到最新；超出容量时淘汰最旧条目。
      * @param {string} key
      * @param {Float32Array} audio
@@ -4361,6 +4400,9 @@ class OnnxSVSPipeline {
         if (cachedAudio) {
             console.warn(`[OnnxSVSPipeline] >>> CACHE HIT <<< key=${cacheKey.substring(0, 32)}... | Returning CACHED audio, vocoder will NOT run! (Clear cache: switch model or restart app)`);
             onProgress(100);
+            // 流式消费方（分片编辑器）需要 chunk 才能"边收边播"；整段直接返回
+            // 会让它退化成"等完整缓冲再开播"（见 _emitCachedAudioAsChunks 注释）。
+            this._emitCachedAudioAsChunks(cachedAudio, onChunkAudio);
             return cachedAudio;
         }
         console.log(`[OnnxSVSPipeline] Cache MISS (key=${cacheKey.substring(0, 32)}...), running full synthesis pipeline`);

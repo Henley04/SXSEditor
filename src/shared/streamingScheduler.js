@@ -183,10 +183,20 @@ export class StreamingScheduler {
     }
   }
 
-  /** Start a new streaming session. */
+  /**
+   * Start the streaming session's watchdog.
+   *
+   * **Non-destructive**: must NOT reset bufferEndSec / inferenceDone /
+   * activeSourceCount. Callers activate on the first chunk that actually
+   * sounds, which can be *after* the synthesis invoke already resolved
+   * (cold AudioContext creation, cached-audio burst replay). Resetting there
+   * wipes the already-set inferenceDone flag, so the final underrun freeze
+   * has nobody left to resume it — playback dies before the end and the
+   * playhead hangs forever. State is initialised in the constructor and only
+   * cleared by an explicit reset() on a brand-new session.
+   */
   activate() {
     this._active = true;
-    this.reset();
     this.startWatchdog();
   }
 
