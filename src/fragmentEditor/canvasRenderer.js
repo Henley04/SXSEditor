@@ -3150,9 +3150,22 @@ function _announceCanvasState() {
 }
 
 // Static layer cache (background + grid lines)
+//
+// 关键：缓存不按精确的 scrollX 键控。分页跟随动画在 ~220–420ms 内连续改写
+// scrollX（约 0.7 视口），若把 scrollX 放进键，每帧都要重建静态层（实测重建
+// 2.85ms vs 命中 2.07ms）。改为世界坐标锚定：缓存一条覆盖 2 个视口宽的网格带，
+// 锚点量化到视口边界；横向滚动停留在同一页内时键命中，只做带偏移的 drawImage。
 let _staticCacheCanvas = null;
 let _staticCacheKey = '';
 let _staticCacheDirty = true;
+const STATIC_STRIP_VIEWPORTS = 2;
+
+/** 静态层锚点：按视口宽量化到页边界（世界 x，≥0）。 */
+function _staticAnchorX(scrollX, viewportW) {
+  if (!(viewportW > 0)) return 0;
+  const x = Number.isFinite(scrollX) && scrollX > 0 ? scrollX : 0;
+  return Math.floor(x / viewportW) * viewportW;
+}
 
 export function invalidateStaticCache() {
   _staticCacheDirty = true;
@@ -3197,32 +3210,37 @@ function _doRenderImpl(w, h) {
   const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
-  // Build cache key from state that affects the static layer
-  const staticCacheKey = `${w}|${h}|${dprVal}|${getScrollX()}|${getScrollY()}|${getZoomX()}|${beatsPerMeasure}|${showParamArea}|${pianoAreaBottom}|${c.bgElevated}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.gridLineMinor}|${c.timeText}`;
+  // 静态层按「视口量化的页锚点」键控，横向滚动在页内不触发重建（见上方注释）。
+  const anchorX = _staticAnchorX(getScrollX(), w);
+  const stripW = w * STATIC_STRIP_VIEWPORTS;
+  const stripPixelW = Math.floor(stripW * dprVal);
+  // 世界 x → 缓存带内 x：worldPx - anchorX（BEAT_WIDTH*zoom 是世界像素/拍）。
+  const worldXToStrip = (beats) => beats * BEAT_WIDTH * getZoomX() - anchorX;
+  const staticCacheKey = `${w}|${h}|${dprVal}|${anchorX}|${getScrollY()}|${getZoomX()}|${beatsPerMeasure}|${showParamArea}|${pianoAreaBottom}|${c.bgElevated}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.gridLineMinor}|${c.timeText}`;
 
   if (_staticCacheDirty || _staticCacheKey !== staticCacheKey ||
-      !_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
-    // Rebuild static layer (background + grid lines)
-    if (!_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
+      !_staticCacheCanvas || _staticCacheCanvas.width !== stripPixelW || _staticCacheCanvas.height !== pixelH) {
+    // Rebuild static layer (background + grid lines) on a world-anchored strip.
+    if (!_staticCacheCanvas || _staticCacheCanvas.width !== stripPixelW || _staticCacheCanvas.height !== pixelH) {
       _staticCacheCanvas = document.createElement('canvas');
-      _staticCacheCanvas.width = pixelW;
+      _staticCacheCanvas.width = stripPixelW;
       _staticCacheCanvas.height = pixelH;
     }
     const cacheCtx = _staticCacheCanvas.getContext('2d');
     cacheCtx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
-    cacheCtx.clearRect(0, 0, w, h);
+    cacheCtx.clearRect(0, 0, stripW, h);
 
     // Background
     cacheCtx.fillStyle = c.bgElevated;
-    cacheCtx.fillRect(0, 0, w, h);
+    cacheCtx.fillRect(0, 0, stripW, h);
 
-    // Vertical grid lines (beats)
-    const startBeat = xToTime(0);
-    const endBeat = xToTime(w);
+    // Vertical grid lines (beats) — world coords, offset into the strip.
+    const startBeat = anchorX / (BEAT_WIDTH * getZoomX());
+    const endBeat = (anchorX + stripW) / (BEAT_WIDTH * getZoomX());
     cacheCtx.lineWidth = 0.5;
     for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
-      const x = timeToX(b);
-      if (x < 0) continue;
+      const x = worldXToStrip(b);
+      if (x < 0 || x > stripW) continue;
       const isMeasure = isMeasureBoundary(b, beatsPerMeasure);
       cacheCtx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
       cacheCtx.beginPath();
@@ -3237,7 +3255,7 @@ function _doRenderImpl(w, h) {
       }
     }
 
-    // Horizontal grid lines (pitches)
+    // Horizontal grid lines (pitches) — span the full strip.
     const startPitch = yToPitch(h);
     const endPitch = yToPitch(HEADER_HEIGHT);
     for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
@@ -3246,7 +3264,7 @@ function _doRenderImpl(w, h) {
       cacheCtx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
       cacheCtx.beginPath();
       cacheCtx.moveTo(0, y);
-      cacheCtx.lineTo(w, y);
+      cacheCtx.lineTo(stripW, y);
       cacheCtx.stroke();
     }
 
@@ -3254,10 +3272,11 @@ function _doRenderImpl(w, h) {
     _staticCacheDirty = false;
   }
 
-  // Draw cached static layer
+  // Draw cached static layer：从锚定带里取当前视口那一屏（带偏移的 blit）。
   ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  ctx.drawImage(_staticCacheCanvas, 0, 0, w, h);
+  const srcX = (getScrollX() - anchorX) * dprVal;
+  ctx.drawImage(_staticCacheCanvas, srcX, 0, pixelW, pixelH, 0, 0, w, h);
 
   const currentParamMode = getCurrentParamMode();
 
