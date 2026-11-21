@@ -324,6 +324,90 @@ describe('分片编辑器播放会话（结构性根因回归）', () => {
     expect(live.length, '不得出现双路音频').to.equal(1);
     expect(state.getFragmentIsPlaying()).to.equal(true);
   });
+
+  it('后台定时器停摆（窗口被遮挡）：最后一块播完必须由 onended 冻结，休止后首块不得被裁头', async () => {
+    setup();
+    playPromise = audioPlayback.playFragment();
+    await sleep(40);
+
+    chunkCb(chunkAt(0, 4, false));
+    await sleep(40);
+    expect(ctx.sources).to.have.lengthOf(1);
+
+    // 模拟窗口被遮挡：rAF 被丢弃（id 还在但永不回调）、250ms 看门狗被节流到
+    // ~1 次/分钟 —— 测试里不等待任何定时器。音频线程仍会在缓冲播完时触发 onended。
+    const deadId = state.getFragmentPlayheadRaf();
+    if (deadId) cancelAnimationFrame(deadId);
+    state.setFragmentPlayheadRaf(999999);
+
+    // 时钟推进到第一块末端（anchor 0.05 + 4s）。若无 onended 冻结，
+    // 此刻播放头会继续前进；长休止后到达的块就会整段被当作"迟到"裁掉。
+    ctx.advanceTo(4.05);
+    expect(ctx.suspendCalls, 'onended 必须触发一次冻结').to.equal(1);
+    expect(ctx.state, '时钟应停在前沿').to.equal('suspended');
+    expect(state.getFragmentIsPlaying(), '是等待推理，不是收尾').to.equal(true);
+
+    // 长休止后的第一块此刻才到达（真实场景里可能是几十秒后）：
+    // 必须按原绝对时间从头部完整接上。
+    chunkCb(chunkAt(4, 4, true));
+    await sleep(20);
+    ctx.releaseResume();
+    await sleep(40);
+
+    expect(ctx.sources).to.have.lengthOf(2);
+    const second = ctx.sources[1];
+    expect(second.startOffset, '休止后的首块不得被裁头').to.be.closeTo(0, 0.001);
+    expect(second.startWhen, '按原绝对时间接上').to.be.closeTo(4.05, 0.02);
+    expect(ctx.state, '下一块到达后应解冻').to.equal('running');
+    expect(state.getFragmentIsPlaying()).to.equal(true);
+  });
+});
+
+describe('StreamingScheduler.onSourcesDrained', () => {
+  const { StreamingScheduler } = require('../src/shared/streamingScheduler.js');
+
+  function makeScheduler() {
+    const ctx = {
+      state: 'running',
+      suspendCalls: 0,
+      suspend() { this.suspendCalls += 1; this.state = 'suspended'; return Promise.resolve(); },
+      resume() { this.state = 'running'; return Promise.resolve(); },
+    };
+    const sched = new StreamingScheduler({ getCtx: () => ctx, getElapsed: () => 10 });
+    sched.activate();
+    sched.updateBufferFrontier(10);
+    return { sched, ctx };
+  }
+
+  it('最后一块播完且推理未结束 → 立即冻结', () => {
+    const { sched, ctx } = makeScheduler();
+    sched.addSource();
+    sched.sourceEnded();
+    expect(sched.onSourcesDrained()).to.equal(true);
+    expect(sched.isWaiting, '应进入等待').to.equal(true);
+    expect(ctx.suspendCalls).to.equal(1);
+    sched.deactivate();
+  });
+
+  it('仍在等待 / 推理已结束 / 已收到 isLast / 还有 source → 不重复冻结', () => {
+    const { sched } = makeScheduler();
+    sched.addSource();
+    expect(sched.onSourcesDrained(), '还有 source').to.equal(false);
+    sched.sourceEnded();
+
+    sched.inferenceDone = true;
+    expect(sched.onSourcesDrained(), '推理已结束').to.equal(false);
+    sched.inferenceDone = false;
+
+    sched.isLastReceived = true;
+    expect(sched.onSourcesDrained(), '已是末块').to.equal(false);
+    sched.isLastReceived = false;
+
+    sched._waitingForInference = true;
+    expect(sched.onSourcesDrained(), '已在等待').to.equal(false);
+    sched._waitingForInference = false;
+    sched.deactivate();
+  });
 });
 
 describe('StreamingScheduler.activate 非破坏性', () => {

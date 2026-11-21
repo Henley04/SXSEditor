@@ -173,6 +173,30 @@ export class StreamingScheduler {
   }
 
   /**
+   * 所有已排程 source 都已播完（由 source.onended 调用）—— underrun 的最后一道
+   * 防线，**不依赖 rAF / 定时器**。
+   *
+   * 为什么必须有：窗口最小化或被完全遮挡时，Chromium 把 rAF 与 250ms 看门狗
+   * 一起节流到约 1 次/分钟。若此刻推理还没送来下一块，播放头会在无人冻结的
+   * 情况下冲过缓冲前沿；之后到达的每一块都按"迟到"裁头甚至整块丢弃，听感是
+   * "从这里开始再也没有声音"，只有点播放头/重播（新建会话重新锚定）才恢复。
+   * source.onended 由音频线程在缓冲播完的瞬间触发，不受后台定时器节流影响 ——
+   * 它给出最后一个"时钟还停在前沿"的窗口，此时冻结不会丢任何内容。
+   *
+   * @param {() => void} [onEnterWait] - 进入等待时的 UI 回调（如重绘）
+   * @returns {boolean} 是否进入了等待冻结
+   */
+  onSourcesDrained(onEnterWait) {
+    if (!this._active) return false;
+    if (this.inferenceDone || this.isLastReceived) return false;
+    if (this._waitingForInference) return false;
+    if (this.activeSourceCount > 0) return false;
+    if (this.bufferEndSec <= 0) return false;
+    // onended 任务派发可能略晚于精确的前沿时刻；0.05s 容差保证仍能命中。
+    return this.checkUnderrun(this._getElapsed(), onEnterWait, 0.05);
+  }
+
+  /**
    * Mark inference as done. No more underrun waits will be triggered.
    * If currently waiting, resumes the context.
    */

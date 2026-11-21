@@ -573,6 +573,9 @@ class Session {
         if (sched) sched.sourceEnded();
         if (this.sources[idx] === source) this.sources[idx] = null;
         this._maybeFinish();
+        // 缓冲刚播完、推理还没送来下一块：这是最后一个"时钟仍停在前沿"的时刻。
+        // rAF / 看门狗在窗口被遮挡时会被节流到 ~1 次/分钟，不能作为唯一判据。
+        if (!this.finished && sched) sched.onSourcesDrained(() => render());
       };
     }
 

@@ -35,17 +35,25 @@ const DEBUG = !!process.env.SIM_DEBUG;
 let vnow = 0;
 const timers = new Map();
 let timerSeq = 0;
+// Chromium 对 hidden/被完全遮挡的页面做后台节流：定时器最早也要等这么久
+// 才执行一次（intensive throttling ≈1 分钟）。rAF 不再派发由场景循环单独模拟；
+// 这里只模拟定时器侧 —— 播放头的 underrun 看门狗正是定时器驱动的。
+// IPC chunk 不属于定时器，不受节流（下面的 _exemptNextTimer 用于豁免它们）。
+let HIDDEN_THROTTLE_MS = 0;
+let _exemptNextTimer = false;
 
-global.setTimeout = (fn, ms = 0, ...args) => {
+function _makeTimer(fn, ms, args, interval) {
   const id = ++timerSeq;
-  timers.set(id, { due: vnow + Math.max(0, ms), fn, args, interval: null });
+  const t = { due: vnow + Math.max(interval ? 1 : 0, ms), fn, args, interval };
+  if (HIDDEN_THROTTLE_MS > 0 && document.hidden && !_exemptNextTimer) {
+    t.notBefore = vnow + HIDDEN_THROTTLE_MS;
+  }
+  _exemptNextTimer = false;
+  timers.set(id, t);
   return id;
-};
-global.setInterval = (fn, ms = 0, ...args) => {
-  const id = ++timerSeq;
-  timers.set(id, { due: vnow + Math.max(1, ms), fn, args, interval: Math.max(1, ms) });
-  return id;
-};
+}
+global.setTimeout = (fn, ms = 0, ...args) => _makeTimer(fn, ms, args, null);
+global.setInterval = (fn, ms = 0, ...args) => _makeTimer(fn, ms, args, Math.max(1, ms));
 global.clearTimeout = (id) => { timers.delete(id); };
 global.clearInterval = (id) => { timers.delete(id); };
 Date.now = () => Math.floor(vnow);
@@ -63,11 +71,18 @@ function runDueTimers() {
     let pickId = null;
     let pickT = null;
     for (const [id, t] of timers) {
-      if (t.due <= vnow && (!pickT || t.due < pickT.due)) { pickId = id; pickT = t; }
+      if (t.due > vnow) continue;
+      if (t.notBefore && vnow < t.notBefore) continue; // 后台节流：还没到解禁时刻
+      if (!pickT || t.due < pickT.due) { pickId = id; pickT = t; }
     }
     if (!pickT) return;
-    if (pickT.interval) pickT.due = vnow + pickT.interval;
-    else timers.delete(pickId);
+    if (pickT.interval) {
+      pickT.due = vnow + pickT.interval;
+      if (HIDDEN_THROTTLE_MS > 0 && document.hidden) pickT.notBefore = vnow + HIDDEN_THROTTLE_MS;
+      else pickT.notBefore = 0;
+    } else {
+      timers.delete(pickId);
+    }
     try { pickT.fn(...pickT.args); } catch (e) { console.error('[timer]', e); }
   }
 }
@@ -398,7 +413,10 @@ async function runScenario(spec) {
     for (const seg of spec.regions) {
       const gap = seg.startSec - frontier;
       if (gap > 0.021) {
-        chunks.push({ idx: ci++, absStartSec: frontier, dur: gap, inferSec: 0.001 });
+        // 真实发射器（_createSegmentStreamEmitter.tryEmit）只有在**后一段推理完成**
+        // 后才连同该段一起补发前置静音 chunk —— 静音不是提前到达的。
+        // inferSec 仅用于默认累加；gapArrivalWithNext 时下面会把到达时刻对齐后段。
+        chunks.push({ idx: ci++, absStartSec: frontier, dur: gap, inferSec: 0.001, isGap: true });
         frontier = seg.startSec;
       }
       let p = Math.max(seg.startSec, frontier);
@@ -427,6 +445,12 @@ async function runScenario(spec) {
   chunks.forEach((c, i) => { c.idx = i; });
   let wallCursor = spec.startupSec;
   for (const c of chunks) { wallCursor += c.inferSec; c.arrivalSec = wallCursor; }
+  if (spec.gapArrivalWithNext) {
+    // 静音 chunk 与紧随其后的 segment chunk 同时到达（同一 tryEmit 调用内 emit）
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      if (chunks[i].isGap && chunks[i + 1]) chunks[i].arrivalSec = chunks[i + 1].arrivalSec;
+    }
+  }
 
   let chunkCb = null;
   let synthResolve = null;
@@ -469,6 +493,7 @@ async function runScenario(spec) {
   const actionLog = [];
   _hiddenFrom = spec.hidden ? spec.hidden.fromSec * 1000 : Infinity;
   _hiddenUntil = spec.hidden ? spec.hidden.toSec * 1000 : -Infinity;
+  HIDDEN_THROTTLE_MS = spec.hiddenThrottleMs || 0;
   // 控制延迟时间线：模拟负载在播放过程中起停（开始训练 / 开始录屏 / 负载消失）。
   const cdTimeline = (spec.controlDelayTimeline || []).slice().sort((a, b) => a.atSec - b.atSec);
   let cdIdx = 0;
@@ -478,8 +503,15 @@ async function runScenario(spec) {
     // 进入最小化：Chromium 会把已排队的 rAF 回调直接丢掉（恢复后也不补发）。
     // 只清队列、不清 state 里的 id —— 这才是"id 非空但回调永远不会跑"的真实
     // 情形，只有心跳看门狗能救回来。
-    if (document.hidden && !wasHidden) rafQueue.clear();
-    wasHidden = document.hidden;
+    if (document.hidden !== wasHidden) {
+      wasHidden = document.hidden;
+      if (wasHidden) rafQueue.clear();
+      // 真实浏览器在这里派发 visibilitychange；_bindVisibility 靠它恢复循环。
+      // 场景可显式关闭（Q 专测"没有事件、只靠看门狗"的最坏情况）。
+      if (!spec.noVisibilityEvents) {
+        try { document.dispatchEvent(new global.CustomEvent('visibilitychange')); } catch (_) {}
+      }
+    }
     while (cdIdx < cdTimeline.length && vnow >= cdTimeline[cdIdx].atSec * 1000) {
       ctx._controlDelayMs = cdTimeline[cdIdx].ms;
       if (DEBUG) console.log(`[wall ${(vnow / 1000).toFixed(2)}] CONTROL DELAY -> ${ctx._controlDelayMs}ms`);
@@ -535,7 +567,7 @@ async function runScenario(spec) {
       chunkEvents.push({ idx: c.idx, arrivalWall: vnow / 1000, relStart: c.relStart, absStartSec: c.absStartSec, dur: c.dur });
       if (DEBUG) console.log(`[wall ${(vnow / 1000).toFixed(2)}] CHUNK ${c.idx} abs=[${c.absStartSec.toFixed(2)},${(c.absStartSec + c.dur).toFixed(2)}) rel=${c.relStart.toFixed(2)}`);
       const cb = chunkCb;
-      if (cb) setTimeout(() => cb(chunkInfo), 0);
+      if (cb) { _exemptNextTimer = true; setTimeout(() => cb(chunkInfo), 0); }
     }
 
     if (!inferenceDone && vnow >= inferDoneMs) {
@@ -861,6 +893,80 @@ const SCENARIOS = [
     ],
   },
   {
+    // 真实工程 xinzuo.sxsproj 的特征：bpm=168，首音符 5.25 拍（1.875s），
+    // 第一句在 59.25 拍结束，到 133.25 拍（第三十四小节）之间是 74 拍（26.4s）长休止。
+    // 主进程按 buildVocalSegments 的真实边界切 12 段；静音 chunk 与后段推理完成
+    // 同批到达（gapArrivalWithNext），这是用户听到"第三十四小节后没声音"的现场。
+    name: 'XINZUO 168bpm 74拍长休止（真实分片边界，休止后无声复现）',
+    mode: 'multi', gapArrivalWithNext: true,
+    bpm: 168, firstNoteStartSec: 1.875, fragmentDurationSec: 262.232, playFromSec: 0,
+    startupSec: 0.6, totalWallSec: 320,
+    regions: [
+      { startSec: 1.875, endSec: 21.311, chunkSec: 100, inferSec: 25 },
+      { startSec: 47.439, endSec: 67.025, chunkSec: 100, inferSec: 25 },
+      { startSec: 68.868, endSec: 83.125, chunkSec: 100, inferSec: 2 },
+      { startSec: 81.125, endSec: 94.554, chunkSec: 100, inferSec: 2 },
+      { startSec: 92.554, endSec: 104.525, chunkSec: 100, inferSec: 2 },
+      { startSec: 116.011, endSec: 135.596, chunkSec: 100, inferSec: 2 },
+      { startSec: 163.154, endSec: 177.411, chunkSec: 100, inferSec: 2 },
+      { startSec: 175.411, endSec: 188.839, chunkSec: 100, inferSec: 2 },
+      { startSec: 186.839, endSec: 200.268, chunkSec: 100, inferSec: 2 },
+      { startSec: 198.268, endSec: 211.696, chunkSec: 100, inferSec: 2 },
+      { startSec: 209.696, endSec: 221.668, chunkSec: 100, inferSec: 2 },
+      { startSec: 244.582, endSec: 262.232, chunkSec: 100, inferSec: 2 },
+    ],
+  },
+  {
+    // 与 XINZUO 同布局，但每段推理耗时 ≈ 1.5× 音频时长（比实时慢）：
+    // 每个 segment 边界都会 underrun → 反复 suspend/resume，接近用户实机节奏。
+    name: 'XINZUO-SLOW 同上但逐段推理 1.5× 音频（每个接缝都等待）',
+    mode: 'multi', gapArrivalWithNext: true, controlDelayMs: 300,
+    bpm: 168, firstNoteStartSec: 1.875, fragmentDurationSec: 262.232, playFromSec: 0,
+    allowGapSec: 0.3, allowLossSec: 0.3,
+    startupSec: 0.6, totalWallSec: 430,
+    regions: [
+      { startSec: 1.875, endSec: 21.311, chunkSec: 100, inferSec: 29.2 },
+      { startSec: 47.439, endSec: 67.025, chunkSec: 100, inferSec: 29.4 },
+      { startSec: 68.868, endSec: 83.125, chunkSec: 100, inferSec: 21.4 },
+      { startSec: 81.125, endSec: 94.554, chunkSec: 100, inferSec: 20.1 },
+      { startSec: 92.554, endSec: 104.525, chunkSec: 100, inferSec: 18.0 },
+      { startSec: 116.011, endSec: 135.596, chunkSec: 100, inferSec: 29.4 },
+      { startSec: 163.154, endSec: 177.411, chunkSec: 100, inferSec: 21.4 },
+      { startSec: 175.411, endSec: 188.839, chunkSec: 100, inferSec: 20.1 },
+      { startSec: 186.839, endSec: 200.268, chunkSec: 100, inferSec: 20.1 },
+      { startSec: 198.268, endSec: 211.696, chunkSec: 100, inferSec: 20.1 },
+      { startSec: 209.696, endSec: 221.668, chunkSec: 100, inferSec: 18.0 },
+      { startSec: 244.582, endSec: 262.232, chunkSec: 100, inferSec: 26.4 },
+    ],
+  },
+  {
+    // 用户实机现场：等待长休止后的 segment 时切到别的窗口（分片窗口被遮挡）。
+    // Chromium 后台节流把 250ms 看门狗压到 ~1 分钟一次，而池子里的 chunk 照常
+    // 到达 —— 播放头在没人冻结的情况下冲过缓冲前沿，之后每块都被判"迟到"裁头 /
+    // 整块丢弃，表现为「第三十四小节之后明明有音符却没有声音」。点播放头/重播
+    // 会新建会话（重新锚定）→ 声音恢复。
+    name: 'XINZUO-HIDDEN 长休止等待期间窗口被遮挡（后台定时器节流）',
+    mode: 'multi', gapArrivalWithNext: true, hiddenThrottleMs: 60000,
+    bpm: 168, firstNoteStartSec: 1.875, fragmentDurationSec: 262.232, playFromSec: 0,
+    startupSec: 0.6, totalWallSec: 380,
+    hidden: { fromSec: 30, toSec: 200 },
+    allowGapSec: 0.3, allowLossSec: 0.3,
+    regions: [
+      { startSec: 1.875, endSec: 21.311, chunkSec: 100, inferSec: 25 },
+      { startSec: 47.439, endSec: 67.025, chunkSec: 100, inferSec: 100 },
+      { startSec: 68.868, endSec: 83.125, chunkSec: 100, inferSec: 5 },
+      { startSec: 81.125, endSec: 94.554, chunkSec: 100, inferSec: 5 },
+      { startSec: 92.554, endSec: 104.525, chunkSec: 100, inferSec: 5 },
+      { startSec: 116.011, endSec: 135.596, chunkSec: 100, inferSec: 5 },
+      { startSec: 163.154, endSec: 177.411, chunkSec: 100, inferSec: 5 },
+      { startSec: 175.411, endSec: 188.839, chunkSec: 100, inferSec: 5 },
+      { startSec: 186.839, endSec: 200.268, chunkSec: 100, inferSec: 5 },
+      { startSec: 198.268, endSec: 211.696, chunkSec: 100, inferSec: 5 },
+      { startSec: 209.696, endSec: 221.668, chunkSec: 100, inferSec: 5 },
+      { startSec: 244.582, endSec: 262.232, chunkSec: 100, inferSec: 5 },
+    ],
+  },
+  {
     name: 'F 单段真实分块：10s/1s 重叠，推理 1.6x',
     mode: 'single',
     bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 32, playFromSec: 0,
@@ -965,7 +1071,7 @@ const SCENARIOS = [
   },
   {
     name: 'Q 最小化 6s 后恢复：无 visibilitychange 事件，看门狗必须重启播放头',
-    mode: 'single',
+    mode: 'single', noVisibilityEvents: true,
     bpm: 120, firstNoteStartSec: 0, fragmentDurationSec: 24, playFromSec: 0,
     startupSec: 0.6, totalWallSec: 45,
     regions: [{ startSec: 0, endSec: 22, chunkSec: 4, inferSec: 1.2 }],
