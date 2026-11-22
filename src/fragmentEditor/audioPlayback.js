@@ -11,7 +11,9 @@ import {
   getSampleRate,
   getFragmentAudioData, setFragmentAudioData,
   getFragmentIsPlaying,
-  getFragmentIsSynthesizing, setFragmentIsSynthesizing,
+  getFragmentIsSynthesizing,
+  beginFragmentSynthesis, finishFragmentSynthesis,
+  getFragmentSynthesisId, waitForFragmentPlayheadDragEnd,
   getFragmentIsAutoInferring, setFragmentIsAutoInferring,
   getFragmentIsExporting, setFragmentIsExporting,
   getFragmentCurrentTime, setFragmentCurrentTime,
@@ -41,7 +43,7 @@ import {
   getFragmentAudioContextInternal, loadFragmentAudioSettings,
 } from './playbackSession.js';
 
-export { getFragmentAudioContextInternal, loadFragmentAudioSettings };
+export { getFragmentAudioContextInternal, loadFragmentAudioSettings, getCurrentSession };
 /** 兼容旧调用名：播放头循环现在由会话驱动。 */
 export const updateFragmentPlayhead = playheadTick;
 
@@ -107,14 +109,15 @@ export function cancelFragmentSynthesis() {
   if (!getFragmentIsSynthesizing()) return false;
   // 模型加载阶段不能发 cancel：主进程会落到"无活跃任务 → resetSvsPipeline()"，
   // 把正在初始化的 lazy 实例作废，下次播放要重新加载（与主页面同一守卫）。
+  const sess = getCurrentSession();
   if (getPipelineInitialized() && window.electronAPI?.cancelSVSSynthesis) {
-    const sess = getCurrentSession();
     // 带 streamId：主进程若已在跑新一轮，会忽略这次迟到的取消。
     window.electronAPI.cancelSVSSynthesis(sess?.streamId ? { streamId: sess.streamId } : undefined).catch(() => {});
   }
   // 立即放开重入锁：否则 IDLE 下按钮可点、playFragment 的 guard 却静默 return，
   // 用户看到的是"点了没反应"。旧会话会在最近的检查点（sess.isCurrent）退出。
-  setFragmentIsSynthesizing(false);
+  // 只有当前 token 的拥有者才允许清合成状态；旧任务迟到结束时不能误清新任务。
+  finishFragmentSynthesis(getFragmentSynthesisId());
   // dispose 会话 → 在途 chunk / 收尾 / 兜底播放全部作废
   stopPlayback();
   updateFragmentPlayButton();
@@ -133,8 +136,17 @@ export async function seekFragmentPlayback(newStartTime) {
   // 完成后的兜底播放叠加成双路音频）。只停掉当前出声并记住新位置，合成完成后
   // 由 playFragment 从该位置整段播放新音频。
   const cur = getCurrentSession();
-  if (getFragmentIsSynthesizing() && cur && !cur.disposed) {
-    cur.requestSeekDuringSynthesis(newStartTime);
+  if (getFragmentIsSynthesizing()) {
+    if (cur && !cur.disposed && cur.kind === 'stream') {
+      cur.requestSeekDuringSynthesis(newStartTime);
+    } else {
+      // 状态不变量已损坏：全局在合成但 owner session 丢失。此时绝不能回落
+      // 到可能过期的 fragmentAudioData 播放，否则会播旧版本并与迟到结果叠音。
+      setFragmentPlayStartPosition(newStartTime);
+      setFragmentCurrentTime(newStartTime);
+      cancelFragmentSynthesis();
+      render();
+    }
     return;
   }
 
@@ -322,7 +334,9 @@ export async function playFragment() {
   const sess = createSession('stream');
   sess.streamId = nextFragmentStreamId();
   sess.beginStreaming();
-  setFragmentIsSynthesizing(true);
+  // 合成状态属于 token，不属于 session：session 被 seek/stop dispose 后，
+  // 这个 Promise 仍要在结束时释放自己设置的状态（token 不匹配的新任务除外）。
+  beginFragmentSynthesis(sess.streamId);
   updateFragmentPlayButton();
 
   try {
@@ -395,6 +409,10 @@ export async function playFragment() {
 
     // 合成期间用户拖拽了播放头：从新位置整段播放新音频。
     if (sess.pendingSeek !== null) {
+      // 若合成恰好在拖拽过程中完成，先等最终位置落定，避免从 mousedown
+      // 的旧位置抢先起播（慢速拖动/长按时尤其明显）。
+      await waitForFragmentPlayheadDragEnd();
+      if (!sess.isCurrent) return;
       const pos = sess.pendingSeek;
       sess.pendingSeek = null;
       sess.startPositionSec = pos;
@@ -424,10 +442,10 @@ export async function playFragment() {
     setFragmentCurrentTime(0);
     updateFragmentPlayButton();
   } finally {
-    // 只有"当前会话"才允许收尾：取消后用户可能已经开了新一轮播放，
-    // 旧会话在这里把 isSynthesizing 置 false 会把新一轮的重入锁拆掉。
-    if (sess.isCurrent) {
-      setFragmentIsSynthesizing(false);
+    // 合成状态按任务 token 释放，而不是按 sess.isCurrent：
+    // seek 期间 session 可能被停音频/dispose，但本任务仍需释放自己设置的
+    // synthesizing 标志；若新任务已接管则 token 不匹配，不能误清。
+    if (finishFragmentSynthesis(sess.streamId)) {
       updateFragmentPlayButton();
     }
   }

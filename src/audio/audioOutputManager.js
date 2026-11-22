@@ -54,6 +54,10 @@ class AudioOutputManager {
     // 在每个 await 之后重新比对 —— 排队中的 start（play 锁、worker ready）
     // 不能因为"回执晚到"就在用户已经停止之后把声音放出来。
     this._stopGeneration = 0;
+    // start 回执可能晚于 worker 的 ended 消息（短音频）。若不用标志记住这次
+    // "结束先到"，start 的 success 回执会把 _isPlaying 错误地反转回 true。
+    this._starting = false;
+    this._endedDuringStart = false;
   }
 
   _ensureWorker() {
@@ -117,6 +121,7 @@ class AudioOutputManager {
         // S12: Guard against firing onEnded twice (e.g. interval + Speaker finish).
         if (this._endedSent) return;
         this._endedSent = true;
+        if (this._starting) this._endedDuringStart = true;
         this._isPlaying = false;
         if (this._onEndedCallback) {
           try { this._onEndedCallback(); } catch (_) {}
@@ -325,10 +330,18 @@ class AudioOutputManager {
       return { success: false, error: 'Audio start cancelled by stop' };
     }
 
-    const result = await this._sendCommand('start', {
-      audioData: audioArray,
-      options: { ...workerOptions, volume: this._volume },
-    }, [audioArray.buffer], START_COMMAND_TIMEOUT_MS);
+    // 标记"start 在途"：worker 可能在回执之前就发 ended（短音频）。
+    this._starting = true;
+    this._endedDuringStart = false;
+    let result;
+    try {
+      result = await this._sendCommand('start', {
+        audioData: audioArray,
+        options: { ...workerOptions, volume: this._volume },
+      }, [audioArray.buffer], START_COMMAND_TIMEOUT_MS);
+    } finally {
+      this._starting = false;
+    }
 
     if (this._stopGeneration !== stopGeneration) {
       // 回执回来之前用户已经按了停止：这一路可能真的在出声（start 无回执
@@ -340,7 +353,7 @@ class AudioOutputManager {
       return { success: false, error: 'Audio start cancelled by stop' };
     }
 
-    if (result.success) {
+    if (result.success && !this._endedDuringStart) {
       this._isPlaying = true;
       this._playbackStartTime = performance.now();
       // Playback end is driven by the worker's 'ended' IPC message (Speaker

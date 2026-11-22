@@ -252,6 +252,28 @@ describe('分片流式协议', () => {
     await playPromise;
   });
 
+  it('合成中 seek 保留合成 session 并记录最终位置，结束时正常清 synthesizing', async () => {
+    await sleep(40);
+    const sess = sessionModule.getCurrentSession();
+    chunkCb(chunkAt(0, 2, { streamId: sess.streamId, seq: 1 }));
+    await sleep(60);
+    expect(state.getFragmentIsPlaying(), '流式 chunk 应已起播').to.equal(true);
+
+    await audioPlayback.seekFragmentPlayback(5);
+    expect(sess.disposed, 'seek 不能 dispose 合成 session').to.equal(false);
+    expect(sessionModule.getCurrentSession()).to.equal(sess);
+    expect(sess.pendingSeek).to.equal(5);
+    expect(sess.streamDisabled).to.equal(true);
+    expect(state.getFragmentIsPlaying()).to.equal(false);
+    expect(state.getFragmentIsSynthesizing(), '推理仍在跑，不能提前清').to.equal(true);
+
+    resolveSynth(new Float32Array(6 * SAMPLE_RATE));
+    await playPromise;
+    expect(state.getFragmentIsSynthesizing(), '合成结束后必须清掉，不能卡在 100%').to.equal(false);
+    expect(sess.pendingSeek).to.equal(null);
+    expect(sess.startPositionSec).to.equal(5);
+  });
+
   it('seq 缺口会被显式记录，而不是被当成完整交付', async () => {
     await sleep(40);
     const sess = sessionModule.getCurrentSession();
@@ -279,6 +301,44 @@ describe('分片流式协议 — 静态契约', () => {
     expect(svsIpc).to.match(/chunkSeq = nextSeq/);   // send 成功后才提交序号
     expect(svsIpc).to.include('transportFailed');
     expect(svsIpc).to.include('ignoredStaleStream');
+  });
+
+  it('mousedown seek 分支保留合成 session，不再调用会话级 stop', () => {
+    const events = read('src/fragmentEditor/eventHandlers.js');
+    const mousedownBranch = events.slice(
+      events.indexOf("setDragMode('playhead');"),
+      events.indexOf("setDragMode('playhead');") + 700,
+    );
+    expect(mousedownBranch).to.include('cur.requestSeekDuringSynthesis(newStartTime)');
+    expect(mousedownBranch).to.include('getFragmentIsSynthesizing()');
+    expect(mousedownBranch).to.include('setFragmentPlayheadDragging(true)');
+    // 合成分支内不能再出现 stopFragmentPlayback()（else 非合成路径允许）。
+    const synthStart = mousedownBranch.indexOf('if (getFragmentIsSynthesizing()');
+    const synthEnd = mousedownBranch.indexOf('} else {', synthStart);
+    const synthBranch = mousedownBranch.slice(synthStart, synthEnd)
+      .replace(/\/\/.*$/gm, '');
+    expect(synthBranch).not.to.include('stopFragmentPlayback()');
+  });
+
+  it('合成 token：旧任务迟到 finish 不得清新任务状态', () => {
+    const s = require('../src/fragmentEditor/state.js');
+    s.beginFragmentSynthesis('task-A');
+    s.beginFragmentSynthesis('task-B');
+    expect(s.finishFragmentSynthesis('task-A')).to.equal(false);
+    expect(s.getFragmentIsSynthesizing()).to.equal(true);
+    expect(s.getFragmentSynthesisId()).to.equal('task-B');
+    expect(s.finishFragmentSynthesis('task-B')).to.equal(true);
+    expect(s.getFragmentIsSynthesizing()).to.equal(false);
+    expect(s.getFragmentSynthesisId()).to.equal(null);
+  });
+
+  it('进度由状态派生，且按 synthesisId 过滤旧任务', () => {
+    const ipc = read('src/fragmentEditor/ipcHandlers.js');
+    const ui = read('src/fragmentEditor/uiControls.js');
+    expect(ipc).to.include('data.synthesisId !== getFragmentSynthesisId()');
+    expect(ipc).to.include('setFragmentSynthesisProgress(progress)');
+    expect(ipc).not.to.match(/setLabel\(btnPlayFragment, t\('fragment\.cancelSynthesisProgress'/);
+    expect(ui).to.include("t('fragment.cancelSynthesisProgress', { progress })");
   });
 
   it('StreamTimeline: reserve:false 未 commit 的区间不会占位', () => {

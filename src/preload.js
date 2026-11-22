@@ -210,7 +210,9 @@ const _fullElectronAPI = {
   resolvePhonemes: (lyrics) => invokeHeavy('fragment-svs:resolvePhonemes', { lyrics }),
   disposeFragmentSVSPipeline: () => invokeHeavy('fragment-svs:dispose'),
   onFragmentSVSProgress: (callback) => {
-    const handler = (event, data) => callback(data.progress);
+    // 保留完整 payload：synthesisId 用于过滤旧任务的迟到进度。
+    // 老调用方若只读数字，可继续用 data.progress，不影响兼容。
+    const handler = (event, data) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, handler);
   },

@@ -10,6 +10,12 @@ let fragmentAudioSource = null;
 let fragmentAudioData = null;
 let fragmentIsPlaying = false;
 let fragmentIsSynthesizing = false;
+// 合成任务 token：fragmentIsSynthesizing 的所有者。播放 session 被 seek/stop
+// dispose 后，该任务仍可能在跑；只有 token 匹配的任务才有权清合成状态。
+let fragmentSynthesisId = null;
+let fragmentSynthesisProgress = null;
+const _playheadDragWaiters = new Set();
+let fragmentPlayheadDragging = false;
 // 后台自动推理进行中（编辑后自动实时推理）。与 fragmentIsSynthesizing 互斥概念：
 // 它不代表用户主动等待的结果，因此不会禁用播放按钮，也不参与 playFragment 的重入保护。
 let fragmentIsAutoInferring = false;
@@ -192,6 +198,38 @@ export function setFragmentIsPlaying(v) { fragmentIsPlaying = v; }
 
 export function getFragmentIsSynthesizing() { return fragmentIsSynthesizing; }
 export function setFragmentIsSynthesizing(v) { fragmentIsSynthesizing = v; }
+
+/** 开始/结束合成任务：id 必须是唯一 token（当前直接用 streamId）。 */
+export function beginFragmentSynthesis(id) {
+  fragmentSynthesisId = id;
+  fragmentIsSynthesizing = true;
+  fragmentSynthesisProgress = null;
+}
+export function finishFragmentSynthesis(id) {
+  if (fragmentSynthesisId !== id) return false;
+  fragmentSynthesisId = null;
+  fragmentIsSynthesizing = false;
+  fragmentSynthesisProgress = null;
+  return true;
+}
+export function getFragmentSynthesisId() { return fragmentSynthesisId; }
+export function setFragmentSynthesisProgress(v) { fragmentSynthesisProgress = v; }
+export function getFragmentSynthesisProgress() { return fragmentSynthesisProgress; }
+
+/** 播放头拖拽状态：合成完成时若仍在拖拽，先等最终位置落定再起播。 */
+export function setFragmentPlayheadDragging(v) {
+  if (fragmentPlayheadDragging === v) return;
+  fragmentPlayheadDragging = v;
+  if (!v) {
+    for (const resolve of _playheadDragWaiters) resolve();
+    _playheadDragWaiters.clear();
+  }
+}
+export function isFragmentPlayheadDragging() { return fragmentPlayheadDragging; }
+export function waitForFragmentPlayheadDragEnd() {
+  if (!fragmentPlayheadDragging) return Promise.resolve();
+  return new Promise((resolve) => _playheadDragWaiters.add(resolve));
+}
 
 export function getFragmentIsAutoInferring() { return fragmentIsAutoInferring; }
 export function setFragmentIsAutoInferring(v) { fragmentIsAutoInferring = v; }

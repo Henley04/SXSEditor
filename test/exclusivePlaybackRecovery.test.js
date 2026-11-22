@@ -113,6 +113,22 @@ describe('独占音频 start 超时后的恢复', () => {
     }
   });
 
+  it('ended 早于 start 回执时不得把 _isPlaying 反转回 true', async () => {
+    mgr._ensureWorker();
+    fakeWorker._emit('message', { type: 'ready', isAvailable: true });
+    const promise = mgr.start(new Float32Array(100), { sampleRate: 24000 });
+    await Promise.resolve();
+    await Promise.resolve();
+    const cmd = fakeWorker.send.lastCall.args[0];
+    expect(cmd.type).to.equal('start');
+
+    // 短音频：worker 先报 ended，start 回执随后才到。
+    fakeWorker._emit('message', { type: 'ended' });
+    fakeWorker._emit('message', { id: cmd.id, type: 'start', result: { success: true } });
+    await promise;
+    expect(mgr.isPlaying(), '迟到的 start 回执不能覆盖先到的 ended').to.be.false;
+  });
+
   it('forceStop 在父进程未标记 playing 时仍向 worker 发 stop', async () => {
     mgr._ensureWorker(); // 模拟"worker 已在播、父进程却没标记 playing"
     expect(mgr.isPlaying()).to.be.false;

@@ -311,6 +311,9 @@ if (window.electronAPI?.onCloseConfirm) {
           result = await pipeline.runSynthesisBatch(params.map(p => ({ ...p, onProgress })));
         } else {
           result = await pipeline.runSynthesis({ ...params, onProgress, onChunkComplete });
+          // 显式结束屏障：主进程不能靠"response 先到就摘 chunk listener"来
+          // 猜最后一块已送达；先发完所有 chunk，再发 final 标记，最后回响应。
+          api.webnnChunk(`webnn:runSynthesis:response:chunk:${requestId}`, { final: true });
         }
       } catch (e) {
         result = { error: e.message };

@@ -4,8 +4,8 @@ import { setLabel } from '../icons/iconHelper.js';
 import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import {
   getFragmentIsSynthesizing,
+  getFragmentSynthesisId, setFragmentSynthesisProgress,
   getFragmentIsExporting,
-  getFragmentIsPlaying,
   getPitchCurve,
   getNotes,
   getSelectedNoteIds,
@@ -46,7 +46,7 @@ import {
 import { PARAM_MODES } from './constants.js';
 import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
-import { updateParamModeButtons, syncPostprocessUi } from './uiControls.js';
+import { updateParamModeButtons, syncPostprocessUi, updateFragmentPlayButton } from './uiControls.js';
 import { normalizeTrackBackend } from './pluginEditorMode.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 import { showAlertDialog } from '../alertDialog.js';
@@ -62,18 +62,18 @@ export function setupIpcHandlers() {
     if (cleanupIncompatible) _ipcCleanups.push(cleanupIncompatible);
   }
 
-  const cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
-    // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
-    // 之前回调同时更新两个按钮，播放时导出按钮也被改成"导出 X%"，
-    // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
-    // 流式播放期间（isPlaying）不要把按钮改回"合成中 X%"：那一轮合成还没结束，
-    // 但按钮此刻的语义是"停止"（见 updateFragmentPlayButton），进度条位置由
-    // 画布播放头体现；否则按钮文案在"停止/合成中"之间来回跳。
-    if (getFragmentIsSynthesizing() && !getFragmentIsPlaying()) {
-      const btnPlayFragment = document.getElementById('btn-play-fragment');
-      // 进度直接叠在"取消推理"按钮上：按钮此刻可点（= 取消推理），
-      // 单纯写"合成中 X%"会让用户以为不能中断。
-      if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.cancelSynthesisProgress', { progress }), { icon: 'stop' });
+  const cleanupProgress = window.electronAPI.onFragmentSVSProgress((info) => {
+    const data = info && typeof info === 'object' ? info : { progress: info };
+    const progress = Math.max(0, Math.min(100, Math.round(Number(data.progress) || 0)));
+    // 旧任务的迟到进度不得覆盖当前合成任务的按钮文案。
+    if (data.synthesisId && getFragmentSynthesisId()
+        && data.synthesisId !== getFragmentSynthesisId()) return;
+
+    if (getFragmentIsSynthesizing()) {
+      // 只更新状态，按钮文案统一由 updateFragmentPlayButton 派生；避免
+      // IPC 回调直接写 DOM 后遗留陈旧"100%"。
+      setFragmentSynthesisProgress(progress);
+      updateFragmentPlayButton();
     } else if (getFragmentIsExporting()) {
       const btnExportFragment = document.getElementById('btn-export-fragment');
       if (btnExportFragment) setLabel(btnExportFragment, t('fragment.exportingProgress', { progress }), { icon: 'download' });

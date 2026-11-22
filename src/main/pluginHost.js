@@ -228,10 +228,12 @@ function toPluginError(err, code) {
  * @param {string} label
  * @returns {Promise<T>}
  */
-function withTimeout(promise, ms, label) {
+function withTimeout(promise, ms, label, onTimeout) {
   let timer = null;
   const guard = new Promise((_resolve, reject) => {
     timer = setTimeout(() => {
+      // 超时只是放弃等待，插件 Promise 可能还在跑；必须同时给协作式取消信号。
+      if (typeof onTimeout === 'function') onTimeout();
       reject(new Error(`插件调用超时：${label} 超过 ${ms}ms 未返回`));
     }, ms);
   });
@@ -1294,6 +1296,8 @@ function createPluginHost(options) {
         record.pending.delete(callId);
         record.consecutiveTimeouts = (record.consecutiveTimeouts || 0) + 1;
         const exhausted = record.consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS;
+        // 让插件侧通过 abortSignal / host.isCancelled() 感知调用已结束。
+        if (typeof opts.onTimeout === 'function') opts.onTimeout();
         // ★ 真正的抢占：中止另一个线程里的那段正在执行的插件代码
         void terminateWorker(record);
         if (exhausted) {
@@ -1786,18 +1790,20 @@ function createPluginHost(options) {
         // 在调用开始前一次性把配额内的 id 分配好下发。
         const ticketPool = [];
         for (let i = 0; i < MAX_TICKETS_PER_CALL; i++) ticketPool.push(`pt-${++ticketSeq}`);
-        raw = await callInWorker(record, 'synthesize', [pluginRequest, wire.hostSlot()], {
-          timeoutMs,
-          call,
-          ticketPool,
-        });
+      raw = await callInWorker(record, 'synthesize', [pluginRequest, wire.hostSlot()], {
+        timeoutMs,
+        call,
+        ticketPool,
+        onTimeout: () => controller.abort(),
+      });
       } else {
         // ⚠️ in-process：这个 withTimeout 只能拦住"插件异步不返回"，拦不住同步忙等
-        raw = await withTimeout(
-          record.module.synthesize(pluginRequest, host),
-          timeoutMs,
-          `${pluginId}.synthesize`,
-        );
+      raw = await withTimeout(
+        record.module.synthesize(pluginRequest, host),
+        timeoutMs,
+        `${pluginId}.synthesize`,
+        () => controller.abort(),
+      );
       }
       const normalized = normalizeSynthResult(raw, sampleRate);
       return {

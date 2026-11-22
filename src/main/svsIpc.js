@@ -583,7 +583,7 @@ function _mixTrackAudio(tracks) {
 // 进度节流发送器：100ms 最小间隔，且进度变化 <2% 时跳过；progress>=100 必发。
 // svs:synthesize / svs:synthesizeMultiStreaming / fragment-svs:synthesize 共用，
 // 避免 diffusion 每步回调直接 win.send 形成 IPC 风暴。
-function _makeThrottledSender(win, channel) {
+function _makeThrottledSender(win, channel, extra = null) {
   let lastSentAt = 0;
   let lastValue = -1;
   return (progress) => {
@@ -592,7 +592,7 @@ function _makeThrottledSender(win, channel) {
     lastSentAt = now;
     lastValue = progress;
     try {
-      if (win && !win.isDestroyed()) win.send(channel, { progress });
+      if (win && !win.isDestroyed()) win.send(channel, { progress, ...(extra || {}) });
     } catch (_) {}
   };
 }
@@ -947,10 +947,19 @@ function registerSvsIpc() {
     const win = event.sender;
     const opts = options || {};
     opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
+    // 进度也要带 streamId：渲染侧据此过滤旧任务的迟到进度，避免 A 的 100%
+    // 覆盖 B 的按钮文案。
+    const fragmentStreamId = typeof opts.streamId === 'string' && opts.streamId
+      ? opts.streamId
+      : null;
     // 进度推送节流：与 svs:synthesize 共用 _makeThrottledSender（100ms / 2% 变化阈值）。
     // 长合成时 diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
     // 序列化开销），拖慢主进程与渲染进程。
-    opts.onProgress = _makeThrottledSender(win, IPC_CHANNELS.FRAGMENT_SVS_PROGRESS);
+    opts.onProgress = _makeThrottledSender(
+      win,
+      IPC_CHANNELS.FRAGMENT_SVS_PROGRESS,
+      fragmentStreamId ? { synthesisId: fragmentStreamId } : null,
+    );
     // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
     // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
     // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。
@@ -959,9 +968,6 @@ function registerSvsIpc() {
     // 目的有两个：① 旧请求的迟到 chunk 不能被新会话误收（channel 是全局的）；
     // ② renderer 不再靠 `invoke 回执 + setTimeout(0)` 猜"chunk 已全部到齐"。
     // STREAM_END 在 invoke 回执之前发出（同一 win 的消息有序），构成显式屏障。
-    const fragmentStreamId = typeof opts.streamId === 'string' && opts.streamId
-      ? opts.streamId
-      : null;
     let chunkSeq = 0;
     let streamSendFailed = false;
     const isBackground = opts.background === true;

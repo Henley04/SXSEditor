@@ -117,12 +117,16 @@ function _normalizeResult(webnnNpu, gpu, npu, details, webnnApi) {
 }
 
 /**
- * 创建一个在超时后自动清理对应 IPC handler 的 timeout。
- * 避免 renderer 未响应时 handleOnce handler 一直残留。
+ * 创建一个在超时后自动清理对应 IPC listener 的 timeout。
+ *
+ * renderer 的 webnnRespond 用的是 ipcRenderer.send（preload 明确注释
+ * "Main process listens with ipcMain.on (not handle)"），所以这里必须用
+ * ipcMain.once + removeAllListeners，不能用 handleOnce/removeHandler ——
+ * 后者属于 ipcMain.invoke 的注册表，send 过来的响应永远到不了。
  */
 function _createIpcTimeout(responseChannel, ms, callback) {
   return setTimeout(() => {
-    try { ipcMain.removeHandler(responseChannel); } catch (_) { /* handler 可能已被响应移除 */ }
+    try { ipcMain.removeAllListeners(responseChannel); } catch (_) { /* 已销毁 */ }
     callback();
   }, ms);
 }
@@ -182,7 +186,7 @@ function registerWebnnIpc() {
         resolve(_timeoutResult('webnn:loadModel', loadTimeout));
       });
 
-      ipcMain.handleOnce(responseChannel, async (_, result) => {
+      ipcMain.once(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -203,7 +207,7 @@ function registerWebnnIpc() {
         resolve(_timeoutResult('webnn:unloadModel', 10000));
       });
 
-      ipcMain.handleOnce(responseChannel, async (_, result) => {
+      ipcMain.once(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -227,7 +231,7 @@ function registerWebnnIpc() {
         reject(err);
       });
 
-      ipcMain.handleOnce(responseChannel, async (_, result) => {
+      ipcMain.once(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         if (result.error) {
           reject(new Error(result.error));
@@ -252,7 +256,7 @@ function registerWebnnIpc() {
         resolve(_timeoutResult('webnn:getStatus', 5000));
       });
 
-      ipcMain.handleOnce(responseChannel, async (_, result) => {
+      ipcMain.once(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -274,7 +278,7 @@ function registerWebnnIpc() {
         resolve(_timeoutResult('webnn:runSynthesis', 600000));
       });
 
-      ipcMain.handleOnce(responseChannel, async (_, result) => {
+      ipcMain.once(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -410,7 +414,7 @@ async function detectNPUAvailability() {
             unavailable('Detection timeout');
           });
 
-          ipcMain.handleOnce(responseChannel, async (_, r) => {
+          ipcMain.once(responseChannel, async (_, r) => {
             clearTimeout(timeout);
             resolve(r || {});
           });

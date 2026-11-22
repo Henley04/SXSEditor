@@ -91,40 +91,134 @@ function validateBackend(backend) {
  * @param {number} expectedSampleRate
  * @returns {{ok:true, audio: Float32Array, sampleRate:number, diagnostics:object|null}|{ok:false, error:string}}
  */
+const MAX_PLUGIN_CHANNELS = 32;
+const MAX_PLUGIN_AUDIO_SAMPLES = 30 * 60 * 48000; // 30 分钟 @48k 的硬上限
+
+function _asFloat32Pcm(value, label) {
+  if (value instanceof Float32Array) return value.slice();
+  if (value instanceof ArrayBuffer) {
+    if (value.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+      throw new TypeError(`${label} ArrayBuffer byteLength 不是 4 的整数倍`);
+    }
+    return new Float32Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    if (value instanceof DataView) throw new TypeError(`${label} 不支持 DataView`);
+    const out = new Float32Array(value.length);
+    for (let i = 0; i < value.length; i++) {
+      const n = Number(value[i]);
+      if (!Number.isFinite(n)) throw new TypeError(`${label} 包含非有限数值`);
+      out[i] = n;
+    }
+    return out;
+  }
+  if (Array.isArray(value)) {
+    const out = new Float32Array(value.length);
+    for (let i = 0; i < value.length; i++) {
+      const n = Number(value[i]);
+      if (!Number.isFinite(n)) throw new TypeError(`${label} 包含非有限数值`);
+      out[i] = n;
+    }
+    return out;
+  }
+  throw new TypeError(`${label} 不是可识别的 PCM 类型`);
+}
+
+function _resampleLinear(input, fromRate, toRate) {
+  if (fromRate === toRate) return input;
+  const outLen = Math.max(0, Math.round(input.length * toRate / fromRate));
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const pos = i * fromRate / toRate;
+    const i0 = Math.floor(pos);
+    const frac = pos - i0;
+    const a = input[i0] || 0;
+    const b = input[i0 + 1] === undefined ? a : input[i0 + 1];
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+
 function toBuiltinAudio(result, expectedSampleRate) {
   const pcm = result.pcm;
   if (!pcm) return { ok: true, audio: new Float32Array(0), sampleRate: expectedSampleRate, diagnostics: result.diagnostics || null };
 
-  let mono;
-  if (Array.isArray(pcm)) {
-    // Float32Array[]：按声道分离存放，取第一声道（内置链路是单声道）
-    if (pcm.length > 1) console.warn(`[Main] Plugin returned ${pcm.length} channels, built-in chain uses only the first channel`);
-    mono = pcm[0];
-  } else if (result.channels > 1) {
-    // 交错存放：抽取出第 0 声道
-    const frames = Math.floor(pcm.length / result.channels);
-    mono = new Float32Array(frames);
-    for (let i = 0; i < frames; i++) mono[i] = pcm[i * result.channels];
-    console.warn(`[Main] Plugin returned ${result.channels} channels of interleaved data, built-in chain uses only the first channel`);
-  } else {
-    mono = pcm;
+  const rate = Number(result.sampleRate);
+  if (!Number.isInteger(rate) || rate < 8000 || rate > 384000) {
+    return { ok: false, error: `插件返回的采样率非法：${result.sampleRate}` };
+  }
+  // 必须本来就是 number：Number('2') 会把字符串悄悄接受，掩盖插件协议错误。
+  if (result.channels != null && typeof result.channels !== 'number') {
+    return { ok: false, error: `插件返回的声道数类型非法：${typeof result.channels}` };
+  }
+  const channels = result.channels == null ? 1 : result.channels;
+  if (!Number.isInteger(channels) || channels < 1 || channels > MAX_PLUGIN_CHANNELS) {
+    return { ok: false, error: `插件返回的声道数非法：${result.channels}` };
   }
 
-  if (!(mono instanceof Float32Array)) return { ok: false, error: '插件返回的音频不是 Float32Array' };
+  try {
+    // 平面声道数组：元素必须是 PCM 容器，而不是普通数值（普通数值数组按
+    // 单声道/交错单声道处理，避免把 [0.1, 0.2] 误读成两个声道再取第一个）。
+    const planar = Array.isArray(pcm) && pcm.length > 0
+      && pcm.every(ch => ch instanceof Float32Array || ch instanceof ArrayBuffer || ArrayBuffer.isView(ch));
+    let mono;
+    if (planar) {
+      if (pcm.length !== channels) {
+        return { ok: false, error: `平面 PCM 声道数 ${pcm.length} 与声明的 ${channels} 不一致` };
+      }
+      const chans = pcm.map((ch, i) => _asFloat32Pcm(ch, `PCM 声道 ${i}`));
+      const len = chans[0].length;
+      if (chans.some(ch => ch.length !== len)) {
+        return { ok: false, error: '平面 PCM 各声道长度不一致' };
+      }
+      mono = new Float32Array(len);
+      for (const ch of chans) {
+        for (let i = 0; i < len; i++) mono[i] += ch[i] / channels; // 下混，避免只取第 0 声道丢信号
+      }
+    } else {
+      const flat = _asFloat32Pcm(pcm, 'PCM');
+      if (channels > 1) {
+        if (flat.length % channels !== 0) {
+          return { ok: false, error: `交错 PCM 长度 ${flat.length} 不能被声道数 ${channels} 整除` };
+        }
+        const frames = flat.length / channels;
+        mono = new Float32Array(frames);
+        for (let f = 0; f < frames; f++) {
+          let sum = 0;
+          for (let c = 0; c < channels; c++) sum += flat[f * channels + c];
+          mono[f] = sum / channels;
+        }
+      } else {
+        mono = flat;
+      }
+    }
 
-  if (Number.isFinite(expectedSampleRate) && result.sampleRate !== expectedSampleRate) {
-    // 不做重采样（会引入额外分配与延迟），只记录：调用方应让插件输出工程采样率。
-    console.warn(`[Main] Plugin sample rate ${result.sampleRate} differs from project sample rate ${expectedSampleRate}, returning as-is`);
+    const leading = result.leadingSamples == null ? 0 : Number(result.leadingSamples);
+    if (!Number.isSafeInteger(leading) || leading < 0) {
+      return { ok: false, error: `插件返回的 leadingSamples 非法：${result.leadingSamples}` };
+    }
+
+    // 在插件采样率域内先补 leading，再统一重采样到工程采样率，
+    // 否则 leadingSamples 的时间含义会被错误缩放。
+    const totalAtSource = leading + mono.length;
+    const targetRate = Number.isInteger(expectedSampleRate) && expectedSampleRate > 0
+      ? expectedSampleRate : rate;
+    if (!Number.isSafeInteger(totalAtSource) || totalAtSource > MAX_PLUGIN_AUDIO_SAMPLES) {
+      return { ok: false, error: `插件音频总长度 ${totalAtSource} 超出上限` };
+    }
+    let pcmFull = mono;
+    if (leading > 0) {
+      pcmFull = new Float32Array(totalAtSource);
+      pcmFull.set(mono, leading);
+    }
+    const audio = _resampleLinear(pcmFull, rate, targetRate);
+    if (audio.length > MAX_PLUGIN_AUDIO_SAMPLES) {
+      return { ok: false, error: `重采样后音频长度 ${audio.length} 超出上限` };
+    }
+    return { ok: true, audio, sampleRate: targetRate, diagnostics: result.diagnostics || null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : '插件音频归一化失败' };
   }
-
-  const leading = Number.isInteger(result.leadingSamples) ? result.leadingSamples : 0;
-  if (leading > 0) {
-    const padded = new Float32Array(leading + mono.length);
-    padded.set(mono, leading);
-    mono = padded;
-  }
-
-  return { ok: true, audio: mono, sampleRate: result.sampleRate, diagnostics: result.diagnostics || null };
 }
 
 /**

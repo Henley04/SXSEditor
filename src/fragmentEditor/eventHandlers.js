@@ -53,6 +53,8 @@ import {
   getPitchCurve,
   getCurrentProject,
   getFragmentIsPlaying,
+  getFragmentIsSynthesizing,
+  setFragmentPlayheadDragging,
   getFragmentCurrentTime,
   getFragmentPlayStartPosition, setFragmentPlayStartPosition,
   getCurrentFragment,
@@ -108,7 +110,7 @@ import {
   isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
   invalidateKanjiGroupIndex,
 } from './kanjiGroupUtils.js';
-import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback } from './audioPlayback.js';
+import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback, getCurrentSession } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
 import { snapshotAnchors, clampStrength, clampSmoothness } from './automationCurve.js';
@@ -2410,11 +2412,19 @@ export function setupEventListeners() {
         // stop/restart 音频源（爆音/卡顿）。现对齐主页面时间轴交互：
         // mousedown 暂停并记住状态，拖拽期间只更新视觉，mouseup 一次性 seek。
         setDragMode('playhead');
-        if (getFragmentIsPlaying()) {
-          _wasPlayingBeforePlayheadDrag = true;
-          stopFragmentPlayback();
-        } else {
-          _wasPlayingBeforePlayheadDrag = false;
+        setFragmentPlayheadDragging(true);
+        const wasPlaying = getFragmentIsPlaying();
+        _wasPlayingBeforePlayheadDrag = wasPlaying;
+        if (wasPlaying) {
+          const cur = getCurrentSession();
+          if (getFragmentIsSynthesizing() && cur && !cur.disposed && cur.kind === 'stream') {
+            // 合成尚未结束：只停音频、保留合成 session 并记录 seek 位置。
+            // 不能调用 stopFragmentPlayback()，它会 dispose 合成 session，
+            // 导致 pendingSeek 丢失、finally 跳过清 synthesizing 而卡在 100%。
+            cur.requestSeekDuringSynthesis(newStartTime);
+          } else {
+            stopFragmentPlayback();
+          }
         }
         render();
         return;
@@ -2662,6 +2672,13 @@ export function setupEventListeners() {
       const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
       const newStartTime = Math.max(0, (beats / bpm) * 60);
       setFragmentPlayStartPosition(newStartTime);
+      // 合成中拖拽：持续把最终位置写回 owner session，避免合成恰好在拖拽
+      // 期间完成时使用 mousedown 的旧位置起播。
+      const cur = getCurrentSession();
+      if (getFragmentIsSynthesizing() && cur && !cur.disposed && cur.kind === 'stream') {
+        cur.pendingSeek = newStartTime;
+        cur.startPositionSec = newStartTime;
+      }
       render();
       return;
     }
@@ -2868,6 +2885,7 @@ export function setupEventListeners() {
     // 合成完成后从新位置自动播放。
     if (getDragMode() === 'playhead') {
       setDragMode(null);
+      setFragmentPlayheadDragging(false);
       if (_wasPlayingBeforePlayheadDrag) {
         _wasPlayingBeforePlayheadDrag = false;
         seekFragmentPlayback(getFragmentPlayStartPosition());
@@ -2998,6 +3016,7 @@ export function setupEventListeners() {
     // 否则音频停在暂停态且无提示（拖拽被 mouseleave 中断）。
     if (getDragMode() === 'playhead') {
       setDragMode(null);
+      setFragmentPlayheadDragging(false);
       if (_wasPlayingBeforePlayheadDrag) {
         _wasPlayingBeforePlayheadDrag = false;
         seekFragmentPlayback(getFragmentPlayStartPosition());

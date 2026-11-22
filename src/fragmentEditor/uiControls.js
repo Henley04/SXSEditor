@@ -9,6 +9,7 @@ import {
   getPitchCurve,
   getPitchMode, setPitchMode,
   getFragmentIsSynthesizing,
+  getFragmentSynthesisProgress,
   getFragmentIsPlaying,
   getFragmentIsAutoInferring,
   getAutoSaveTimer, setAutoSaveTimer,
@@ -162,8 +163,12 @@ export function updateFragmentPlayButton() {
     btnPlayFragment.disabled = false;
   } else if (getFragmentIsSynthesizing()) {
     // 推理中（首个 chunk 尚未到达 / 非流式整段合成）：按钮语义与主页面一致 ——
-    // 可点即"取消推理"。旧实现把它禁用，用户只能等整段推理跑完才能再操作。
-    setLabel(btnPlayFragment, t('fragment.cancelSynthesis'), { icon: 'stop' });
+    // 可点即"取消推理"。进度从状态派生，避免 IPC 直接写 DOM 遗留陈旧 100%。
+    const progress = getFragmentSynthesisProgress();
+    const label = Number.isFinite(progress)
+      ? t('fragment.cancelSynthesisProgress', { progress })
+      : t('fragment.cancelSynthesis');
+    setLabel(btnPlayFragment, label, { icon: 'stop' });
     btnPlayFragment.disabled = false;
   } else if (getFragmentIsAutoInferring()) {
     // 后台自动推理进行中：仅提示，不禁用按钮——用户仍可随时手动播放或编辑。
