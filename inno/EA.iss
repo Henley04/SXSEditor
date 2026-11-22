@@ -50,7 +50,7 @@ Source: "D:\Document\electron\SXSEditor\out\SXSEditor-win32-x64\*"; DestDir: "{a
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 ; VC++ 2015-2022 Redistributable (x64) — download into inno\ before building.
 ; Installed only when a required CRT DLL is missing (see NeedVcRedist below).
-Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: ignoreversion skipifdoesntexist
+Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Registry]
 ; 工程文件

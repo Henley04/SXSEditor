@@ -57,12 +57,12 @@ Source: "{#MyAppRoot}\out\SXSEditor-win32-x64\{#MyAppExeName}"; DestDir: "{app}"
 Source: "{#MyAppRoot}\out\SXSEditor-win32-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 ; VC++ 2015-2022 Redistributable (x64). CI downloads vc_redist.x64.exe into
-; inno\ before compiling ISCC. skipifdoesntexist keeps local/source builds
+; inno\ before compiling ISCC. skipifsourcedoesntexist keeps local/source builds
 ; (without the downloaded binary) compiling fine — only release installers
 ; bundle it. It is installed only when a required CRT DLL is missing (see the
 ; NeedVcRedist Check below), and removed from {tmp} automatically after setup.
 ; Redistribution license: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
-Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: ignoreversion skipifdoesntexist
+Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Registry]
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}\OpenWithProgids"; ValueType: string; ValueName: "{#MyAppAssocKey}"; ValueData: ""; Flags: uninsdeletevalue

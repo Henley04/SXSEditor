@@ -130,6 +130,9 @@ jobs:
       - name: IPC channel contract check
         run: npm run lint:ipc
 
+      - name: Inno Setup flag preflight
+        run: npm run check:inno
+
       - name: Lint
         run: npm run lint
 
@@ -407,6 +410,12 @@ jobs:
           name: build-log-${{ github.ref_name }}
           path: build-output.log
           retention-days: 7
+
+      - name: Inno Setup flag preflight
+        # Fail fast on cross-section Flags misuse (e.g. skipifdoesntexist in
+        # [Files]) before spending minutes packaging — ISCC reports it as an
+        # opaque "unknown flag" only at the very end of this job.
+        run: npm run check:inno
 
       - name: Install Inno Setup
         shell: pwsh
