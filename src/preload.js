@@ -173,7 +173,9 @@ const _fullElectronAPI = {
   initSVSPipeline: (options) => invokeHeavy('svs:init', options),
   synthesizeSVS: (data) => invokeHeavy('svs:synthesize', data),
   synthesizeMultiStreaming: (data) => invokeHeavy('svs:synthesizeMultiStreaming', data),
-  cancelSVSSynthesis: () => invokeHeavy('svs:cancel'),
+  // 可选 {streamId}：分片编辑器用它确保旧会话的取消不会误伤新一轮推理。
+  // 主页面不传，行为与原来逐字一致。
+  cancelSVSSynthesis: (options) => invokeHeavy('svs:cancel', options),
   disposeSVSPipeline: () => invokeHeavy('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
@@ -216,6 +218,11 @@ const _fullElectronAPI = {
     const handler = (event, data) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, handler);
+  },
+  onFragmentSVSStreamEnd: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, handler);
   },
   extractF0: (data) => invokeHeavy('extractF0:onnx', data),
   extractMidiRosvot: (data) => invokeHeavy('extractMidi:rosvot', data),

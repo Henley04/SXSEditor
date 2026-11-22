@@ -82,6 +82,13 @@ let _pendingPipelineReset = false;
 // 当前持有 mutex 的可取消管线引用：svs:cancel 在 lazy 实例尚未注册
 // （pipeline 异步初始化窗口）或已被延迟重置清空时仍能命中正确的 worker。
 let _activeCancellable = null;
+// 分片预览的流身份。旧会话 dispose 时带 streamId 调 svs:cancel；若此刻在跑的
+// 已是新一轮，必须忽略那次取消，否则"停止 A"会把刚启动的 B 一起杀掉。
+let _activeFragmentStreamId = null;
+// streamId -> {state:'queued'|'running'|'cancelled', cancel}。
+// 单一 active ID 只能表达"最后提交者"，无法表示 mutex 队列里排队但尚未
+// 执行的请求；取消必须按 streamId 精确命中任务。
+const _fragmentStreamTasks = new Map();
 function _withSynthMutex(fn, cancellable) {
   const prev = _synthMutex;
   let release;
@@ -864,7 +871,20 @@ function registerSvsIpc() {
     return _mixTrackAudio(tracks);
   });
 
-  safeHandle(IPC_CHANNELS.SVS_CANCEL, async () => {
+  safeHandle(IPC_CHANNELS.SVS_CANCEL, async (_event, options) => {
+    const requestedStreamId = options && typeof options.streamId === 'string' ? options.streamId : null;
+    if (requestedStreamId) {
+      // 携带 streamId 时必须精确命中任务：active 为空或任务尚未执行，
+      // 都不能退化成"取消当前在跑的任意合成"。
+      const task = _fragmentStreamTasks.get(requestedStreamId);
+      if (!task || task.state !== 'running') {
+        if (task && task.state === 'queued') task.state = 'cancelled';
+        console.log(`[Main] svs:cancel ignored stream ${requestedStreamId} (state=${task ? task.state : 'missing'})`);
+        return { success: true, ignoredStaleStream: true };
+      }
+      try { await task.cancel?.cancelActiveSynthesis?.(); } catch (_) {}
+      return { success: true };
+    }
     // API 模式没有可取消的本地 pipeline，但要中止在途 HTTP 请求（Fetch AbortController）。
     if (isApiMode()) {
       try { apiModules().inference.cancelAll(); } catch (_) { /* 尚未加载 API 模块 */ }
@@ -934,14 +954,51 @@ function registerSvsIpc() {
     // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
     // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
     // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。
-    opts.onChunkAudio = opts.background === true
+    //
+    // 每个 chunk 都带 streamId + 单调 seq，流结束时再发一条 STREAM_END(lastSeq)。
+    // 目的有两个：① 旧请求的迟到 chunk 不能被新会话误收（channel 是全局的）；
+    // ② renderer 不再靠 `invoke 回执 + setTimeout(0)` 猜"chunk 已全部到齐"。
+    // STREAM_END 在 invoke 回执之前发出（同一 win 的消息有序），构成显式屏障。
+    const fragmentStreamId = typeof opts.streamId === 'string' && opts.streamId
+      ? opts.streamId
+      : null;
+    let chunkSeq = 0;
+    let streamSendFailed = false;
+    const isBackground = opts.background === true;
+    const fragmentTask = !isBackground && fragmentStreamId
+      ? { state: 'queued', cancel: null }
+      : null;
+    if (fragmentTask) _fragmentStreamTasks.set(fragmentStreamId, fragmentTask);
+    const sendStreamEnd = () => {
+      if (isBackground || !fragmentStreamId || win.isDestroyed()) return;
+      try {
+        win.send(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, {
+          streamId: fragmentStreamId,
+          lastSeq: chunkSeq,
+          transportFailed: streamSendFailed,
+        });
+      } catch (_) {
+        console.warn(`[Main] Failed to send STREAM_END for ${fragmentStreamId}`);
+      }
+    };
+    opts.onChunkAudio = isBackground
       ? null
       : (chunkInfo) => {
+        if (win.isDestroyed()) return;
+        // 先发送、成功后才提交 seq：否则 send 抛错时 lastSeq 会声明一个
+        // renderer 永远收不到的序号，结束屏障永远无法满足。
+        const nextSeq = chunkSeq + 1;
         try {
-          if (!win.isDestroyed()) {
-            win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, chunkInfo);
-          }
-        } catch (_) {}
+          win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, {
+            ...chunkInfo,
+            streamId: fragmentStreamId,
+            seq: nextSeq,
+          });
+          chunkSeq = nextSeq;
+        } catch (_) {
+          streamSendFailed = true;
+          console.warn(`[Main] Failed to send fragment chunk seq=${nextSeq} stream=${fragmentStreamId}`);
+        }
       };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
     // 插件路径下 RMVPE 可能未初始化，容错不注入，由插件自己的 F0 逻辑兜底。
@@ -1012,10 +1069,30 @@ function registerSvsIpc() {
     }
 
     try {
-      const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts), pipeline);
+      // active ID 必须在实际进入 mutex、真正要用 GPU 时才置位；排队中的
+      // 请求不能被当成"当前执行者"，否则取消会命中错任务。
+      const data = await _withSynthMutex(() => {
+        if (fragmentTask && fragmentTask.state === 'cancelled') {
+          const err = new Error('Synthesis cancelled');
+          err.code = 'SYNTHESIS_CANCELLED';
+          throw err;
+        }
+        if (fragmentTask) {
+          fragmentTask.state = 'running';
+          fragmentTask.cancel = pipeline;
+          _activeFragmentStreamId = fragmentStreamId;
+        }
+        return pipeline.synthesize(notes, bpm, opts);
+      }, pipeline);
       return { data };
     } catch (err) {
       return { error: err.message };
+    } finally {
+      // 必须在 invoke 回执之前投递结束屏障；win.send 与 handle 的回复同属
+      // main→renderer 方向，Electron 保证顺序，renderer 处理回执时 END 已排队。
+      sendStreamEnd();
+      if (fragmentTask) _fragmentStreamTasks.delete(fragmentStreamId);
+      if (_activeFragmentStreamId === fragmentStreamId) _activeFragmentStreamId = null;
     }
   });
 

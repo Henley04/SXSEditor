@@ -159,7 +159,12 @@ export class StreamTimeline {
    * @param {number} ctxNow 当前 `ctx.currentTime`
    * @returns {StreamChunkPlan}
    */
-  plan(chunkInfo, sampleRate, ctxNow) {
+  plan(chunkInfo, sampleRate, ctxNow, opts = {}) {
+    // reserve=false：先把排程方案算出来但不记账。调用方（_handleChunk）必须
+    // 在 source.start() 真正成功后再 commit —— 否则 start 失败也会留下
+    // coveredRanges 占位，后续重传被判重复 → 永久静音。单测直接调 plan()
+    // 时保持默认 reserve=true，既有契约不变。
+    const reserve = opts.reserve !== false;
     const audioLength = chunkInfo && chunkInfo.audio ? chunkInfo.audio.length : 0;
     if (audioLength <= 0) {
       this.droppedCount += 1;
@@ -224,15 +229,13 @@ export class StreamTimeline {
       return this._drop('late', startedNow);
     }
 
-    this._cover(fromSec, scheduledEndSec);
-    this.scheduledCount += 1;
-    if (segments.some((s) => s.offsetSec > 0)) this.lateCount += 1;
-    // 乱序回填 = 排到了"已交付末端之前"的位置（后段先到、前段后到）。
-    if (!startedNow && fromSec + EPS_SEC < deliveredBeforeSec) this.backfillCount += 1;
+    if (reserve) this._commitPlan(fromSec, segments, startedNow, deliveredBeforeSec);
 
     const first = segments[0];
     return {
       action: 'schedule',
+      fromSec,
+      deliveredBeforeSec,
       startedNow,
       // 以下字段是"第一段"的等价描述（兼容既有调用方 / 测试）。
       when: first.when,
@@ -244,6 +247,27 @@ export class StreamTimeline {
       segments,
       splitParts: parts.length,
     };
+  }
+
+  /** 给 plan(reserve:false) 的调用方补记账：只登记真正启动成功的段。 */
+  commit(plan, startedSegments) {
+    if (!plan || plan.action !== 'schedule' || !plan.segments) return;
+    if (!Array.isArray(startedSegments) || startedSegments.length === 0) return;
+    this._commitPlan(plan.fromSec, startedSegments, plan.startedNow, plan.deliveredBeforeSec);
+  }
+
+  _commitPlan(fromSec, segments, startedNow, deliveredBeforeSec) {
+    let endSec = 0;
+    for (const s of segments) {
+      // 每段只登记自己的区间：块被切成多段时，中间的空洞不能被一并标记覆盖。
+      this._cover(s.contentStartSec, s.contentEndSec);
+      endSec = Math.max(endSec, s.contentEndSec);
+    }
+    if (endSec > 0) this.deliveredEndSec = Math.max(this.deliveredEndSec, endSec);
+    this.scheduledCount += 1;
+    if (segments.some((s) => s.offsetSec > 0)) this.lateCount += 1;
+    // 乱序回填 = 排到了"已交付末端之前"的位置（后段先到、前段后到）。
+    if (!startedNow && fromSec + EPS_SEC < deliveredBeforeSec) this.backfillCount += 1;
   }
 
   _drop(reason, startedNow = false) {

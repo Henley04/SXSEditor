@@ -331,6 +331,9 @@ const IPC_CHANNELS = {
   FRAGMENT_CLOSE_ALL: 'fragment:closeAll',
   // ---- fragment-svs ----
   FRAGMENT_SVS_CHUNK_AUDIO: 'fragment-svs:chunk-audio',
+  // 显式流结束屏障：携带 streamId / lastSeq，renderer 确认处理完最后序号后
+  // 才允许把 scheduler 置为 inferenceDone（不能靠 invoke 回执猜 chunk 到齐）。
+  FRAGMENT_SVS_STREAM_END: 'fragment-svs:stream-end',
   // ---- main-menu ----
   MAIN_MENU_EXPORT_MIDI_REQUEST: 'main-menu:export-midi-request',
   MAIN_MENU_IMPORT_MIDI_REQUEST: 'main-menu:import-midi-request',

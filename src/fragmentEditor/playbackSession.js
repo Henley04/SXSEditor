@@ -218,6 +218,12 @@ async function _ctxForChunk(sess) {
 
 function _bpm() { return getCurrentProject() ? getCurrentProject().bpm : 120; }
 
+const _delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// 首个到达的 chunk 不是时间上最早的一块时，短暂收集更早序号再锚定。
+// 只对带 seq 的新协议生效；老路径（插件 / 测试桩）零延迟。
+const REORDER_WAIT_MS = 80;
+const REORDER_MAX_CHUNKS = 16;
+
 /** 实时播放的 per-note 渐入/渐出调度参数（atSec 为分片绝对秒）。 */
 function buildNoteFades() {
   const notes = getClippedNotes();
@@ -332,12 +338,27 @@ class Session {
     this.sources = [];
     this.fadeGain = null;
     this.chunkCleanup = null;
+    this.endCleanup = null;
     this.queue = Promise.resolve();
     this.lastChunkAtMs = 0;
     this.chunkSeen = false;
     this.streamStarted = false;
     this.streamDisabled = false;
     this.inferenceDone = false;
+    // 流身份与显式结束屏障（见 audioPlayback.nextFragmentStreamId / svsIpc）。
+    this.streamId = null;
+    this.seenSeqs = new Set();
+    this.expectedLastSeq = null;
+    this.endSeen = false;         // END 事件已到达（同步置位，用来区分"还没到"与"还没处理"）
+    this.deliveryDone = false;    // 已处理到 lastSeq / 已确认回执兜底
+    this.deliveryComplete = true; // seq 是否连续（缺口时只兜底，不假装完整）
+    // 首块乱序预缓冲：必须放在串行队列入口，不能在处理函数内部睡眠
+    // （那只会让更早的 seq 排在当前处理之后，等到也用不上）。
+    this._initialChunks = new Map();
+    this._reorderTimer = null;
+    this._reorderFlushed = false;
+    this.protocolMode = null;     // 'identified' | 'legacy'，首块到达时一次性决定
+    this.inFlightChunkHandlers = 0;
 
     // 整段 / 独占
     this.fullSource = null;
@@ -353,16 +374,115 @@ class Session {
 
   get isCurrent() { return _current === this && !this.disposed; }
 
+  /** 所有 await 之后统一用这一把守卫：会话身份 + 停止/完成标记。 */
+  get isUsable() {
+    return this.isCurrent && !this.finished && !this.streamDisabled;
+  }
+
+  /** 第一个 source 真正启动成功后才宣告播放开始。 */
+  _activatePlaybackUi() {
+    if (this.streamStarted || !this.timeline || !this.timeline.started) return;
+    this.streamStarted = true;
+    const anchor = this.timeline.anchorCtxTime;
+    setFragmentIsPlaying(true);
+    setFragmentPlaybackStartTime(anchor);
+    setFragmentPlaybackOffset(this.startPositionSec);
+    setFragmentCurrentTime(this.startPositionSec);
+    updateFragmentPlayButton();
+    // activate 只武装 watchdog，**不重置**会话状态：invoke 回执可能先于
+    // 首块处理到达（冷启动 AudioContext / 缓存 burst），重置会把已经置位的
+    // inferenceDone 抹掉 → 末尾 underrun 冻结后无人解冻 → 全程静音 + 卡死。
+    if (this.scheduler) this.scheduler.activate();
+    _bindVisibility();
+    console.log(`[FragPlay] PLAYBACK START | session=${this.id} playFromSec=${this.startPositionSec.toFixed(3)} firstNoteStartSec=${this.timeline.firstNoteStartSec.toFixed(3)} t=${Date.now()}`);
+    playheadTick();
+  }
+
+  /** 输入在推理途中变化：停掉本会话已排程的旧音频，但不 dispose 会话。 */
+  stopStreamAudio() {
+    this.streamDisabled = true;
+    for (const src of this.sources) {
+      if (!src) continue;
+      safeCleanup('fragmentPlayback.inputChanged.src.stop', () => { src.onended = null; src.stop(); });
+    }
+    this.sources = [];
+    if (this.fadeGain) {
+      safeCleanup('fragmentPlayback.inputChanged.fadeGain.disconnect', () => this.fadeGain.disconnect());
+      this.fadeGain = null;
+    }
+    if (this.scheduler) this.scheduler.deactivate();
+    setFragmentIsPlaying(false);
+    _cancelLoop();
+  }
+
+  /** 本会话是否真的排过/正在排 source（兜底播放不再看全局 isPlaying）。 */
+  hasStartedSources() {
+    return this.sources.some(Boolean)
+      || !!(this.scheduler && this.scheduler.activeSourceCount > 0);
+  }
+
+  /**
+   * 流结束屏障：由 preload 的 stream-end 回调同步调用，把确认动作放进同一条
+   * chunk 队列，保证 lastSeq 之前的块先处理完。
+   */
+  noteStreamEnd(info) {
+    if (!this.isUsable) return;
+    if (info && this.streamId && info.streamId && info.streamId !== this.streamId) return;
+    this.endSeen = true;
+    // END 必须排在预缓冲里所有已收到的 chunk 之后，否则屏障会先于尾部
+    // chunk 处理完，drain() 返回时它们还没进 timeline。
+    this._flushInitialChunks();
+    this.queue = this.queue
+      .then(() => this._handleStreamEnd(info))
+      .catch((e) => console.warn('[FragmentPlayback] stream-end error:', e && e.message));
+    return this.queue;
+  }
+
+  /** 没有 END 事件可用时的回执兜底（插件 / 老主进程 / 测试桩）。 */
+  markLegacyDelivery() {
+    if (this.endSeen) return;
+    this.deliveryDone = true;
+    this.deliveryComplete = true;
+  }
+
+  async _handleStreamEnd(info) {
+    if (!this.isUsable) return;
+    const lastSeq = info && Number.isFinite(info.lastSeq) ? info.lastSeq : 0;
+    this.expectedLastSeq = lastSeq;
+    const transportFailed = !!(info && info.transportFailed);
+    if (transportFailed) {
+      console.warn(`[FragmentPlayback] stream transport failed; lastSeq=${lastSeq} is not authoritative`);
+    }
+    // 连续序号检查：缺口意味着尾段可能永远到不了，记录但不阻塞收尾，
+    // 由上层结合"是否开播"决定整段兜底。
+    let contiguous = 0;
+    while (this.seenSeqs.has(contiguous + 1)) contiguous += 1;
+    this.deliveryComplete = !transportFailed && (lastSeq === 0 || contiguous >= lastSeq);
+    if (!this.deliveryComplete) {
+      console.warn(`[FragmentPlayback] stream gap: seen contiguous=${contiguous} lastSeq=${lastSeq} stream=${this.streamId}`);
+    }
+    this.deliveryDone = true;
+  }
+
   // ---------- 生命周期 ----------
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    if (this._reorderTimer) {
+      clearTimeout(this._reorderTimer);
+      this._reorderTimer = null;
+    }
+    this._initialChunks.clear();
     if (_current === this) _current = null;
     this._teardownAudio();
     if (this.chunkCleanup) {
       safeCleanup('fragmentPlayback.chunkCleanup', this.chunkCleanup);
       this.chunkCleanup = null;
+    }
+    if (this.endCleanup) {
+      safeCleanup('fragmentPlayback.endCleanup', this.endCleanup);
+      this.endCleanup = null;
     }
     if (this.scheduler) this.scheduler.deactivate();
     if (this.removeEndedListener) {
@@ -461,8 +581,63 @@ class Session {
     });
   }
 
-  /** chunk 入口：串行化（回调体内有 await，并发会让后块基于旧状态排程）。 */
+  /**
+   * chunk 入口。首块若带 seq 且不是 1，先在队列**外面**做一次性预缓冲：
+   * 在串行 handler 内部 sleep 是无效的——更早的 seq 只能排在它后面，等完
+   * 也用不上。这里让早期块先进入 staging，flush 时按 seq 排序再统一入队。
+   */
   pushChunk(chunkInfo) {
+    if (!this.isUsable || !chunkInfo) return;
+    // 协议模式由首块一次性决定：带 streamId 后必须严格匹配，不允许无 ID
+    // 的迟到 chunk 混进新会话；老协议整轮保持兼容语义。
+    if (!this.protocolMode) {
+      this.protocolMode = chunkInfo.streamId ? 'identified' : 'legacy';
+    }
+    if (this.protocolMode === 'identified' && chunkInfo.streamId !== this.streamId) {
+      console.warn(`[FragmentPlayback] drop chunk stream=${chunkInfo.streamId} current=${this.streamId}`);
+      return;
+    }
+    const seq = Number(chunkInfo.seq);
+    const hasSeq = Number.isSafeInteger(seq) && seq > 0;
+    if (hasSeq) {
+      if (this.seenSeqs.has(seq)) {
+        console.warn(`[FragmentPlayback] duplicate seq=${seq} dropped`);
+        return;
+      }
+      this.seenSeqs.add(seq);
+    }
+
+    if (!this._reorderFlushed && this.protocolMode === 'identified' && hasSeq) {
+      if (seq === 1) {
+        this._initialChunks.set(seq, chunkInfo);
+        this._flushInitialChunks();
+        return;
+      }
+      if (this._initialChunks.size < REORDER_MAX_CHUNKS) {
+        this._initialChunks.set(seq, chunkInfo);
+        if (!this._reorderTimer) {
+          this._reorderTimer = setTimeout(() => this._flushInitialChunks(), REORDER_WAIT_MS);
+        }
+        return;
+      }
+      this._flushInitialChunks();
+    }
+    this._enqueueChunk(chunkInfo);
+  }
+
+  _flushInitialChunks() {
+    if (this._reorderTimer) {
+      clearTimeout(this._reorderTimer);
+      this._reorderTimer = null;
+    }
+    if (this._reorderFlushed || this._initialChunks.size === 0) return;
+    this._reorderFlushed = true;
+    const ordered = [...this._initialChunks.entries()].sort((a, b) => a[0] - b[0]);
+    this._initialChunks.clear();
+    for (const [, chunk] of ordered) this._enqueueChunk(chunk);
+  }
+
+  _enqueueChunk(chunkInfo) {
     this.queue = this.queue
       .then(() => this._handleChunk(chunkInfo))
       .catch((e) => console.warn('[FragmentPlayback] chunk queue error:', e && e.message));
@@ -473,19 +648,35 @@ class Session {
   drain() { return this.queue; }
 
   async _handleChunk(chunkInfo) {
-    if (!this.isCurrent || this.finished || this.streamDisabled) return;
+    this.inFlightChunkHandlers += 1;
+    try {
+      return await this._processChunk(chunkInfo);
+    } finally {
+      this.inFlightChunkHandlers -= 1;
+      // 队列内即时 onended 被 inFlight 守卫挡下的收尾，在这一刻补做。
+      this._maybeFinish();
+    }
+  }
+
+  async _processChunk(chunkInfo) {
+    if (!this.isUsable) return;
     if (!chunkInfo) return;
-    this.chunkSeen = true;
+    // 流归属校验：首块一次性决定协议模式后严格按 streamId 过滤。
+    if (this.protocolMode === 'identified' && chunkInfo.streamId !== this.streamId) {
+      console.warn(`[FragmentPlayback] drop stale chunk stream=${chunkInfo.streamId} current=${this.streamId}`);
+      return;
+    }
     if (!chunkInfo.audio || chunkInfo.audio.length === 0) return;
+    this.chunkSeen = true;
 
     const ctx = await _ctxForChunk(this);
-    if (!ctx || !this.isCurrent || this.finished || this.streamDisabled) return;
+    if (!ctx || !this.isUsable) return;
 
     const sampleRate = getSampleRate();
     // 首个 chunk 之前先等 suspend 落地：in-flight 期间时钟仍在走，
     // 此刻读 currentTime 会把"控制消息还没送到"算成迟到而裁掉音频头。
     if (this.scheduler) await this.scheduler.awaitSuspendSettled();
-    if (!this.isCurrent || this.finished || this.streamDisabled) return;
+    if (!this.isUsable) return;
 
     if (!this.timeline) {
       const notes = getClippedNotes();
@@ -496,11 +687,13 @@ class Session {
       });
     }
 
-    const plan = this.timeline.plan(chunkInfo, sampleRate, ctx.currentTime);
+    // 先算方案不记账；source.start() 成功后再 commit，避免失败排程污染账本。
+    const plan = this.timeline.plan(chunkInfo, sampleRate, ctx.currentTime, { reserve: false });
     this.lastChunkAtMs = Date.now();
 
     if (plan.startedNow) {
-      this.streamStarted = true;
+      // 这里只建立时间基准与 fade 节点；"正式开播"必须等第一个 source
+      // start() 成功后才宣告（见 _activatePlaybackUi）。
       const anchor = this.timeline.anchorCtxTime;
       const fades = buildNoteFades();
       if (fades.length > 0) {
@@ -509,18 +702,6 @@ class Session {
         this.fadeGain.connect(master || ctx.destination);
         scheduleFades(this.fadeGain, ctx, fades, this.startPositionSec, anchor);
       }
-      setFragmentIsPlaying(true);
-      setFragmentPlaybackStartTime(anchor);
-      setFragmentPlaybackOffset(this.startPositionSec);
-      setFragmentCurrentTime(this.startPositionSec);
-      updateFragmentPlayButton();
-      // activate 只武装 watchdog，**不重置**会话状态：invoke 回执可能先于
-      // 首块处理到达（冷启动 AudioContext / 缓存 burst），重置会把已经置位的
-      // inferenceDone 抹掉 → 末尾 underrun 冻结后无人解冻 → 全程静音 + 卡死。
-      if (this.scheduler) this.scheduler.activate();
-      _bindVisibility();
-      console.log(`[FragPlay] PLAYBACK START | session=${this.id} playFromSec=${this.startPositionSec.toFixed(3)} firstNoteStartSec=${this.timeline.firstNoteStartSec.toFixed(3)} t=${Date.now()}`);
-      playheadTick();
     }
 
     if (plan.action === 'drop') {
@@ -530,18 +711,19 @@ class Session {
       return;
     }
 
-    // 前沿必须在 resumeFromWait 之前更新：解冻后重启的循环用新前沿判定，
-    // 否则刚解冻又被旧前沿冻结 → 首段之后整段静音。
-    if (this.scheduler) this.scheduler.updateBufferFrontier(plan.contentEndSec);
-
     const segments = plan.segments && plan.segments.length > 0
       ? plan.segments
       : [{ skipSamples: plan.skipSamples, when: plan.when, offsetSec: plan.offsetSec, durationSec: plan.durationSec }];
+    const startedSegs = [];
 
     // 一个块可能被已排程区间切成多段（乱序/重叠），逐段排 —— 少排一段就是丢一句。
     for (const seg of segments) {
+      // 中途失效必须先提交已成功启动的段再退出：直接 return 会留下
+      // "音频已播但 coveredRanges 未登记"的空洞，后续重传被判重复。
+      if (!this.isUsable) break;
       const startSample = seg.skipSamples;
-      // 按"该段完整长度"切片，迟到量只在 start(when, offset) 里扣一次。
+      // 按"该段完整长度"切片：基础偏移已由 subarray(startSample) 扣掉，
+      // source.start 的 offsetSec 只需要再扣迟到量（不能重复扣基础偏移）。
       const fullSec = Number.isFinite(seg.sourceDurationSec) ? seg.sourceDurationSec : seg.durationSec + seg.offsetSec;
       const sliceSamples = Math.min(Math.round(fullSec * sampleRate), chunkInfo.audio.length - startSample);
       if (sliceSamples <= 0) continue;
@@ -554,21 +736,11 @@ class Session {
 
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      if (this.fadeGain) source.connect(this.fadeGain);
-      else {
-        const master = getFragmentGainNode();
-        source.connect(master || ctx.destination);
-      }
-      source.start(seg.when, seg.offsetSec);
-
-      if (!this.isCurrent) {
-        safeCleanup('fragmentPlayback.lateSrc.stop', () => { source.onended = null; source.stop(); });
-        return;
-      }
       const sched = this.scheduler;
-      if (sched) sched.addSource();
       const idx = this.sources.length;
-      this.sources.push(source);
+      // 生命周期顺序：先挂 onended / 计数 / 登记，再 start()。
+      // 极短 buffer 或已过期的 when 可能让 source 立刻结束；若先 start 再挂
+      // onended，计数将永久不归零 → _maybeFinish 永不成立、播放卡死。
       source.onended = () => {
         if (sched) sched.sourceEnded();
         if (this.sources[idx] === source) this.sources[idx] = null;
@@ -577,13 +749,48 @@ class Session {
         // rAF / 看门狗在窗口被遮挡时会被节流到 ~1 次/分钟，不能作为唯一判据。
         if (!this.finished && sched) sched.onSourcesDrained(() => render());
       };
+      if (this.fadeGain) source.connect(this.fadeGain);
+      else {
+        const master = getFragmentGainNode();
+        source.connect(master || ctx.destination);
+      }
+      if (sched) sched.addSource();
+      this.sources.push(source);
+      try {
+        source.start(seg.when, seg.offsetSec);
+      } catch (err) {
+        // start 失败：回滚计数与登记，不把这段记进 coveredRanges。
+        source.onended = null;
+        if (sched) sched.sourceEnded();
+        if (this.sources[idx] === source) this.sources[idx] = null;
+        safeCleanup('fragmentPlayback.source.disconnect', () => source.disconnect());
+        console.warn(`[FragmentPlayback] source.start failed: ${err && err.message}`);
+        continue;
+      }
+      startedSegs.push(seg);
+      // 至少一个 source 真正发声后才把会话宣告为 playing。
+      this._activatePlaybackUi();
+    }
+
+    // 只有真正 start() 成功的段才登记占位与前沿。
+    if (startedSegs.length > 0) {
+      this.timeline.commit(plan, startedSegs);
+      const committedEnd = Math.max(...startedSegs.map((s) => s.contentEndSec));
+      // 前沿必须在 resumeFromWait 之前更新：解冻后重启的循环用新前沿判定，
+      // 否则刚解冻又被旧前沿冻结 → 首段之后整段静音。
+      if (this.scheduler && Number.isFinite(committedEnd)) {
+        this.scheduler.updateBufferFrontier(committedEnd);
+      }
     }
 
     console.log(`[FragPlay] chunk scheduled | session=${this.id} seg=${chunkInfo.chunkIndex ?? '-'} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} lateSec=${plan.offsetSec.toFixed(4)} durSec=${plan.durationSec.toFixed(3)} parts=${segments.length} started=${plan.startedNow} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
     if (this.scheduler && this.scheduler.isWaiting) {
       await this.scheduler.resumeFromWait();
-      if (this.isCurrent && getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
+      // resumeFromWait 内部有 await：等待期间用户可能停止或已开新一轮。
+      // 守卫必须覆盖后面所有状态写入，不能只保护 playheadTick。
+      if (!this.isUsable) return;
+      if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
     }
 
     if (chunkInfo.isLast && this.scheduler) {
@@ -609,9 +816,14 @@ class Session {
    */
   _maybeFinish() {
     if (!this.isCurrent || this.finished || this.kind !== 'stream') return;
+    // 当前 chunk 还在 commit / 前沿更新中时，不允许被即时 onended 抢先收尾。
+    if (this.inFlightChunkHandlers > 0) return;
     if (!this.streamStarted) return;
     const sched = this.scheduler;
     if (!sched) return;
+    // 新协议下 END 未处理完之前不允许靠 inferenceDone 判定完成：最后几块
+    // 可能还在 IPC 队列里。isLast 已收到且 source 全结束时则是安全收尾点。
+    if (this.streamId && !this.deliveryDone && !sched.isLastReceived) return;
     if (!sched.inferenceDone && !sched.isLastReceived) return;
     if (sched.activeSourceCount > 0) return;
     const ctx = getFragmentAudioContext();

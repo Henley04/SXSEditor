@@ -45,6 +45,14 @@ export { getFragmentAudioContextInternal, loadFragmentAudioSettings };
 /** 兼容旧调用名：播放头循环现在由会话驱动。 */
 export const updateFragmentPlayhead = playheadTick;
 
+// 每次合成一个独立 streamId：chunk / 结束屏障 / cancel 全链路带上它，
+// 旧请求的迟到数据就不会被新会话当成自己的音频（IPC channel 是全局共享的）。
+let _fragmentStreamSeq = 0;
+function nextFragmentStreamId() {
+  _fragmentStreamSeq += 1;
+  return `frag-${Date.now().toString(36)}-${_fragmentStreamSeq}`;
+}
+
 /**
  * 把当前分片的后端声明挂到合成 options 上（options.backend）。
  *
@@ -100,7 +108,9 @@ export function cancelFragmentSynthesis() {
   // 模型加载阶段不能发 cancel：主进程会落到"无活跃任务 → resetSvsPipeline()"，
   // 把正在初始化的 lazy 实例作废，下次播放要重新加载（与主页面同一守卫）。
   if (getPipelineInitialized() && window.electronAPI?.cancelSVSSynthesis) {
-    window.electronAPI.cancelSVSSynthesis().catch(() => {});
+    const sess = getCurrentSession();
+    // 带 streamId：主进程若已在跑新一轮，会忽略这次迟到的取消。
+    window.electronAPI.cancelSVSSynthesis(sess?.streamId ? { streamId: sess.streamId } : undefined).catch(() => {});
   }
   // 立即放开重入锁：否则 IDLE 下按钮可点、playFragment 的 guard 却静默 return，
   // 用户看到的是"点了没反应"。旧会话会在最近的检查点（sess.isCurrent）退出。
@@ -310,6 +320,7 @@ export async function playFragment() {
 
   // 作废旧会话并开新一轮。会话号即身份：所有异步续体据此判断自己是否过期。
   const sess = createSession('stream');
+  sess.streamId = nextFragmentStreamId();
   sess.beginStreaming();
   setFragmentIsSynthesizing(true);
   updateFragmentPlayButton();
@@ -333,12 +344,17 @@ export async function playFragment() {
     sess.chunkCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
       sess.pushChunk(chunkInfo);
     });
+    // 结束屏障与 chunk 共用同一条串行队列：END 入队后，drain() 返回即证明
+    // lastSeq 之前的所有块都已处理完，才允许把 scheduler 置为 inferenceDone。
+    sess.endCleanup = window.electronAPI.onFragmentSVSStreamEnd?.((info) => {
+      sess.noteStreamEnd(info);
+    }) || null;
 
     const previewOpts = getFragmentPreviewInferenceOptions();
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: buildPreviewOptions(previewOpts),
+      options: buildPreviewOptions(previewOpts, { streamId: sess.streamId }),
     });
     // 会话已被取消/取代（用户点了停止 / 又开了新一轮）：结果作废。
     if (!sess.isCurrent) return;
@@ -348,6 +364,9 @@ export async function playFragment() {
     if (computeFragmentAudioSignature() !== currentSignature) {
       console.warn('[FragmentAudio] Inputs changed during synthesis — discarding result');
       setFragmentAudioDataSignature(null);
+      // 不能只丢缓存：此时旧输入的 chunk 可能已经在播、甚至有 future source
+      // 已排程。必须先停掉本会话的旧音频，否则用户编辑后会继续听到旧音符。
+      sess.stopStreamAudio();
       await sess.setInferenceDone();
       return;
     }
@@ -357,15 +376,22 @@ export async function playFragment() {
     setFragmentAudioDataSignature(currentSignature);
     console.log(`[FragPlay] INFERENCE RETURNED | session=${sess.id} streamingStarted=${sess.streamStarted} pendingSeek=${sess.pendingSeek !== null} t=${Date.now()}`);
 
-    // 标记推理完成：后续不再触发 buffer underrun 等待；已在等待则立即解冻。
-    await sess.setInferenceDone();
-    if (!sess.isCurrent) return;
-
-    // 让出一轮宏任务：chunk 事件与 invoke 回执走不同通道，回执可能先到。
-    // 随后等队列排空 —— 监听器仍在，队列里剩下的块都会被处理。
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 结束屏障优先：END 在 invoke 回执之前由主进程发出，处理完它的队列项
+    // 才证明"最后一块已交付"。不支持 END 的路径（插件 / 老主进程 / 测试桩）
+    // 退化为原来的回执语义，但不再把它当作普遍正确的排序保证。
+    if (!sess.endSeen) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sess.markLegacyDelivery();
+    }
     await sess.drain();
     if (!sess.isCurrent) return;
+
+    // 只有确认交付完成后才标记推理完成：过早置位会让 checkUnderrun 直接
+    // 返回 false，尾段 chunk 未到时 source 播完 → 播放头冲进静音区、提前收尾。
+    await sess.setInferenceDone();
+    if (!sess.isCurrent) return;
+    // 交付确认到位后再给收尾判据一次机会（isLast 可能早于 END 到达）。
+    sess._maybeFinish();
 
     // 合成期间用户拖拽了播放头：从新位置整段播放新音频。
     if (sess.pendingSeek !== null) {
@@ -378,7 +404,10 @@ export async function playFragment() {
     }
 
     // 流式从未启动（插件后端 / 单块未触发回调 / 全部块都在起播点之前）：整段兜底。
-    if (!sess.streamStarted && !getFragmentIsPlaying()) {
+    // 判据只看当前会话自己的状态 —— 全局 isPlaying 可能被别的播放模式/上一轮
+    // 残留占用，拿它当唯一条件会让整段兜底被跳过 → 完全静音。
+    if (!sess.streamStarted && sess.isCurrent && !sess.userStopped
+        && sess.pendingSeek === null && !sess.hasStartedSources()) {
       await playWholeBuffer(sess, padded);
     }
   } catch (error) {

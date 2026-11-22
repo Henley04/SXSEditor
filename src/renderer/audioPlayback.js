@@ -907,26 +907,47 @@ export async function playAll() {
                 const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
                 const safeNow = ctx.currentTime + 0.01;
-                if (accScheduleTime < safeNow) {
-                  // The first MIDI chunk may begin after timeline zero. Start the
-                  // accompaniment at the matching offset, not from its head.
-                  const offset = Math.max(0, safeNow - accScheduleTime);
-                  if (offset >= accBuffer.duration) continue;
-                  accSource.start(safeNow, offset);
-                } else {
-                  accSource.start(accScheduleTime);
-                }
-                const accEndSec = accStartSec + accBuffer.duration;
-                if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
-                _scheduler.addSource();
-                const accSourceIdx = state.streamingSources.length;
-                state.streamingSources.push(accSource);
-                accSource.onended = () => {
-                  _scheduler.sourceEnded();
-                  if (state.streamingSources[accSourceIdx] === accSource) {
-                    state.streamingSources[accSourceIdx] = null;
-                  }
-                };
+        // 必须先登记 onended / 计数，再 start()：极短 buffer 或已过期的
+        // when 可能让 source 立刻 ended，先 start 后挂回调会永久漏计数。
+        let accRegistered = false;
+        const accSourceIdx = state.streamingSources.length;
+        accSource.onended = () => {
+          if (accRegistered) {
+            accRegistered = false;
+            _scheduler.sourceEnded();
+          }
+          if (state.streamingSources[accSourceIdx] === accSource) {
+            state.streamingSources[accSourceIdx] = null;
+          }
+        };
+        _scheduler.addSource();
+        accRegistered = true;
+        state.streamingSources.push(accSource);
+        try {
+          if (accScheduleTime < safeNow) {
+            // The first MIDI chunk may begin after timeline zero. Start the
+            // accompaniment at the matching offset, not from its head.
+            const offset = Math.max(0, safeNow - accScheduleTime);
+            if (offset >= accBuffer.duration) throw new Error('accompaniment fully elapsed');
+            accSource.start(safeNow, offset);
+          } else {
+            accSource.start(accScheduleTime);
+          }
+        } catch (err) {
+          accSource.onended = null;
+          if (accRegistered) {
+            accRegistered = false;
+            _scheduler.sourceEnded();
+          }
+          if (state.streamingSources[accSourceIdx] === accSource) {
+            state.streamingSources[accSourceIdx] = null;
+          }
+          safeCleanup('audioPlayback.accSource.disconnect', () => accSource.disconnect());
+          console.warn(`[MainPlay] accompaniment start failed track=${accTrack.id}:`, err.message);
+          continue;
+        }
+        const accEndSec = accStartSec + accBuffer.duration;
+        if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
               }
             }
 
@@ -989,27 +1010,43 @@ export async function playAll() {
                 _scheduler.markLastReceived();
               }
             } else {
-              source.start(startCtxTime, lateSec);
-              console.log(`[MainPlay] chunk scheduled | stream=${streamKey} offset=${chunkStartSec.toFixed(3)} end=${chunkEndSec.toFixed(3)} lateSec=${lateSec.toFixed(4)} durSec=${chunkDurSec.toFixed(3)} streamLast=${!!chunkInfo.streamLast} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
-
-              // 统一的 onended：递减活跃 source 计数，释放引用，
-              // 当 isLast 已收到且所有 source 均结束时标记流式完成。
-              // 这比仅依赖 isLast chunk 的 onended 更健壮——
-              // 若非末 chunk 因音频更长而晚于 isLast chunk 结束，也能正确等待。
-              _scheduler.addSource();
-              if (chunkInfo.isLast) {
-                console.log(`[MainPlay] ALL SEGS RECEIVED (isLast) | stream=${streamKey} t=${Date.now()}`);
-                _scheduler.markLastReceived();
-              }
-
+              // 与分片编辑器一致：先挂 onended、登记计数，再 start()。
+              // 极短 buffer / 已过期 when 可能立刻 ended，先 start 后挂回调
+              // 会永久漏掉一次 sourceEnded() → activeSourceCount 不归零。
+              let registered = false;
               const sourceIdx = state.streamingSources.length;
-              state.streamingSources.push(source);
               source.onended = () => {
-                _scheduler.sourceEnded();
+                if (registered) {
+                  registered = false;
+                  _scheduler.sourceEnded();
+                }
                 if (state.streamingSources[sourceIdx] === source) {
                   state.streamingSources[sourceIdx] = null;
                 }
               };
+              _scheduler.addSource();
+              registered = true;
+              state.streamingSources.push(source);
+              try {
+                source.start(startCtxTime, lateSec);
+              } catch (err) {
+                source.onended = null;
+                if (registered) {
+                  registered = false;
+                  _scheduler.sourceEnded();
+                }
+                if (state.streamingSources[sourceIdx] === source) {
+                  state.streamingSources[sourceIdx] = null;
+                }
+                safeCleanup('audioPlayback.source.disconnect', () => source.disconnect());
+                throw err;
+              }
+              console.log(`[MainPlay] chunk scheduled | stream=${streamKey} offset=${chunkStartSec.toFixed(3)} end=${chunkEndSec.toFixed(3)} lateSec=${lateSec.toFixed(4)} durSec=${chunkDurSec.toFixed(3)} streamLast=${!!chunkInfo.streamLast} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
+
+              if (chunkInfo.isLast) {
+                console.log(`[MainPlay] ALL SEGS RECEIVED (isLast) | stream=${streamKey} t=${Date.now()}`);
+                _scheduler.markLastReceived();
+              }
             }
           } catch (e) {
             console.warn('[Audio] Streaming chunk playback failed:', e.message);

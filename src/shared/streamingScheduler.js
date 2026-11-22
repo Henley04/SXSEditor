@@ -75,6 +75,9 @@ export class StreamingScheduler {
     this._contextSuspended = false;
     this._suspendInFlight = null;
     this._resumeInFlight = null;
+    // 解冻是一次异步状态转换：在它真正完成前清掉 waiting，会让 rAF/drain
+    // 再次 checkUnderrun() 进入新的 suspend，与在途 resume 交错。
+    this._resumeTransition = null;
     this._watchdogTimer = null;
   }
 
@@ -146,6 +149,8 @@ export class StreamingScheduler {
    */
   checkUnderrun(elapsed, onEnterWait, marginSec = 0) {
     if (this.inferenceDone || this._waitingForInference) return false;
+    // 正在解冻时不能启动新的冻结转换，否则 context 最终状态与 waiting 撕裂。
+    if (this._resumeTransition || this._resumeInFlight) return false;
     // 尚未收到任何音频：没有可判断的前沿。此时 elapsed 可能来自上一轮
     // 播放遗留的 playbackStartTime（垃圾值），绝不能据此冻结 context，
     // 否则首 chunk 到达前 context 就被挂起，后续调度时序全部错乱。
@@ -166,9 +171,23 @@ export class StreamingScheduler {
    */
   async resumeFromWait() {
     if (!this._waitingForInference) return false;
-    this._waitingForInference = false;
-    this._onWaitStateChange(false);
-    await this._resumeContext();
+    if (this._resumeTransition) {
+      await this._resumeTransition;
+      return true;
+    }
+    const p = (async () => {
+      // 先等 suspend 真正落地、context 真正 running，再清 waiting：
+      // 否则这中间的 checkUnderrun 会再次进入冻结。
+      await this._resumeContext();
+      this._waitingForInference = false;
+      this._onWaitStateChange(false);
+    })();
+    this._resumeTransition = p;
+    try {
+      await p;
+    } finally {
+      if (this._resumeTransition === p) this._resumeTransition = null;
+    }
     return true;
   }
 
@@ -275,19 +294,25 @@ export class StreamingScheduler {
 
   async _suspendContext() {
     if (this._contextSuspended) return;
-    this._contextSuspended = true;
     const ctx = this._getCtx();
     if (ctx && ctx.state === 'running') {
+      this._contextSuspended = true;
       const t0 = Date.now();
-      const p = ctx.suspend().catch(err => {
-        console.warn('[StreamingScheduler] Failed to suspend context:', err.message);
-      }).then(() => {
+      const p = (async () => {
+        try {
+          await ctx.suspend();
+        } catch (err) {
+          // suspend 失败必须回退内部标志：否则后续 underrun 会认为已冻结
+          // 而永远不再尝试，context 实际仍在 running。
+          this._contextSuspended = false;
+          console.warn('[StreamingScheduler] Failed to suspend context:', err.message);
+          return;
+        }
         // 观测"发出 suspend"到"设备真正冻结时钟"之间的控制消息延迟。
-        // 这段时间里渲染时钟照常前进，正是裁头量下限 —— 必须计入提前量。
         const sec = Math.max(0, Date.now() - t0) / 1000;
         const prev = _suspendLatencyByCtx.get(ctx) || 0;
         _suspendLatencyByCtx.set(ctx, Math.max(sec, prev * SUSPEND_LATENCY_DECAY));
-      });
+      })();
       this._suspendInFlight = p;
       try { await p; } finally {
         if (this._suspendInFlight === p) this._suspendInFlight = null;
@@ -310,9 +335,17 @@ export class StreamingScheduler {
     const ctx = this._getCtx();
     const p = (async () => {
       if (ctx && ctx.state === 'suspended') {
-        try { await ctx.resume(); } catch (err) {
+        try {
+          await ctx.resume();
+          // 以真实 ctx.state 为准：resume() 返回成功也可能仍未真正恢复。
+          this._contextSuspended = ctx.state === 'suspended';
+        } catch (err) {
+          // 失败时保持 suspended，让 watchdog 还能再试一次。
+          this._contextSuspended = true;
           console.warn('[StreamingScheduler] Failed to resume context:', err.message);
         }
+      } else {
+        this._contextSuspended = ctx ? ctx.state === 'suspended' : false;
       }
     })();
     this._resumeInFlight = p;
@@ -327,9 +360,13 @@ export class StreamingScheduler {
     const inflight = this._suspendInFlight;
     this._suspendInFlight = null;
     if (inflight) { try { await inflight; } catch (_) {} }
-    // 已有 resume 在落地时不要第二次 resume()：等它，效果一样，控制消息少一条。
+    // 已有 resume 在落地时不要第二次 resume()：等它，但等待后必须复查真实
+    // 状态——resume 抛错或被拒绝时 context 仍可能停在 suspended。
     const resuming = this._resumeInFlight;
-    if (resuming) { try { await resuming; } catch (_) {} return; }
+    if (resuming) { try { await resuming; } catch (_) {} }
+    if (this._resumeTransition) {
+      try { await this._resumeTransition; } catch (_) {}
+    }
     const ctx = this._getCtx();
     if (ctx && ctx.state === 'suspended') {
       try { await ctx.resume(); } catch (_) {}
