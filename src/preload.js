@@ -65,6 +65,17 @@ const WINDOW_ID = (() => {
   }
 })();
 
+// ---------------------------------------------------------------------------
+// 渲染进程调试日志统一由主进程的 webContents 'console-message' 事件落盘
+// （见 src/main/crashReporter.js 的 attachRendererErrorHandler）。
+//
+// 不能在这里用 webFrame.executeJavaScript 往主世界注入 console 包装：
+// 渲染进程 CSP 为 script-src 'self'，该调用会被当成 eval 直接拒绝
+// （Uncaught EvalError）。因此对象参数在 console-message 里会退化为
+// "[object Object]"，需要完整结构的诊断日志请在调用点用
+// JSON.stringify(...) 拼成字符串再输出。
+// ---------------------------------------------------------------------------
+
 function redactApi(api) {
   // 无法识别窗口（例如未来新增的入口）→ 不裁剪，保持全量，不冒险
   return applyWindowCapabilityRedaction(api, WINDOW_ID);

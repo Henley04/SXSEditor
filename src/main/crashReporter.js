@@ -229,16 +229,35 @@ function attachRendererErrorHandler(webContents) {
     });
   } catch (_) {}
   try {
-    webContents.on('console-message', (_event, details) => {
-      const { level, message, lineNumber, sourceId } = details;
-      // Electron console-message levels: 0=verbose, 1=info, 2=warning, 3=error.
-      // Only persist warnings and errors to keep log size manageable.
-      if (level >= 2) {
-        const levels = ['LOG', 'INFO', 'WARN', 'ERROR'];
-        const lv = levels[level] || 'LOG';
-        const label = getRendererLabel(webContents);
-        writeLog(lv, `[Renderer:${label}] ${message} (${sourceId}:${lineNumber})`);
+    webContents.on('console-message', (event, ...legacy) => {
+      // Electron 45 实际回调 (event, level:number, message, line, sourceId)，
+      // 新版文档描述的是 event.params = { level:'info'|'warning'|'error'|'debug', ... }。
+      // 两种都要兼容：旧写法把第二个参数当对象解构，level=undefined，
+      // 导致渲染进程日志一条都落不了盘。
+      let level;
+      let message;
+      let lineNumber;
+      let sourceId;
+      const params = event && event.params;
+      if (params && typeof params === 'object') {
+        ({ level, message, lineNumber, sourceId } = params);
+      } else {
+        [level, message, lineNumber, sourceId] = legacy;
       }
+      // debug/verbose=0, info=1, warning=2, error=3（字符串形式同理）。
+      // 全部落盘：渲染进程的调试输出（含 [FragPlay] / 播放诊断）都在这里。
+      let lv;
+      if (typeof level === 'string') {
+        if (level === 'debug') lv = 'DEBUG';
+        else if (level === 'info') lv = 'INFO';
+        else if (level === 'warning') lv = 'WARN';
+        else if (level === 'error') lv = 'ERROR';
+        else lv = 'INFO';
+      } else {
+        lv = ['DEBUG', 'INFO', 'WARN', 'ERROR'][level] || 'INFO';
+      }
+      const label = getRendererLabel(webContents);
+      writeLog(lv, `[Renderer:${label}] ${message} (${sourceId}:${lineNumber})`);
     });
   } catch (_) {}
 }

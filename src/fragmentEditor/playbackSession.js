@@ -533,7 +533,7 @@ class Session {
     if (this.finished || this.disposed || !this.isCurrent) return;
     this.finished = true;
     console.log(`[FragPlay] PLAYBACK FINISHED | session=${this.id} kind=${this.kind} deliveredEndSec=${this.timeline ? this.timeline.deliveredEndSec.toFixed(3) : '-'} t=${Date.now()}`);
-    console.log('[FragPlay] finish state', this._debugSnapshot('finish'));
+    this._logDebug('finish state', this._debugSnapshot('finish'));
     setFragmentIsPlaying(false);
     _cancelLoop();
     if (this.scheduler) this.scheduler.deactivate();
@@ -574,11 +574,11 @@ class Session {
         if (!this.isCurrent) return;
         if (isWaiting) {
           this._waitGeneration += 1;
-          console.log('[FragPlay] ENTER WAIT', this._debugSnapshot('enter-wait'));
+          this._logDebug('ENTER WAIT', this._debugSnapshot('enter-wait'));
           const btn = document.getElementById('btn-play-fragment');
           if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
         } else {
-          console.log('[FragPlay] RESUME', this._debugSnapshot('resume'));
+          this._logDebug('RESUME', this._debugSnapshot('resume'));
           updateFragmentPlayButton();
           if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
         }
@@ -712,7 +712,7 @@ class Session {
     }
 
     if (plan.action === 'drop') {
-      console.log('[FragPlay] chunk dropped', {
+      this._logDebug('chunk dropped', {
         ...this._debugSnapshot('chunk-dropped'),
         seq: chunkInfo.seq ?? null,
         reason: plan.reason,
@@ -760,7 +760,7 @@ class Session {
       // 极短 buffer 或已过期的 when 可能让 source 立刻结束；若先 start 再挂
       // onended，计数将永久不归零 → _maybeFinish 永不成立、播放卡死。
       source.onended = () => {
-        console.log('[FragPlay] source ended', {
+        this._logDebug('source ended', {
           session: this.id,
           srcId,
           ctxNow: ctx.currentTime,
@@ -782,7 +782,7 @@ class Session {
       }
       if (sched) sched.addSource();
       this.sources.push(source);
-      console.log('[FragPlay] source start', {
+      this._logDebug('source start', {
         session: this.id,
         srcId,
         seq: chunkInfo.seq ?? null,
@@ -824,7 +824,7 @@ class Session {
     console.log(`[FragPlay] chunk scheduled | session=${this.id} seg=${chunkInfo.chunkIndex ?? '-'} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} lateSec=${plan.offsetSec.toFixed(4)} durSec=${plan.durationSec.toFixed(3)} parts=${segments.length} started=${plan.startedNow} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
     if (this.scheduler && this.scheduler.isWaiting) {
-      console.log('[FragPlay] resume after chunk', {
+      this._logDebug('resume after chunk', {
         session: this.id,
         seq: chunkInfo.seq ?? null,
         waitGen: this._waitGeneration,
@@ -846,15 +846,25 @@ class Session {
 
   setInferenceDone() {
     this.inferenceDone = true;
-    console.log('[FragPlay] inference done', this._debugSnapshot('inference-done'));
+    this._logDebug('inference done', this._debugSnapshot('inference-done'));
     if (!this.scheduler) return Promise.resolve();
     // scheduler 内部会在 waiting 时解冻；这里再跑一次一致性自检，兜住
     // "解冻已发出但设备没真正恢复 / 前沿与播放头脱节"的残留状态。
     return this.scheduler.setInferenceDone()
       .then(() => this._repairPlaybackConsistency('inference-done'))
       .then(() => {
-        console.log('[FragPlay] inference done settled', this._debugSnapshot('inference-done-settled'));
+        this._logDebug('inference done settled', this._debugSnapshot('inference-done-settled'));
       });
+  }
+
+  /**
+   * 写调试日志。渲染端 console 由主进程 console-message 落盘，对象参数会退化成
+   * "[object Object]"，所以这里统一序列化成字符串（日志文件与 DevTools 都可读）。
+   */
+  _logDebug(tag, obj) {
+    let text = '';
+    try { text = obj === undefined ? '' : JSON.stringify(obj); } catch (_) { text = String(obj); }
+    console.log(`[FragPlay] ${tag} ${text}`);
   }
 
   /** 一次性快照：静音取证需要的全部会话/调度/上下文状态。 */
@@ -922,10 +932,10 @@ class Session {
       // 合法等待：推理仍在进行，且没有越过播放头的已交付内容。保持冻结。
       if (!this.inferenceDone && !hasRemaining) return Promise.resolve();
       if (!sched.isResuming) {
-        console.warn('[FragPlay] repairing stuck scheduler', {
-          ...this._debugSnapshot(`repair:${stage}`),
-          hasRemaining,
-        });
+        // console.warn 走主进程 console-message（保留源码位置），对象参数会被
+        // 压成 [object Object]，所以这里显式序列化。
+        console.warn('[FragPlay] repairing stuck scheduler '
+          + JSON.stringify({ ...this._debugSnapshot(`repair:${stage}`), hasRemaining }));
       }
       if (hasRemaining) sched.updateBufferFrontier(end);
       return sched.resumeFromWait().then(() => {
@@ -935,7 +945,8 @@ class Session {
 
     // scheduler 不在等待，但设备时钟仍被冻结：补一次 resume（只记录，不重排）。
     if (ctx.state === 'suspended' && this.inferenceDone) {
-      console.warn('[FragPlay] repairing suspended context', this._debugSnapshot(`repair-ctx:${stage}`));
+      console.warn('[FragPlay] repairing suspended context '
+        + JSON.stringify(this._debugSnapshot(`repair-ctx:${stage}`)));
       return Promise.resolve(ctx.resume()).catch(() => {});
     }
     return Promise.resolve();
@@ -1216,13 +1227,13 @@ export function createSession(kind) {
 export function stopPlayback() {
   const sess = _current;
   if (sess) {
-    console.log('[FragPlay] stopPlayback', {
+    console.log('[FragPlay] stopPlayback ' + JSON.stringify({
       session: sess.id,
       kind: sess.kind,
       waiting: sess.scheduler ? sess.scheduler.isWaiting : null,
       waitGen: sess._waitGeneration,
       ctxState: (getFragmentAudioContext() || {}).state ?? null,
-    });
+    }));
     sess.userStopped = true;
     sess.dispose();
   }
