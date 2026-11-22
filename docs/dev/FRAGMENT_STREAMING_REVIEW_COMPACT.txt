@@ -1,0 +1,2265 @@
+# 分片编辑器 · 分块流式推理 → 播放（精简审查版）
+
+> 由完整审查包 `FRAGMENT_STREAMING_REVIEW_BUNDLE.txt` 抽取（约 1/3 体积）。
+> 保留：流式主路径 + 必要兜底/收尾路径的可执行代码（含行内注释）。
+> 省略：整段注释块、诊断日志、导出、独占模式、后台自动推理、UI/状态/常量代码；
+> WSOLA 与人声段切分改为摘要，但保留其调用点。完整原文见完整版对应小节。
+> **所有代码节均为非线性摘录**：标题中的行号是保留区间，区间之间的代码未包含；
+> 每节末尾的“本节缺口”列出被跳过的函数/分支，未对任何代码做改写。
+
+## 0. 调用链
+
+```text
+点击播放 → playFragment()
+  ├─ createSession("stream") + streamId；订阅 chunk / STREAM_END
+  ├─ synthesizeFragmentSVS({ notes, bpm, options:{ streamId, diffStepChunk, ... } })
+  │    └─ preload → svsIpc: onChunkAudio 加 streamId+seq → win.send
+  │         └─ SvsWorkerClient → svsWorker → pipeline.synthesize()
+  │              └─ _synthesizeImpl
+  │                   ├─ 整段缓存命中 → _emitCachedAudioAsChunks(2s/块)
+  │                   ├─ 单 segment → runDiffusionLoopChunked
+  │                   │    └─ onChunkMel → _runVocoderChunkedForSegment
+  │                   │         └─ runVocoderChunked → onChunkComplete
+  │                   └─ 多 segment → _createSegmentStreamEmitter.segmentDone()
+  │                        （前序未发射时缓冲，按时间序门控）
+  ├─ Session.pushChunk()：协议/streamId/seq 过滤 → 首块预缓冲 → 串行队列
+  │    └─ StreamTimeline.plan() → createBufferSource().start(when, offset)
+  │         └─ scheduler.updateBufferFrontier() / resumeFromWait()
+  ├─ playheadTick()：positionAt(可听时钟) + checkUnderrun（冻结/解冻 AudioContext）
+  └─ STREAM_END → deliveryDone → drain() → setInferenceDone() → _maybeFinish() → finish()
+```
+
+## 1. 坐标与关键不变量
+
+- 采样坐标 `sampleOffset/sampleEnd` 以**首音符起点**为 0；内容坐标以分片起点为 0；调度用 `ctx.currentTime`。显示域才减 `outputLatency`。
+- 一次播放一个 `streamId`；首块决定 identified/legacy 协议，identified 下 streamId 不匹配直接丢弃。
+- `STREAM_END(lastSeq)` 在 invoke 回执前发出，并与 chunk 共用 Session 串行队列 → 处理完 END 才证明尾块已处理。
+- 监听器归 Session 所有，只能随 dispose 摘除；不能在 invoke 回执后提前摘除。
+- `anchorCtxTime` 只在第一个真正发声的 chunk 上建立一次；起播点之前的块丢弃且不锚定；锚定后永不重建。
+- 重复/重叠用 `coveredRanges` 判定；`plan(reserve:false)` 必须在 `source.start()` 成功后才 `commit()`。
+- `suspend/resume` 是异步控制消息：`isWaiting` 要等 resume 落地再清；`inferenceDone` 后不再冻结，等待中则立即解冻。
+- 收尾三条件：推理结束、无活跃 source、播放头越过 `deliveredEndSec`；chunk handler 在飞时不允许 onended 抢先收尾。
+- 多 segment 发射器按时间序门控；长休止补零；重叠裁头；末段补静音承载 isLast。
+- vocoder 只推送 `[committedSamples, stableEnd)`，非末块 `stableEnd = chunkEnd - overlap`，推送前应用整条流共享增益。
+- 扩散非末块 `newCommitted = chunkEnd - overlap`；循环结束校验 `committedFrames === totalFrames`。
+- 带 streamId 的 cancel 只命中对应 task；running 任务走 AbortController 协作取消，不 terminate worker。
+
+常量：`SAMPLE_RATE=24000`，`HOP_SIZE=480`，`MEL_DIM=128`，`VOCODER_CHUNK_FRAMES=1024`，`VOCODER_OVERLAP_FRAMES=32`，`SEGMENT_MIN/MAX/OVERLAP=8/20/2s`，`LONG_REST=1.5s`，`REST_CONTEXT=0.15s`，`MAX_SAFE_FRAMES=40000`。
+
+## 2. 代码
+
+### C1 编辑器合成编排：取消、签名、预览参数、playFragment
+文件：`src/fragmentEditor/audioPlayback.js`　原行号：99-125, 207-317, 319-461（注释块/空行已省略）
+
+````javascript
+export function cancelFragmentSynthesis() {
+  if (!getFragmentIsSynthesizing()) return false;
+  const sess = getCurrentSession();
+  if (getPipelineInitialized() && window.electronAPI?.cancelSVSSynthesis) {
+    window.electronAPI.cancelSVSSynthesis(sess?.streamId ? { streamId: sess.streamId } : undefined).catch(() => {});
+  }
+  finishFragmentSynthesis(getFragmentSynthesisId());
+  stopPlayback();
+  updateFragmentPlayButton();
+  return true;
+}
+export function computeFragmentAudioSignature() {
+  const notes = getClippedNotes();
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const previewOpts = getFragmentPreviewInferenceOptions();
+  const pitchCurveF0 = buildPitchCurveF0Data({ postprocess: false });
+  const refAudioWavBuffer = getWavFileBuffer();
+  const autoShiftEl = document.getElementById('autoShiftCheck');
+  const autoShift = autoShiftEl ? autoShiftEl.checked : false;
+  const singerId = getCurrentFragment()?.singerId || null;
+  let notesHash = 0;
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
+    if (n.phonemeAdjustments) {
+      for (const adj of n.phonemeAdjustments) {
+        s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
+        if (adj.volumePoints) {
+          for (const vp of adj.volumePoints) s += `:${vp.t}:${vp.v}`;
+        }
+      }
+    }
+    if (n.vibrato && n.vibrato.enabled) {
+      s += `|vib:${n.vibrato.enabled ? 1 : 0}:${n.vibrato.depth}:${n.vibrato.rate}:${n.vibrato.start}:${n.vibrato.length}:${n.vibrato.fadeIn}`;
+    }
+    for (let j = 0; j < s.length; j++) {
+      notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
+    }
+  }
+  const f0Hash = pitchCurveF0 ? _hashArrayFNV(pitchCurveF0) : 0;
+  let ppHash = 0;
+  const ppSignature = serializePostprocessForSignature();
+  for (let i = 0; i < ppSignature.length; i++) {
+    ppHash = ((ppHash << 5) - ppHash + ppSignature.charCodeAt(i)) | 0;
+  }
+  let refHash = 0;
+  if (refAudioWavBuffer) {
+    const refBytes = refAudioWavBuffer instanceof ArrayBuffer
+      ? new Uint8Array(refAudioWavBuffer)
+      : refAudioWavBuffer;
+    refHash = _hashArrayFNV(refBytes);
+  }
+  const singerAnn = getSingerAnnotation() || {};
+  const promptHash = hashString(computePromptCondSignature(
+    singerAnn.singerData,
+    singerAnn.midiNotes,
+    singerAnn.f0Data,
+    undefined
+  ));
+  const pitchControl = currentPitchControl();
+  const schedSig = `${previewOpts.cfgScheduleMode || 'constant'}:${previewOpts.cfgStrengthStart ?? ''}:${JSON.stringify(previewOpts.cfgScheduleKeyframes || null)}`;
+  const dynSig = previewOpts.dynamicThresholdEnabled ? `1:${previewOpts.dynamicThresholdPercentile}` : '0';
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_p${promptHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}_sm${previewOpts.sampler || 'euler'}_qd${previewOpts.qdrift ? 1 : 0}_pm${previewOpts.modelPrecision || 'fp32'}_cs${schedSig}_dt${dynSig}`;
+}
+function buildPreviewOptions(previewOpts, extra) {
+  return attachPluginBackend({
+    f0Envelope: null,
+    pitchCurveF0: buildPitchCurveF0Data() || null,
+    pitchControl: currentPitchControl(),
+    refAudioWavBuffer: getWavFileBuffer() || null,
+    refSingerData: (getSingerAnnotation() || {}).singerData || null,
+    refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+    refF0Data: (getSingerAnnotation() || {}).f0Data || null,
+    singerId: getCurrentFragment()?.singerId || null,
+    autoShift: document.getElementById('autoShiftCheck').checked,
+    nSteps: previewOpts.nSteps,
+    cfg: previewOpts.cfg,
+    cfgRescale: previewOpts.cfgRescale,
+    sampler: previewOpts.sampler,
+    qdrift: previewOpts.qdrift,
+    modelPrecision: previewOpts.modelPrecision,
+    diffStepChunk: previewOpts.diffStepChunk,
+    diffStepChunkFrames: previewOpts.diffStepChunkFrames,
+    diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
+    cfgScheduleMode: previewOpts.cfgScheduleMode,
+    cfgStrengthStart: previewOpts.cfgStrengthStart,
+    cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
+    dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
+    dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
+    melPostprocess: buildMelPostprocessPayload(
+      getClippedNotes(),
+      getCurrentProject() ? getCurrentProject().bpm : 120,
+      getSampleRate(),
+      480,
+    ),
+    ...extra,
+  });
+}
+async function playWholeBuffer(sess, audioData) {
+  const exclusive = getFragmentAudioSettings()?.audioOutputMode === 'exclusive';
+  if (exclusive) await sess.playExclusive(audioData);
+  else await sess.playFullBuffer(audioData);
+}
+export async function playFragment() {
+  if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
+  resetPlayheadFollow({ reveal: true });
+  const sess = createSession('stream');
+  sess.streamId = nextFragmentStreamId();
+  sess.beginStreaming();
+  const startAudio = getFragmentAudioData();
+  console.log('[FragPlay] playFragment begin ' + JSON.stringify({
+    session: sess.id,
+    streamId: sess.streamId,
+    playFromSec: sess.startPositionSec,
+    hasCachedAudio: !!(startAudio && startAudio.length > 0),
+    cachedAudioLength: startAudio ? startAudio.length : 0,
+    hasCachedSignature: getFragmentAudioDataSignature() !== null,
+  }));
+  beginFragmentSynthesis(sess.streamId);
+  updateFragmentPlayButton();
+  try {
+    if (!getPipelineInitialized()) await initPipeline();
+    await loadFragmentAudioSettings();
+    if (!sess.isCurrent) return;
+    const currentSignature = computeFragmentAudioSignature();
+    const cachedAudio = getFragmentAudioData();
+    if (cachedAudio && cachedAudio.length > 0 && getFragmentAudioDataSignature() === currentSignature) {
+      await playWholeBuffer(sess, cachedAudio);
+      return;
+    }
+    sess.chunkCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
+      sess.pushChunk(chunkInfo);
+    });
+    sess.endCleanup = window.electronAPI.onFragmentSVSStreamEnd?.((info) => {
+      sess.noteStreamEnd(info);
+    }) || null;
+    const previewOpts = getFragmentPreviewInferenceOptions();
+    const audioData = await window.electronAPI.synthesizeFragmentSVS({
+      notes: getClippedNotes(),
+      bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
+      options: buildPreviewOptions(previewOpts, { streamId: sess.streamId }),
+    });
+    if (!sess.isCurrent) return;
+    if (computeFragmentAudioSignature() !== currentSignature) {
+      console.warn('[FragmentAudio] Inputs changed during synthesis — discarding result');
+      setFragmentAudioDataSignature(null);
+      sess.stopStreamAudio();
+      await sess.setInferenceDone();
+      return;
+    }
+    const padded = padAudioToFragmentDuration(audioData);
+    setFragmentAudioData(padded);
+    setFragmentAudioDataSignature(currentSignature);
+    console.log(`[FragPlay] INFERENCE RETURNED | session=${sess.id} streamingStarted=${sess.streamStarted} pendingSeek=${sess.pendingSeek !== null} t=${Date.now()}`);
+    if (!sess.endSeen) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sess.markLegacyDelivery();
+    }
+    await sess.drain();
+    if (!sess.isCurrent) return;
+    await sess.setInferenceDone();
+    if (!sess.isCurrent) return;
+    sess._maybeFinish();
+    if (sess.pendingSeek !== null) {
+      await waitForFragmentPlayheadDragEnd();
+      if (!sess.isCurrent) return;
+      const pos = sess.pendingSeek;
+      sess.pendingSeek = null;
+      sess.startPositionSec = pos;
+      setFragmentPlayStartPosition(pos);
+      await playWholeBuffer(sess, padded);
+      return;
+    }
+    if (!sess.streamStarted && sess.isCurrent && !sess.userStopped
+        && sess.pendingSeek === null && !sess.hasStartedSources()) {
+      await playWholeBuffer(sess, padded);
+    }
+  } catch (error) {
+    if (!sess.isCurrent) return;
+    const msg = String((error && error.message) || '');
+    if (/cancel|superseded|abort/i.test(msg)) {
+      console.log('[FragmentAudio] Synthesis cancelled');
+    } else {
+      console.error(t('fragment.synthesisFailed') + ':', error);
+      showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
+    }
+    stopPlayback();
+    setFragmentCurrentTime(0);
+    updateFragmentPlayButton();
+  } finally {
+    if (finishFragmentSynthesis(sess.streamId)) {
+      updateFragmentPlayButton();
+    }
+  }
+}
+````
+
+本节缺口：省略 `padAudioToFragmentDuration`（整段兜底播放前按首音符偏移补零）与 `exportFragment`。
+
+### C2 播放会话：watchdog、Session、chunk 队列、排程、收尾、seek
+文件：`src/fragmentEditor/playbackSession.js`　原行号：49-96, 106-153, 157-175, 202-215, 326-468, 470-519, 531-589, 591-666, 668-858, 909-1004, 1008-1024, 1063-1080, 1146-1210, 1214-1251（注释块/空行已省略）
+
+````javascript
+let _current = null;
+let _sessionSeq = 0;
+let _exclusiveToken = 0;
+export function getCurrentSession() { return _current; }
+function _nextExclusiveToken() { _exclusiveToken += 1; return _exclusiveToken; }
+const LOOP_STALL_MS = 700;
+const WATCHDOG_INTERVAL_MS = 400;
+let _lastTickAt = 0;
+let _watchdogTimer = null;
+let _lastWatchdogTickAt = 0;
+let _visibilityBound = false;
+let _ctxResumeInFlight = false;
+function _cancelLoop() {
+  const raf = getFragmentPlayheadRaf();
+  if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+  const xraf = getFragmentExclusiveRaf();
+  if (xraf) { cancelAnimationFrame(xraf); setFragmentExclusiveRaf(null); }
+  _lastTickAt = 0;
+}
+function _loopAlive(now) {
+  return _lastTickAt > 0 && (now - _lastTickAt) < LOOP_STALL_MS;
+}
+function _resumeLoopIfStalled() {
+  if (document.hidden) return false;
+  const sess = _current;
+  if (!sess || sess.disposed || !getFragmentIsPlaying()) return false;
+  if (sess.scheduler && sess.scheduler.isWaiting) return false;
+  const raf = sess.kind === 'exclusive' ? getFragmentExclusiveRaf() : getFragmentPlayheadRaf();
+  if (raf && _loopAlive(Date.now())) return false;
+  _cancelLoop();
+  _lastTickAt = Date.now(); // 乐观心跳：避免同毫秒多路同时重启互相 cancel
+  _scheduleTick();
+  return true;
+}
+function _ensureWatchdog() {
+  const now = Date.now();
+  if (_watchdogTimer && Math.abs(now - _lastWatchdogTickAt) < WATCHDOG_INTERVAL_MS * 3) return;
+  if (_watchdogTimer) { clearInterval(_watchdogTimer); _watchdogTimer = null; }
+  _lastWatchdogTickAt = now;
+  _watchdogTimer = setInterval(() => {
+    _lastWatchdogTickAt = Date.now();
+    const sess = _current;
+    if (!sess || sess.disposed || !getFragmentIsPlaying() || document.hidden) return;
+    _resumeLoopIfStalled();
+    sess.checkStalledFinish();
+  }, WATCHDOG_INTERVAL_MS);
+  if (typeof _watchdogTimer?.unref === 'function') _watchdogTimer.unref();
+}
+function _teardownWatchdog() {
+  if (_watchdogTimer) { clearInterval(_watchdogTimer); _watchdogTimer = null; }
+  _lastWatchdogTickAt = 0;
+}
+function _onVisibilityChange() {
+  if (document.hidden) { _cancelLoop(); return; }
+  _resumeLoops();
+}
+function _resumeLoops() {
+  if (document.hidden) return;
+  _ensureWatchdog();
+  _resumeLoopIfStalled();
+}
+function _bindVisibility() {
+  _ensureWatchdog();
+  if (_visibilityBound) return;
+  _visibilityBound = true;
+  document.addEventListener('visibilitychange', _onVisibilityChange);
+  window.addEventListener('focus', _resumeLoops);
+  window.addEventListener('pageshow', _resumeLoops);
+  window.addEventListener('beforeunload', () => {
+    document.removeEventListener('visibilitychange', _onVisibilityChange);
+    window.removeEventListener('focus', _resumeLoops);
+    window.removeEventListener('pageshow', _resumeLoops);
+    _visibilityBound = false;
+    _teardownWatchdog();
+  }, { once: true });
+}
+export async function getFragmentAudioContextInternal() {
+  let ctx = getFragmentAudioContext();
+  if (!ctx || ctx.state === 'closed') {
+    ctx = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: getSampleRate(),
+      latencyHint: 'interactive',
+    });
+    setFragmentAudioContext(ctx);
+    const gainNode = ctx.createGain();
+    gainNode.connect(ctx.destination);
+    setFragmentGainNode(gainNode);
+    await applyFragmentAudioSettings();
+  }
+  if (ctx.state === 'suspended') await ctx.resume();
+  return ctx;
+}
+async function _ctxForChunk(sess) {
+  let ctx = getFragmentAudioContext();
+  if (!ctx || ctx.state === 'closed') return getFragmentAudioContextInternal();
+  const waiting = !!(sess.scheduler && sess.scheduler.isWaiting);
+  if (ctx.state === 'suspended' && !waiting) {
+    try { await ctx.resume(); } catch (_) { /* 交给排程与 watchdog */ }
+  }
+  return ctx;
+}
+class Session {
+  constructor(kind) {
+    this.id = ++_sessionSeq;
+    this.kind = kind;                 // 'stream' | 'full' | 'exclusive'
+    this.disposed = false;
+    this.finished = false;
+    this.userStopped = false;
+    this.startPositionSec = Math.max(0, getFragmentPlayStartPosition() || 0);
+    this.timeline = null;
+    this.scheduler = null;
+    this.sources = [];
+    this.fadeGain = null;
+    this.chunkCleanup = null;
+    this.endCleanup = null;
+    this.queue = Promise.resolve();
+    this.lastChunkAtMs = 0;
+    this.chunkSeen = false;
+    this.streamStarted = false;
+    this.streamDisabled = false;
+    this.inferenceDone = false;
+    this.streamId = null;
+    this.seenSeqs = new Set();
+    this.expectedLastSeq = null;
+    this.endSeen = false;         // END 事件已到达（同步置位，用来区分"还没到"与"还没处理"）
+    this.deliveryDone = false;    // 已处理到 lastSeq / 已确认回执兜底
+    this.deliveryComplete = true; // seq 是否连续（缺口时只兜底，不假装完整）
+    this._initialChunks = new Map();
+    this._reorderTimer = null;
+    this._reorderFlushed = false;
+    this.protocolMode = null;     // 'identified' | 'legacy'，首块到达时一次性决定
+    this.inFlightChunkHandlers = 0;
+    this._waitGeneration = 0;
+    this._sourceSeq = 0;
+    this.fullSource = null;
+    this.fullNodes = [];
+    this.fullDurationSec = 0;
+    this.exclusiveToken = 0;
+    this.exclusiveStartWallMs = 0;
+    this.removeEndedListener = null;
+    this.pendingSeek = null;
+  }
+  get isCurrent() { return _current === this && !this.disposed; }
+  get isUsable() {
+    return this.isCurrent && !this.finished && !this.streamDisabled;
+  }
+  _activatePlaybackUi() {
+    if (this.streamStarted || !this.timeline || !this.timeline.started) return;
+    this.streamStarted = true;
+    const anchor = this.timeline.anchorCtxTime;
+    setFragmentIsPlaying(true);
+    setFragmentPlaybackStartTime(anchor);
+    setFragmentPlaybackOffset(this.startPositionSec);
+    setFragmentCurrentTime(this.startPositionSec);
+    updateFragmentPlayButton();
+    if (this.scheduler) this.scheduler.activate();
+    _bindVisibility();
+    console.log(`[FragPlay] PLAYBACK START | session=${this.id} playFromSec=${this.startPositionSec.toFixed(3)} firstNoteStartSec=${this.timeline.firstNoteStartSec.toFixed(3)} t=${Date.now()}`);
+    playheadTick();
+  }
+  stopStreamAudio() {
+    this.streamDisabled = true;
+    for (const src of this.sources) {
+      if (!src) continue;
+      safeCleanup('fragmentPlayback.inputChanged.src.stop', () => { src.onended = null; src.stop(); });
+    }
+    this.sources = [];
+    if (this.fadeGain) {
+      safeCleanup('fragmentPlayback.inputChanged.fadeGain.disconnect', () => this.fadeGain.disconnect());
+      this.fadeGain = null;
+    }
+    if (this.scheduler) this.scheduler.deactivate();
+    setFragmentIsPlaying(false);
+    _cancelLoop();
+  }
+  hasStartedSources() {
+    return this.sources.some(Boolean)
+      || !!(this.scheduler && this.scheduler.activeSourceCount > 0);
+  }
+  noteStreamEnd(info) {
+    if (!this.isUsable) return;
+    if (info && this.streamId && info.streamId && info.streamId !== this.streamId) return;
+    this.endSeen = true;
+    this._flushInitialChunks();
+    this.queue = this.queue
+      .then(() => this._handleStreamEnd(info))
+      .catch((e) => console.warn('[FragmentPlayback] stream-end error:', e && e.message));
+    return this.queue;
+  }
+  markLegacyDelivery() {
+    if (this.endSeen) return;
+    this.deliveryDone = true;
+    this.deliveryComplete = true;
+  }
+  async _handleStreamEnd(info) {
+    if (!this.isUsable) return;
+    const lastSeq = info && Number.isFinite(info.lastSeq) ? info.lastSeq : 0;
+    this.expectedLastSeq = lastSeq;
+    const transportFailed = !!(info && info.transportFailed);
+    if (transportFailed) {
+      console.warn(`[FragmentPlayback] stream transport failed; lastSeq=${lastSeq} is not authoritative`);
+    }
+    let contiguous = 0;
+    while (this.seenSeqs.has(contiguous + 1)) contiguous += 1;
+    this.deliveryComplete = !transportFailed && (lastSeq === 0 || contiguous >= lastSeq);
+    if (!this.deliveryComplete) {
+      console.warn(`[FragmentPlayback] stream gap: seen contiguous=${contiguous} lastSeq=${lastSeq} stream=${this.streamId}`);
+    }
+    this.deliveryDone = true;
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this._reorderTimer) {
+      clearTimeout(this._reorderTimer);
+      this._reorderTimer = null;
+    }
+    this._initialChunks.clear();
+    if (_current === this) _current = null;
+    this._teardownAudio();
+    if (this.chunkCleanup) {
+      safeCleanup('fragmentPlayback.chunkCleanup', this.chunkCleanup);
+      this.chunkCleanup = null;
+    }
+    if (this.endCleanup) {
+      safeCleanup('fragmentPlayback.endCleanup', this.endCleanup);
+      this.endCleanup = null;
+    }
+    if (this.scheduler) this.scheduler.deactivate();
+    if (this.removeEndedListener) {
+      safeCleanup('fragmentPlayback.detachEnded', this.removeEndedListener);
+      this.removeEndedListener = null;
+    }
+  }
+  _teardownAudio() {
+    for (const src of this.sources) {
+      if (!src) continue;
+      safeCleanup('fragmentPlayback.src.stop', () => { src.onended = null; src.stop(); });
+    }
+    this.sources = [];
+    if (this.fadeGain) {
+      safeCleanup('fragmentPlayback.fadeGain.disconnect', () => this.fadeGain.disconnect());
+      this.fadeGain = null;
+    }
+    if (this.fullSource) {
+      safeCleanup('fragmentPlayback.fullSource.stop', () => { this.fullSource.onended = null; this.fullSource.stop(); });
+      this.fullSource = null;
+    }
+    for (const n of this.fullNodes) safeCleanup('fragmentPlayback.node.disconnect', () => n.disconnect());
+    this.fullNodes = [];
+    if (this.kind === 'exclusive') this._stopExclusive();
+    const src = getFragmentAudioSource();
+    if (src) {
+      safeCleanup('fragmentPlayback.stateSource.stop', () => { src.onended = null; src.stop(); });
+      setFragmentAudioSource(null);
+    }
+  }
+  finish() {
+    if (this.finished || this.disposed || !this.isCurrent) return;
+    this.finished = true;
+    console.log(`[FragPlay] PLAYBACK FINISHED | session=${this.id} kind=${this.kind} deliveredEndSec=${this.timeline ? this.timeline.deliveredEndSec.toFixed(3) : '-'} t=${Date.now()}`);
+    this._logDebug('finish state', this._debugSnapshot('finish'));
+    setFragmentIsPlaying(false);
+    _cancelLoop();
+    if (this.scheduler) this.scheduler.deactivate();
+    setFragmentCurrentTime(0);
+    setFragmentPlayStartPosition(0);
+    this.startPositionSec = 0;
+    updateFragmentPlayButton();
+    render();
+  }
+  positionAt(ctxNow, latencySec = 0) {
+    if (this.kind === 'exclusive') {
+      const elapsed = (performance.now() - this.exclusiveStartWallMs) / 1000;
+      return this.startPositionSec + Math.max(0, elapsed);
+    }
+    if (this.kind === 'stream' && this.timeline && this.timeline.started) {
+      return this.timeline.positionAt(ctxNow, latencySec);
+    }
+    return this.startPositionSec + getAudibleElapsedSec(getFragmentAudioContext(), getFragmentPlaybackStartTime());
+  }
+  renderPosition(ctxNow) { return this.positionAt(ctxNow, 0); }
+  beginStreaming() {
+    this.scheduler = new StreamingScheduler({
+      getCtx: () => getFragmentAudioContext(),
+      getElapsed: () => {
+        const ctx = getFragmentAudioContext();
+        return ctx ? this.renderPosition(ctx.currentTime) : 0;
+      },
+      onWaitStateChange: (isWaiting) => {
+        if (!this.isCurrent) return;
+        if (isWaiting) {
+          this._waitGeneration += 1;
+          this._logDebug('ENTER WAIT', this._debugSnapshot('enter-wait'));
+          const btn = document.getElementById('btn-play-fragment');
+          if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
+        } else {
+          this._logDebug('RESUME', this._debugSnapshot('resume'));
+          updateFragmentPlayButton();
+          if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
+        }
+      },
+      watchdogMarginSec: 0.3,
+      onFinish: () => this._maybeFinish(),
+    });
+  }
+  pushChunk(chunkInfo) {
+    if (!this.isUsable || !chunkInfo) return;
+    if (!this.protocolMode) {
+      this.protocolMode = chunkInfo.streamId ? 'identified' : 'legacy';
+    }
+    if (this.protocolMode === 'identified' && chunkInfo.streamId !== this.streamId) {
+      console.warn(`[FragmentPlayback] drop chunk stream=${chunkInfo.streamId} current=${this.streamId}`);
+      return;
+    }
+    const seq = Number(chunkInfo.seq);
+    const hasSeq = Number.isSafeInteger(seq) && seq > 0;
+    if (hasSeq) {
+      if (this.seenSeqs.has(seq)) {
+        console.warn(`[FragmentPlayback] duplicate seq=${seq} dropped`);
+        return;
+      }
+      this.seenSeqs.add(seq);
+    }
+    if (!this._reorderFlushed && this.protocolMode === 'identified' && hasSeq) {
+      if (seq === 1) {
+        this._initialChunks.set(seq, chunkInfo);
+        this._flushInitialChunks();
+        return;
+      }
+      if (this._initialChunks.size < REORDER_MAX_CHUNKS) {
+        this._initialChunks.set(seq, chunkInfo);
+        if (!this._reorderTimer) {
+          this._reorderTimer = setTimeout(() => this._flushInitialChunks(), REORDER_WAIT_MS);
+        }
+        return;
+      }
+      this._flushInitialChunks();
+    }
+    this._enqueueChunk(chunkInfo);
+  }
+  _flushInitialChunks() {
+    if (this._reorderTimer) {
+      clearTimeout(this._reorderTimer);
+      this._reorderTimer = null;
+    }
+    if (this._reorderFlushed || this._initialChunks.size === 0) return;
+    this._reorderFlushed = true;
+    const ordered = [...this._initialChunks.entries()].sort((a, b) => a[0] - b[0]);
+    this._initialChunks.clear();
+    for (const [, chunk] of ordered) this._enqueueChunk(chunk);
+  }
+  _enqueueChunk(chunkInfo) {
+    this.queue = this.queue
+      .then(() => this._handleChunk(chunkInfo))
+      .catch((e) => console.warn('[FragmentPlayback] chunk queue error:', e && e.message));
+    return this.queue;
+  }
+  drain() { return this.queue; }
+  async _handleChunk(chunkInfo) {
+    this.inFlightChunkHandlers += 1;
+    try {
+      return await this._processChunk(chunkInfo);
+    } finally {
+      this.inFlightChunkHandlers -= 1;
+      this._maybeFinish();
+    }
+  }
+  async _processChunk(chunkInfo) {
+    if (!this.isUsable) return;
+    if (!chunkInfo) return;
+    if (this.protocolMode === 'identified' && chunkInfo.streamId !== this.streamId) {
+      console.warn(`[FragmentPlayback] drop stale chunk stream=${chunkInfo.streamId} current=${this.streamId}`);
+      return;
+    }
+    if (!chunkInfo.audio || chunkInfo.audio.length === 0) return;
+    this.chunkSeen = true;
+    const ctx = await _ctxForChunk(this);
+    if (!ctx || !this.isUsable) return;
+    const sampleRate = getSampleRate();
+    if (this.scheduler) await this.scheduler.awaitSuspendSettled();
+    if (!this.isUsable) return;
+    if (!this.timeline) {
+      const notes = getClippedNotes();
+      const firstNoteStartSec = notes.length > 0 ? (firstNoteStart(notes) / _bpm()) * 60 : 0;
+      this.timeline = new StreamTimeline({
+        startPositionSec: this.startPositionSec,
+        firstNoteStartSec,
+      });
+    }
+    const plan = this.timeline.plan(chunkInfo, sampleRate, ctx.currentTime, { reserve: false });
+    this.lastChunkAtMs = Date.now();
+    if (plan.startedNow) {
+      const anchor = this.timeline.anchorCtxTime;
+      const fades = buildNoteFades();
+      if (fades.length > 0) {
+        this.fadeGain = ctx.createGain();
+        const master = getFragmentGainNode();
+        this.fadeGain.connect(master || ctx.destination);
+        scheduleFades(this.fadeGain, ctx, fades, this.startPositionSec, anchor);
+      }
+    }
+    if (plan.action === 'drop') {
+      this._logDebug('chunk dropped', {
+        ...this._debugSnapshot('chunk-dropped'),
+        seq: chunkInfo.seq ?? null,
+        reason: plan.reason,
+        chunkStartSec: plan.contentStartSec,
+        chunkEndSec: plan.contentEndSec,
+        chunkDurSec: plan.durationSec,
+        sampleOffset: chunkInfo.sampleOffset ?? null,
+        sampleEnd: chunkInfo.sampleEnd ?? null,
+        isLast: !!chunkInfo.isLast,
+      });
+      if (chunkInfo.isLast && this.scheduler) this.scheduler.markLastReceived();
+      this._maybeFinish();
+      return;
+    }
+    const segments = plan.segments && plan.segments.length > 0
+      ? plan.segments
+      : [{ skipSamples: plan.skipSamples, when: plan.when, offsetSec: plan.offsetSec, durationSec: plan.durationSec }];
+    const startedSegs = [];
+    for (const seg of segments) {
+      if (!this.isUsable) break;
+      const startSample = seg.skipSamples;
+      const fullSec = Number.isFinite(seg.sourceDurationSec) ? seg.sourceDurationSec : seg.durationSec + seg.offsetSec;
+      const sliceSamples = Math.min(Math.round(fullSec * sampleRate), chunkInfo.audio.length - startSample);
+      if (sliceSamples <= 0) continue;
+      const slice = chunkInfo.audio.subarray(startSample, startSample + sliceSamples);
+      const buffer = ctx.createBuffer(1, slice.length, sampleRate);
+      const dest = buffer.getChannelData(0);
+      dest.set(slice);
+      if (startSample > 0 || seg.offsetSec > 0) fadeInHead(dest, sampleRate, 0.01);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      const sched = this.scheduler;
+      const idx = this.sources.length;
+      const srcId = ++this._sourceSeq;
+      source.onended = () => {
+        this._logDebug('source ended', {
+          session: this.id,
+          srcId,
+          ctxNow: ctx.currentTime,
+          activeSources: sched ? sched.activeSourceCount - 1 : null,
+          inferenceDone: this.inferenceDone,
+          finished: this.finished,
+        });
+        if (sched) sched.sourceEnded();
+        if (this.sources[idx] === source) this.sources[idx] = null;
+        this._maybeFinish();
+        if (!this.finished && sched) sched.onSourcesDrained(() => render());
+      };
+      if (this.fadeGain) source.connect(this.fadeGain);
+      else {
+        const master = getFragmentGainNode();
+        source.connect(master || ctx.destination);
+      }
+      if (sched) sched.addSource();
+      this.sources.push(source);
+      this._logDebug('source start', {
+        session: this.id,
+        srcId,
+        seq: chunkInfo.seq ?? null,
+        ctxNow: ctx.currentTime,
+        when: seg.when,
+        startOffsetSec: seg.offsetSec,
+        durationSec: seg.durationSec,
+        lateSec: plan.offsetSec,
+        activeSources: sched ? sched.activeSourceCount : null,
+        waiting: sched ? sched.isWaiting : null,
+      });
+      try {
+        source.start(seg.when, seg.offsetSec);
+      } catch (err) {
+        source.onended = null;
+        if (sched) sched.sourceEnded();
+        if (this.sources[idx] === source) this.sources[idx] = null;
+        safeCleanup('fragmentPlayback.source.disconnect', () => source.disconnect());
+        console.warn(`[FragmentPlayback] source.start failed: ${err && err.message}`);
+        continue;
+      }
+      startedSegs.push(seg);
+      this._activatePlaybackUi();
+    }
+    if (startedSegs.length > 0) {
+      this.timeline.commit(plan, startedSegs);
+      const committedEnd = Math.max(...startedSegs.map((s) => s.contentEndSec));
+      if (this.scheduler && Number.isFinite(committedEnd)) {
+        this.scheduler.updateBufferFrontier(committedEnd);
+      }
+    }
+    console.log(`[FragPlay] chunk scheduled | session=${this.id} seg=${chunkInfo.chunkIndex ?? '-'} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} lateSec=${plan.offsetSec.toFixed(4)} durSec=${plan.durationSec.toFixed(3)} parts=${segments.length} started=${plan.startedNow} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
+    if (this.scheduler && this.scheduler.isWaiting) {
+      this._logDebug('resume after chunk', {
+        session: this.id,
+        seq: chunkInfo.seq ?? null,
+        waitGen: this._waitGeneration,
+        ...this._debugSnapshot('resume-after-chunk'),
+      });
+      await this.scheduler.resumeFromWait();
+      if (!this.isUsable) return;
+      if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
+    }
+    if (chunkInfo.isLast && this.scheduler) {
+      console.log(`[FragPlay] LAST CHUNK RECEIVED | session=${this.id} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} t=${Date.now()}`);
+      this.scheduler.markLastReceived();
+    }
+    this._maybeFinish();
+  }
+  setInferenceDone() {
+    this.inferenceDone = true;
+    this._logDebug('inference done', this._debugSnapshot('inference-done'));
+    if (!this.scheduler) return Promise.resolve();
+    return this.scheduler.setInferenceDone()
+      .then(() => this._repairPlaybackConsistency('inference-done'))
+      .then(() => {
+        this._logDebug('inference done settled', this._debugSnapshot('inference-done-settled'));
+      });
+  }
+  _repairPlaybackConsistency(stage) {
+    const sched = this.scheduler;
+    const ctx = getFragmentAudioContext();
+    if (!sched || !ctx || this.disposed || this.finished || this.streamDisabled) {
+      return Promise.resolve();
+    }
+    const pos = this.renderPosition(ctx.currentTime);
+    const end = this.timeline ? this.timeline.deliveredEndSec : 0;
+    const hasRemaining = end > pos + 0.05;
+    if (sched.isWaiting) {
+      if (!this.inferenceDone && !hasRemaining) return Promise.resolve();
+      if (!sched.isResuming) {
+        console.warn('[FragPlay] repairing stuck scheduler '
+          + JSON.stringify({ ...this._debugSnapshot(`repair:${stage}`), hasRemaining }));
+      }
+      if (hasRemaining) sched.updateBufferFrontier(end);
+      return sched.resumeFromWait().then(() => {
+        if (this.isCurrent && getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
+      });
+    }
+    if (ctx.state === 'suspended' && this.inferenceDone) {
+      console.warn('[FragPlay] repairing suspended context '
+        + JSON.stringify(this._debugSnapshot(`repair-ctx:${stage}`)));
+      return Promise.resolve(ctx.resume()).catch(() => {});
+    }
+    return Promise.resolve();
+  }
+  _maybeFinish() {
+    if (!this.isCurrent || this.finished || this.kind !== 'stream') return;
+    if (this.inFlightChunkHandlers > 0) return;
+    if (!this.streamStarted) return;
+    const sched = this.scheduler;
+    if (!sched) return;
+    if (this.streamId && !this.deliveryDone && !sched.isLastReceived) return;
+    if (!sched.inferenceDone && !sched.isLastReceived) return;
+    if (sched.activeSourceCount > 0) return;
+    const ctx = getFragmentAudioContext();
+    if (!ctx) return;
+    const pos = this.renderPosition(ctx.currentTime);
+    const end = this.timeline ? this.timeline.deliveredEndSec : 0;
+    if (pos + 0.02 < end) return;
+    this.finish();
+  }
+  checkStalledFinish() {
+    if (!this.isCurrent || this.finished || this.kind !== 'stream') return;
+    const sched = this.scheduler;
+    if (!sched) return;
+    if (sched.isWaiting) {
+      const ctx = getFragmentAudioContext();
+      const hasRemaining = !!(this.timeline && ctx
+        && this.timeline.deliveredEndSec > this.renderPosition(ctx.currentTime) + 0.05);
+      if (sched.inferenceDone || hasRemaining) {
+        this._repairPlaybackConsistency('watchdog').catch(() => {});
+        return;
+      }
+    }
+    if (!this.streamStarted || !sched.inferenceDone) return;
+    if (Date.now() - this.lastChunkAtMs < 1500) return;
+    const ctx = getFragmentAudioContext();
+    if (!ctx) return;
+    if (this.renderPosition(ctx.currentTime) >= sched.bufferEndSec + 1.0) this.finish();
+  }
+  async playFullBuffer(audioData) {
+    const ctx = await getFragmentAudioContextInternal();
+    if (!this.isCurrent) return;
+    this._teardownAudio();
+    this.kind = 'full';
+    this.streamDisabled = true;
+    const sr = getSampleRate();
+    const duration = audioData.length / sr;
+    const startOffset = Math.max(0, Math.min(this.startPositionSec, duration - 0.01));
+    this.startPositionSec = startOffset;
+    this.fullDurationSec = duration;
+    const buffer = ctx.createBuffer(1, audioData.length, sr);
+    buffer.getChannelData(0).set(audioData);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(envGain).connect(fadeGain).connect(panNode).connect(getFragmentGainNode() || ctx.destination);
+    source.onended = () => {
+      for (const n of this.fullNodes) safeCleanup('fragmentPlayback.node.disconnect', () => n.disconnect());
+      this.fullNodes = [];
+      this.finish();
+    };
+    const startAt = ctx.currentTime;
+    source.start(startAt, startOffset);
+    this.fullSource = source;
+    setFragmentAudioSource(source);
+    setFragmentIsPlaying(true);
+    setFragmentPlaybackStartTime(startAt);
+    setFragmentPlaybackOffset(startOffset);
+    setFragmentCurrentTime(startOffset);
+    _bindVisibility();
+    playheadTick();
+    updateFragmentPlayButton();
+  }
+  requestSeekDuringSynthesis(pos) {
+    this._teardownAudio();
+    this.streamDisabled = true;
+    this.pendingSeek = pos;
+    this.startPositionSec = pos;
+    setFragmentIsPlaying(false);
+    _cancelLoop();
+    if (this.scheduler) this.scheduler.deactivate();
+    setFragmentPlayStartPosition(pos);
+    setFragmentCurrentTime(pos);
+    render();
+  }
+}
+export function playheadTick() {
+  const sess = _current;
+  if (!sess || sess.disposed) return;
+  _bindVisibility();
+  if (!getFragmentIsPlaying()) return;
+  _lastTickAt = Date.now();
+  const ctx = getFragmentAudioContext();
+  if (sess.kind !== 'exclusive' && !ctx) return;
+  if (ctx && sess.kind !== 'exclusive' && ctx.state === 'suspended'
+      && !(sess.scheduler && sess.scheduler.isWaiting)
+      && !(sess.scheduler && sess.scheduler.isResuming) && !_ctxResumeInFlight) {
+    _ctxResumeInFlight = true;
+    ctx.resume().catch(() => {}).then(() => { _ctxResumeInFlight = false; }, () => { _ctxResumeInFlight = false; });
+  }
+  const positionSec = sess.kind === 'exclusive'
+    ? sess.positionAt(0, 0)
+    : sess.positionAt(ctx.currentTime, getOutputLatencySec(ctx));
+  setFragmentCurrentTime(positionSec);
+  tickPlayheadFollow(positionSec);
+  if (sess.kind === 'stream' && sess.streamStarted && sess.scheduler && !sess.scheduler.inferenceDone) {
+    sess.scheduler.checkUnderrun(
+      sess.renderPosition(ctx.currentTime),
+      () => render(),
+      sess.scheduler.requiredUnderrunMarginSec(0.05),
+    );
+  }
+  sess.checkStalledFinish();
+  if (sess.finished || sess.disposed) return;
+  if (sess.kind !== 'stream' && sess.fullDurationSec > 0 && positionSec >= sess.fullDurationSec) {
+    sess.finish();
+    return;
+  }
+  render();
+  _scheduleTick();
+}
+export function createSession(kind) {
+  if (_current) {
+    _current.userStopped = true;
+    _current.dispose();
+  }
+  _cancelLoop();
+  const sess = new Session(kind);
+  _current = sess;
+  return sess;
+}
+export function stopPlayback() {
+  const sess = _current;
+  if (sess) {
+    console.log('[FragPlay] stopPlayback ' + JSON.stringify({
+      session: sess.id,
+      kind: sess.kind,
+      waiting: sess.scheduler ? sess.scheduler.isWaiting : null,
+      waitGen: sess._waitGeneration,
+      ctxState: (getFragmentAudioContext() || {}).state ?? null,
+    }));
+    sess.userStopped = true;
+    sess.dispose();
+  }
+  if (!sess) {
+    const token = _nextExclusiveToken();
+    const p = window.electronAPI?.audioStop?.(token);
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  }
+  setFragmentIsPlaying(false);
+  setFragmentAudioSource(null);
+  _cancelLoop();
+  settlePlayheadFollow();
+  updateFragmentPlayButton();
+}
+````
+
+本节缺口：省略 `_stopExclusive`、`playFullBuffer` 的包络/声像/音符 fade 调度、`_debugSnapshot` 与诊断日志；`_teardownAudio` 中对 `_stopExclusive` 的调用保留。
+
+### C3 流式时间轴：锚点、coveredRanges、迟到裁头、位置换算
+文件：`src/fragmentEditor/playbackTimeline.js`　原行号：27-301（注释块/空行已省略）
+
+````javascript
+export const STREAM_LEAD_SEC = 0.05;
+const EPS_SEC = 1e-6;
+export class StreamTimeline {
+  constructor({ startPositionSec = 0, firstNoteStartSec = 0, leadSec = STREAM_LEAD_SEC } = {}) {
+    this.startPositionSec = Math.max(0, Number(startPositionSec) || 0);
+    this.firstNoteStartSec = Math.max(0, Number(firstNoteStartSec) || 0);
+    this.leadSec = Number.isFinite(leadSec) ? leadSec : STREAM_LEAD_SEC;
+    this.anchorCtxTime = null;
+    this.deliveredEndSec = this.startPositionSec;
+    this.coveredRanges = [];
+    this.seqCursorSec = 0;
+    this.scheduledCount = 0;
+    this.droppedCount = 0;
+    this.lateCount = 0;
+    this.backfillCount = 0;
+  }
+  get started() {
+    return this.anchorCtxTime !== null;
+  }
+  _contentRange(chunkInfo, sampleRate) {
+    const audioLength = chunkInfo && chunkInfo.audio ? chunkInfo.audio.length : 0;
+    const rawStart = Number(chunkInfo && chunkInfo.sampleOffset);
+    const rawEnd = Number(chunkInfo && chunkInfo.sampleEnd);
+    const hasSampleRange = Number.isFinite(rawStart) && Number.isFinite(rawEnd) && rawEnd > rawStart;
+    const chunkSec = audioLength / sampleRate;
+    const relStartSec = hasSampleRange ? rawStart / sampleRate : this.seqCursorSec;
+    const relEndSec = hasSampleRange ? rawEnd / sampleRate : relStartSec + chunkSec;
+    if (!hasSampleRange) this.seqCursorSec = relEndSec;
+    return {
+      contentStartSec: this.firstNoteStartSec + relStartSec,
+      contentEndSec: this.firstNoteStartSec + relEndSec,
+      durationSec: chunkSec,
+      hasSampleRange,
+    };
+  }
+  _cover(from, to) {
+    if (!(to > from)) return;
+    const ranges = this.coveredRanges;
+    let i = 0;
+    while (i < ranges.length && ranges[i].end < from) i++;
+    let start = from;
+    let end = to;
+    let j = i;
+    while (j < ranges.length && ranges[j].start <= end) {
+      start = Math.min(start, ranges[j].start);
+      end = Math.max(end, ranges[j].end);
+      j++;
+    }
+    ranges.splice(i, j - i, { start, end });
+    this.deliveredEndSec = Math.max(this.deliveredEndSec, end);
+  }
+  _uncoveredParts(from, to) {
+    const parts = [];
+    let cursor = from;
+    for (const r of this.coveredRanges) {
+      if (r.end <= cursor) continue;
+      if (r.start >= to) break;
+      if (r.start > cursor) parts.push({ start: cursor, end: Math.min(r.start, to) });
+      cursor = Math.max(cursor, r.end);
+      if (cursor >= to) break;
+    }
+    if (cursor < to) parts.push({ start: cursor, end: to });
+    return parts;
+  }
+  plan(chunkInfo, sampleRate, ctxNow, opts = {}) {
+    const reserve = opts.reserve !== false;
+    const audioLength = chunkInfo && chunkInfo.audio ? chunkInfo.audio.length : 0;
+    if (audioLength <= 0) {
+      this.droppedCount += 1;
+      return this._drop('empty');
+    }
+    const { contentStartSec, contentEndSec } = this._contentRange(chunkInfo, sampleRate);
+    const fromSec = Math.max(contentStartSec, this.startPositionSec);
+    const deliveredBeforeSec = this.deliveredEndSec;
+    const parts = this._uncoveredParts(fromSec, contentEndSec);
+    if (parts.length === 0) {
+      const reason = contentEndSec <= this.startPositionSec + EPS_SEC ? 'before-start' : 'duplicate';
+      this.droppedCount += 1;
+      return this._drop(reason);
+    }
+    const startedNow = !this.started;
+    if (startedNow) this.anchorCtxTime = ctxNow + this.leadSec;
+    const segments = [];
+    let scheduledEndSec = 0;
+    for (const part of parts) {
+      const skipSamples = Math.max(0, Math.round((part.start - contentStartSec) * sampleRate));
+      const availableSamples = audioLength - skipSamples;
+      if (availableSamples <= 0) continue;
+      const durSec = Math.min(availableSamples / sampleRate, part.end - part.start);
+      if (durSec <= EPS_SEC) continue;
+      const wantCtxTime = this.anchorCtxTime + (part.start - this.startPositionSec);
+      const lateSec = Math.max(0, ctxNow - wantCtxTime);
+      if (lateSec >= durSec - EPS_SEC) {
+        this.lateCount += 1;
+        continue;
+      }
+      segments.push({
+        skipSamples,
+        when: wantCtxTime + lateSec,
+        offsetSec: lateSec,
+        durationSec: durSec - lateSec,
+        sourceDurationSec: durSec,
+        contentStartSec: part.start,
+        contentEndSec: part.start + durSec,
+      });
+      scheduledEndSec = Math.max(scheduledEndSec, part.start + durSec);
+    }
+    if (segments.length === 0) {
+      this.droppedCount += 1;
+      return this._drop('late', startedNow);
+    }
+    if (reserve) this._commitPlan(fromSec, segments, startedNow, deliveredBeforeSec);
+    const first = segments[0];
+    return {
+      action: 'schedule',
+      fromSec,
+      deliveredBeforeSec,
+      startedNow,
+      when: first.when,
+      offsetSec: first.offsetSec,
+      skipSamples: first.skipSamples,
+      contentStartSec: first.contentStartSec,
+      contentEndSec: scheduledEndSec,
+      durationSec: first.durationSec,
+      segments,
+      splitParts: parts.length,
+    };
+  }
+  commit(plan, startedSegments) {
+    if (!plan || plan.action !== 'schedule' || !plan.segments) return;
+    if (!Array.isArray(startedSegments) || startedSegments.length === 0) return;
+    this._commitPlan(plan.fromSec, startedSegments, plan.startedNow, plan.deliveredBeforeSec);
+  }
+  _commitPlan(fromSec, segments, startedNow, deliveredBeforeSec) {
+    let endSec = 0;
+    for (const s of segments) {
+      this._cover(s.contentStartSec, s.contentEndSec);
+      endSec = Math.max(endSec, s.contentEndSec);
+    }
+    if (endSec > 0) this.deliveredEndSec = Math.max(this.deliveredEndSec, endSec);
+    this.scheduledCount += 1;
+    if (segments.some((s) => s.offsetSec > 0)) this.lateCount += 1;
+    if (!startedNow && fromSec + EPS_SEC < deliveredBeforeSec) this.backfillCount += 1;
+  }
+  _drop(reason, startedNow = false) {
+    return {
+      action: 'drop',
+      reason,
+      startedNow,
+      when: 0,
+      offsetSec: 0,
+      skipSamples: 0,
+      contentStartSec: 0,
+      contentEndSec: 0,
+      durationSec: 0,
+      segments: [],
+    };
+  }
+  positionAt(ctxNow, latencySec = 0) {
+    if (!this.started) return this.startPositionSec;
+    const audible = ctxNow - (Number.isFinite(latencySec) ? latencySec : 0);
+    return this.startPositionSec + Math.max(0, audible - this.anchorCtxTime);
+  }
+}
+export default StreamTimeline;
+````
+
+### C4 underrun 调度器：前沿、suspend/resume、watchdog、完成判定
+文件：`src/shared/streamingScheduler.js`　原行号：22-254, 270-355, 376-384（注释块/空行已省略）
+
+````javascript
+const WATCHDOG_TICK_MS = 250;
+const MAX_UNDERRUN_MARGIN_SEC = 2.0;
+const SUSPEND_LATENCY_DECAY = 0.9;
+const _suspendLatencyByCtx = new WeakMap();
+export class StreamingScheduler {
+  constructor({ getCtx, getElapsed, onWaitStateChange, onFinish, watchdogMarginSec = 0, getPacingFrontier }) {
+    this._getCtx = getCtx;
+    this._getElapsed = getElapsed;
+    this._onWaitStateChange = onWaitStateChange || (() => {});
+    this._onFinish = onFinish || (() => {});
+    this._watchdogMarginSec = watchdogMarginSec;
+    this._getPacingFrontier = getPacingFrontier || null;
+    this.bufferEndSec = 0;
+    this.inferenceDone = false;
+    this.isLastReceived = false;
+    this.activeSourceCount = 0;
+    this._finished = false;
+    this._active = false;
+    this._waitingForInference = false;
+    this._contextSuspended = false;
+    this._suspendInFlight = null;
+    this._resumeInFlight = null;
+    this._resumeTransition = null;
+    this._watchdogTimer = null;
+  }
+  get isWaiting() { return this._waitingForInference; }
+  get isResuming() { return !!this._resumeInFlight; }
+  _suspendLatencySec() {
+    const ctx = this._getCtx();
+    return ctx ? (_suspendLatencyByCtx.get(ctx) || 0) : 0;
+  }
+  requiredUnderrunMarginSec(allowanceSec = 0) {
+    const need = this._suspendLatencySec() + allowanceSec;
+    return Math.min(MAX_UNDERRUN_MARGIN_SEC, Math.max(this._watchdogMarginSec, need));
+  }
+  async awaitSuspendSettled() {
+    if (this._suspendInFlight) {
+      try { await this._suspendInFlight; } catch (_) {}
+    }
+  }
+  updateBufferFrontier(endSec) {
+    if (endSec > this.bufferEndSec) this.bufferEndSec = endSec;
+  }
+  addSource() { this.activeSourceCount++; }
+  sourceEnded() {
+    if (this.activeSourceCount > 0) this.activeSourceCount--;
+    this._checkCompletion();
+  }
+  markLastReceived() {
+    this.isLastReceived = true;
+    this._checkCompletion();
+  }
+  checkUnderrun(elapsed, onEnterWait, marginSec = 0) {
+    if (this.inferenceDone || this._waitingForInference) return false;
+    if (this._resumeTransition || this._resumeInFlight) return false;
+    if (this.bufferEndSec <= 0) return false;
+    const pacingFrontier = this._getPacingFrontier ? this._getPacingFrontier() : this.bufferEndSec;
+    if (elapsed < pacingFrontier - marginSec) return false;
+    this._waitingForInference = true;
+    this._onWaitStateChange(true);
+    void this._suspendContext();
+    if (onEnterWait) onEnterWait();
+    return true;
+  }
+  async resumeFromWait() {
+    if (!this._waitingForInference) return false;
+    if (this._resumeTransition) {
+      await this._resumeTransition;
+      return true;
+    }
+    const p = (async () => {
+      await this._resumeContext();
+      this._waitingForInference = false;
+      this._onWaitStateChange(false);
+    })();
+    this._resumeTransition = p;
+    try {
+      await p;
+    } finally {
+      if (this._resumeTransition === p) this._resumeTransition = null;
+    }
+    return true;
+  }
+  onSourcesDrained(onEnterWait) {
+    if (!this._active) return false;
+    if (this.inferenceDone || this.isLastReceived) return false;
+    if (this._waitingForInference) return false;
+    if (this.activeSourceCount > 0) return false;
+    if (this.bufferEndSec <= 0) return false;
+    return this.checkUnderrun(this._getElapsed(), onEnterWait, 0.05);
+  }
+  async setInferenceDone() {
+    this.inferenceDone = true;
+    if (this._waitingForInference) {
+      await this.resumeFromWait();
+    }
+  }
+  activate() {
+    this._active = true;
+    this.startWatchdog();
+  }
+  deactivate() {
+    this._active = false;
+    this._waitingForInference = false;
+    this._clearWatchdog();
+    if (this._contextSuspended || this._suspendInFlight) {
+      void this._abortContext();
+    }
+  }
+  startWatchdog() {
+    if (this._watchdogTimer) return;
+    const tick = () => {
+      if (!this._active) { this._watchdogTimer = null; return; }
+      try {
+        const elapsed = this._getElapsed();
+        this.checkUnderrun(elapsed, undefined, this.requiredUnderrunMarginSec(WATCHDOG_TICK_MS / 1000));
+      } catch (_) {}
+      this._watchdogTimer = setTimeout(tick, WATCHDOG_TICK_MS);
+    };
+    this._watchdogTimer = setTimeout(tick, WATCHDOG_TICK_MS);
+  }
+  _clearWatchdog() {
+    if (this._watchdogTimer) {
+      clearTimeout(this._watchdogTimer);
+      this._watchdogTimer = null;
+    }
+  }
+  async _suspendContext() {
+    if (this._contextSuspended) return;
+    const ctx = this._getCtx();
+    if (ctx && ctx.state === 'running') {
+      this._contextSuspended = true;
+      const t0 = Date.now();
+      const p = (async () => {
+        try {
+          await ctx.suspend();
+        } catch (err) {
+          this._contextSuspended = false;
+          console.warn('[StreamingScheduler] Failed to suspend context:', err.message);
+          return;
+        }
+        const sec = Math.max(0, Date.now() - t0) / 1000;
+        const prev = _suspendLatencyByCtx.get(ctx) || 0;
+        _suspendLatencyByCtx.set(ctx, Math.max(sec, prev * SUSPEND_LATENCY_DECAY));
+      })();
+      this._suspendInFlight = p;
+      try { await p; } finally {
+        if (this._suspendInFlight === p) this._suspendInFlight = null;
+      }
+    }
+  }
+  async _resumeContext() {
+    if (this._resumeInFlight) {
+      try { await this._resumeInFlight; } catch (_) {}
+      return;
+    }
+    if (!this._contextSuspended) return;
+    if (this._suspendInFlight) {
+      try { await this._suspendInFlight; } catch (_) {}
+    }
+    this._contextSuspended = false;
+    const ctx = this._getCtx();
+    const p = (async () => {
+      if (ctx && ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+          this._contextSuspended = ctx.state === 'suspended';
+        } catch (err) {
+          this._contextSuspended = true;
+          console.warn('[StreamingScheduler] Failed to resume context:', err.message);
+        }
+      } else {
+        this._contextSuspended = ctx ? ctx.state === 'suspended' : false;
+      }
+    })();
+    this._resumeInFlight = p;
+    try { await p; } finally {
+      if (this._resumeInFlight === p) this._resumeInFlight = null;
+    }
+  }
+  _checkCompletion() {
+    if (this._finished) return;
+    if (this.isLastReceived && this.activeSourceCount <= 0) {
+      this._finished = true;
+      this._onFinish();
+    }
+  }
+}
+````
+
+本节缺口：省略 `reset()` 与 `_abortContext()`（新会话状态重置、停止时恢复设备时钟）。
+
+### C5 主进程：流任务表、精确取消、chunk/END 网关
+文件：`src/main/svsIpc.js`　原行号：81-114, 874-908, 952-996, 1013-1024, 1093-1118（注释块/空行已省略）
+
+````javascript
+let _pendingPipelineReset = false;
+let _activeCancellable = null;
+let _activeFragmentStreamId = null;
+const _fragmentStreamTasks = new Map();
+function _withSynthMutex(fn, cancellable) {
+  const prev = _synthMutex;
+  let release;
+  _synthBusy++;
+  _synthMutex = new Promise((r) => { release = r; });
+  const p = prev.then(async () => {
+    if (cancellable) _activeCancellable = cancellable;
+    try {
+      return await fn();
+    } finally {
+      if (cancellable && _activeCancellable === cancellable) _activeCancellable = null;
+    }
+  }).finally(() => {
+    _synthBusy--;
+    if (_synthBusy === 0 && _pendingPipelineReset) {
+      _pendingPipelineReset = false;
+      console.log('[Main] Executing deferred pipeline reset (synthesis idle)');
+      try { resetSvsPipeline(); } catch (_) {}
+    }
+    release();
+  });
+  return p;
+}
+  safeHandle(IPC_CHANNELS.SVS_CANCEL, async (_event, options) => {
+    const requestedStreamId = options && typeof options.streamId === 'string' ? options.streamId : null;
+    if (requestedStreamId) {
+      const task = _fragmentStreamTasks.get(requestedStreamId);
+      if (!task || task.state !== 'running') {
+        if (task && task.state === 'queued') task.state = 'cancelled';
+        console.log(`[Main] svs:cancel ignored stream ${requestedStreamId} (state=${task ? task.state : 'missing'})`);
+        return { success: true, ignoredStaleStream: true };
+      }
+      try { await task.cancel?.cancelActiveSynthesis?.(); } catch (_) {}
+      return { success: true };
+    }
+    if (isApiMode()) {
+      try { apiModules().inference.cancelAll(); } catch (_) { /* 尚未加载 API 模块 */ }
+    }
+    const target = _activeCancellable || svsPipelineLazy.getInstance();
+    console.log(`[Main] svs:cancel active=${!!_activeCancellable} lazyInstance=${!!svsPipelineLazy.getInstance()} busy=${_synthBusy}`);
+    if (target && typeof target.cancelActiveSynthesis === 'function') {
+      await target.cancelActiveSynthesis();
+      return { success: true };
+    }
+    if (_synthBusy === 0) {
+      resetSvsPipeline();
+    }
+    return { success: true };
+  });
+    const fragmentStreamId = typeof opts.streamId === 'string' && opts.streamId
+      ? opts.streamId
+      : null;
+    opts.onProgress = _makeThrottledSender(
+      win,
+      IPC_CHANNELS.FRAGMENT_SVS_PROGRESS,
+      fragmentStreamId ? { synthesisId: fragmentStreamId } : null,
+    );
+    let chunkSeq = 0;
+    let streamSendFailed = false;
+    const isBackground = opts.background === true;
+    const fragmentTask = !isBackground && fragmentStreamId
+      ? { state: 'queued', cancel: null }
+      : null;
+    if (fragmentTask) _fragmentStreamTasks.set(fragmentStreamId, fragmentTask);
+    const sendStreamEnd = () => {
+      if (isBackground || !fragmentStreamId || win.isDestroyed()) return;
+      try {
+        win.send(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, {
+          streamId: fragmentStreamId,
+          lastSeq: chunkSeq,
+          transportFailed: streamSendFailed,
+        });
+      } catch (_) {
+        console.warn(`[Main] Failed to send STREAM_END for ${fragmentStreamId}`);
+      }
+    };
+    opts.onChunkAudio = isBackground
+      ? null
+      : (chunkInfo) => {
+        if (win.isDestroyed()) return;
+        const nextSeq = chunkSeq + 1;
+        try {
+          win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, {
+            ...chunkInfo,
+            streamId: fragmentStreamId,
+            seq: nextSeq,
+          });
+          chunkSeq = nextSeq;
+        } catch (_) {
+          streamSendFailed = true;
+          console.warn(`[Main] Failed to send fragment chunk seq=${nextSeq} stream=${fragmentStreamId}`);
+        }
+      };
+    try {
+      const data = await _withSynthMutex(() => {
+        if (fragmentTask && fragmentTask.state === 'cancelled') {
+          const err = new Error('Synthesis cancelled');
+          err.code = 'SYNTHESIS_CANCELLED';
+          throw err;
+        }
+        if (fragmentTask) {
+          fragmentTask.state = 'running';
+          fragmentTask.cancel = pipeline;
+          _activeFragmentStreamId = fragmentStreamId;
+        }
+        return pipeline.synthesize(notes, bpm, opts);
+      }, pipeline);
+      return { data };
+    } catch (err) {
+      return { error: err.message };
+    } finally {
+      sendStreamEnd();
+      if (fragmentTask) _fragmentStreamTasks.delete(fragmentStreamId);
+      if (_activeFragmentStreamId === fragmentStreamId) _activeFragmentStreamId = null;
+    }
+````
+
+本节缺口：省略 chunk RMS 诊断计算（原 997-1012 行），不影响 seq 提交与发送顺序。
+
+### C6 worker 客户端：事件桥接与协作取消
+文件：`src/main/svsWorkerClient.js`　原行号：39-77, 102-115, 144-160（注释块/空行已省略）
+
+````javascript
+  async _ensureWorker() {
+    if (this.worker && this.readyPromise) { await this.readyPromise; return; }
+    const script = findWorkerScript();
+    if (!script) throw new Error('svsWorker.js not found');
+    let readyResolve, readyReject;
+    this.readyPromise = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+    const worker = new Worker(script, { workerData: this.workerData });
+    this.worker = worker;
+    worker.on('message', msg => {
+      if (msg.type === 'ready') { readyResolve(); return; }
+      const pending = this.pending.get(msg.id);
+      if (msg.type === 'event') {
+        if (msg.event === 'progress') pending?.onProgress?.(msg.data);
+        if (msg.event === 'chunk-audio') pending?.onChunkAudio?.(msg.data);
+        return;
+      }
+      if (!pending) return;
+      this.pending.delete(msg.id);
+      this._applyState(msg.state);
+      if (msg.type === 'result') pending.resolve(msg.result);
+      else {
+        const err = new Error(msg.error?.message || 'SVS worker failed');
+        if (msg.error?.code) err.code = msg.error.code;
+        if (msg.error?.stack) err.stack = msg.error.stack;
+        pending.reject(err);
+      }
+    });
+    const fail = err => {
+      readyReject(err);
+      for (const { reject } of this.pending.values()) reject(err);
+      this.pending.clear();
+      this.worker = null;
+      this.readyPromise = null;
+      this.initialized = false;
+    };
+    worker.once('error', fail);
+    worker.once('exit', code => { if (code !== 0) fail(new Error(`SVS worker exited with code ${code}`)); });
+    await this.readyPromise;
+  }
+  async _call(command, args = {}, callbacks = {}) {
+    await this._ensureWorker();
+    const id = ++this.nextId;
+    if (command === 'synthesize' || command === 'synthesizeMultiStreaming') {
+      this.activeSynthId = id;
+    }
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject, ...callbacks });
+      const transferList = (command === 'synthesize' || command === 'synthesizeMultiStreaming')
+        ? this._collectSynthTransfers(args) : [];
+      this.worker.postMessage({ id, command, args }, transferList);
+    });
+  }
+  async cancelActiveSynthesis() {
+    if (!this.worker) return;
+    const targetId = this.activeSynthId;
+    console.log(`[SvsWorkerClient] cancelActiveSynthesis: targetId=${targetId} pending=${this.pending.size}`);
+    this.activeSynthId = null;
+    const err = new Error('Synthesis cancelled');
+    err.code = 'SYNTHESIS_CANCELLED';
+    for (const { reject } of this.pending.values()) reject(err);
+    this.pending.clear();
+    try {
+      this.worker.postMessage({ id: `cancel-${targetId ?? Date.now()}`, command: 'cancel', args: { requestId: targetId ?? undefined } });
+    } catch (_) {}
+  }
+````
+
+### C7 worker：chunk 事件归一化、协作取消、请求世代号
+文件：`src/inference/svsWorker.js`　原行号：123-164, 246-277（注释块/空行已省略）
+
+````javascript
+function attachCallbacks(id, options = {}) {
+  const opts = { ...options };
+  if (options.__progress) {
+    opts.onProgress = progress => parentPort.postMessage({ type: 'event', id, event: 'progress', data: progress });
+  }
+  if (options.__chunkAudio) {
+    opts.onChunkAudio = data => {
+      try {
+        const a = data && data.audio;
+        let pcm = null;
+        if (a instanceof Float32Array) pcm = a;
+        else if (a instanceof ArrayBuffer && a.byteLength % 4 === 0) pcm = new Float32Array(a);
+        else if (ArrayBuffer.isView(a) && !(a instanceof DataView)) {
+          const out = new Float32Array(a.length);
+          for (let i = 0; i < a.length; i++) out[i] = Number(a[i]) || 0;
+          pcm = out;
+        }
+        if (!pcm) return;
+        const message = {
+          type: 'event',
+          id,
+          event: 'chunk-audio',
+          data: { ...data, audio: pcm },
+        };
+        const ab = pcm.buffer instanceof ArrayBuffer
+          && pcm.byteOffset === 0 && pcm.byteLength === pcm.buffer.byteLength
+          ? pcm.buffer : null;
+        if (ab) parentPort.postMessage(message, [ab]);
+        else parentPort.postMessage(message);
+      } catch (err) {
+        console.warn('[SVS worker] Failed to post chunk audio:', err && err.message);
+      }
+    };
+  }
+  delete opts.__progress;
+  delete opts.__chunkAudio;
+  return opts;
+}
+let latestSynthSeq = 0;
+parentPort.on('message', msg => {
+  if (msg.command === 'cancel') {
+    abortRequest(msg.args?.requestId);
+    parentPort.postMessage({ type: 'result', id: msg.id, result: { success: true }, state: snapshot() });
+    return;
+  }
+  const isSynthCommand = msg.command === 'synthesize'
+    || msg.command === 'synthesizeMultiStreaming';
+  const synthSeq = isSynthCommand ? ++latestSynthSeq : 0;
+  queue = queue.then(async () => {
+    if (isSynthCommand && synthSeq !== latestSynthSeq) {
+      parentPort.postMessage({
+        type: 'error',
+        id: msg.id,
+        error: { message: 'Synthesis superseded by a newer request', code: 'SVS_SUPERSEDED' },
+        state: snapshot(),
+      });
+      return;
+    }
+    try {
+      const result = await handle(msg);
+      parentPort.postMessage({ type: 'result', id: msg.id, result, state: snapshot() });
+    } catch (err) {
+      parentPort.postMessage({ type: 'error', id: msg.id, error: serializeError(err), state: snapshot() });
+    }
+  });
+});
+````
+
+### C8 管线：缓存重放、段级 vocoder、多 segment 发射器
+文件：`src/inference/pipeline/index.js`　原行号：1171-1193, 2552-2572, 3282-3392（注释块/空行已省略）
+
+````javascript
+    _emitCachedAudioAsChunks(audio, onChunkAudio, chunkSec = 2) {
+        if (!onChunkAudio || !audio || audio.length === 0) return;
+        const step = Math.max(1, Math.round(chunkSec * SAMPLE_RATE));
+        const total = audio.length;
+        let idx = 0;
+        for (let off = 0; off < total; off += step, idx++) {
+            const end = Math.min(total, off + step);
+            try {
+                onChunkAudio({
+                    chunkIndex: idx,
+                    sampleOffset: off,
+                    sampleEnd: end,
+                    audio: audio.subarray(off, end),
+                    totalSamples: total,
+                    isLast: end >= total,
+                    cached: true,
+                });
+            } catch (e) {
+                console.warn(`[OnnxSVSPipeline] cached chunk emit failed: ${e.message}`);
+                return;
+            }
+        }
+    }
+    async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete, frameOffset = 0, melCtx = null) {
+        melData = this._postprocessMel(melData, segFrames, frameOffset, '[VocoderSeg]', melCtx);
+        const chunkFrames = this._resolveVocoderChunkFrames();
+        const overlapFramesOverride = this._resolveVocoderOverlapFrames();
+        const runVocoder = () => this._postprocessing.runVocoderChunked(
+            this.sessions, melData, segFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+            this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
+        );
+        try {
+            return await runVocoder();
+        } catch (err) {
+            try {
+                return await this._retryVocoderOnFallbackEp(err, runVocoder);
+            } catch (fallbackErr) {
+                if (fallbackErr !== err) {
+                    console.error(`[OnnxSVSPipeline] Segment vocoder fallback retry failed: ${fallbackErr.message}`);
+                }
+                throw err;
+            }
+        }
+    }
+    _createSegmentStreamEmitter(segments, bpm, firstNoteStartBeat, totalSamples, onChunkAudio) {
+        const firstNoteStartSample = Math.floor((firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
+        const totalSamplesRel = Math.max(0, totalSamples - firstNoteStartSample);
+        const timeOrder = segments.map((_, i) => i)
+            .sort((a, b) => segments[a].startBeat - segments[b].startBeat);
+        const metas = new Map();
+        for (const idx of timeOrder) {
+            metas.set(idx, {
+                relStart: Math.floor((segments[idx].startBeat / bpm) * 60 * SAMPLE_RATE) - firstNoteStartSample,
+                relEnd: Math.floor((segments[idx].endBeat / bpm) * 60 * SAMPLE_RATE) - firstNoteStartSample,
+                audio: null,
+            });
+        }
+        const CONTIG_EPS = Math.round(0.021 * SAMPLE_RATE);
+        const FADE_SAMPLES = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
+        let frontier = 0;    // 已发射前沿（相对 firstNoteStart 的采样位置）
+        let nextTimeIdx = 0; // timeOrder 中下一个待发射的 segment
+        let finished = false;
+        const fadeInHead = (audio) => {
+            const n = Math.min(FADE_SAMPLES, audio.length);
+            for (let i = 0; i < n; i++) {
+                audio[i] *= 0.5 * (1 - Math.cos((Math.PI * i) / n));
+            }
+        };
+        const fadeOutTail = (audio) => {
+            const n = Math.min(FADE_SAMPLES, audio.length);
+            const base = audio.length - n;
+            for (let i = 0; i < n; i++) {
+                audio[base + i] *= 0.5 * (1 + Math.cos((Math.PI * i) / n));
+            }
+        };
+        const emitChunk = (audio, isLast) => {
+            if (!audio || audio.length === 0) return false;
+            try {
+                onChunkAudio({
+                    chunkIndex: nextTimeIdx,
+                    sampleOffset: frontier,
+                    sampleEnd: frontier + audio.length,
+                    audio,
+                    totalSamples: totalSamplesRel,
+                    isLast,
+                });
+            } catch (_) {}
+            console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${frontier} end=${frontier + audio.length} isLast=${isLast} t=${Date.now()}`);
+            frontier += audio.length;
+            return true;
+        };
+        const tryEmit = () => {
+            while (!finished && nextTimeIdx < timeOrder.length) {
+                const segIdx = timeOrder[nextTimeIdx];
+                const meta = metas.get(segIdx);
+                if (!meta || !meta.audio) break; // 该 segment 尚未完成，等待
+                const isLastSeg = nextTimeIdx === timeOrder.length - 1;
+                const gapSamples = meta.relStart - frontier;
+                if (gapSamples > CONTIG_EPS) {
+                    emitChunk(new Float32Array(gapSamples), false);
+                }
+                let audio = meta.audio;
+                const trim = Math.max(0, Math.min(frontier - meta.relStart, audio.length));
+                if (trim > 0) {
+                    audio = audio.slice(trim);
+                    fadeInHead(audio);
+                } else {
+                    audio = audio.slice();
+                }
+                if (!isLastSeg) {
+                    const nextMeta = metas.get(timeOrder[nextTimeIdx + 1]);
+                    if (nextMeta && nextMeta.relStart < meta.relEnd) fadeOutTail(audio);
+                }
+                if (isLastSeg) {
+                    const wantLen = totalSamplesRel - frontier;
+                    if (wantLen > audio.length) {
+                        const padded = new Float32Array(wantLen);
+                        padded.set(audio, 0);
+                        audio = padded;
+                    }
+                }
+                const emitted = emitChunk(audio, isLastSeg);
+                meta.audio = null; // 释放引用
+                nextTimeIdx++;
+                if (isLastSeg && !emitted) {
+                    emitChunk(new Float32Array(1), true);
+                }
+            }
+            if (nextTimeIdx >= timeOrder.length) finished = true;
+        };
+        return {
+            segmentDone(segIdx, audio) {
+                if (finished) return;
+                const meta = metas.get(segIdx);
+                if (!meta || meta.audio) return; // 未知 segment / 重复完成
+                const samples = (audio && audio.length > 0) ? audio.length : 0;
+                console.log(`[SegInfer][FRAG] segment inference done | seg=${segIdx}/${timeOrder.length} samples=${samples} relStart=${meta.relStart} relEnd=${meta.relEnd} t=${Date.now()}`);
+                meta.audio = samples > 0 ? audio : new Float32Array(0);
+                tryEmit();
+            },
+        };
+    }
+````
+
+### C9 管线：_synthesizeImpl 的流式相关段落
+文件：`src/inference/pipeline/index.js`　原行号：4366-4450, 4568-4578, 4694-4782, 4824-4836, 4958-4967, 5044-5048, 5120-5124, 5159-5187（注释块/空行已省略）
+
+````javascript
+    async _synthesizeImpl(notes, bpm, options = {}) {
+        if (!this.initialized) {
+            await this.init();
+        }
+        await this.ensureAllModelsLoaded();
+        if (Number.isFinite(options.seed)) {
+            this._diffusion.setNoiseSeed(options.seed);
+        } else {
+            this._applyFixedNoiseSeedSetting();
+        }
+        this._currentF0Hz = null;
+        this._diffusion.resetBlacklist();
+        this._currentPitchCurveF0 = null;
+        this._currentPromptSeq = null;
+        const onProgress = options.onProgress || (() => {});
+        const abortSignal = options.abortSignal || null;
+        throwIfCancelled(abortSignal);
+        const f0Envelope = options.f0Envelope || null;
+        this._pitchControlMode = options.pitchControl === 'score' ? 'score' : 'manual';
+        const pitchCurveF0 = this._pitchControlMode === 'score' ? null : (options.pitchCurveF0 || null);
+        const refAudioWavBuffer = options.refAudioWavBuffer || null;
+        const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
+        const cfgStrength = options.cfg !== undefined ? options.cfg : CFG_STRENGTH;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
+        const autoShift = options.autoShift || false;
+        const pitchShift = options.pitchShift || 0;
+        const npuDiffBatchSize = options.npuDiffBatchSize || 4;
+        const npuVocoderBatchSize = options.npuVocoderBatchSize || 2;
+        const onChunkAudio = options.onChunkAudio || null;
+        const priorityTimeSec = Number.isFinite(options.priorityTimeSec) ? options.priorityTimeSec : 0;
+        this._currentSamplerName = options.sampler || DEFAULT_SOLVER;
+        this._currentQDriftEnabled = options.qdrift === true;
+        this._currentCfgScheduleOpts = {
+            mode: options.cfgScheduleMode || 'constant',
+            cfgStrengthStart: options.cfgStrengthStart ?? null,
+            keyframes: options.cfgScheduleKeyframes ?? null,
+        };
+        this._currentDynamicThresholdOpts = options.dynamicThresholdEnabled
+            ? { enabled: true, percentile: options.dynamicThresholdPercentile ?? 0.995 }
+            : null;
+        this._currentDiffStepChunkOpts = {
+            enabled: options.diffStepChunk === true,
+            chunkFrames: options.diffStepChunkFrames || 500,
+            overlapFrames: options.diffStepOverlapFrames !== undefined ? options.diffStepOverlapFrames : 50,
+        };
+        this._melPostprocessOptions = normalizeMelPostprocessOptions(options.melPostprocess);
+        const filledNotes = this._fillNoteGaps(notes);
+        const { synthKey: cacheKey, melKey } = this._computeCacheKeyPair(notes, bpm, options);
+        const cachedAudio = this._synthCacheGet(cacheKey);
+        if (cachedAudio) {
+            console.warn(`[OnnxSVSPipeline] >>> CACHE HIT <<< key=${cacheKey.substring(0, 32)}... | Returning CACHED audio, vocoder will NOT run! (Clear cache: switch model or restart app)`);
+            onProgress(100);
+            this._emitCachedAudioAsChunks(cachedAudio, onChunkAudio);
+            return cachedAudio;
+        }
+        console.log(`[OnnxSVSPipeline] Cache MISS (key=${cacheKey.substring(0, 32)}...), running full synthesis pipeline`);
+        const segments = this._buildVocalSegments(filledNotes, bpm);
+        if (segments.length === 0) {
+            onProgress(100);
+            return new Float32Array(0);
+        }
+        if (segments.length === 1) {
+            const seg = segments[0];
+            let segNotes = seg.notes || filledNotes;
+            const singleSegOnChunk = onChunkAudio && !contextPadding ? onChunkAudio : null;
+            const chunkOpts = this._currentDiffStepChunkOpts;
+            const safeChunkFrames = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
+            const useStreamingChunked = chunkOpts && chunkOpts.enabled && !this.useStaticShapes
+                && chunkOpts.chunkFrames > 0 && totalFrames > safeChunkFrames
+                && singleSegOnChunk && !melCacheHit; // 流式推送可用时才走此路径
+            if (useStreamingChunked) {
+                console.log(`[OnnxSVSPipeline] Streaming chunked diffusion+vocoder: totalFrames=${totalFrames}, chunkFrames=${chunkOpts.chunkFrames}, overlap=${chunkOpts.overlapFrames}`);
+                const totalSamplesEst = totalFrames * HOP_SIZE;
+                const segmentAudios = []; // {frameStart, audio}
+                const onChunkMel = async (chunkInfo) => {
+                    const { frameStart, frameEnd, melData, isLast } = chunkInfo;
+                    const segFrames = frameEnd - frameStart;
+                    const segF0 = this._currentF0Hz ? this._currentF0Hz.subarray(frameStart, frameEnd) : null;
+                    const sampleOffsetBase = frameStart * HOP_SIZE;
+                    const chunkBaseBeat = (filledNotes[0]?.start || 0);
+                    const wrappedOnChunk = (info) => {
+                        const chunkStartBeat = chunkBaseBeat +
+                            ((info.sampleOffset + sampleOffsetBase) / SAMPLE_RATE) * (bpm / 60);
+                        this._silenceNonVocalRegions(info.audio, filledNotes, bpm, chunkStartBeat);
+                        singleSegOnChunk({
+                            chunkIndex: info.chunkIndex,
+                            sampleOffset: info.sampleOffset + sampleOffsetBase,
+                            sampleEnd: info.sampleEnd + sampleOffsetBase,
+                            audio: info.audio,
+                            totalSamples: totalSamplesEst,
+                            isLast: isLast && info.isLast,
+                        });
+                    };
+                    const segAudio = await this._runVocoderChunkedForSegment(
+                        melData, segFrames, segF0, wrappedOnChunk,
+                        _melBaseOffset + frameStart,
+                        { fullMel: xt.data, totalFrames, startFrame: frameStart, payloadBase: _melBaseOffset, rightFinal: !!isLast },
+                    );
+                    segmentAudios.push({ frameStart, audio: segAudio });
+                };
+                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel, abortSignal);
+                if (!melCacheHit && !segMel) {
+                    this._melCachePut(melKey, { mel: xt.data, frames: totalFrames });
+                }
+                let audioData = new Float32Array(totalSamplesEst);
+                for (const { frameStart, audio } of segmentAudios) {
+                    const offset = frameStart * HOP_SIZE;
+                    const copyLen = Math.min(audio.length, totalSamplesEst - offset);
+                    audioData.set(audio.subarray(0, copyLen), offset);
+                }
+                console.log(`[OnnxSVSPipeline] Streaming chunked complete: ${segmentAudios.length} segments, ${audioData.length} samples`);
+                if (contextPadding) {
+                    const startSample = contextPadding.offsetFrames * HOP_SIZE;
+                    const validSamples = contextPadding.validFrames * HOP_SIZE;
+                    const endSample = Math.min(startSample + validSamples, audioData.length);
+                    audioData = audioData.slice(startSample, endSample);
+                }
+                this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
+                const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
+                if (audioData.length <= MAX_CACHE_SAMPLES) {
+                    this._synthCachePut(cacheKey, audioData);
+                }
+                onProgress(100);
+                await this._recreateHeavySessionsAfterSynthesis();
+                return audioData;
+            }
+            onProgress(90);
+            const _chunkSilenceBaseBeat = filledNotes[0]?.start || 0;
+            const _silencingOnChunk = singleSegOnChunk ? (info) => {
+                const chunkStartBeat = _chunkSilenceBaseBeat +
+                    (info.sampleOffset / SAMPLE_RATE) * (bpm / 60);
+                this._silenceNonVocalRegions(info.audio, filledNotes, bpm, chunkStartBeat);
+                singleSegOnChunk(info);
+            } : null;
+            let audioData = await this._runVocoderChunked(xt.data, totalFrames, _silencingOnChunk, _melBaseOffset, { fullMel: xt.data, totalFrames, startFrame: 0, payloadBase: _melBaseOffset, rightFinal: true });
+        const streamEmitter = onChunkAudio
+            ? this._createSegmentStreamEmitter(
+                segments, bpm,
+                filledNotes.length > 0 ? filledNotes[0].start : 0,
+                totalSamples, onChunkAudio)
+            : null;
+                if (streamEmitter) {
+                    streamEmitter.segmentDone(segIdx, pairResult[0].audio);
+                    streamEmitter.segmentDone(segIdx + 1, pairResult[1].audio);
+                }
+            if (streamEmitter) {
+                streamEmitter.segmentDone(segIdx, segResult.audio);
+            }
+        for (let i = 0; i < totalSamples; i++) {
+            if (weightSum[i] > 1e-8) {
+                finalAudio[i] /= weightSum[i];
+            }
+        }
+        normalizePeakTo(finalAudio, totalSamples);
+        const firstNoteStartSample = Math.floor((filledNotes[0].start / bpm) * 60 * SAMPLE_RATE);
+        const audioData = firstNoteStartSample > 0
+            ? finalAudio.subarray(firstNoteStartSample)
+            : finalAudio;
+        this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
+        const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
+        if (audioData.length <= MAX_CACHE_SAMPLES) {
+            this._synthCachePut(cacheKey, audioData);
+            console.log('[OnnxSVSPipeline] Audio cached (LRU entries=' +
+                (this._synthCacheMap ? this._synthCacheMap.size : 0) + ')');
+        }
+        onProgress(100);
+        await this._recreateHeavySessionsAfterSynthesis();
+        return audioData;
+    }
+````
+
+本节缺口：非线性摘录：只保留缓存命中、单 segment 分块流式、整段 vocoder 流式、多 segment 发射器调用与最终拼装；其余为参数装配/autoShift/缓存键。
+
+### C10 扩散分块：规划、单块推理、committed 帧循环
+文件：`src/inference/pipeline/diffusion.js`　原行号：1328-1382, 1403-1415, 1432-1532, 1534-1612（注释块/空行已省略）
+
+````javascript
+    _planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope = null) {
+        if (!Number.isFinite(totalFrames) || totalFrames <= 0) return null;
+        const safeChunk = Math.max(50, Math.floor(chunkFrames));
+        let safeOverlap = Math.max(0, Math.floor(overlapFrames));
+        if (safeOverlap >= safeChunk) safeOverlap = Math.floor(safeChunk / 2);
+        if (safeOverlap * 4 >= safeChunk * 3) safeOverlap = Math.floor(safeChunk / 4);
+        if (safeChunk >= totalFrames) return null;
+        if (safeOverlap < 1) safeOverlap = 0;
+        const hasF0 = !!(f0Slope && f0Slope.length >= totalFrames);
+        const minBeats = hasF0
+            ? Math.max(Math.floor(safeChunk * 0.75), safeChunk - safeOverlap)
+            : safeChunk;
+        const maxBeats = hasF0
+            ? Math.min(safeChunk + safeOverlap, Math.floor(safeChunk * 1.25))
+            : safeChunk;
+        const canSearch = hasF0 && maxBeats > minBeats;
+        const specs = [];
+        let framePos = 0;
+        let chunkIdx = 0;
+        const minAdvance = Math.max(1,
+            (canSearch
+                ? Math.max(Math.floor(safeChunk * 0.75), safeChunk - safeOverlap)
+                : safeChunk) - safeOverlap);
+        const maxIters = Math.ceil(totalFrames / minAdvance) + 8;
+        let iterCount = 0;
+        while (framePos < totalFrames) {
+            if (++iterCount > maxIters) {
+                console.error(`[DiffusionChunk] _planChunks exceeded maxIters=${maxIters}, aborting plan (totalFrames=${totalFrames}, chunk=${safeChunk}, overlap=${safeOverlap})`);
+                break;
+            }
+            const isFirst = chunkIdx === 0;
+            const chunkStart = isFirst ? 0 : Math.max(0, framePos - safeOverlap);
+            const defaultChunkEnd = Math.min(chunkStart + safeChunk, totalFrames);
+            const isLast = defaultChunkEnd >= totalFrames;
+            let chunkEnd;
+            if (isLast) {
+            } else {
+                chunkEnd = defaultChunkEnd;
+            }
+            const currentChunkFrames = chunkEnd - chunkStart;
+            const finalIsLast = chunkEnd >= totalFrames;
+            specs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast: finalIsLast });
+            if (finalIsLast) break;
+            framePos = chunkEnd;
+            chunkIdx++;
+        }
+        return { specs, overlap: safeOverlap };
+    }
+    async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog } = ctx;
+        const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
+        const xtOut = xt.data;
+        throwIfCancelled(abortSignal);
+        const chunkNoise = new Float32Array(currentChunkFrames * MEL_DIM);
+        chunkNoise.set(xtOut.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
+        if (!isFirst) {
+            const renoiseOv = Math.min(overlap, currentChunkFrames);
+            if (renoiseOv > 0) {
+                const t0 = Number.isFinite(ctx.chunkOverlapNoiseLevel)
+                    ? Math.min(1, Math.max(0, ctx.chunkOverlapNoiseLevel))
+                    : 0;
+                const ovNoise = this.randomNoise(renoiseOv, MEL_DIM);
+                const ovEnd = renoiseOv * MEL_DIM;
+                for (let i = 0; i < ovEnd; i++) {
+                    chunkNoise[i] = (1 - t0) * ovNoise.data[i] + t0 * chunkNoise[i];
+                }
+            }
+        }
+        const subXt = { data: chunkNoise, dims: [1, currentChunkFrames, MEL_DIM] };
+        const promptCondBytes = ptFrameCount * COND_DIM;
+        const chunkTargetCondBytes = currentChunkFrames * COND_DIM;
+        const chunkCondStart = (ptFrameCount + chunkStart) * COND_DIM;
+        const chunkCondEnd = chunkCondStart + chunkTargetCondBytes;
+        const chunkCond = new Float32Array(promptCondBytes + chunkTargetCondBytes);
+        chunkCond.set(combinedCond.subarray(0, promptCondBytes), 0);
+        chunkCond.set(combinedCond.subarray(chunkCondStart, chunkCondEnd), promptCondBytes);
+        const chunkOnProgress = (p) => {
+            if (onProgress) onProgress(Math.round(p));
+        };
+        await this.runDiffusionLoop(
+            sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
+            chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
+            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog, 100
+        );
+        if (isFirst) {
+            xtOut.set(subXt.data.subarray(0, currentChunkFrames * MEL_DIM), chunkStart * MEL_DIM);
+        } else {
+            const actualOv = Math.min(overlap, currentChunkFrames);
+            if (actualOv > 0) {
+                const prevTailMel = xtOut.subarray(chunkStart * MEL_DIM, (chunkStart + actualOv) * MEL_DIM);
+                const currHeadMel = subXt.data.subarray(0, actualOv * MEL_DIM);
+                const wsolaMel = wsolaCrossfadeMel(prevTailMel, currHeadMel, actualOv, MEL_DIM);
+                xtOut.set(wsolaMel, chunkStart * MEL_DIM);
+            }
+            const nonOverlapStart = actualOv * MEL_DIM;
+            const nonOverlapLen = (currentChunkFrames - actualOv) * MEL_DIM;
+            if (nonOverlapLen > 0) {
+                xtOut.set(
+                    subXt.data.subarray(nonOverlapStart, nonOverlapStart + nonOverlapLen),
+                    (chunkStart + actualOv) * MEL_DIM
+                );
+            }
+        }
+        await gpuDrainAdaptive();
+        const newCommitted = isLast ? chunkEnd : Math.max(0, chunkEnd - overlap);
+        return { newCommitted };
+    }
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = DEFAULT_SOLVER, pitchCurveF0 = null, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null) {
+        let f0Slope = null;
+        if (pitchCurveF0 && pitchCurveF0.length >= 2) {
+            f0Slope = new Float32Array(pitchCurveF0.length);
+            for (let i = 0; i < pitchCurveF0.length - 1; i++) {
+                f0Slope[i] = pitchCurveF0[i + 1] - pitchCurveF0[i];
+            }
+            f0Slope[pitchCurveF0.length - 1] = 0;
+        }
+        const plan = this._planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope);
+        if (!plan) {
+            return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
+        }
+        const { specs, overlap } = plan;
+        const totalChunks = specs.length;
+        console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
+        const _chunkedT0 = performance.now();
+        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog: true };
+        const progressPerChunk = progressRange / totalChunks;
+        let committedFrames = 0;
+        try {
+            for (let ci = 0; ci < totalChunks; ci++) {
+                throwIfCancelled(abortSignal);
+                const spec = specs[ci];
+                console.log(`[DiffusionChunk] chunk ${ci}/${totalChunks}: frames[${spec.chunkStart},${spec.chunkEnd})=${spec.currentChunkFrames}frames`);
+                const { newCommitted } = await this._runSingleDiffusionChunk(
+                    ctx, spec, onProgress,
+                    progressStart + ci * progressPerChunk, progressPerChunk
+                );
+                if (onChunkMel && newCommitted > committedFrames) {
+                    const melStart = committedFrames;
+                    const melEnd = newCommitted;
+                    const melLen = melEnd - melStart;
+                    const melData = new Float32Array(melLen * MEL_DIM);
+                    melData.set(xt.data.subarray(melStart * MEL_DIM, melEnd * MEL_DIM));
+                    await onChunkMel({
+                        chunkIndex: ci,
+                        frameStart: melStart,
+                        frameEnd: melEnd,
+                        melData,
+                        isLast: spec.isLast,
+                    });
+                    committedFrames = newCommitted;
+                }
+            }
+        } catch (err) {
+            console.error(`[DiffusionChunk] Chunked diffusion failed: ${err.message}`);
+            throw err;
+        }
+        if (onChunkMel && committedFrames !== totalFrames) {
+            throw new Error(
+                `Chunked diffusion consumer incomplete: ` +
+                `committed ${committedFrames}/${totalFrames} frames`
+            );
+        }
+        const _elapsed = performance.now() - _chunkedT0;
+        const _rtf = (totalFrames * HOP_SIZE / SAMPLE_RATE) / (_elapsed / 1000);
+        console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s`);
+    }
+````
+
+本节缺口：省略 `_planChunks` 的 F0-aware 边界搜索分支（原 1384-1402 行）及 `runDiffusionLoopChunked` 的详细日志；默认边界路径保留。
+
+### C11 vocoder 分块：committed chunk 推送、WSOLA 写回、流增益
+文件：`src/inference/pipeline/postprocessing.js`　原行号：77-105, 1281-1330, 1568-1607, 1628-1653, 1727-1794（注释块/空行已省略）
+
+````javascript
+function _applyStreamGain(buf, state) {
+    const TARGET_PEAK = 0.95;
+    const FADE_SAMPLES = 120;
+    const n = buf.length;
+    if (n === 0) return;
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+        const abs = Math.abs(buf[i]);
+        if (abs > peak) peak = abs;
+    }
+    const prev = state.gain;
+    if (peak * prev <= TARGET_PEAK) {
+        if (prev !== 1) {
+            for (let i = 0; i < n; i++) buf[i] *= prev;
+        }
+        return;
+    }
+    const next = TARGET_PEAK / peak;
+    const fade = Math.min(n, FADE_SAMPLES);
+    for (let i = 0; i < fade; i++) {
+        buf[i] *= next * 0.5 * (1 - Math.cos(Math.PI * i / fade));
+    }
+    for (let i = fade; i < n; i++) buf[i] *= next;
+    state.gain = next;
+}
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0, overlapFramesOverride = 0) {
+        const _vocoderStartMs = performance.now();
+        if (!sessions || !sessions.vocoder) {
+            console.error(`[VocoderDiag] CRITICAL: sessions.vocoder is ${sessions ? (sessions.vocoder === undefined ? 'undefined' : 'null') : 'sessions is null'}! Vocoder will throw. sessionEPs=${JSON.stringify(sessions ? Object.keys(sessions) : [])}`);
+        }
+        if (_readDiagnosticMode()) {
+            console.log(`[VocoderDiag] runVocoderChunked START: totalFrames=${totalFrames}, vocoderType=${vocoderType}, isFP16=${isFP16}, melDataLen=${melData.length}`);
+        }
+        const SIFIGAN_UPSAMPLE_RATIO = vocoderType === 'sifigan' ? (HOP_SIZE / SIFIGAN_HOP_SIZE) : 1;
+        let effectiveTotalFrames = totalFrames;
+        let effectiveMelData = melData;
+        if (SIFIGAN_UPSAMPLE_RATIO > 1) {
+            effectiveTotalFrames = totalFrames * SIFIGAN_UPSAMPLE_RATIO;
+            const srcArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
+            effectiveMelData = new Float32Array(effectiveTotalFrames * MEL_DIM);
+            for (let f = 0; f < totalFrames; f++) {
+                const srcOff = f * MEL_DIM;
+                for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
+                    const dstOff = (f * SIFIGAN_UPSAMPLE_RATIO + r) * MEL_DIM;
+                    effectiveMelData.set(srcArr.subarray(srcOff, srcOff + MEL_DIM), dstOff);
+                }
+            }
+        }
+        effectiveMelData = guardMelFinite(effectiveMelData, effectiveTotalFrames, vocoderType);
+        const chunkSize = ((chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES) * SIFIGAN_UPSAMPLE_RATIO;
+        const _baseOverlapFrames = (Number.isFinite(overlapFramesOverride) && overlapFramesOverride >= 8 && overlapFramesOverride <= 96)
+            ? Math.floor(overlapFramesOverride)
+            : VOCODER_OVERLAP_FRAMES;
+        let overlapFrames = _baseOverlapFrames * SIFIGAN_UPSAMPLE_RATIO;
+        if (overlapFrames >= chunkSize) {
+            overlapFrames = Math.floor(chunkSize / 2);
+        }
+        const fadeSamples = overlapFrames * vocoderHopSize;
+        let prevChunkTail = null;
+        const chunkSpecs = [];
+        let framePos = 0;
+        let chunkIdx = 0;
+        while (framePos < effectiveTotalFrames) {
+            const isFirst = chunkIdx === 0;
+            const chunkStart = isFirst ? 0 : Math.max(0, framePos - overlapFrames);
+            const chunkEnd = Math.min(chunkStart + chunkSize, effectiveTotalFrames);
+            const currentChunkFrames = chunkEnd - chunkStart;
+            const isLast = chunkEnd >= effectiveTotalFrames;
+            chunkSpecs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast });
+            if (isLast) break;
+            framePos = chunkEnd;
+            chunkIdx++;
+        }
+        for (let i = 0; i < totalChunkCount; i++) {
+            const spec = chunkSpecs[i];
+            const melSub = effectiveMelData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM);
+            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : spec.currentChunkFrames;
+            const paddedChunk = useStaticShapes ? padFloat(melSub, vocSeqLen * MEL_DIM) : melSub;
+            const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
+            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, spec.chunkStart, spec.currentChunkFrames);
+            let results;
+            try {
+                results = await sessions.vocoder.run(vocoderInputs);
+            } catch (runErr) {
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+                if (isVramOOMError(runErr)) {
+                    throw new Error(`Vocoder OOM at chunk ${i}/${totalChunkCount} (frames=${spec.currentChunkFrames}, offset=${spec.chunkStart}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
+                }
+                throw new Error(`Vocoder inference failed at chunk ${i}/${totalChunkCount}: ${runErr.message}`);
+            }
+            await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
+            const writeStart = spec.chunkStart * vocoderHopSize;
+            const writeLen = Math.min(waveform.length, totalSamples - writeStart);
+            const overlapWriteLen = Math.min(fadeSamples, writeLen);
+            const canWsola = !spec.isFirst && prevChunkTail && overlapWriteLen > 0 &&
+                prevChunkTail.length >= overlapWriteLen && waveform.length >= overlapWriteLen;
+            if (canWsola) {
+                const currChunkHead = waveform.subarray(0, overlapWriteLen);
+                const wsolaResult = wsolaCrossfade(prevChunkTail, currChunkHead, overlapWriteLen, SAMPLE_RATE);
+                const overlapCopy = Math.min(overlapWriteLen, totalSamples - writeStart);
+                if (overlapCopy > 0) {
+                    output.set(wsolaResult.subarray(0, overlapCopy), writeStart);
+                }
+                const stableStart = writeStart + overlapWriteLen;
+                const stableCopy = Math.min(writeLen - overlapWriteLen, totalSamples - stableStart);
+                if (stableCopy > 0) {
+                    output.set(waveform.subarray(overlapWriteLen, overlapWriteLen + stableCopy), stableStart);
+                }
+            } else {
+                const copyLen = Math.min(writeLen, totalSamples - writeStart);
+                if (copyLen > 0) {
+                    output.set(waveform.subarray(0, copyLen), writeStart);
+                }
+            }
+            if (!spec.isLast && fadeSamples > 0 && waveform.length >= fadeSamples) {
+                prevChunkTail = waveform.subarray(waveform.length - fadeSamples);
+            }
+            if (onChunkComplete) {
+                const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
+                const stableEnd = Math.min(stableEndFrames * vocoderHopSize, totalSamples);
+                if (stableEnd > committedSamples) {
+                    const chunkAudio = output.slice(committedSamples, stableEnd);
+                    _applyStreamGain(chunkAudio, streamGain);
+                    try {
+                        onChunkComplete({
+                            chunkIndex: i,
+                            sampleOffset: committedSamples,
+                            sampleEnd: stableEnd,
+                            audio: chunkAudio,
+                            totalSamples,
+                            isLast: spec.isLast,
+                        });
+                    } catch (e) {
+                        console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
+                    }
+                    committedSamples = stableEnd;
+                }
+            }
+        }
+````
+
+本节缺口：省略 vocoder 单块快速路径（≤ chunkSize）、SiFiGAN 4× 上采样、张量生命周期与诊断日志；保留分块规划、WSOLA 写回与 committed 推送。
+
+### C12 WSOLA（摘要，完整代码见完整版 R34）
+
+- 时域 `wsolaCrossfade(prevTail, currHead, overlapSamples, sampleRate, searchWindowMs=4)`：
+  在 ±4ms 内做**一次全局**零均值归一化互相关搜索，得到唯一对齐偏移；按偏移平移 currHead 后做 Hann OLA。
+  刻意不用逐帧 WSOLA：周期信号多峰会导致每帧选到不同峰，拼接出不连续 alignedCurr。
+- mel 域 `wsolaCrossfadeMel(prevTail, currHead, overlapFrames, melDim)`：逐帧余弦相似度对齐，
+  `j = i + bestOff` 强制单调非减（允许每帧回退 1），再做逐帧 Hann OLA。
+- 调用点：vocoder 重叠区 `postprocessing.js` 的 `wsolaCrossfade(...)`；扩散块重叠区 `diffusion.js` 的 `wsolaCrossfadeMel(...)`。
+
+### C13 人声段切分（摘要，完整代码见完整版 R37）
+
+- `buildVocalSegments(notes, bpm)`：无长休止且总时长 ≤20s → 单段；否则在 ≥1.5s 的休止中心切 region，两侧各留 0.15s 上下文。
+- region 超过 20s 时继续切成 8~20s 的 segment，段间保留 2s 重叠；`startBeat/endBeat` 为绝对拍位。
+- 段边界优先选休止中点或音符结束点；segment 内部 diffusion 分块再按 `diffStepChunkFrames/overlap` 处理。
+- 多 segment 路径中 `_synthesizeSegment(..., onChunkAudio=null)`：段内部不流式；由 `_createSegmentStreamEmitter` 在段完成后按时间序发射。
+
+## 3. 已省略内容
+
+- 导出 `exportFragment`、独占模式 `playExclusive`、`playFullBuffer` 的包络/声像细节、UI/状态访问器；
+- 编辑后自动实时推理（`autoInference.js` / `synthesizeFragmentInBackground`，非流式且 `background:true` 时不发 chunk）；
+- `SequencedChunkQueue`（内置管线主路径未启用，乱序/重叠已由 StreamTimeline.coveredRanges 处理）；
+- `synthesizeMultiStreaming`（主窗口多分片交错路径）与 `streamManifest/streamLast` 协议；
+- 插件后端、远程 API 后端、vocoder 单块快速路径、模型加载/显存管理、导出 WAV；
+- 完整注释、诊断日志、WSOLA/分段算法实现。完整原文见 `FRAGMENT_STREAMING_REVIEW_BUNDLE.txt`。
