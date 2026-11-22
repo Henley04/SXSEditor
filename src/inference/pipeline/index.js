@@ -1175,12 +1175,23 @@ class OnnxSVSPipeline {
         let idx = 0;
         for (let off = 0; off < total; off += step, idx++) {
             const end = Math.min(total, off + step);
+            const view = audio.subarray(off, end);
+            // The worker bridge transfers a chunk's backing ArrayBuffer when the
+            // view owns the whole buffer. A <= chunkSec cached audio produces
+            // exactly one such view, so transferring it would detach the LRU
+            // cache entry itself and poison every later cache hit. Hand the
+            // bridge a private copy only in that case; partial views are not
+            // transferable and keep the zero-copy path.
+            const ownsWholeBuffer = view.buffer instanceof ArrayBuffer
+                && view.byteOffset === 0
+                && view.byteLength === view.buffer.byteLength;
+            const chunkAudio = ownsWholeBuffer ? view.slice() : view;
             try {
                 onChunkAudio({
                     chunkIndex: idx,
                     sampleOffset: off,
                     sampleEnd: end,
-                    audio: audio.subarray(off, end),
+                    audio: chunkAudio,
                     totalSamples: total,
                     isLast: end >= total,
                     cached: true,
@@ -3314,18 +3325,25 @@ class OnnxSVSPipeline {
         };
         const emitChunk = (audio, isLast) => {
             if (!audio || audio.length === 0) return false;
+            // Capture the range BEFORE onChunkAudio: the worker bridge transfers
+            // audio.buffer to the main thread (postMessage transfer list) and the
+            // sender-side typed array is detached synchronously. Reading
+            // audio.length afterwards would yield 0 and freeze `frontier` at the
+            // first chunk, so every later chunk would be emitted with offset 0.
+            const sampleOffset = frontier;
+            const sampleEnd = sampleOffset + audio.length;
             try {
                 onChunkAudio({
                     chunkIndex: nextTimeIdx,
-                    sampleOffset: frontier,
-                    sampleEnd: frontier + audio.length,
+                    sampleOffset,
+                    sampleEnd,
                     audio,
                     totalSamples: totalSamplesRel,
                     isLast,
                 });
             } catch (_) {}
-            console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${frontier} end=${frontier + audio.length} isLast=${isLast} t=${Date.now()}`);
-            frontier += audio.length;
+            console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${sampleOffset} end=${sampleEnd} isLast=${isLast} t=${Date.now()}`);
+            frontier = sampleEnd;
             return true;
         };
 

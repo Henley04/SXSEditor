@@ -36,6 +36,27 @@ describe('缓存命中的流式重放', () => {
     expect(chunks).to.have.lengthOf(0);
   });
 
+  it('≤2s 缓存被真实 transfer 后，不分离缓存条目本身', () => {
+    const pipeline = new OnnxSVSPipeline('/fake/model/dir/');
+    const audio = new Float32Array(Math.round(1.5 * SAMPLE_RATE)).fill(0.1);
+    const chunks = [];
+    pipeline._emitCachedAudioAsChunks(audio, (c) => {
+      // 复现 svsWorker.attachCallbacks：视图独占 buffer 时转移，发送侧同步分离。
+      const view = c.audio;
+      const ab = view.buffer instanceof ArrayBuffer
+        && view.byteOffset === 0
+        && view.byteLength === view.buffer.byteLength
+        ? view.buffer : null;
+      chunks.push(structuredClone(c, ab ? { transfer: [ab] } : undefined));
+    }, 2);
+
+    expect(chunks).to.have.lengthOf(1);
+    expect(chunks[0].audio.length).to.equal(Math.round(1.5 * SAMPLE_RATE));
+    // 关键：LRU 里的缓存数组必须仍然可用，否则下一次命中会拿到空音频。
+    expect(audio.length).to.equal(Math.round(1.5 * SAMPLE_RATE));
+    expect(audio[0]).to.be.closeTo(0.1, 1e-6);
+  });
+
   it('回调抛错时停止重放（不让一条坏链路拖垮整次合成）', () => {
     const pipeline = new OnnxSVSPipeline('/fake/model/dir/');
     let n = 0;

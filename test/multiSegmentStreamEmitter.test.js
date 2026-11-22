@@ -157,6 +157,74 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
     });
   });
 
+  describe('Worker Transferable（真实 buffer 转移）', () => {
+    /**
+     * svsWorker.js 的 onChunkAudio 会在视图独占 buffer 时调用
+     * `postMessage(message, [audio.buffer])`，发送侧 typed array 会同步分离。
+     * 这里用 structuredClone 复现同一语义，而不是只把参数塞进数组。
+     */
+    function makeTransferEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } = {}) {
+      const chunks = [];
+      const pipeline = buildPipeline();
+      const ts = totalSamples != null
+        ? totalSamples
+        : Math.floor((segments[segments.length - 1].endBeat / BPM) * 60 * SAMPLE_RATE);
+      const emitter = pipeline._createSegmentStreamEmitter(
+        segments, BPM, firstNoteStartBeat, ts,
+        (c) => {
+          const view = c.audio;
+          const ab = view.buffer instanceof ArrayBuffer
+            && view.byteOffset === 0
+            && view.byteLength === view.buffer.byteLength
+            ? view.buffer : null;
+          chunks.push(structuredClone(c, ab ? { transfer: [ab] } : undefined));
+        },
+      );
+      return { emitter, chunks };
+    }
+
+    it('长休止：转移后 frontier 仍连续，补零恰好覆盖空白，后段 PCM 保留', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4.15 },
+        { startBeat: 26.15, endBeat: 30.15 },
+      ];
+      const { emitter, chunks } = makeTransferEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4.15, 0.1));
+      emitter.segmentDone(1, makeAudio(4, 0.2));
+
+      expect(chunks).to.have.lengthOf(3);
+      const [c0, gap, c2] = chunks;
+      expect(c0.sampleOffset).to.equal(0);
+      expect(c0.sampleEnd).to.equal(Math.round(4.15 * SEC));
+      expect(gap.sampleOffset).to.equal(c0.sampleEnd);
+      expect(gap.sampleEnd).to.equal(Math.round(26.15 * SEC));
+      expect(gap.audio.length).to.equal(Math.round(22 * SEC));
+      expect(gap.audio[0]).to.equal(0);
+      expect(gap.audio[gap.audio.length - 1]).to.equal(0);
+      expect(c2.sampleOffset).to.equal(Math.round(26.15 * SEC));
+      expect(c2.sampleEnd).to.equal(Math.round(30.15 * SEC));
+      expect(c2.audio[0]).to.be.closeTo(0.2, 1e-6);
+      expect(c2.audio[c2.audio.length - 1]).to.be.closeTo(0.2, 1e-6);
+    });
+
+    it('连续多段：转移后第二段不会从 0 重发', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 4, endBeat: 8 },
+      ];
+      const { emitter, chunks } = makeTransferEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4, 0.1));
+      emitter.segmentDone(1, makeAudio(4, 0.2));
+
+      expect(chunks).to.have.lengthOf(2);
+      expect(chunks[0].sampleOffset).to.equal(0);
+      expect(chunks[0].sampleEnd).to.equal(4 * SEC);
+      expect(chunks[1].sampleOffset).to.equal(4 * SEC);
+      expect(chunks[1].sampleEnd).to.equal(8 * SEC);
+      expect(chunks[1].audio[0]).to.be.closeTo(0.2, 1e-6);
+    });
+  });
+
   describe('firstNoteStart 偏移与 isLast 收尾', () => {
     it('分片以休止开头时首段裁掉前导休止（audioData[0] 对齐首音符）', () => {
       const segA = { startBeat: 0, endBeat: 12 }; // 前导休止已补，音频从拍 0 开始
