@@ -334,6 +334,15 @@ export async function playFragment() {
   const sess = createSession('stream');
   sess.streamId = nextFragmentStreamId();
   sess.beginStreaming();
+  const startAudio = getFragmentAudioData();
+  console.log('[FragPlay] playFragment begin', {
+    session: sess.id,
+    streamId: sess.streamId,
+    playFromSec: sess.startPositionSec,
+    hasCachedAudio: !!(startAudio && startAudio.length > 0),
+    cachedAudioLength: startAudio ? startAudio.length : 0,
+    hasCachedSignature: getFragmentAudioDataSignature() !== null,
+  });
   // 合成状态属于 token，不属于 session：session 被 seek/stop dispose 后，
   // 这个 Promise 仍要在结束时释放自己设置的状态（token 不匹配的新任务除外）。
   beginFragmentSynthesis(sess.streamId);

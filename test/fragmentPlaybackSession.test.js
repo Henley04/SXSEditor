@@ -361,6 +361,80 @@ describe('分片编辑器播放会话（结构性根因回归）', () => {
     expect(ctx.state, '下一块到达后应解冻').to.equal('running');
     expect(state.getFragmentIsPlaying()).to.equal(true);
   });
+
+  describe('播放一致性自检（推理结束/交付领先时不得停在等待）', () => {
+    it('播放头之后已有交付内容却停在 waiting → 必须解冻并推进前沿', async () => {
+      setup();
+      playPromise = audioPlayback.playFragment();
+      await sleep(40);
+      // 两块连续音频都已交付；播放头仍在起点（后续内容已排程）。
+      chunkCb(chunkAt(0, 4, false));
+      await sleep(40);
+      chunkCb(chunkAt(4, 4, false));
+      await sleep(40);
+
+      const sess = sessionModule.getCurrentSession();
+      expect(sess, '会话存在').to.be.ok;
+      // 模拟解冻控制消息丢失：scheduler 停在 waiting、设备时钟仍冻结，
+      // 而 timeline 已交付到 8s（播放头之后还有内容）。
+      sess.scheduler._waitingForInference = true;
+      sess.scheduler._contextSuspended = true;
+      ctx.state = 'suspended';
+
+      const repair = sess._repairPlaybackConsistency('test');
+      await sleep(10);
+      ctx.releaseResume();
+      await repair;
+      expect(sess.scheduler.isWaiting, '不得停在等待').to.equal(false);
+      expect(ctx.state, '设备时钟必须恢复').to.equal('running');
+      expect(sess.scheduler.bufferEndSec, '前沿不得落后于已交付内容').to.be.at.least(8);
+    });
+
+    it('合法的 underrun 等待（无已交付剩余、推理未结束）不得被自检解冻', async () => {
+      setup();
+      playPromise = audioPlayback.playFragment();
+      await sleep(40);
+      chunkCb(chunkAt(0, 4, false));
+      await sleep(40);
+
+      // 播到前沿：onended 立刻冻结，尚无后续块 —— 这是合法等待。
+      ctx.advanceTo(4.05);
+      const sess = sessionModule.getCurrentSession();
+      expect(sess.scheduler.isWaiting).to.equal(true);
+
+      await sess._repairPlaybackConsistency('test');
+      expect(sess.scheduler.isWaiting, '无内容可播时保持冻结').to.equal(true);
+      expect(ctx.state).to.equal('suspended');
+
+      // 推理结束：没有任何后续 chunk 会来，自检必须解冻。
+      sess.inferenceDone = true;
+      const repair = sess._repairPlaybackConsistency('test');
+      await sleep(10);
+      ctx.releaseResume();
+      await repair;
+      expect(sess.scheduler.isWaiting, '推理结束后不得再等待').to.equal(false);
+      expect(ctx.state).to.equal('running');
+    });
+
+    it('setInferenceDone() 在等待态下解冻并留下可继续的会话', async () => {
+      setup();
+      playPromise = audioPlayback.playFragment();
+      await sleep(40);
+      chunkCb(chunkAt(0, 4, false));
+      await sleep(40);
+      ctx.advanceTo(4.05);
+
+      const sess = sessionModule.getCurrentSession();
+      expect(sess.scheduler.isWaiting).to.equal(true);
+
+      const done = sess.setInferenceDone();
+      await sleep(10);
+      ctx.releaseResume();
+      await done;
+      expect(sess.scheduler.isWaiting, '推理结束后必须解冻').to.equal(false);
+      expect(ctx.state).to.equal('running');
+    });
+  });
 });
 
 describe('StreamingScheduler.onSourcesDrained', () => {

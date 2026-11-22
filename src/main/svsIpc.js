@@ -994,6 +994,22 @@ function registerSvsIpc() {
         // 先发送、成功后才提交 seq：否则 send 抛错时 lastSeq 会声明一个
         // renderer 永远收不到的序号，结束屏障永远无法满足。
         const nextSeq = chunkSeq + 1;
+        // 诊断：区分"推理侧推出静音"与"渲染端播放静音"。抽样 RMS（步长 64）
+        // 足以看出长空当后的块是否真的有内容，开销可忽略。
+        let chunkRms = 0;
+        const audio = chunkInfo && chunkInfo.audio;
+        if (audio && audio.length > 0) {
+          const stride = 64;
+          let sum = 0;
+          let count = 0;
+          for (let i = 0; i < audio.length; i += stride) {
+            const v = audio[i];
+            sum += v * v;
+            count += 1;
+          }
+          chunkRms = count > 0 ? Math.sqrt(sum / count) : 0;
+        }
+        console.log(`[FragStream] send seq=${nextSeq} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} samples=${audio ? audio.length : 0} rms=${chunkRms.toFixed(6)} isLast=${!!chunkInfo.isLast} stream=${fragmentStreamId}`);
         try {
           win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, {
             ...chunkInfo,

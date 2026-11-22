@@ -359,6 +359,9 @@ class Session {
     this._reorderFlushed = false;
     this.protocolMode = null;     // 'identified' | 'legacy'，首块到达时一次性决定
     this.inFlightChunkHandlers = 0;
+    // 诊断：underrun 等待代数 / source 序号（定位"只进等待、没有解冻"）
+    this._waitGeneration = 0;
+    this._sourceSeq = 0;
 
     // 整段 / 独占
     this.fullSource = null;
@@ -530,6 +533,7 @@ class Session {
     if (this.finished || this.disposed || !this.isCurrent) return;
     this.finished = true;
     console.log(`[FragPlay] PLAYBACK FINISHED | session=${this.id} kind=${this.kind} deliveredEndSec=${this.timeline ? this.timeline.deliveredEndSec.toFixed(3) : '-'} t=${Date.now()}`);
+    console.log('[FragPlay] finish state', this._debugSnapshot('finish'));
     setFragmentIsPlaying(false);
     _cancelLoop();
     if (this.scheduler) this.scheduler.deactivate();
@@ -569,9 +573,12 @@ class Session {
       onWaitStateChange: (isWaiting) => {
         if (!this.isCurrent) return;
         if (isWaiting) {
+          this._waitGeneration += 1;
+          console.log('[FragPlay] ENTER WAIT', this._debugSnapshot('enter-wait'));
           const btn = document.getElementById('btn-play-fragment');
           if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
         } else {
+          console.log('[FragPlay] RESUME', this._debugSnapshot('resume'));
           updateFragmentPlayButton();
           if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
         }
@@ -705,7 +712,17 @@ class Session {
     }
 
     if (plan.action === 'drop') {
-      console.log(`[FragPlay] chunk dropped | session=${this.id} reason=${plan.reason} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} t=${Date.now()}`);
+      console.log('[FragPlay] chunk dropped', {
+        ...this._debugSnapshot('chunk-dropped'),
+        seq: chunkInfo.seq ?? null,
+        reason: plan.reason,
+        chunkStartSec: plan.contentStartSec,
+        chunkEndSec: plan.contentEndSec,
+        chunkDurSec: plan.durationSec,
+        sampleOffset: chunkInfo.sampleOffset ?? null,
+        sampleEnd: chunkInfo.sampleEnd ?? null,
+        isLast: !!chunkInfo.isLast,
+      });
       if (chunkInfo.isLast && this.scheduler) this.scheduler.markLastReceived();
       this._maybeFinish();
       return;
@@ -738,10 +755,19 @@ class Session {
       source.buffer = buffer;
       const sched = this.scheduler;
       const idx = this.sources.length;
+      const srcId = ++this._sourceSeq;
       // 生命周期顺序：先挂 onended / 计数 / 登记，再 start()。
       // 极短 buffer 或已过期的 when 可能让 source 立刻结束；若先 start 再挂
       // onended，计数将永久不归零 → _maybeFinish 永不成立、播放卡死。
       source.onended = () => {
+        console.log('[FragPlay] source ended', {
+          session: this.id,
+          srcId,
+          ctxNow: ctx.currentTime,
+          activeSources: sched ? sched.activeSourceCount - 1 : null,
+          inferenceDone: this.inferenceDone,
+          finished: this.finished,
+        });
         if (sched) sched.sourceEnded();
         if (this.sources[idx] === source) this.sources[idx] = null;
         this._maybeFinish();
@@ -756,6 +782,18 @@ class Session {
       }
       if (sched) sched.addSource();
       this.sources.push(source);
+      console.log('[FragPlay] source start', {
+        session: this.id,
+        srcId,
+        seq: chunkInfo.seq ?? null,
+        ctxNow: ctx.currentTime,
+        when: seg.when,
+        startOffsetSec: seg.offsetSec,
+        durationSec: seg.durationSec,
+        lateSec: plan.offsetSec,
+        activeSources: sched ? sched.activeSourceCount : null,
+        waiting: sched ? sched.isWaiting : null,
+      });
       try {
         source.start(seg.when, seg.offsetSec);
       } catch (err) {
@@ -786,6 +824,12 @@ class Session {
     console.log(`[FragPlay] chunk scheduled | session=${this.id} seg=${chunkInfo.chunkIndex ?? '-'} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} lateSec=${plan.offsetSec.toFixed(4)} durSec=${plan.durationSec.toFixed(3)} parts=${segments.length} started=${plan.startedNow} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
     if (this.scheduler && this.scheduler.isWaiting) {
+      console.log('[FragPlay] resume after chunk', {
+        session: this.id,
+        seq: chunkInfo.seq ?? null,
+        waitGen: this._waitGeneration,
+        ...this._debugSnapshot('resume-after-chunk'),
+      });
       await this.scheduler.resumeFromWait();
       // resumeFromWait 内部有 await：等待期间用户可能停止或已开新一轮。
       // 守卫必须覆盖后面所有状态写入，不能只保护 playheadTick。
@@ -802,8 +846,99 @@ class Session {
 
   setInferenceDone() {
     this.inferenceDone = true;
+    console.log('[FragPlay] inference done', this._debugSnapshot('inference-done'));
     if (!this.scheduler) return Promise.resolve();
-    return this.scheduler.setInferenceDone();
+    // scheduler 内部会在 waiting 时解冻；这里再跑一次一致性自检，兜住
+    // "解冻已发出但设备没真正恢复 / 前沿与播放头脱节"的残留状态。
+    return this.scheduler.setInferenceDone()
+      .then(() => this._repairPlaybackConsistency('inference-done'))
+      .then(() => {
+        console.log('[FragPlay] inference done settled', this._debugSnapshot('inference-done-settled'));
+      });
+  }
+
+  /** 一次性快照：静音取证需要的全部会话/调度/上下文状态。 */
+  _debugSnapshot(stage) {
+    const ctx = getFragmentAudioContext();
+    const sched = this.scheduler;
+    const ctxNow = ctx ? ctx.currentTime : null;
+    const master = getFragmentGainNode();
+    return {
+      stage,
+      session: this.id,
+      kind: this.kind,
+      current: this.isCurrent,
+      disposed: this.disposed,
+      finished: this.finished,
+      userStopped: this.userStopped,
+      streamDisabled: this.streamDisabled,
+      streamStarted: this.streamStarted,
+      streamId: this.streamId,
+      seenSeqs: this.seenSeqs.size,
+      expectedLastSeq: this.expectedLastSeq,
+      inferenceDone: this.inferenceDone,
+      endSeen: this.endSeen,
+      deliveryDone: this.deliveryDone,
+      ctxState: ctx ? ctx.state : null,
+      ctxNow,
+      position: ctx && this.kind !== 'exclusive' ? this.renderPosition(ctxNow) : null,
+      deliveredEnd: this.timeline ? this.timeline.deliveredEndSec : null,
+      anchorCtxTime: this.timeline ? this.timeline.anchorCtxTime : null,
+      waiting: sched ? sched.isWaiting : null,
+      resuming: sched ? sched.isResuming : null,
+      bufferEnd: sched ? sched.bufferEndSec : null,
+      schedulerElapsed: sched && sched._getElapsed ? sched._getElapsed() : null,
+      marginSec: sched ? sched.requiredUnderrunMarginSec(0) : null,
+      activeSources: sched ? sched.activeSourceCount : null,
+      liveSources: this.sources.filter(Boolean).length,
+      masterGain: master && master.gain ? master.gain.value : null,
+      waitGen: this._waitGeneration,
+    };
+  }
+
+  /**
+   * 播放一致性自检（兜底修复，不是主路径）。
+   *
+   * 不变量：**只要播放头之后还有已交付内容，scheduler 就不允许停在等待态。**
+   * 主路径会在 chunk 到达时先 updateBufferFrontier 再 resumeFromWait；一旦
+   * 某次 resume 因设备控制消息失败/丢失而回到 suspended，后续不会再有 chunk
+   * 来唤醒它 —— 表现为"推理全部完成、播放头却定在长空当里永久无声"。
+   *
+   * 另外兜住"scheduler 认为不等待，但 AudioContext 实际仍是 suspended"：
+   * 此时解冻控制消息永远不会再发，必须按真实 ctx.state 补一次 resume。
+   */
+  _repairPlaybackConsistency(stage) {
+    const sched = this.scheduler;
+    const ctx = getFragmentAudioContext();
+    if (!sched || !ctx || this.disposed || this.finished || this.streamDisabled) {
+      return Promise.resolve();
+    }
+    const pos = this.renderPosition(ctx.currentTime);
+    const end = this.timeline ? this.timeline.deliveredEndSec : 0;
+    // 播放头之后还有已交付内容 → 解冻后必须能立刻出声。
+    const hasRemaining = end > pos + 0.05;
+
+    if (sched.isWaiting) {
+      // 合法等待：推理仍在进行，且没有越过播放头的已交付内容。保持冻结。
+      if (!this.inferenceDone && !hasRemaining) return Promise.resolve();
+      if (!sched.isResuming) {
+        console.warn('[FragPlay] repairing stuck scheduler', {
+          ...this._debugSnapshot(`repair:${stage}`),
+          hasRemaining,
+        });
+      }
+      if (hasRemaining) sched.updateBufferFrontier(end);
+      return sched.resumeFromWait().then(() => {
+        if (this.isCurrent && getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
+      });
+    }
+
+    // scheduler 不在等待，但设备时钟仍被冻结：补一次 resume（只记录，不重排）。
+    if (ctx.state === 'suspended' && this.inferenceDone) {
+      console.warn('[FragPlay] repairing suspended context', this._debugSnapshot(`repair-ctx:${stage}`));
+      return Promise.resolve(ctx.resume()).catch(() => {});
+    }
+    return Promise.resolve();
   }
 
   /**
@@ -840,11 +975,15 @@ class Session {
     const sched = this.scheduler;
     if (!sched) return;
     // 死锁守卫：推理已结束却仍在等待 → 立即解冻（没有任何后续 chunk 会来）。
-    if (sched.isWaiting && sched.inferenceDone) {
-      sched.resumeFromWait().then(() => {
-        if (this.isCurrent && getFragmentIsPlaying() && !getFragmentPlayheadRaf()) playheadTick();
-      });
-      return;
+    // 另外覆盖"播放头之后已有交付内容却仍停在等待"——同样是无人再唤醒的状态。
+    if (sched.isWaiting) {
+      const ctx = getFragmentAudioContext();
+      const hasRemaining = !!(this.timeline && ctx
+        && this.timeline.deliveredEndSec > this.renderPosition(ctx.currentTime) + 0.05);
+      if (sched.inferenceDone || hasRemaining) {
+        this._repairPlaybackConsistency('watchdog').catch(() => {});
+        return;
+      }
     }
     if (!this.streamStarted || !sched.inferenceDone) return;
     if (Date.now() - this.lastChunkAtMs < 1500) return;
@@ -1077,6 +1216,13 @@ export function createSession(kind) {
 export function stopPlayback() {
   const sess = _current;
   if (sess) {
+    console.log('[FragPlay] stopPlayback', {
+      session: sess.id,
+      kind: sess.kind,
+      waiting: sess.scheduler ? sess.scheduler.isWaiting : null,
+      waitGen: sess._waitGeneration,
+      ctxState: (getFragmentAudioContext() || {}).state ?? null,
+    });
     sess.userStopped = true;
     sess.dispose();
   }

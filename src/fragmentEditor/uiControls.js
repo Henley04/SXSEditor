@@ -12,6 +12,7 @@ import {
   getFragmentSynthesisProgress,
   getFragmentIsPlaying,
   getFragmentIsAutoInferring,
+  getFragmentAudioData,
   getAutoSaveTimer, setAutoSaveTimer,
   getNotes, setNotes,
   getSelectedNoteIds, setSelectedNoteIds,
@@ -327,6 +328,15 @@ export function setupUiControls() {
         showAlertDialog(t('fragment.noNotesToPlay'));
         return;
       }
+      // 诊断：记录每次点击实际走哪条分支（播放中停止 / 合成中取消 / 新建播放）。
+      const cachedAudio = getFragmentAudioData();
+      console.log('[FragPlay] play button', {
+        isPlaying: getFragmentIsPlaying(),
+        isSynthesizing: getFragmentIsSynthesizing(),
+        isAutoInferring: getFragmentIsAutoInferring(),
+        audioLength: cachedAudio ? cachedAudio.length : 0,
+        action: (getFragmentIsPlaying() || getFragmentIsSynthesizing()) ? 'stop-or-cancel' : 'play',
+      });
       // 播放中 / 推理中一律按"停止"处理：
       //   · 流式播放期间合成仍在进行（isSynthesizing=true），按钮此刻是"停止"；
       //   · 推理刚开始、首个 chunk 还没到时同样要能取消 —— 旧实现直接 return，
