@@ -25,8 +25,8 @@ if (!global.requestAnimationFrame) {
   global.cancelAnimationFrame = (id) => global.window.cancelAnimationFrame(id);
 }
 
-const { state, trackManager } = require('../src/renderer/state.js');
-const { playAll } = require('../src/renderer/audioPlayback.js');
+const { state, dom, trackManager } = require('../src/renderer/state.js');
+const { playAll, stopPlayback } = require('../src/renderer/audioPlayback.js');
 const { TRANSPORT, setTransport, getTransportState } = require('../src/renderer/transport.js');
 
 /** 造一个可观测的假 AudioBufferSourceNode */
@@ -38,6 +38,43 @@ function makeFakeSource() {
   };
 }
 
+/** jsdom 没有 WebAudio；只提供 chunk 排程会用到的最小接口。 */
+function installFakeAudioContext() {
+  let sourceCount = 0;
+  class FakeGain {
+    constructor() { this.gain = { value: 1, setValueAtTime() {}, setTargetAtTime() {} }; }
+    connect() { return this; }
+    disconnect() {}
+  }
+  class FakeBuffer {
+    constructor(length) { this.length = length; this.duration = length / 24000; this._data = new Float32Array(length); }
+    getChannelData() { return this._data; }
+  }
+  class FakeSource {
+    constructor() { this.onended = null; }
+    connect() { return this; }
+    start() {}
+    stop() {}
+  }
+  class FakeCtx {
+    constructor() {
+      this.state = 'running';
+      this.currentTime = 0;
+      this.sampleRate = 24000;
+      this.destination = {};
+      this.outputLatency = 0;
+      this.baseLatency = 0;
+    }
+    createGain() { return new FakeGain(); }
+    createBuffer(channels, length) { return new FakeBuffer(length); }
+    createBufferSource() { sourceCount++; return new FakeSource(); }
+    suspend() { return Promise.resolve(); }
+    resume() { return Promise.resolve(); }
+  }
+  window.AudioContext = function () { return new FakeCtx(); };
+  return { get sourceCount() { return sourceCount; } };
+}
+
 function installElectronApi(overrides = {}) {
   const calls = { cancel: 0, settings: 0, synth: 0 };
   global.window.electronAPI = {
@@ -46,6 +83,7 @@ function installElectronApi(overrides = {}) {
     audioStop: async () => ({ success: true }),
     initSVSPipeline: async () => ({ success: true }),
     onSVSProgress: () => () => {},
+    onSVSChunkAudio: () => () => {},
     synthesizeMultiStreaming: async () => { calls.synth++; return new Float32Array(0); },
     synthesizeSVS: async () => { calls.synth++; return new Float32Array(0); },
     ...overrides,
@@ -68,7 +106,12 @@ function resetState() {
   state.streamingSources = [];
   state.streamingFinished = false;
   state.pipelineInitialized = true;
+  state.pipelineInitPromise = null;
+  state.audioSettings = {};
   state.playheadRaf = null;
+  state.audioContext = null;
+  state.gainNode = null;
+  dom.autoShiftCheck = null;
   // 工程为空：playAll 会走"没有分片"的早退分支，避免真的去建管线
   if (global.window.alert) global.window.alert = () => {};
 }
@@ -121,5 +164,109 @@ describe('renderer playAll — 推理进行中再次播放', () => {
     await playAll();
 
     expect(calls.cancel).to.equal(0);
+  });
+
+  // 用户报告：主页面加载模型时按"停止推理"，界面回到 IDLE，但模型加载完成后
+  // playAll 从 await 处续跑，继续推理；旧会话 chunk 还会重启播放头与播放。
+  function addOneFragment() {
+    const singer = trackManager.addSinger({ id: 's-load-stop', type: 'singer' });
+    trackManager.addFragment({
+      id: 'f-load-stop',
+      singerId: singer.id,
+      startTime: 0,
+      duration: 4,
+      notes: [{ id: 'n-load-stop', start: 0, duration: 2, pitch: 60, lyric: 'a' }],
+    });
+  }
+
+  function installPendingInit() {
+    let signalInitCalled;
+    let releaseInit;
+    const initCalled = new Promise((resolve) => { signalInitCalled = resolve; });
+    const initGate = new Promise((resolve) => { releaseInit = resolve; });
+    const calls = installElectronApi({
+      initSVSPipeline: async () => { signalInitCalled(); return initGate; },
+    });
+    state.pipelineInitialized = false;
+    state.pipelineInitPromise = null;
+    return { calls, initCalled, releaseInit };
+  }
+
+  it('模型加载中按停止：加载完成后不得继续推理，也不得重启播放头', async () => {
+    const { calls, initCalled, releaseInit } = installPendingInit();
+    addOneFragment();
+
+    const pending = playAll();
+    await initCalled;
+    expect(getTransportState(), '加载阶段必须可见').to.equal(TRANSPORT.LOADING);
+
+    stopPlayback();
+    expect(getTransportState()).to.equal(TRANSPORT.IDLE);
+    // LOADING 阶段不能发 cancel IPC：主进程会 reset 正在初始化的 lazy 实例。
+    expect(calls.cancel).to.equal(0);
+
+    releaseInit({ success: true });
+    await pending;
+
+    expect(calls.synth, '加载完成后旧会话不得发起推理').to.equal(0);
+    expect(state.isSynthesizing).to.equal(false);
+    expect(state.isPlaying).to.equal(false);
+    expect(getTransportState()).to.equal(TRANSPORT.IDLE);
+    expect(state.playheadRaf, '播放头动画不得被旧会话重启').to.equal(null);
+  });
+
+  it('加载中停止后立刻重新播放：新会话照常推理，旧会话不再插手', async () => {
+    const { calls, initCalled, releaseInit } = installPendingInit();
+    // jsdom 没有 index.html 里的复选框，这个字段只被读取 checked。
+    dom.autoShiftCheck = { checked: false };
+    // 走流式路径：空 chunk 结果不会触发真实 AudioContext（jsdom 没有 WebAudio）。
+    window.electronAPI.getSettings = async () => ({ previewDiffStepChunkEnabled: true });
+    addOneFragment();
+
+    const stale = playAll();
+    await initCalled;
+    stopPlayback();
+    const fresh = playAll();
+    releaseInit({ success: true });
+    await Promise.all([stale, fresh]);
+
+    expect(calls.synth, '只有新会话允许发起一次推理').to.equal(1);
+    expect(state.isSynthesizing).to.equal(false);
+    expect(getTransportState()).to.equal(TRANSPORT.IDLE);
+    stopPlayback(); // 清掉流式 watchdog，避免 timer 泄漏到后续用例
+  });
+
+  it('停止后迟到的流式 chunk 不得重启播放头与重复播放', async () => {
+    let emitChunk;
+    let releaseSynth;
+    const synthGate = new Promise((resolve) => { releaseSynth = resolve; });
+    installElectronApi({
+      getSettings: async () => ({ previewDiffStepChunkEnabled: true }),
+      onSVSChunkAudio: (handler) => { emitChunk = handler; return () => { emitChunk = null; }; },
+      synthesizeMultiStreaming: async () => synthGate,
+    });
+    dom.autoShiftCheck = { checked: false };
+    addOneFragment();
+    const audio = installFakeAudioContext();
+
+    const pending = playAll();
+    await new Promise((resolve) => setImmediate(resolve)); // 等 chunk 监听器注册
+    expect(emitChunk, '流式会话必须已注册 chunk 监听器').to.be.a('function');
+
+    await emitChunk({ audio: new Float32Array(4410), sampleOffset: 0, sampleEnd: 4410 });
+    expect(state.isPlaying, '首个 chunk 正常起播').to.equal(true);
+    expect(audio.sourceCount).to.equal(1);
+    const firstStart = state.playbackStartTime;
+
+    stopPlayback();
+    expect(state.isPlaying).to.equal(false);
+    await emitChunk({ audio: new Float32Array(4410), sampleOffset: 4410, sampleEnd: 8820 });
+    expect(state.isPlaying, '停止后的迟到 chunk 不得重新起播').to.equal(false);
+    expect(audio.sourceCount, '迟到 chunk 不得再排新的音频 source').to.equal(1);
+    expect(state.playbackStartTime, '时间基准不得被迟到 chunk 重置').to.equal(firstStart);
+    expect(getTransportState()).to.equal(TRANSPORT.IDLE);
+
+    releaseSynth(new Float32Array(0));
+    await pending;
   });
 });

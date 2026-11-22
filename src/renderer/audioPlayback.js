@@ -566,7 +566,11 @@ export async function ensurePipelineInitialized() {
     if (getTransportState() === TRANSPORT.LOADING) {
       setTransport(state.isSynthesizing ? TRANSPORT.SYNTHESIZING : TRANSPORT.IDLE);
     }
-    clearTransportStatus();
+    // 用户可能在加载期间停止后又立刻重新播放：那轮旧 init 的收尾不能抹掉
+    // 新会话刚设置的"推理中"进度文案。
+    if (getTransportState() === TRANSPORT.LOADING || (!state.isSynthesizing && !state.isPlaying)) {
+      clearTransportStatus();
+    }
   }
 }
 
@@ -723,6 +727,10 @@ export async function playAll() {
     if (!allFragmentsUsePluginBackend(allFragments, singerMap)) {
       await ensurePipelineInitialized();
     }
+    // 模型加载可能耗时数秒。stopPlayback 在这段 await 期间只能改状态/代数，
+    // 无法打断这个 async 函数；不在这里检查，加载完成后会直接从挂起点续跑，
+    // 继续发起用户已经停止的推理（随后旧 chunk 还会重启播放头与播放）。
+    throwIfCancelled();
 
     const inferenceOpts = getPreviewInferenceOptions();
 
@@ -812,6 +820,11 @@ export async function playAll() {
         streamingChunkCleanup = window.electronAPI.onSVSChunkAudio(async (chunkInfo) => {
           try {
             if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
+            // 停止/新一轮播放后，主进程仍可能推来旧会话的 chunk。它们绝不能
+            // 走到下面的 first-chunk 分支：那会重设 playbackStartTime、置
+            // isPlaying、重启播放头 rAF —— 用户按了停止却自己响起来、播放头
+            // 跳回起点并重复播放，正是这条路径造成的。
+            if (myGeneration !== _playGeneration || state.synthesisCancelled) return;
             if (state.streamingFinished) return;
 
             const ctx = getAudioContext();
@@ -943,6 +956,9 @@ export async function playAll() {
             // 共享时钟基准（伴奏、先前 chunk、播放头都按它继续走）。
             if (_scheduler.isWaiting) {
               await _scheduler.resumeFromWait();
+              // resumeFromWait 内部有 await，期间用户可能按了停止并开启新会话；
+              // 恢复后必须复查代数，否则旧 chunk 会在新会话里排程出声。
+              if (myGeneration !== _playGeneration || state.synthesisCancelled) return;
               // 恢复后必须清掉"等待推理…"，否则它会一直挂在右侧直到停止播放
               // （setTransport(PLAYING) 在状态未变化时不会动进度区）。
               clearTransportStatus();
@@ -1746,6 +1762,9 @@ export function stopPlayback() {
   // 若用户在"最后一步 startAudioPlayback 还挂着"时按了停止，旧代码会把刚复位
   // 成 IDLE 的界面又拽回 PAUSED（Play/Stop 亮着但什么都没在播）。
   _playGeneration += 1;
+  // 立即关闭流式 chunk 接收：监听器可能还没撤掉，旧会话的迟到 chunk 不能再
+  // 启动播放或重置时间基准（播放头位置错误 + 重复播放的直接来源）。
+  state.streamingFinished = true;
   // 解除推理等待冻结（等待在途 suspend 落地后再 resume，避免冻结泄漏）
   if (_scheduler) _scheduler.deactivate();
   if (state.isSynthesizing) {
