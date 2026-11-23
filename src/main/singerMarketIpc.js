@@ -41,6 +41,7 @@ const net = require('node:net');
 const { URL } = require('node:url');
 const { t } = require('./locale');
 const { IPC_CHANNELS } = require('../shared/ipcChannels');
+const { ownsWholeBuffer } = require('../shared/pcmTransfer');
 const { isPathAllowed } = require('./security');
 
 const DEFAULT_API_BASE = 'https://singer-files.15240287482.workers.dev';
@@ -893,7 +894,7 @@ function registerSingerMarketIpc() {
         const body = res.body;
         // Buffer.concat 对大体积返回的 Buffer 独占其底层 ArrayBuffer（offset 0、
         // 长度相等），此时直接复用，省掉一次整文件的 slice 拷贝（P11 峰值内存）。
-        const ab = body.byteOffset === 0 && body.byteLength === body.buffer.byteLength
+        const ab = ownsWholeBuffer(body)
           ? body.buffer
           : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
         return {

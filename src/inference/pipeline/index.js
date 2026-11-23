@@ -1,4 +1,5 @@
 const { IPC_CHANNELS } = require('../../shared/ipcChannels');
+const { ownsWholeBuffer } = require('../../shared/pcmTransfer');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -1182,10 +1183,7 @@ class OnnxSVSPipeline {
             // cache entry itself and poison every later cache hit. Hand the
             // bridge a private copy only in that case; partial views are not
             // transferable and keep the zero-copy path.
-            const ownsWholeBuffer = view.buffer instanceof ArrayBuffer
-                && view.byteOffset === 0
-                && view.byteLength === view.buffer.byteLength;
-            const chunkAudio = ownsWholeBuffer ? view.slice() : view;
+            const chunkAudio = ownsWholeBuffer(view) ? view.slice() : view;
             try {
                 onChunkAudio({
                     chunkIndex: idx,
@@ -3341,8 +3339,14 @@ class OnnxSVSPipeline {
                     totalSamples: totalSamplesRel,
                     isLast,
                 });
-            } catch (_) {}
-            console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${sampleOffset} end=${sampleEnd} isLast=${isLast} t=${Date.now()}`);
+            } catch (err) {
+                // Keep advancing: the next chunk's absolute coordinates must not
+                // overlap this slot even if the consumer failed to deliver it.
+                console.warn('[SegInfer][FRAG] onChunkAudio failed:', err && err.message);
+            }
+            if (_readDiagnosticMode()) {
+                console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${sampleOffset} end=${sampleEnd} isLast=${isLast} t=${Date.now()}`);
+            }
             frontier = sampleEnd;
             return true;
         };
@@ -3559,6 +3563,13 @@ class OnnxSVSPipeline {
         this._diffusion.setNoiseSeed(null);
     }
 
+    /**
+     * @param {Object} [options]
+     * @param {(chunk: {audio: Float32Array}) => void} [options.onChunkAudio]
+     *   Streaming preview consumer. In the SVS worker the bridge may transfer
+     *   `chunk.audio`'s backing ArrayBuffer, so the producer must not read
+     *   `chunk.audio` after this callback returns (ownership is transferred).
+     */
     async synthesize(notes, bpm, options = {}) {
         // 串行化：防止并发 synthesize() 调用导致的 session 重建竞态（见 _synthPromise 注释）。
         // 复用 _initPromise 模式：await 上一条合成（含 _recreateHeavySessionsAfterSynthesis）

@@ -2,6 +2,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { OnnxSVSPipeline } = require('../src/inference/pipeline');
 const { SAMPLE_RATE } = require('../src/inference/pipeline/constants');
+const { ownsWholeBuffer } = require('../src/shared/pcmTransfer');
 
 /**
  * 多 segment 流式发射器（_createSegmentStreamEmitter）回归测试。
@@ -30,7 +31,7 @@ const BPM = 60;
 const SEC = SAMPLE_RATE; // 1 秒的样本数
 
 /** 收集 onChunkAudio 回调的辅助：返回 {emitter, chunks} */
-function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } = {}) {
+function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null, wrapChunk = null } = {}) {
   const chunks = [];
   const pipeline = buildPipeline();
   const ts = totalSamples != null
@@ -38,7 +39,7 @@ function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } =
     : Math.floor((segments[segments.length - 1].endBeat / BPM) * 60 * SAMPLE_RATE);
   const emitter = pipeline._createSegmentStreamEmitter(
     segments, BPM, firstNoteStartBeat, ts,
-    (c) => chunks.push(c),
+    (c) => chunks.push(wrapChunk ? wrapChunk(c) : c),
   );
   return { emitter, chunks };
 }
@@ -161,26 +162,15 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
     /**
      * svsWorker.js 的 onChunkAudio 会在视图独占 buffer 时调用
      * `postMessage(message, [audio.buffer])`，发送侧 typed array 会同步分离。
-     * 这里用 structuredClone 复现同一语义，而不是只把参数塞进数组。
+     * 这里用 structuredClone + 同一个 ownsWholeBuffer 谓词复现同一语义。
      */
-    function makeTransferEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } = {}) {
-      const chunks = [];
-      const pipeline = buildPipeline();
-      const ts = totalSamples != null
-        ? totalSamples
-        : Math.floor((segments[segments.length - 1].endBeat / BPM) * 60 * SAMPLE_RATE);
-      const emitter = pipeline._createSegmentStreamEmitter(
-        segments, BPM, firstNoteStartBeat, ts,
-        (c) => {
-          const view = c.audio;
-          const ab = view.buffer instanceof ArrayBuffer
-            && view.byteOffset === 0
-            && view.byteLength === view.buffer.byteLength
-            ? view.buffer : null;
-          chunks.push(structuredClone(c, ab ? { transfer: [ab] } : undefined));
-        },
-      );
-      return { emitter, chunks };
+    function transferChunk(c) {
+      const ab = ownsWholeBuffer(c.audio) ? c.audio.buffer : null;
+      return structuredClone(c, ab ? { transfer: [ab] } : undefined);
+    }
+
+    function makeTransferEmitter(segments, opts = {}) {
+      return makeEmitter(segments, { ...opts, wrapChunk: transferChunk });
     }
 
     it('长休止：转移后 frontier 仍连续，补零恰好覆盖空白，后段 PCM 保留', () => {

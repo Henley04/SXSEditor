@@ -87,6 +87,8 @@ module.exports = [
             'src/shared/mcpModel.js',
             'src/shared/jpPhonemeMap.js',
             'src/shared/pluginPermissions.js',
+            // PCM typed-array 归属谓词（主进程 / svsWorker / 单测共用的 CJS 纯函数）
+            'src/shared/pcmTransfer.js',
             // 插件系统 v2 的共享层：CJS（插件 runtime 是裸拷贝，按路径 require，
             // 因此这几个文件不能写成 ESM），主进程与 runtime 共用。
             'src/shared/pluginApi.js',

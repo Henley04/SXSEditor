@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const { ownsWholeBuffer } = require('../shared/pcmTransfer');
 
 function findWorkerScript() {
   const candidates = [
@@ -87,8 +88,7 @@ class SvsWorkerClient {
       if (!v) return;
       if (v instanceof ArrayBuffer) {
         list.push(v);
-      } else if (ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer
-        && v.byteOffset === 0 && v.byteLength === v.buffer.byteLength) {
+      } else if (ownsWholeBuffer(v)) {
         list.push(v.buffer);
       }
     };
