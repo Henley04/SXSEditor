@@ -36,6 +36,8 @@ export const state = {
   // Audio
   audioContext: null,
   currentAudioSource: null,
+  // 共享播放的一轨一 source（含伴奏）：停止/暂停时统一清理。
+  trackSources: [],
   currentAudioBuffer: null,
   playbackStartTime: 0,
   playbackPauseOffset: 0,
