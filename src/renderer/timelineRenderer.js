@@ -1,5 +1,5 @@
 import { state, dom, trackManager, history } from './state.js';
-import { setAccompanimentVolume } from './accompanimentMixer.js';
+import { setTrackBaseGain, applyAudibility } from './trackGainMixer.js';
 import {
   FRAGMENT_HEIGHT,
   SINGER_ROW_HEIGHT,
@@ -1500,8 +1500,8 @@ export function renderSingerList() {
             singer.accompanimentVolume = value;
             volumeText.textContent = t('main.accompanimentVolumeShort', { volume: Math.round(value * 100) });
             // 播放中即时生效：伴奏改为独立 BufferSource → GainNode 调度，
-            // 这里直接改增益（15ms 斜坡），不再需要重新播放。
-            setAccompanimentVolume(singer.id, value);
+            // 这里直接改该轨增益（12ms 斜坡），静音状态下只更新 base 不解除静音。
+            setTrackBaseGain(singer.id, value);
           });
           volumeInput.addEventListener('click', e => e.stopPropagation());
           volumeWrap.append(volumeText, volumeInput);
@@ -1683,6 +1683,9 @@ export function invalidateSingerListCache() {
 }
 
 export function refreshAll() {
+  // 声音先变、UI 后重绘：所有 M/S 入口（点击、撤销、重做、工程加载、插件改轨）
+  // 都经这里收敛到同一个 applyAudibility。缓存键未变时不重复写增益。
+  applyAudibility(trackManager.getSingers());
   renderSingerList();
   renderFragmentTimeline();
   syncExportAvailability();

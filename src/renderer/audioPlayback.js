@@ -15,7 +15,7 @@ import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, tickPlayheadFollow, resetPlayheadFollow, settlePlayheadFollow, resetFollowAnchor } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
-import { registerAccompanimentGain, clearAccompanimentGains } from './accompanimentMixer.js';
+import { registerTrackGain, clearTrackGains, applyAudibility, getOrCreateTrackGain } from './trackGainMixer.js';
 // 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
 // （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
 import { getAudibleElapsedSec, getAudibleContextTime } from '../shared/audioOutputClock.js';
@@ -356,7 +356,7 @@ function _clearAccompanimentNodes() {
     safeCleanup('audioPlayback.accSrc.stop', () => { src.onended = null; src.stop(); });
   }
   _accSources.clear();
-  clearAccompanimentGains();
+  clearTrackGains();
 }
 
 /**
@@ -414,7 +414,8 @@ function _scheduleAccompaniment(ctx, destination, baseCtxTime, offsetSec, maxDur
 
     src.start(startAt, bufOffset, playDur);
 
-    registerAccompanimentGain(track.id, gain);
+    // 伴奏轨用自媒体音量作 base，可听性由 applyAudibility 统一决定。
+    registerTrackGain(track.id, gain, Number.isFinite(track.accompanimentVolume) ? track.accompanimentVolume : 1);
     _accSources.add(src);
     src.onended = () => { _accSources.delete(src); };
   }
@@ -529,7 +530,7 @@ function _finishStreamingPlayback() {
   state.streamingFinished = true;
   // 流式路径不经过 stopAudioSource，需在这里清掉伴奏增益表，
   // 否则暂停/播完后 _gains 里仍是已停止的节点（滑块拖了"有值但无声"）。
-  clearAccompanimentGains();
+  clearTrackGains();
   state.streamingSources = [];
   _streamingActive = false;
   if (_scheduler) _scheduler.deactivate();
@@ -934,8 +935,8 @@ export async function playAll() {
                 const accGain = ctx.createGain();
                 accGain.gain.value = Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1;
                 accSource.connect(accGain).connect(state.gainNode);
-                // 登记给音量滑块：流式路径同样支持播放中实时调音量
-                registerAccompanimentGain(accTrack.id, accGain);
+                // 登记给音量滑块 / M-S：流式路径同样支持播放中实时生效。
+                registerTrackGain(accTrack.id, accGain, Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1);
                 const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
                 const safeNow = ctx.currentTime + 0.01;
@@ -1573,6 +1574,8 @@ export function startSharedPlayback(offset) {
   // 伴奏独立调度（不预混）：滑块拖动时 setAccompanimentVolume 直接改 GainNode
   const vocalDurSec = (state.currentAudioData?.length || 0) / SAMPLE_RATE;
   _scheduleAccompaniment(context, state.gainNode, startAt, offset, Math.max(0, vocalDurSec - offset));
+  // 注册完伴奏增益后按当前 M/S 状态统一刷新一次（要确保初始就静音的轨不漏音）。
+  applyAudibility(trackManager.getSingers());
   state.currentAudioSource = source;
   state.isPlaying = true;
   setTransport(TRANSPORT.PLAYING);
@@ -1770,7 +1773,7 @@ export function pausePlayback() {
     }
     state.streamingSources = [];
     state.isPlaying = false;
-    clearAccompanimentGains();
+    clearTrackGains();
     if (_scheduler) _scheduler.deactivate();
     if (state.playheadRaf) {
       cancelAnimationFrame(state.playheadRaf);
