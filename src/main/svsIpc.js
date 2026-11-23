@@ -970,18 +970,38 @@ function registerSvsIpc() {
     // STREAM_END 在 invoke 回执之前发出（同一 win 的消息有序），构成显式屏障。
     let chunkSeq = 0;
     let streamSendFailed = false;
+    let firstFailedSeq = null;
+    let sendFailuresAfterFirst = 0;
     const isBackground = opts.background === true;
     const fragmentTask = !isBackground && fragmentStreamId
       ? { state: 'queued', cancel: null }
       : null;
     if (fragmentTask) _fragmentStreamTasks.set(fragmentStreamId, fragmentTask);
-    const sendStreamEnd = () => {
+    /**
+     * 流结束屏障。接收端必须能区分"正常完成 / 合成失败 / 用户取消"，
+     * 否则失败或取消都会被当成完整交付（seq 连续但尾段根本没合成）。
+     *
+     * @param {{complete?:boolean, failed?:boolean, cancelled?:boolean, errorCode?:string|null}} [outcome]
+     */
+    const sendStreamEnd = (outcome = {}) => {
       if (isBackground || !fragmentStreamId || win.isDestroyed()) return;
+      const failed = outcome.failed === true;
+      const cancelled = outcome.cancelled === true;
+      // 有块发送失败 = 交付不完整，不能报 complete。
+      const complete = outcome.complete === true && !streamSendFailed;
+      const status = cancelled ? 'cancelled' : failed ? 'failed' : complete ? 'complete' : 'incomplete';
       try {
         win.send(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, {
           streamId: fragmentStreamId,
           lastSeq: chunkSeq,
           transportFailed: streamSendFailed,
+          complete,
+          failed,
+          cancelled,
+          status,
+          firstFailedSeq,
+          sendFailuresAfterFirst,
+          errorCode: outcome.errorCode ?? null,
         });
       } catch (_) {
         console.warn(`[Main] Failed to send STREAM_END for ${fragmentStreamId}`);
@@ -1019,7 +1039,10 @@ function registerSvsIpc() {
           chunkSeq = nextSeq;
         } catch (_) {
           streamSendFailed = true;
-          console.warn(`[Main] Failed to send fragment chunk seq=${nextSeq} stream=${fragmentStreamId}`);
+          // 只记首个失败序号：诊断"从哪一块开始丢"比"丢了几个"更有用。
+          if (firstFailedSeq === null) firstFailedSeq = nextSeq;
+          else sendFailuresAfterFirst += 1;
+          console.warn(`[Main] Failed to send fragment chunk seq=${nextSeq} firstFailedSeq=${firstFailedSeq} stream=${fragmentStreamId}`);
         }
       };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
@@ -1090,6 +1113,8 @@ function registerSvsIpc() {
       return { error: t('error.fragmentSvsNotInitialized') };
     }
 
+    /** @type {{complete:boolean, failed:boolean, cancelled:boolean, errorCode:string|null}} */
+    let outcome = { complete: false, failed: false, cancelled: false, errorCode: null };
     try {
       // active ID 必须在实际进入 mutex、真正要用 GPU 时才置位；排队中的
       // 请求不能被当成"当前执行者"，否则取消会命中错任务。
@@ -1106,13 +1131,20 @@ function registerSvsIpc() {
         }
         return pipeline.synthesize(notes, bpm, opts);
       }, pipeline);
+      outcome = { complete: true, failed: false, cancelled: false, errorCode: null };
       return { data };
     } catch (err) {
+      outcome = {
+        complete: false,
+        failed: true,
+        cancelled: err && err.code === 'SYNTHESIS_CANCELLED',
+        errorCode: (err && err.code) || null,
+      };
       return { error: err.message };
     } finally {
       // 必须在 invoke 回执之前投递结束屏障；win.send 与 handle 的回复同属
       // main→renderer 方向，Electron 保证顺序，renderer 处理回执时 END 已排队。
-      sendStreamEnd();
+      sendStreamEnd(outcome);
       if (fragmentTask) _fragmentStreamTasks.delete(fragmentStreamId);
       if (_activeFragmentStreamId === fragmentStreamId) _activeFragmentStreamId = null;
     }

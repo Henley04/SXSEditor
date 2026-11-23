@@ -173,22 +173,28 @@ export class StreamingScheduler {
     if (!this._waitingForInference) return false;
     if (this._resumeTransition) {
       await this._resumeTransition;
-      return true;
+      return !this._contextSuspended;
     }
     const p = (async () => {
       // 先等 suspend 真正落地、context 真正 running，再清 waiting：
       // 否则这中间的 checkUnderrun 会再次进入冻结。
-      await this._resumeContext();
+      const resumed = await this._resumeContext();
+      if (!resumed) {
+        // resume 失败：保持 waiting，watchdog 会重试。清 waiting 会让调度器
+        // 以为已经恢复，继续往一个仍 suspended 的 context 里排块。
+        console.warn('[StreamingScheduler] resume failed; keeping underrun wait for retry');
+        return false;
+      }
       this._waitingForInference = false;
       this._onWaitStateChange(false);
+      return true;
     })();
     this._resumeTransition = p;
     try {
-      await p;
+      return await p;
     } finally {
       if (this._resumeTransition === p) this._resumeTransition = null;
     }
-    return true;
   }
 
   /**
@@ -320,14 +326,15 @@ export class StreamingScheduler {
     }
   }
 
+  /** @returns {Promise<boolean>} 解冻后 AudioContext 是否真的不再 suspended。 */
   async _resumeContext() {
     // 合并并发的解冻请求：resumeFromWait 与播放头自愈循环可能同一时刻各发一次
     // resume()，双倍控制消息只会加重排队（极端负载下实测每个接缝出现两次）。
     if (this._resumeInFlight) {
       try { await this._resumeInFlight; } catch (_) {}
-      return;
+      return !this._contextSuspended;
     }
-    if (!this._contextSuspended) return;
+    if (!this._contextSuspended) return true;
     if (this._suspendInFlight) {
       try { await this._suspendInFlight; } catch (_) {}
     }
@@ -352,6 +359,8 @@ export class StreamingScheduler {
     try { await p; } finally {
       if (this._resumeInFlight === p) this._resumeInFlight = null;
     }
+    // 以真实状态为准：resume() 抛异常或返回后仍是 suspended 都算失败。
+    return !this._contextSuspended;
   }
 
   async _abortContext() {

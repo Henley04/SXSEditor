@@ -41,6 +41,9 @@ const EPS_SEC = 1e-6;
  * @property {number} contentStartSec 实际发声内容起点（分片绝对秒）
  * @property {number} contentEndSec chunk 内容末端（分片绝对秒）
  * @property {number} durationSec 剩余可播时长
+ * @property {number} [anchorCtxTime] 候选时间基准（仅 `startedNow` 时有意义）。
+ *   `plan()` 不再直接写入 timeline，调用方必须在至少一个 `source.start()`
+ *   成功后通过 `commit()` 提交，避免启动失败留下无效锚点。
  * @property {Array<{skipSamples:number,when:number,offsetSec:number,durationSec:number,contentStartSec:number,contentEndSec:number}>} segments
  *   实际要排程的片段（通常一段；块被已排区间切成多段时逐段排，避免静默丢音频）
  * @property {number} [splitParts] 该块被已排程区间切成了几段
@@ -62,6 +65,10 @@ export class StreamTimeline {
     this.coveredRanges = [];
     /** 无 sampleOffset 时的顺序拼接游标（相对首音符）。 */
     this.seqCursorSec = 0;
+    /** 上一次 chunk 是否带采样范围；用于识别混合协议（诊断用）。 */
+    this._sawSampleRange = null;
+    /** 同一流中同时出现"带范围"与"无范围"chunk 时置位（协议异常）。 */
+    this.mixedRangeProtocol = false;
     /** 已排程块数 / 丢弃块数 / 迟到块数 / 乱序回填块数（诊断用）。 */
     this.scheduledCount = 0;
     this.droppedCount = 0;
@@ -91,9 +98,20 @@ export class StreamTimeline {
     const rawEnd = Number(chunkInfo && chunkInfo.sampleEnd);
     const hasSampleRange = Number.isFinite(rawStart) && Number.isFinite(rawEnd) && rawEnd > rawStart;
     const chunkSec = audioLength / sampleRate;
+    // 混合协议识别：同一流里带范围/无范围 chunk 交替出现时，顺序游标不能
+    // 停在旧值（否则无范围块会从 0 重发，被判 duplicate 整块丢弃）。
+    if (hasSampleRange) {
+      if (this._sawSampleRange === false) this.mixedRangeProtocol = true;
+      this._sawSampleRange = true;
+    } else {
+      if (this._sawSampleRange === true) this.mixedRangeProtocol = true;
+      this._sawSampleRange = false;
+    }
     const relStartSec = hasSampleRange ? rawStart / sampleRate : this.seqCursorSec;
     const relEndSec = hasSampleRange ? rawEnd / sampleRate : relStartSec + chunkSec;
-    if (!hasSampleRange) this.seqCursorSec = relEndSec;
+    // 无论本块是否带范围都推进游标：带范围块之后的无范围块必须接在其末端，
+    // 而不是回到上一次无范围块的游标（通常是 0）。
+    this.seqCursorSec = Math.max(this.seqCursorSec, relEndSec);
     return {
       contentStartSec: this.firstNoteStartSec + relStartSec,
       contentEndSec: this.firstNoteStartSec + relEndSec,
@@ -184,9 +202,12 @@ export class StreamTimeline {
       return this._drop(reason);
     }
 
-    // 到这里说明这一块"应该出声"（或至少部分落在起播点之后），此刻才锚定。
+    // 到这里说明这一块"应该出声"（或至少部分落在起播点之后）。
+    // 只计算**候选**基准，不写入 timeline：`source.start()` / buffer 创建可能
+    // 抛异常，提前锚定会让后续块按一个从未发声的时间原点排程。真正的写入
+    // 由 `commit()` 在至少一个 source 启动成功后完成。
     const startedNow = !this.started;
-    if (startedNow) this.anchorCtxTime = ctxNow + this.leadSec;
+    const candidateAnchor = startedNow ? ctxNow + this.leadSec : this.anchorCtxTime;
 
     // 一个块被已排程区间切成多段时逐段排程 —— 少排一段就是静默丢一句歌词，
     // 而 WebAudio 完全支持同一块音频按不同 offset 排多个 source。
@@ -201,7 +222,7 @@ export class StreamTimeline {
       if (durSec <= EPS_SEC) continue;
 
       // 内容位置 X 应在 anchor + (X − startPosition) 出声。
-      const wantCtxTime = this.anchorCtxTime + (part.start - this.startPositionSec);
+      const wantCtxTime = candidateAnchor + (part.start - this.startPositionSec);
       // 迟到只裁头、不移基准：把这部分从头部裁掉，内容位置始终等于播放头位置。
       const lateSec = Math.max(0, ctxNow - wantCtxTime);
       if (lateSec >= durSec - EPS_SEC) {
@@ -224,12 +245,12 @@ export class StreamTimeline {
 
     if (segments.length === 0) {
       this.droppedCount += 1;
-      // 丢掉整块但保留基准：基准代表时间轴原点，丢了它下一块会重新锚定，
-      // 播放头会凭空回跳。
+      // 一段都没排：不锚定。下一个真正能发声的块会重新计算基准，
+      // 避免"没有声音源却占用了时间原点"。
       return this._drop('late', startedNow);
     }
 
-    if (reserve) this._commitPlan(fromSec, segments, startedNow, deliveredBeforeSec);
+    if (reserve) this._commitPlan(fromSec, segments, startedNow, deliveredBeforeSec, candidateAnchor);
 
     const first = segments[0];
     return {
@@ -246,6 +267,8 @@ export class StreamTimeline {
       durationSec: first.durationSec,
       segments,
       splitParts: parts.length,
+      // 候选基准：调用方创建 fade 曲线时需要它；正式生效在 commit()。
+      anchorCtxTime: candidateAnchor,
     };
   }
 
@@ -253,10 +276,14 @@ export class StreamTimeline {
   commit(plan, startedSegments) {
     if (!plan || plan.action !== 'schedule' || !plan.segments) return;
     if (!Array.isArray(startedSegments) || startedSegments.length === 0) return;
-    this._commitPlan(plan.fromSec, startedSegments, plan.startedNow, plan.deliveredBeforeSec);
+    this._commitPlan(plan.fromSec, startedSegments, plan.startedNow, plan.deliveredBeforeSec, plan.anchorCtxTime);
   }
 
-  _commitPlan(fromSec, segments, startedNow, deliveredBeforeSec) {
+  _commitPlan(fromSec, segments, startedNow, deliveredBeforeSec, anchorCtxTime) {
+    // 第一段真正启动成功后才建立时间基准（只建立一次）。
+    if (startedNow && this.anchorCtxTime === null && Number.isFinite(anchorCtxTime)) {
+      this.anchorCtxTime = anchorCtxTime;
+    }
     let endSec = 0;
     for (const s of segments) {
       // 每段只登记自己的区间：块被切成多段时，中间的空洞不能被一并标记覆盖。

@@ -317,7 +317,11 @@ function buildPreviewOptions(previewOpts, extra) {
 }
 
 /** 按当前输出设置整段播放（缓存命中 / 流式未启动的兜底 / seek 后续播）。 */
-async function playWholeBuffer(sess, audioData) {
+async function playWholeBuffer(sess, audioData, opts = {}) {
+  // 交付缺口续播：从当前可听位置开始，避免把已经听过的部分重放一遍。
+  if (Number.isFinite(opts.startSec)) {
+    sess.startPositionSec = Math.max(0, opts.startSec);
+  }
   const exclusive = getFragmentAudioSettings()?.audioOutputMode === 'exclusive';
   if (exclusive) await sess.playExclusive(audioData);
   else await sess.playFullBuffer(audioData);
@@ -427,6 +431,16 @@ export async function playFragment() {
       sess.startPositionSec = pos;
       setFragmentPlayStartPosition(pos);
       await playWholeBuffer(sess, padded);
+      return;
+    }
+
+    // 交付缺口（END 明确 failed / cancelled / seq 不连续）：绝不能把不完整
+    // 音频当成正常播完。gap 收尾时记录了可听位置，这里用整段 buffer 从该
+    // 位置继续，已播过的部分不重复。
+    if (sess.gapDetected && sess.isCurrent) {
+      const resumeSec = Number.isFinite(sess.gapResumeSec) ? sess.gapResumeSec : sess.startPositionSec;
+      console.warn(`[FragPlay] GAP FALLBACK | session=${sess.id} from=${resumeSec.toFixed(3)}s status=${sess.streamEndStatus || 'incomplete'} firstFailedSeq=${sess.firstFailedSeq ?? '-'}`);
+      await playWholeBuffer(sess, padded, { startSec: resumeSec });
       return;
     }
 

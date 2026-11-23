@@ -19,6 +19,9 @@ class SvsWorkerClient {
     this.nextId = 0;
     this.pending = new Map();
     this.activeSynthId = null;
+    // 真正的"正在运行"合成 id：由 worker 首次 progress / chunk 事件确认。
+    // activeSynthId 只是最后提交的请求，排队时它并不是当前执行者。
+    this.runningSynthId = null;
     this.initialized = false;
     this.sessionEPs = {};
     this.loadedModels = new Set();
@@ -49,12 +52,18 @@ class SvsWorkerClient {
       if (msg.type === 'ready') { readyResolve(); return; }
       const pending = this.pending.get(msg.id);
       if (msg.type === 'event') {
+        // 首个事件证明这个请求已经真正开始跑（而不是还在队列里排队）。
+        if (pending && pending.command !== 'init' && pending.command !== 'loadModel'
+          && pending.command !== 'status' && pending.command !== 'dispose') {
+          this.runningSynthId = msg.id;
+        }
         if (msg.event === 'progress') pending?.onProgress?.(msg.data);
         if (msg.event === 'chunk-audio') pending?.onChunkAudio?.(msg.data);
         return;
       }
       if (!pending) return;
       this.pending.delete(msg.id);
+      if (this.runningSynthId === msg.id) this.runningSynthId = null;
       this._applyState(msg.state);
       if (msg.type === 'result') pending.resolve(msg.result);
       else {
@@ -107,7 +116,8 @@ class SvsWorkerClient {
       this.activeSynthId = id;
     }
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, ...callbacks });
+      // 记录 command：取消时只拒绝合成类请求，不能误伤 init / loadModel / status。
+      this.pending.set(id, { resolve, reject, command, ...callbacks });
       const transferList = (command === 'synthesize' || command === 'synthesizeMultiStreaming')
         ? this._collectSynthTransfers(args) : [];
       this.worker.postMessage({ id, command, args }, transferList);
@@ -143,20 +153,40 @@ class SvsWorkerClient {
   getHardwareInfo() { return this.hardwareInfo; }
   async cancelActiveSynthesis() {
     if (!this.worker) return;
-    const targetId = this.activeSynthId;
-    console.log(`[SvsWorkerClient] cancelActiveSynthesis: targetId=${targetId} pending=${this.pending.size}`);
-    this.activeSynthId = null;
+    const targetId = this.runningSynthId ?? this.activeSynthId;
     const err = new Error('Synthesis cancelled');
     err.code = 'SYNTHESIS_CANCELLED';
-    for (const { reject } of this.pending.values()) reject(err);
-    this.pending.clear();
+    // 只拒绝合成类请求：init / loadModel / status / dispose 的 promise 必须
+    // 继续等待 worker 回执，否则初始化中的会话会被"取消"打成半初始化状态。
+    const cancelledIds = [];
+    for (const [id, entry] of this.pending) {
+      if (entry.command === 'synthesize' || entry.command === 'synthesizeMultiStreaming') {
+        entry.reject(err);
+        cancelledIds.push(id);
+      }
+    }
+    for (const id of cancelledIds) this.pending.delete(id);
+    console.log(`[SvsWorkerClient] cancelActiveSynthesis: running=${targetId ?? '-'} rejectedSynth=${cancelledIds.length} keptPending=${this.pending.size}`);
+    this.activeSynthId = null;
+    this.runningSynthId = null;
     // 协作式取消：向 worker 发送 cancel 命令，让它通过 abort 信号的检查点
     //（diffusion 每步/每块之间）安全退出并抛出 SYNTHESIS_CANCELLED。
     // worker 线程保持存活，避免 worker.terminate() 强杀 GPU 推理导致 D3D device
     // hung → 主进程原生崩溃。
-    try {
-      this.worker.postMessage({ id: `cancel-${targetId ?? Date.now()}`, command: 'cancel', args: { requestId: targetId ?? undefined } });
-    } catch (_) {}
+    //
+    // 对每个被拒绝的合成请求都发一次 cancel：worker 端对未知 id 会预登记
+    // （pendingCancelledIds），请求真正开始排队执行时立刻 abort。只对
+    // targetId 发会漏掉仍在排队、或 activeSynthId 已过期的情况。
+    const cancelTargets = cancelledIds.length > 0 ? cancelledIds : [targetId];
+    for (const id of cancelTargets) {
+      try {
+        this.worker.postMessage({
+          id: `cancel-${id ?? Date.now()}`,
+          command: 'cancel',
+          args: { requestId: id ?? undefined },
+        });
+      } catch (_) {}
+    }
   }
 
   async dispose() {

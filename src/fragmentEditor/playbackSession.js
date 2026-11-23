@@ -352,6 +352,11 @@ class Session {
     this.endSeen = false;         // END 事件已到达（同步置位，用来区分"还没到"与"还没处理"）
     this.deliveryDone = false;    // 已处理到 lastSeq / 已确认回执兜底
     this.deliveryComplete = true; // seq 是否连续（缺口时只兜底，不假装完整）
+    this.deliveryIncomplete = false; // END 明确报告缺口 / 失败 / 取消（永远不按正常完成收尾）
+    this.streamEndStatus = null;  // 'complete' | 'incomplete' | 'failed' | 'cancelled'
+    this.firstFailedSeq = null;   // 主进程报告的首个发送失败 seq（诊断）
+    this.gapDetected = false;     // 本次会话发生过交付缺口
+    this.gapResumeSec = null;     // 缺口收尾时的可听位置：整段兜底从这里续播
     // 首块乱序预缓冲：必须放在串行队列入口，不能在处理函数内部睡眠
     // （那只会让更早的 seq 排在当前处理之后，等到也用不上）。
     this._initialChunks = new Map();
@@ -456,15 +461,44 @@ class Session {
     if (transportFailed) {
       console.warn(`[FragmentPlayback] stream transport failed; lastSeq=${lastSeq} is not authoritative`);
     }
-    // 连续序号检查：缺口意味着尾段可能永远到不了，记录但不阻塞收尾，
-    // 由上层结合"是否开播"决定整段兜底。
+    // 连续序号检查：缺口意味着尾段永远到不了。
     let contiguous = 0;
     while (this.seenSeqs.has(contiguous + 1)) contiguous += 1;
-    this.deliveryComplete = !transportFailed && (lastSeq === 0 || contiguous >= lastSeq);
+    // 新主进程会显式给出 complete / failed / cancelled；老主进程 / 插件没有
+    // 该字段时退化为 seq 连续性推断，保持兼容。
+    const hasStatus = !!info && typeof info.complete === 'boolean';
+    const legacyComplete = lastSeq === 0 || contiguous >= lastSeq;
+    this.deliveryComplete = !transportFailed && (hasStatus ? info.complete === true : legacyComplete);
+    if (info && info.cancelled) this.deliveryComplete = false;
+    this.deliveryIncomplete = !this.deliveryComplete;
+    this.streamEndStatus = (info && typeof info.status === 'string' && info.status)
+      || (info && info.cancelled ? 'cancelled'
+        : info && info.failed ? 'failed'
+          : this.deliveryComplete ? 'complete' : 'incomplete');
+    this.firstFailedSeq = info && Number.isFinite(info.firstFailedSeq) ? info.firstFailedSeq : null;
     if (!this.deliveryComplete) {
-      console.warn(`[FragmentPlayback] stream gap: seen contiguous=${contiguous} lastSeq=${lastSeq} stream=${this.streamId}`);
+      console.warn(`[FragmentPlayback] stream incomplete: status=${this.streamEndStatus} seen contiguous=${contiguous} lastSeq=${lastSeq} firstFailedSeq=${this.firstFailedSeq ?? '-'} stream=${this.streamId}`);
     }
     this.deliveryDone = true;
+    // END 已经证明推理结束：缺口块不会再补发。若能立即收尾（source 已排空），
+    // 走 gap 收尾；否则等最后一个 source.onended 触发 _maybeFinish。
+    this._maybeFinish();
+  }
+
+  /**
+   * 交付缺口收尾：不再假装"正常播完"。
+   *
+   * 记录当前可听位置后 finish；上层（audioPlayback）拿到整段 PCM 后从这个
+   * 位置继续整段播放，避免重复播放已听到的部分。
+   */
+  _finishWithGap() {
+    if (this.finished || this.disposed || !this.isCurrent) return;
+    const ctx = getFragmentAudioContext();
+    const audible = ctx ? this.renderPosition(ctx.currentTime) : this.startPositionSec;
+    this.gapDetected = true;
+    this.gapResumeSec = Math.max(this.startPositionSec, Number.isFinite(audible) ? audible : this.startPositionSec);
+    console.warn(`[FragPlay] finish with delivery gap | session=${this.id} status=${this.streamEndStatus || 'incomplete'} firstFailedSeq=${this.firstFailedSeq ?? '-'} resumeSec=${this.gapResumeSec.toFixed(3)} t=${Date.now()}`);
+    this.finish();
   }
 
   // ---------- 生命周期 ----------
@@ -673,7 +707,10 @@ class Session {
       console.warn(`[FragmentPlayback] drop stale chunk stream=${chunkInfo.streamId} current=${this.streamId}`);
       return;
     }
-    if (!chunkInfo.audio || chunkInfo.audio.length === 0) return;
+    // 空音频一律丢弃，唯一个例外：`isLast` 标记块。末段没有任何音频时，
+    // pipeline 用 0 长度块承载"流到此结束"，不能补 1 样本把时间轴撑长 1。
+    const chunkAudioLen = chunkInfo.audio ? chunkInfo.audio.length : 0;
+    if (chunkAudioLen === 0 && !chunkInfo.isLast) return;
     this.chunkSeen = true;
 
     const ctx = await _ctxForChunk(this);
@@ -698,10 +735,11 @@ class Session {
     const plan = this.timeline.plan(chunkInfo, sampleRate, ctx.currentTime, { reserve: false });
     this.lastChunkAtMs = Date.now();
 
-    if (plan.startedNow) {
-      // 这里只建立时间基准与 fade 节点；"正式开播"必须等第一个 source
-      // start() 成功后才宣告（见 _activatePlaybackUi）。
-      const anchor = this.timeline.anchorCtxTime;
+    if (plan.action === 'schedule' && plan.startedNow) {
+      // 这里只预建 fade 节点；时间基准用 plan 返回的**候选值**，
+      // 正式写入 timeline 必须等某个 source.start() 成功（见 commit）。
+      // 若所有 source 都失败，下面会断开 fadeGain 且不提交锚点。
+      const anchor = plan.anchorCtxTime;
       const fades = buildNoteFades();
       if (fades.length > 0) {
         this.fadeGain = ctx.createGain();
@@ -734,80 +772,86 @@ class Session {
     const startedSegs = [];
 
     // 一个块可能被已排程区间切成多段（乱序/重叠），逐段排 —— 少排一段就是丢一句。
-    for (const seg of segments) {
-      // 中途失效必须先提交已成功启动的段再退出：直接 return 会留下
-      // "音频已播但 coveredRanges 未登记"的空洞，后续重传被判重复。
-      if (!this.isUsable) break;
-      const startSample = seg.skipSamples;
-      // 按"该段完整长度"切片：基础偏移已由 subarray(startSample) 扣掉，
-      // source.start 的 offsetSec 只需要再扣迟到量（不能重复扣基础偏移）。
-      const fullSec = Number.isFinite(seg.sourceDurationSec) ? seg.sourceDurationSec : seg.durationSec + seg.offsetSec;
-      const sliceSamples = Math.min(Math.round(fullSec * sampleRate), chunkInfo.audio.length - startSample);
-      if (sliceSamples <= 0) continue;
+    // 整个循环用 try/catch 收口：createBuffer / connect / addSource 抛异常时，
+    // 已 start() 成功的段仍会在下面统一 commit，避免"音频已播但 coveredRanges
+    // 未登记"的空洞（后续重传会被判 duplicate）。
+    let schedulingError = null;
+    try {
+      for (const seg of segments) {
+        // 中途失效必须先提交已成功启动的段再退出：直接 return 会留下
+        // "音频已播但 coveredRanges 未登记"的空洞，后续重传被判重复。
+        if (!this.isUsable) break;
+        const startSample = seg.skipSamples;
+        // 按"该段完整长度"切片：基础偏移已由 subarray(startSample) 扣掉，
+        // source.start 的 offsetSec 只需要再扣迟到量（不能重复扣基础偏移）。
+        const fullSec = Number.isFinite(seg.sourceDurationSec) ? seg.sourceDurationSec : seg.durationSec + seg.offsetSec;
+        const sliceSamples = Math.min(Math.round(fullSec * sampleRate), chunkInfo.audio.length - startSample);
+        if (sliceSamples <= 0) continue;
 
-      const slice = chunkInfo.audio.subarray(startSample, startSample + sliceSamples);
-      const buffer = ctx.createBuffer(1, slice.length, sampleRate);
-      const dest = buffer.getChannelData(0);
-      dest.set(slice);
-      if (startSample > 0 || seg.offsetSec > 0) fadeInHead(dest, sampleRate, 0.01);
+        const slice = chunkInfo.audio.subarray(startSample, startSample + sliceSamples);
+        const buffer = ctx.createBuffer(1, slice.length, sampleRate);
+        const dest = buffer.getChannelData(0);
+        dest.set(slice);
+        if (startSample > 0 || seg.offsetSec > 0) fadeInHead(dest, sampleRate, 0.01);
 
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      const sched = this.scheduler;
-      const idx = this.sources.length;
-      const srcId = ++this._sourceSeq;
-      // 生命周期顺序：先挂 onended / 计数 / 登记，再 start()。
-      // 极短 buffer 或已过期的 when 可能让 source 立刻结束；若先 start 再挂
-      // onended，计数将永久不归零 → _maybeFinish 永不成立、播放卡死。
-      source.onended = () => {
-        this._logDebug('source ended', {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        const sched = this.scheduler;
+        const idx = this.sources.length;
+        const srcId = ++this._sourceSeq;
+        // 生命周期顺序：先挂 onended / 计数 / 登记，再 start()。
+        // 极短 buffer 或已过期的 when 可能让 source 立刻结束；若先 start 再挂
+        // onended，计数将永久不归零 → _maybeFinish 永不成立、播放卡死。
+        source.onended = () => {
+          this._logDebug('source ended', {
+            session: this.id,
+            srcId,
+            ctxNow: ctx.currentTime,
+            activeSources: sched ? sched.activeSourceCount - 1 : null,
+            inferenceDone: this.inferenceDone,
+            finished: this.finished,
+          });
+          if (sched) sched.sourceEnded();
+          if (this.sources[idx] === source) this.sources[idx] = null;
+          this._maybeFinish();
+          // 缓冲刚播完、推理还没送来下一块：这是最后一个"时钟仍停在前沿"的时刻。
+          // rAF / 看门狗在窗口被遮挡时会被节流到 ~1 次/分钟，不能作为唯一判据。
+          if (!this.finished && sched) sched.onSourcesDrained(() => render());
+        };
+        if (this.fadeGain) source.connect(this.fadeGain);
+        else {
+          const master = getFragmentGainNode();
+          source.connect(master || ctx.destination);
+        }
+        if (sched) sched.addSource();
+        this.sources.push(source);
+        this._logDebug('source start', {
           session: this.id,
           srcId,
+          seq: chunkInfo.seq ?? null,
           ctxNow: ctx.currentTime,
-          activeSources: sched ? sched.activeSourceCount - 1 : null,
-          inferenceDone: this.inferenceDone,
-          finished: this.finished,
+          when: seg.when,
+          startOffsetSec: seg.offsetSec,
+          durationSec: seg.durationSec,
+          lateSec: plan.offsetSec,
+          activeSources: sched ? sched.activeSourceCount : null,
+          waiting: sched ? sched.isWaiting : null,
         });
-        if (sched) sched.sourceEnded();
-        if (this.sources[idx] === source) this.sources[idx] = null;
-        this._maybeFinish();
-        // 缓冲刚播完、推理还没送来下一块：这是最后一个"时钟仍停在前沿"的时刻。
-        // rAF / 看门狗在窗口被遮挡时会被节流到 ~1 次/分钟，不能作为唯一判据。
-        if (!this.finished && sched) sched.onSourcesDrained(() => render());
-      };
-      if (this.fadeGain) source.connect(this.fadeGain);
-      else {
-        const master = getFragmentGainNode();
-        source.connect(master || ctx.destination);
+        try {
+          source.start(seg.when, seg.offsetSec);
+        } catch (err) {
+          // start 失败：回滚计数与登记，不把这段记进 coveredRanges。
+          source.onended = null;
+          if (sched) sched.sourceEnded();
+          if (this.sources[idx] === source) this.sources[idx] = null;
+          safeCleanup('fragmentPlayback.source.disconnect', () => source.disconnect());
+          console.warn(`[FragmentPlayback] source.start failed: ${err && err.message}`);
+          continue;
+        }
+        startedSegs.push(seg);
       }
-      if (sched) sched.addSource();
-      this.sources.push(source);
-      this._logDebug('source start', {
-        session: this.id,
-        srcId,
-        seq: chunkInfo.seq ?? null,
-        ctxNow: ctx.currentTime,
-        when: seg.when,
-        startOffsetSec: seg.offsetSec,
-        durationSec: seg.durationSec,
-        lateSec: plan.offsetSec,
-        activeSources: sched ? sched.activeSourceCount : null,
-        waiting: sched ? sched.isWaiting : null,
-      });
-      try {
-        source.start(seg.when, seg.offsetSec);
-      } catch (err) {
-        // start 失败：回滚计数与登记，不把这段记进 coveredRanges。
-        source.onended = null;
-        if (sched) sched.sourceEnded();
-        if (this.sources[idx] === source) this.sources[idx] = null;
-        safeCleanup('fragmentPlayback.source.disconnect', () => source.disconnect());
-        console.warn(`[FragmentPlayback] source.start failed: ${err && err.message}`);
-        continue;
-      }
-      startedSegs.push(seg);
-      // 至少一个 source 真正发声后才把会话宣告为 playing。
-      this._activatePlaybackUi();
+    } catch (err) {
+      schedulingError = err;
     }
 
     // 只有真正 start() 成功的段才登记占位与前沿。
@@ -819,7 +863,16 @@ class Session {
       if (this.scheduler && Number.isFinite(committedEnd)) {
         this.scheduler.updateBufferFrontier(committedEnd);
       }
+      // 锚点由 commit 写入，timeline.started 到这里才为真；播放 UI 与 watchdog
+      // 必须在此激活（放在循环内会因 started 仍为 false 而提前返回）。
+      // 会话在排程途中被停止/取代时不再恢复 UI。
+      if (this.isUsable) this._activatePlaybackUi();
+    } else if (plan.startedNow && this.fadeGain) {
+      // 所有 source 都启动失败：丢弃候选锚点与 fade 节点，下一块重新规划。
+      safeCleanup('fragmentPlayback.fadeGain.abort', () => this.fadeGain.disconnect());
+      this.fadeGain = null;
     }
+    if (schedulingError) throw schedulingError;
 
     console.log(`[FragPlay] chunk scheduled | session=${this.id} seg=${chunkInfo.chunkIndex ?? '-'} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} lateSec=${plan.offsetSec.toFixed(4)} durSec=${plan.durationSec.toFixed(3)} parts=${segments.length} started=${plan.startedNow} isLast=${!!chunkInfo.isLast} t=${Date.now()}`);
 
@@ -889,6 +942,13 @@ class Session {
       inferenceDone: this.inferenceDone,
       endSeen: this.endSeen,
       deliveryDone: this.deliveryDone,
+      deliveryComplete: this.deliveryComplete,
+      deliveryIncomplete: this.deliveryIncomplete,
+      streamEndStatus: this.streamEndStatus,
+      firstFailedSeq: this.firstFailedSeq,
+      gapDetected: this.gapDetected,
+      gapResumeSec: this.gapResumeSec,
+      mixedRangeProtocol: this.timeline ? this.timeline.mixedRangeProtocol : null,
       ctxState: ctx ? ctx.state : null,
       ctxNow,
       position: ctx && this.kind !== 'exclusive' ? this.renderPosition(ctxNow) : null,
@@ -967,6 +1027,19 @@ class Session {
     if (!this.streamStarted) return;
     const sched = this.scheduler;
     if (!sched) return;
+    // 交付缺口（END 明确报告失败 / 取消 / seq 不连续）：缺口块永远不会再来，
+    // 绝不能走"正常完成"收尾。等已排程音频播完，记录可听位置后 gap 收尾，
+    // 由上层从该位置整段续播。
+    if (this.deliveryIncomplete) {
+      if (sched.activeSourceCount > 0) return;
+      const ctxNow = getFragmentAudioContext();
+      if (!ctxNow) return;
+      const posGap = this.renderPosition(ctxNow.currentTime);
+      const endGap = this.timeline ? this.timeline.deliveredEndSec : 0;
+      if (posGap + 0.02 < endGap) return;
+      this._finishWithGap();
+      return;
+    }
     // 新协议下 END 未处理完之前不允许靠 inferenceDone 判定完成：最后几块
     // 可能还在 IPC 队列里。isLast 已收到且 source 全结束时则是安全收尾点。
     if (this.streamId && !this.deliveryDone && !sched.isLastReceived) return;
@@ -985,6 +1058,15 @@ class Session {
     if (!this.isCurrent || this.finished || this.kind !== 'stream') return;
     const sched = this.scheduler;
     if (!sched) return;
+    // 交付缺口：未开播时交给整段兜底；已开播则等音频排空后 gap 收尾。
+    // 不加这段会让会话永远停在"播放态"，或在 watchdog 里按正常完成收尾。
+    if (this.deliveryIncomplete) {
+      if (!this.streamStarted) return;
+      if (sched.activeSourceCount > 0) return;
+      if (Date.now() - this.lastChunkAtMs < 1500) return;
+      this._finishWithGap();
+      return;
+    }
     // 死锁守卫：推理已结束却仍在等待 → 立即解冻（没有任何后续 chunk 会来）。
     // 另外覆盖"播放头之后已有交付内容却仍停在等待"——同样是无人再唤醒的状态。
     if (sched.isWaiting) {

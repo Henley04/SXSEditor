@@ -3306,6 +3306,9 @@ class OnnxSVSPipeline {
         const FADE_SAMPLES = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
         let frontier = 0;    // 已发射前沿（相对 firstNoteStart 的采样位置）
         let nextTimeIdx = 0; // timeOrder 中下一个待发射的 segment
+        // 独立块序号：补零块与真实音频块不能共用 segment 序号，否则诊断日志
+        // 里出现 [0,1,1] 这类重复 chunkIndex，误导重叠/丢块排查。
+        let emittedChunkIndex = 0;
         let finished = false;
 
         const fadeInHead = (audio) => {
@@ -3321,8 +3324,15 @@ class OnnxSVSPipeline {
                 audio[base + i] *= 0.5 * (1 + Math.cos((Math.PI * i) / n));
             }
         };
-        const emitChunk = (audio, isLast) => {
-            if (!audio || audio.length === 0) return false;
+        const emitChunk = (audio, isLast, segmentIndex = null) => {
+            if (!audio) return false;
+            // 全局长度上限：任何块（含补零块）都不得越过时间轴末端。末段
+            // "补 1 样本承载 isLast"的旧路径会把 sampleEnd 顶到 total+1，
+            // 这里统一裁平，时间轴长度才可断言。
+            if (frontier + audio.length > totalSamplesRel) {
+                const maxLen = Math.max(0, totalSamplesRel - frontier);
+                audio = maxLen > 0 ? audio.slice(0, maxLen) : new Float32Array(0);
+            }
             // Capture the range BEFORE onChunkAudio: the worker bridge transfers
             // audio.buffer to the main thread (postMessage transfer list) and the
             // sender-side typed array is detached synchronously. Reading
@@ -3332,7 +3342,8 @@ class OnnxSVSPipeline {
             const sampleEnd = sampleOffset + audio.length;
             try {
                 onChunkAudio({
-                    chunkIndex: nextTimeIdx,
+                    chunkIndex: emittedChunkIndex,
+                    segmentIndex,
                     sampleOffset,
                     sampleEnd,
                     audio,
@@ -3345,8 +3356,9 @@ class OnnxSVSPipeline {
                 console.warn('[SegInfer][FRAG] onChunkAudio failed:', err && err.message);
             }
             if (_readDiagnosticMode()) {
-                console.log(`[SegInfer][FRAG] chunk emitted | seg=${nextTimeIdx}/${timeOrder.length} offset=${sampleOffset} end=${sampleEnd} isLast=${isLast} t=${Date.now()}`);
+                console.log(`[SegInfer][FRAG] chunk emitted | idx=${emittedChunkIndex} seg=${segmentIndex ?? '-'}/${timeOrder.length} offset=${sampleOffset} end=${sampleEnd} samples=${audio.length} isLast=${isLast} t=${Date.now()}`);
             }
+            emittedChunkIndex += 1;
             frontier = sampleEnd;
             return true;
         };
@@ -3357,10 +3369,11 @@ class OnnxSVSPipeline {
                 const meta = metas.get(segIdx);
                 if (!meta || !meta.audio) break; // 该 segment 尚未完成，等待
                 const isLastSeg = nextTimeIdx === timeOrder.length - 1;
+                const segmentIndex = segIdx;
                 // 前置静音：region 间长休止中心（与最终混音的零填充区一致）
                 const gapSamples = meta.relStart - frontier;
                 if (gapSamples > CONTIG_EPS) {
-                    emitChunk(new Float32Array(gapSamples), false);
+                    emitChunk(new Float32Array(gapSamples), false, segmentIndex);
                 }
                 let audio = meta.audio;
                 const trim = Math.max(0, Math.min(frontier - meta.relStart, audio.length));
@@ -3373,29 +3386,40 @@ class OnnxSVSPipeline {
                     audio = audio.slice();
                 }
                 if (!isLastSeg) {
+                    // 非末段的硬上限是本段自己的 relEnd：vocoder 按帧取整可能让
+                    // 前段多出几百个样本，越界不裁会让 frontier 越过后段起点，
+                    // 后段头部被多裁。上限必须是 relEnd，不能是 nextStart ——
+                    // 后者会删掉设计中的 2s 重叠尾，改变接缝策略。
+                    const maxLen = Math.max(0, meta.relEnd - frontier);
+                    if (audio.length > maxLen) audio = audio.slice(0, maxLen);
+                    if (audio.length === 0) {
+                        // 本段没有可发射内容（空结果 / 已全部被前段覆盖）：
+                        // 不占块序号，但仍推进时间序。
+                        meta.audio = null;
+                        nextTimeIdx++;
+                        continue;
+                    }
                     const nextMeta = metas.get(timeOrder[nextTimeIdx + 1]);
                     // 后续 segment 与本段重叠（其头部将被裁剪）→ 本段尾部渐出防爆破
                     if (nextMeta && nextMeta.relStart < meta.relEnd) fadeOutTail(audio);
-                }
-                if (isLastSeg) {
-                    // 末段尾部补静音：vocoder 输出按帧取整，末段音频常比时间轴短几个
-                    // 采样（实测 ~241 样本 ≈10ms）。补齐后流式时间轴长度与最终混音
-                    // 完全一致，播放头不会在末尾差一截就停。必须并入本 chunk 而不是
-                    // 追加一个新 chunk —— 追加的会被渲染端 isLastReceived 之后的守卫丢弃。
-                    const wantLen = totalSamplesRel - frontier;
-                    if (wantLen > audio.length) {
+                } else {
+                    // 末段：精确铺满 totalSamplesRel —— 短则补零，长则裁剪。
+                    // 只补不裁会让 sampleEnd 超过时间轴（实测 total=240000 /
+                    // 末段 audio=240480 → end=240480）。
+                    const wantLen = Math.max(0, totalSamplesRel - frontier);
+                    if (audio.length > wantLen) {
+                        audio = audio.slice(0, wantLen);
+                    } else if (audio.length < wantLen) {
                         const padded = new Float32Array(wantLen);
                         padded.set(audio, 0);
                         audio = padded;
                     }
                 }
-                const emitted = emitChunk(audio, isLastSeg);
+                // 末段为空时不再补 1 样本（会把时间轴撑到 total+1）：发一个
+                // 0 长度 isLast 标记块，frontier 严格停在 totalSamplesRel。
+                emitChunk(audio, isLastSeg, segmentIndex);
                 meta.audio = null; // 释放引用
                 nextTimeIdx++;
-                if (isLastSeg && !emitted) {
-                    // 最后一个 segment 无音频（全休止 / 空结果）：补 1 样本静音承载 isLast
-                    emitChunk(new Float32Array(1), true);
-                }
             }
             if (nextTimeIdx >= timeOrder.length) finished = true;
         };
@@ -3409,6 +3433,24 @@ class OnnxSVSPipeline {
                 console.log(`[SegInfer][FRAG] segment inference done | seg=${segIdx}/${timeOrder.length} samples=${samples} relStart=${meta.relStart} relEnd=${meta.relEnd} t=${Date.now()}`);
                 meta.audio = samples > 0 ? audio : new Float32Array(0);
                 tryEmit();
+            },
+            /** 已发射前沿（相对首音符采样）。 */
+            get frontier() { return frontier; },
+            get emittedChunks() { return emittedChunkIndex; },
+            get finished() { return finished; },
+            get totalSamples() { return totalSamplesRel; },
+            /**
+             * 合成结束后的长度断言：正常路径必须严格铺满时间轴。
+             * 旧实现只暴露 segmentDone，越界/欠长只能靠听感发现。
+             */
+            assertComplete() {
+                if (!finished) {
+                    throw new Error(`stream emitter incomplete: nextTimeIdx=${nextTimeIdx}/${timeOrder.length}`);
+                }
+                if (frontier !== totalSamplesRel) {
+                    throw new Error(`stream emitter length mismatch: frontier=${frontier} total=${totalSamplesRel}`);
+                }
+                return { frontier, emittedChunks: emittedChunkIndex };
             },
         };
     }
@@ -5184,6 +5226,11 @@ class OnnxSVSPipeline {
             if (k < order.length - 1) await gpuDrainAdaptive();
             k++;
         }
+
+        // 流式发射的长度契约：所有 segment 都已完成后，时间轴必须被精确铺满。
+        // 越界/欠长以前只能靠听感发现，这里显式断言（取消/异常路径提前抛出，
+        // 不会走到这里）。
+        if (streamEmitter) streamEmitter.assertComplete();
 
         for (let i = 0; i < totalSamples; i++) {
             if (weightSum[i] > 1e-8) {
