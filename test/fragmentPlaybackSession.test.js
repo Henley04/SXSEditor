@@ -499,3 +499,86 @@ describe('StreamingScheduler.activate 非破坏性', () => {
     sched.deactivate();
   });
 });
+
+/**
+ * #3 / #10：END 明确报告"不完整"时，绝不能按正常完成收尾。
+ * 旧实现只检查 deliveryDone，seq 1、2、4 + END(lastSeq=4) 会被当成正常播完。
+ */
+describe('交付缺口收尾（#3 / #10）', () => {
+  const { expect } = require('chai');
+
+  function makeGapSession(streamModule) {
+    const sess = streamModule.createSession('stream');
+    sess.streamId = 'frag-gap';
+    sess.protocolMode = 'identified';
+    sess.streamStarted = true;
+    sess.inferenceDone = true;
+    sess.lastChunkAtMs = Date.now() - 5000;
+    for (const seq of [1, 2, 4]) sess.seenSeqs.add(seq);
+    return sess;
+  }
+
+  it('seq 缺口 + END(complete:false)：不走正常 finish，记录 gap 与可听位置', async () => {
+    const state = require('../src/fragmentEditor/state.js');
+    state.setNotes([]);
+    state.setCurrentProject({ bpm: 120 });
+    state.setFragmentPlayStartPosition(0);
+    state.setFragmentIsPlaying(false);
+    state.setFragmentCurrentTime(0);
+    state.setFragmentAudioContext(null);
+    const streamModule = require('../src/fragmentEditor/playbackSession.js');
+    streamModule._resetPlaybackSessions();
+
+    const sess = makeGapSession(streamModule);
+    await sess.noteStreamEnd({
+      streamId: 'frag-gap',
+      lastSeq: 4,
+      complete: false,
+      status: 'incomplete',
+      firstFailedSeq: 4,
+    });
+
+    expect(sess.deliveryComplete).to.equal(false);
+    expect(sess.deliveryIncomplete).to.equal(true);
+    expect(sess.streamEndStatus).to.equal('incomplete');
+    expect(sess.firstFailedSeq).to.equal(4);
+    expect(sess.finished, '缺口不得走正常 finish').to.equal(false);
+    expect(sess.gapDetected).to.equal(false);
+
+    sess._finishWithGap();
+    expect(sess.gapDetected, '必须显式记录缺口').to.equal(true);
+    expect(sess.gapResumeSec).to.be.a('number');
+    expect(sess.finished).to.equal(true);
+    expect(sess.gapResumeSec, '续播位置必须落在起播点之后（不倒退）')
+      .to.be.at.least(sess.startPositionSec);
+
+    streamModule._resetPlaybackSessions();
+  });
+
+  it('END(complete:true) 且 seq 连续：按完整交付处理', async () => {
+    const state = require('../src/fragmentEditor/state.js');
+    state.setNotes([]);
+    state.setCurrentProject({ bpm: 120 });
+    state.setFragmentPlayStartPosition(0);
+    state.setFragmentIsPlaying(false);
+    state.setFragmentCurrentTime(0);
+    state.setFragmentAudioContext(null);
+    const streamModule = require('../src/fragmentEditor/playbackSession.js');
+    streamModule._resetPlaybackSessions();
+
+    const sess = makeGapSession(streamModule);
+    sess.seenSeqs.add(3);
+    await sess.noteStreamEnd({
+      streamId: 'frag-gap',
+      lastSeq: 4,
+      complete: true,
+      status: 'complete',
+    });
+
+    expect(sess.deliveryComplete).to.equal(true);
+    expect(sess.deliveryIncomplete).to.equal(false);
+    expect(sess.streamEndStatus).to.equal('complete');
+
+    streamModule._resetPlaybackSessions();
+  });
+});

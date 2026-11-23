@@ -181,4 +181,57 @@ describe('StreamTimeline（流式播放时间轴）', () => {
     expect(split.segments[1].skipSamples).to.equal(6 * SR);
     expect(split.contentEndSec).to.be.closeTo(8, EPS);
   });
+
+  /**
+   * #1：锚点必须在 source.start() 成功后才写入。
+   * plan() 提前写 anchor 时，启动失败会让后续块按一个没有声音源的时间原点排程。
+   */
+  describe('延迟锚定（plan 只给候选，commit 才生效）', () => {
+    it('plan(reserve:false) 不写 anchor / 不占账本；commit 后才建立时间基准', () => {
+      const t = new StreamTimeline({ startPositionSec: 0, firstNoteStartSec: 0 });
+      const plan = t.plan(chunkAt(0, 2), SR, 100, { reserve: false });
+
+      expect(plan.action).to.equal('schedule');
+      expect(plan.startedNow).to.equal(true);
+      expect(plan.anchorCtxTime).to.be.closeTo(100 + STREAM_LEAD_SEC, EPS);
+      expect(t.started, 'plan 阶段不得锚定').to.equal(false);
+      expect(t.anchorCtxTime).to.equal(null);
+      expect(t.coveredRanges, 'plan 阶段不得占账本').to.have.lengthOf(0);
+
+      t.commit(plan, plan.segments);
+      expect(t.started).to.equal(true);
+      expect(t.anchorCtxTime).to.be.closeTo(plan.anchorCtxTime, EPS);
+      expect(t.coveredRanges).to.have.lengthOf(1);
+    });
+
+    it('所有 source 都启动失败（不 commit）→ 不锚定；下一块用新的候选值', () => {
+      const t = new StreamTimeline({ startPositionSec: 0, firstNoteStartSec: 0 });
+      t.plan(chunkAt(0, 2), SR, 100, { reserve: false });
+      // 调用方 start() 全部抛异常：不调用 commit
+      expect(t.started).to.equal(false);
+      expect(t.coveredRanges).to.have.lengthOf(0);
+
+      const retry = t.plan(chunkAt(0, 2), SR, 105, { reserve: false });
+      expect(retry.startedNow).to.equal(true);
+      expect(retry.anchorCtxTime, '重试必须使用新时钟，而不是失败时的旧候选').to.be.closeTo(105 + STREAM_LEAD_SEC, EPS);
+    });
+  });
+
+  /**
+   * #6：带 sampleOffset 的块也必须推进顺序游标，否则其后第一个"无范围"块
+   * 会从旧游标（通常是 0）重发，被整块判 duplicate。
+   */
+  describe('混合协议顺序游标', () => {
+    it('带范围块之后的无范围块接在其末端（不回 0）', () => {
+      const t = new StreamTimeline({ startPositionSec: 0, firstNoteStartSec: 0 });
+      t.plan(chunkAt(4, 2), SR, 0);                     // 带范围：4..6s
+      const legacy = { audio: new Float32Array(2 * SR) }; // 无 sampleOffset/End
+      const plan = t.plan(legacy, SR, 0.1);
+
+      expect(plan.action).to.equal('schedule');
+      expect(plan.contentStartSec).to.be.closeTo(6, EPS);
+      expect(plan.contentEndSec).to.be.closeTo(8, EPS);
+      expect(t.mixedRangeProtocol, '混合协议应被显式记录').to.equal(true);
+    });
+  });
 });
