@@ -2,6 +2,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { OnnxSVSPipeline } = require('../src/inference/pipeline');
 const { SAMPLE_RATE } = require('../src/inference/pipeline/constants');
+const { ownsWholeBuffer } = require('../src/shared/pcmTransfer');
 
 /**
  * 多 segment 流式发射器（_createSegmentStreamEmitter）回归测试。
@@ -30,7 +31,7 @@ const BPM = 60;
 const SEC = SAMPLE_RATE; // 1 秒的样本数
 
 /** 收集 onChunkAudio 回调的辅助：返回 {emitter, chunks} */
-function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } = {}) {
+function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null, wrapChunk = null } = {}) {
   const chunks = [];
   const pipeline = buildPipeline();
   const ts = totalSamples != null
@@ -38,7 +39,7 @@ function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } =
     : Math.floor((segments[segments.length - 1].endBeat / BPM) * 60 * SAMPLE_RATE);
   const emitter = pipeline._createSegmentStreamEmitter(
     segments, BPM, firstNoteStartBeat, ts,
-    (c) => chunks.push(c),
+    (c) => chunks.push(wrapChunk ? wrapChunk(c) : c),
   );
   return { emitter, chunks };
 }
@@ -154,6 +155,63 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
         acc = c.sampleEnd;
       }
       expect(acc).to.equal(Math.round(38 * SEC));
+    });
+  });
+
+  describe('Worker Transferable（真实 buffer 转移）', () => {
+    /**
+     * svsWorker.js 的 onChunkAudio 会在视图独占 buffer 时调用
+     * `postMessage(message, [audio.buffer])`，发送侧 typed array 会同步分离。
+     * 这里用 structuredClone + 同一个 ownsWholeBuffer 谓词复现同一语义。
+     */
+    function transferChunk(c) {
+      const ab = ownsWholeBuffer(c.audio) ? c.audio.buffer : null;
+      return structuredClone(c, ab ? { transfer: [ab] } : undefined);
+    }
+
+    function makeTransferEmitter(segments, opts = {}) {
+      return makeEmitter(segments, { ...opts, wrapChunk: transferChunk });
+    }
+
+    it('长休止：转移后 frontier 仍连续，补零恰好覆盖空白，后段 PCM 保留', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4.15 },
+        { startBeat: 26.15, endBeat: 30.15 },
+      ];
+      const { emitter, chunks } = makeTransferEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4.15, 0.1));
+      emitter.segmentDone(1, makeAudio(4, 0.2));
+
+      expect(chunks).to.have.lengthOf(3);
+      const [c0, gap, c2] = chunks;
+      expect(c0.sampleOffset).to.equal(0);
+      expect(c0.sampleEnd).to.equal(Math.round(4.15 * SEC));
+      expect(gap.sampleOffset).to.equal(c0.sampleEnd);
+      expect(gap.sampleEnd).to.equal(Math.round(26.15 * SEC));
+      expect(gap.audio.length).to.equal(Math.round(22 * SEC));
+      expect(gap.audio[0]).to.equal(0);
+      expect(gap.audio[gap.audio.length - 1]).to.equal(0);
+      expect(c2.sampleOffset).to.equal(Math.round(26.15 * SEC));
+      expect(c2.sampleEnd).to.equal(Math.round(30.15 * SEC));
+      expect(c2.audio[0]).to.be.closeTo(0.2, 1e-6);
+      expect(c2.audio[c2.audio.length - 1]).to.be.closeTo(0.2, 1e-6);
+    });
+
+    it('连续多段：转移后第二段不会从 0 重发', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 4, endBeat: 8 },
+      ];
+      const { emitter, chunks } = makeTransferEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4, 0.1));
+      emitter.segmentDone(1, makeAudio(4, 0.2));
+
+      expect(chunks).to.have.lengthOf(2);
+      expect(chunks[0].sampleOffset).to.equal(0);
+      expect(chunks[0].sampleEnd).to.equal(4 * SEC);
+      expect(chunks[1].sampleOffset).to.equal(4 * SEC);
+      expect(chunks[1].sampleEnd).to.equal(8 * SEC);
+      expect(chunks[1].audio[0]).to.be.closeTo(0.2, 1e-6);
     });
   });
 

@@ -33,6 +33,7 @@ if (workerData && typeof workerData === 'object') {
 
 const { OnnxSVSPipeline } = require('./pipeline');
 const { RmvpePitchDetector } = require('./rmvpePitchDetector');
+const { ownsWholeBuffer } = require('../shared/pcmTransfer');
 
 let pipeline = null;
 let rmvpe = null;
@@ -148,9 +149,10 @@ function attachCallbacks(id, options = {}) {
         };
         // 仅当视图独占 backing store 时移交，避免误伤共享缓冲池。
         // postMessage 失败不能反向打断整轮合成。
-        const ab = pcm.buffer instanceof ArrayBuffer
-          && pcm.byteOffset === 0 && pcm.byteLength === pcm.buffer.byteLength
-          ? pcm.buffer : null;
+        // Ownership contract: the producer must not read `audio` after this
+        // callback returns — when the view owns its whole backing store, the
+        // buffer below is transferred to the main thread and detached here.
+        const ab = ownsWholeBuffer(pcm) ? pcm.buffer : null;
         if (ab) parentPort.postMessage(message, [ab]);
         else parentPort.postMessage(message);
       } catch (err) {

@@ -8,6 +8,13 @@
 const { expect } = require('chai');
 const { OnnxSVSPipeline } = require('../src/inference/pipeline');
 const { SAMPLE_RATE } = require('../src/inference/pipeline/constants');
+const { ownsWholeBuffer } = require('../src/shared/pcmTransfer');
+
+/** 复现 svsWorker.attachCallbacks：视图独占 buffer 时转移，发送侧同步分离。 */
+function transferChunk(c) {
+  const ab = ownsWholeBuffer(c.audio) ? c.audio.buffer : null;
+  return structuredClone(c, ab ? { transfer: [ab] } : undefined);
+}
 
 describe('缓存命中的流式重放', () => {
   it('5s 缓存 → 按 2s 切块，偏移连续、只有末块 isLast', () => {
@@ -34,6 +41,57 @@ describe('缓存命中的流式重放', () => {
     const chunks = [];
     pipeline._emitCachedAudioAsChunks(new Float32Array(0), (c) => chunks.push(c));
     expect(chunks).to.have.lengthOf(0);
+  });
+
+  it('≤2s 缓存被真实 transfer 后，不分离缓存条目本身', () => {
+    const pipeline = new OnnxSVSPipeline('/fake/model/dir/');
+    const audio = new Float32Array(Math.round(1.5 * SAMPLE_RATE)).fill(0.1);
+    const chunks = [];
+    pipeline._emitCachedAudioAsChunks(audio, (c) => {
+      chunks.push(transferChunk(c));
+    }, 2);
+
+    expect(chunks).to.have.lengthOf(1);
+    expect(chunks[0].audio.length).to.equal(Math.round(1.5 * SAMPLE_RATE));
+    // 关键：LRU 里的缓存数组必须仍然可用，否则下一次命中会拿到空音频。
+    expect(audio.length).to.equal(Math.round(1.5 * SAMPLE_RATE));
+    expect(audio[0]).to.be.closeTo(0.1, 1e-6);
+    // _synthesizeImpl 命中缓存后会把 cachedAudio 原样返回；分离后再克隆会
+    // 抛 DataCloneError，导致整次 worker invoke 失败而不只是后续缓存为空。
+    expect(() => structuredClone(audio)).to.not.throw();
+    expect(structuredClone(audio).length).to.equal(Math.round(1.5 * SAMPLE_RATE));
+  });
+
+  it('>2s 缓存经真实 transfer 消费后，缓存与分块均完整', () => {
+    const pipeline = new OnnxSVSPipeline('/fake/model/dir/');
+    const audio = new Float32Array(5 * SAMPLE_RATE).fill(0.1);
+    const chunks = [];
+    pipeline._emitCachedAudioAsChunks(audio, (c) => {
+      chunks.push(transferChunk(c));
+    }, 2);
+
+    expect(chunks.map((c) => c.audio.length)).to.deep.equal([
+      2 * SAMPLE_RATE, 2 * SAMPLE_RATE, SAMPLE_RATE,
+    ]);
+    // 部分视图不在移交列表里，缓存不能被分离。
+    expect(audio.length).to.equal(5 * SAMPLE_RATE);
+    expect(audio[0]).to.be.closeTo(0.1, 1e-6);
+  });
+
+  it('缓存长度整除 step：4s → 2 块，末块 isLast，缓存不分离', () => {
+    const pipeline = new OnnxSVSPipeline('/fake/model/dir/');
+    const audio = new Float32Array(4 * SAMPLE_RATE).fill(0.1);
+    const chunks = [];
+    pipeline._emitCachedAudioAsChunks(audio, (c) => {
+      chunks.push(transferChunk(c));
+    }, 2);
+
+    expect(chunks.map((c) => [c.sampleOffset, c.sampleEnd])).to.deep.equal([
+      [0, 2 * SAMPLE_RATE],
+      [2 * SAMPLE_RATE, 4 * SAMPLE_RATE],
+    ]);
+    expect(chunks.map((c) => c.isLast)).to.deep.equal([false, true]);
+    expect(audio.length).to.equal(4 * SAMPLE_RATE);
   });
 
   it('回调抛错时停止重放（不让一条坏链路拖垮整次合成）', () => {
