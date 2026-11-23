@@ -11,7 +11,6 @@ const { state, dom, trackManager } = require('../src/renderer/state.js');
 const {
   renderFragmentTimeline,
   playbackTimeToX,
-  getFollowState,
 } = require('../src/renderer/timelineRenderer.js');
 const ap = require('../src/renderer/audioPlayback.js');
 
@@ -141,8 +140,11 @@ describe('播放头始终可见 — 空工程 / 0 秒 / Stop / 自然结束', ()
     };
     ap.startSharedPlayback(0);
     const src = state.currentAudioSource;
-    // 模拟非"刚启动就结束"的自然结束
-    sinon.stub(performance, 'now').callsFake(() => 5000);
+    // 模拟非"刚启动就结束"的自然结束。用极大墙钟值而不是固定 5000：
+    // startSharedPlayback 记录的 playbackStartWallTime 在全量套件里可能已很大
+    // （套件跑了 1 分钟 → ~60000ms），固定 5000 会算出负的 realElapsed，被
+    // 误判成"刚启动就结束"而保留 pauseOffset=0，测试才会偶发失败。
+    sinon.stub(performance, 'now').callsFake(() => 1e9);
     try {
       src.onended();
     } finally {

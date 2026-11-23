@@ -7,7 +7,6 @@
  * 速度/方向/上限计算由纯函数语义（clamp + 距离映射）保证，通过状态与滚动值观察。
  */
 const { expect } = require('chai');
-const sinon = require('sinon');
 
 const { state, dom, trackManager } = require('../src/renderer/state.js');
 const {

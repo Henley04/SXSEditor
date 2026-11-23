@@ -12,9 +12,7 @@ const sinon = require('sinon');
 
 const { state, dom, trackManager } = require('../src/renderer/state.js');
 const {
-  getBeatWidth,
   renderFragmentTimeline,
-  playbackTimeToX,
   markUserViewActivity,
   pauseFollow,
   resetFollowAnchor,
@@ -117,7 +115,6 @@ describe('分页跟随状态机（保留 90%→20% 行为）', () => {
 
   it('抑制期间播放头继续前进但 fragmentScrollX 保持不变', () => {
     resetFollowAnchor();
-    const sec = playbackTimeToX(5) / getBeatWidth(); // 占位，实际用下面逻辑
     // 先让视口稳定在某处
     state.fragmentScrollX = 0;
     markUserViewActivity();

@@ -7,7 +7,7 @@ const sinon = require('sinon');
 
 const { state, dom, trackManager, history } = require('../src/renderer/state.js');
 const { refreshAll } = require('../src/renderer/timelineRenderer.js');
-const { registerTrackGain, clearTrackGains, getAudibleSnapshot } = require('../src/renderer/trackGainMixer.js');
+const { registerTrackGain, clearTrackGains } = require('../src/renderer/trackGainMixer.js');
 const ap = require('../src/renderer/audioPlayback.js');
 
 function makeGain() {

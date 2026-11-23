@@ -69,7 +69,6 @@ let _edgeScrollRaf = 0;
 let _edgeScrollLastTs = 0;
 // 最近一次拖拽指针位置（clientX/clientY），供边缘滚屏每帧重算世界坐标。
 let _dragClientX = 0;
-let _dragClientY = 0;
 
 function _ensurePlayheadTooltip() {
   if (_playheadTooltip && document.body.contains(_playheadTooltip)) return _playheadTooltip;
@@ -308,7 +307,6 @@ function _stopEdgeScroll() {
 function _onWindowPlayheadDragMove(e) {
   if (!_isPlayheadDragging) return;
   _dragClientX = e.clientX;
-  _dragClientY = e.clientY;
   const x = _mouseToCanvasX(e);
   _updatePlayheadVisual(_canvasXToClampedSeconds(x));
 }
@@ -484,7 +482,6 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
       }
       _isPlayheadDragging = true;
       _dragClientX = e.clientX;
-      _dragClientY = e.clientY;
       // 拖拽期间暂停分页跟随，启动边缘自动滚屏；松手时 resetFollowAnchor() 重建锚点。
       pauseFollow();
       _attachPlayheadDragWindowListeners();
