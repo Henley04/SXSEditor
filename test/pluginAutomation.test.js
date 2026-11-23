@@ -311,7 +311,7 @@ describe('mcpBridge — 插件方法进 MCP', function () {
   const { buildAutomationDef: build } = require('../src/shared/pluginAutomation');
   function provider(handlers) {
     const defs = {};
-    for (const [localId, fn] of Object.entries(handlers)) {
+    for (const [localId, _fn] of Object.entries(handlers)) {
       const built = build({ pluginId: 'demo', localId, title: localId, pluginName: 'Demo' });
       defs[built.name] = built.def;
     }

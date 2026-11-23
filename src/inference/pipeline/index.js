@@ -7,8 +7,8 @@ const fs = require('node:fs');
 // 改由 ortRuntime.getOrt() 在真正加载 ORT 之后调用，见 src/inference/ortRuntime.js。
 const { getOrt } = require('../ortRuntime.js');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, DIFF_STEP_MAX_SEQ_LEN } = require('./constants');
-const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM: _EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, DIFF_STEP_MAX_SEQ_LEN } = require('./constants');
+const { getMainWindowWebContents, classifyDevice: _classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const sessionValidationCache = require('./sessionValidationCache');
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { isCpuOnlyBackend } = require('../shared/epPolicy');
@@ -19,10 +19,10 @@ const { planStaticWindows } = require('./staticShapePlan.js');
 const { formatXtStats } = require('./diffusionStats.js');
 const { DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
-const { Postprocessing, parseWavBuffer, isVramOOMError } = require('./postprocessing');
+const { Postprocessing, parseWavBuffer: _parseWavBuffer, isVramOOMError } = require('./postprocessing');
 const { normalizeMelPostprocessOptions, applyMelPostprocess, applyMelPostprocessWindow, computeMelFrameOffset } = require('./melPostprocess');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrainAdaptive, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError } = require('./utils');
+const { createFloatTensor: _createFloatTensor, outputToFloat32: _outputToFloat32, normalizePeakTo, gpuDrainAdaptive, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError: _cancelledError } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
 // pipeline hook 执行器。module 级注入，没注入时原样返回 —— 单测与 CLI 走这条。
@@ -1769,7 +1769,7 @@ class OnnxSVSPipeline {
      * WebNN 模型加载：NPU 探测 → 并行加载 → Vocoder DML 加载
      * 失败时自动回退到 _doInitFallback
      */
-    async _loadWebNNModels(gpuInfo, resolvedModelFiles, sessionKeys, modelStats) {
+    async _loadWebNNModels(gpuInfo, resolvedModelFiles, sessionKeys, _modelStats) {
         const { ipcMain } = require('electron');
 
         const webnnModelFiles = [...resolvedModelFiles];
@@ -1876,7 +1876,7 @@ class OnnxSVSPipeline {
                 }
             }
 
-            for (const { i, modelFile, modelId, result } of loadResults) {
+            for (const { i: _i, modelFile, modelId, result } of loadResults) {
                 if (result.success) {
                     this.sessions[modelId] = new WebNNSessionProxy(modelId);
                     this.sessionEPs[modelId] = result.ep || 'webnn-npu';
@@ -2775,7 +2775,7 @@ class OnnxSVSPipeline {
             const settings = loadSettings();
             // 传入当前模型精度 + vocoderType，smart 模式下按 vocoderType 使用独立的常驻权重与分档表
             return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames, this._modelPrecision, this.vocoderType);
-        } catch (e) {
+        } catch (_e) {
             return 0; // 0 → 回退到 VOCODER_CHUNK_FRAMES 默认值
         }
     }
@@ -2792,7 +2792,7 @@ class OnnxSVSPipeline {
             const settings = loadSettings();
             const v = settings.vocoderOverlapFrames;
             return (Number.isFinite(v) && v >= 8 && v <= 96) ? Math.floor(v) : 0;
-        } catch (e) {
+        } catch (_e) {
             return 0;
         }
     }
@@ -3171,7 +3171,7 @@ class OnnxSVSPipeline {
             return { audio: audioData, frames: totalFrames };
         }
 
-        const totalFramesWithPrompt = ptFrameCount + totalFrames;
+        const _totalFramesWithPrompt = ptFrameCount + totalFrames;
 
         // INT8 静态形状 + 分段合成：逐段 encoder+diffstep 直接产出整段 mel，不整段编码。
         let xt;
@@ -3911,7 +3911,7 @@ class OnnxSVSPipeline {
                     const melResult = await this._extractRefMelOnnx(refAudioWavBuffer);
                     ptMelData = melResult.data;
                     ptFrameCount = melResult.frames;
-                } catch (e) {
+                } catch (_e) {
                     try {
                         const melResult = await this._extractRefMelAsync(refAudioWavBuffer);
                         ptMelData = melResult.data;
@@ -4610,12 +4610,12 @@ class OnnxSVSPipeline {
                 ptMelData = melResult.data;
                 ptFrameCount = melResult.frames;
                 console.log(`[OnnxSVSPipeline] Reference audio mel: ${ptFrameCount}frames`);
-            } catch (err) {
+            } catch (_err) {
                 try {
                     const melResult = await this._extractRefMelAsync(refAudioWavBuffer);
                     ptMelData = melResult.data;
                     ptFrameCount = melResult.frames;
-                } catch (err2) {
+                } catch (_err2) {
                     // JS fallback also failed, use zero prompt
                 }
             }
@@ -4952,7 +4952,7 @@ class OnnxSVSPipeline {
         // _synthesizeSegment 会在自己的长度钳制后按实际 ptFrameCount 再裁一次。
         this._currentPromptSeq = promptSeq;
 
-        const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
+        const _overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
         const overlapSamples = Math.floor(SEGMENT_OVERLAP_SEC * SAMPLE_RATE);
 
         const fadeWindow = new Float32Array(overlapSamples);

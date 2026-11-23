@@ -211,7 +211,7 @@ function esc(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function code(text) { return `<code>${esc(text)}</code>`; }
+function _code(text) { return `<code>${esc(text)}</code>`; }
 
 function bi(en, zh) {
   return `<span data-lang="en">${en}</span><span data-lang="zh">${zh}</span>`;

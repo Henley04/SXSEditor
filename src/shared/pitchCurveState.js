@@ -17,7 +17,7 @@ import { normalizeAutoConfig, AUTO_PITCH_DEFAULTS } from './autoPitchCurve.js';
 // 从未被引用的 `= 30`，正是 F13 那种"两处口径不一致"的温床。
 const ANCHOR_STRENGTH_DEFAULT = 100;
 
-function num(v, fallback) {
+function _num(v, fallback) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }

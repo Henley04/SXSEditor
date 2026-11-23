@@ -163,7 +163,7 @@ async function main() {
     for (let i = 0; i < n; i++) csv.push(`${(i * 0.1).toFixed(1)},${d[i].toFixed(4)},${ra[i].toFixed(3)},${rb[i].toFixed(3)}`);
     fs.writeFileSync(path.join(C.ROOT, 'ab_vocoder_boundary_curve.csv'), csv.join('\n'));
 
-    const { writeWavFile } = (() => { try { return require('./ab_ep_stages.js'); } catch (_) { return {}; } })();
+    const { writeWavFile: _writeWavFile } = (() => { try { return require('./ab_ep_stages.js'); } catch (_) { return {}; } })();
     // 简单 wav 写出（float32）
     const writeWav = (x, name) => {
         const hdr = Buffer.alloc(44);

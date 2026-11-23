@@ -73,7 +73,7 @@ function main() {
         return rec;
     };
 
-    let diffRunIdx = 0;
+    let _diffRunIdx = 0;
     let vocRunIdx = 0;
 
     const patchSessions = (p) => {
@@ -82,7 +82,7 @@ function main() {
             const orig = ds.run.bind(ds);
             ds.run = async (feeds) => {
                 const out = await orig(feeds);
-                diffRunIdx++;
+                _diffRunIdx++;
                 const state = ds.__captureState || (ds.__captureState = { idx: 0, total: 0, plan: null });
                 // capture a spread of trajectory points, plus the very first pass
                 const plan = state.plan;

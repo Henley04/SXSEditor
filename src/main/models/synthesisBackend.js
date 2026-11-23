@@ -21,7 +21,7 @@ const { ERR } = require('../../shared/modelContract');
 const { encodeWav } = require('../../audio/wavEncoder');
 
 /** 逐声道数组 → 交错；单声道原样返回。 */
-function interleave(pcm, channels) {
+function interleave(pcm, _channels) {
   if (!Array.isArray(pcm)) return pcm;
   const n = pcm[0] ? pcm[0].length : 0;
   const out = new Float32Array(n * pcm.length);

@@ -6,7 +6,7 @@ const { createFloatTensor, outputToFloat32, outputToFloat32Into, disposeTensor, 
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
-const { resolveQDrift, buildQDriftCtx, readQDriftEnabled } = require('./qdrift');
+const { resolveQDrift, buildQDriftCtx, readQDriftEnabled: _readQDriftEnabled } = require('./qdrift');
 const { summarizeXt, formatXtStats, findNonFiniteIndex } = require('./diffusionStats.js');
 
 // One fallback notice per loaded diffStep session, not once per streaming chunk.

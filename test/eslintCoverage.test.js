@@ -25,7 +25,7 @@ describe('ESLint 分档覆盖', function () {
   before(async function () {
     try {
       ({ ESLint } = require('eslint'));
-    } catch (err) {
+    } catch (_err) {
       this.skip();
       return;
     }

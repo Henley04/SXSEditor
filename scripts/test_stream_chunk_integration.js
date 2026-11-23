@@ -11,7 +11,7 @@
 
 const SequencedChunkQueue = require('../src/shared/sequencedChunkQueue.js');
 
-const SR = 24000;
+const _SR = 24000;
 const CHUNK = 2400; // 100ms/chunk
 let passed = 0, failed = 0;
 function assert(c, m) { if (c) passed++; else { failed++; console.error('  ✗ FAIL:', m); } }

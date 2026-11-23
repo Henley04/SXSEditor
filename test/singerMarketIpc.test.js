@@ -24,7 +24,7 @@ const electronStub = {
 // Patch Module._load so `require('electron')` returns our stub. The original
 // loader is restored after the test file loads the module.
 const originalLoad = Module._load;
-Module._load = function (request, parent, isMain) {
+Module._load = function (request, _parent, _isMain) {
   if (request === 'electron') return electronStub;
   return originalLoad.apply(this, arguments);
 };

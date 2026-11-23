@@ -2,7 +2,7 @@
 const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
 import safeCallModule from '../shared/safeCall.js';
 
-const { safeCleanup } = safeCallModule;
+const { safeCleanup: _safeCleanup } = safeCallModule;
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
@@ -16,10 +16,10 @@ import {
   getFragmentSynthesisId, waitForFragmentPlayheadDragEnd,
   getFragmentIsAutoInferring, setFragmentIsAutoInferring,
   getFragmentIsExporting, setFragmentIsExporting,
-  getFragmentCurrentTime, setFragmentCurrentTime,
-  getFragmentUseExclusiveMode,
+  getFragmentCurrentTime as _getFragmentCurrentTime, setFragmentCurrentTime,
+  getFragmentUseExclusiveMode as _getFragmentUseExclusiveMode,
   getFragmentAudioSettings,
-  getFragmentPlayStartPosition, setFragmentPlayStartPosition,
+  getFragmentPlayStartPosition as _getFragmentPlayStartPosition, setFragmentPlayStartPosition,
   getFragmentAudioDataSignature, setFragmentAudioDataSignature,
   getPipelineInitialized,
   getWavFileBuffer,

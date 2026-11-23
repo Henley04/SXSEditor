@@ -24,7 +24,7 @@ const common = require('../qdrift/scripts/common.js');
 const SEQ = Number(process.argv[2] || 2211);
 const FP16_DIR = path.join(common.ROOT, 'onnx_models', 'fp16');
 const OUT_DIR = common.ROOT;
-const MEL_MEAN = -4.92, MEL_STD = Math.sqrt(8.14);
+const _MEL_MEAN = -4.92, _MEL_STD = Math.sqrt(8.14);
 
 function deterministicF32(n, salt, scale = 1.0) {
     const a = new Float32Array(n);
@@ -127,7 +127,7 @@ async function compareStage(label, modelFile, feedsBuilder, seq, outName) {
     const rep = frameReport(outName, aTrt, aDml, dims, seq);
     console.log(`  out=${JSON.stringify(dims)} minCos=${rep.minCos.toFixed(6)} firstBad=${rep.firstBad} maxAbsDiff=${rep.maxAbs.toExponential(3)}`);
     // 逐帧能量差
-    const delta = rep.energyDb.map((v, i) => v - 0); // energyDb 是 TRT 自身能量；与 DML 能量对比需重算
+    const _delta = rep.energyDb.map((v, _i) => v - 0); // energyDb 是 TRT 自身能量；与 DML 能量对比需重算
     return { rep, aDml, aTrt, dims };
 }
 
@@ -162,7 +162,7 @@ async function main() {
             const dims = [1, SEQ, 512];
             return { features: isF16 ? new ort.Tensor('float16', common.toF16(data), dims) : new ort.Tensor('float32', data, dims) };
         };
-        const { rep, aDml, aTrt, dims } = await compareStage('1. preflow', 'preflow.onnx', build, SEQ, 'processed_features');
+        const { rep: _rep, aDml, aTrt, dims } = await compareStage('1. preflow', 'preflow.onnx', build, SEQ, 'processed_features');
         const d = energyDelta(aTrt, aDml, dims, SEQ);
         console.log(`  per-frame energy Δ(TRT-DML): ${statsOf(d)}`);
     }
@@ -175,7 +175,7 @@ async function main() {
             const dims = [1, SEQ, 512];
             return { cond_code: isF16 ? new ort.Tensor('float16', common.toF16(data), dims) : new ort.Tensor('float32', data, dims) };
         };
-        const { rep, aDml, aTrt, dims } = await compareStage('2. cond_emb', 'cond_emb.onnx', build, SEQ, null);
+        const { rep: _rep, aDml, aTrt, dims } = await compareStage('2. cond_emb', 'cond_emb.onnx', build, SEQ, null);
         const d = energyDelta(aTrt, aDml, dims, SEQ);
         console.log(`  per-frame energy Δ(TRT-DML): ${statsOf(d)}`);
     }

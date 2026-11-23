@@ -399,7 +399,7 @@ function rawGetJson(urlStr, timeoutMs) {
       res.on('end', () => {
         try {
           resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
-        } catch (e) {
+        } catch (_e) {
           reject(new Error('invalid JSON response'));
         }
       });

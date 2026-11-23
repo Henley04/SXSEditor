@@ -25,7 +25,7 @@ const {
 const FCPE_SAMPLE_RATE = 16000;
 const FCPE_HOP_SIZE = 160; // 10ms at 16kHz
 const F0_MIN = 50;
-const F0_MAX = 1100;
+const _F0_MAX = 1100;
 
 class FcpePitchDetector {
   constructor(modelDir, options = {}) {

@@ -1,6 +1,6 @@
 const path = require('node:path');
 const ort = require('onnxruntime-node');
-const mods = ['diff_step_dml', 'note_text_encoder', 'f0_encoder', 'cond_emb', 'preflow', 'vocoder_dml'];
+const _mods = ['diff_step_dml', 'note_text_encoder', 'f0_encoder', 'cond_emb', 'preflow', 'vocoder_dml'];
 async function inspect(file) {
     const s = await ort.InferenceSession.create(file, { executionProviders: ['cpu'] });
     const ins = s.inputMetadata || [];

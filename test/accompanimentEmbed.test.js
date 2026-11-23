@@ -11,7 +11,7 @@
 
 const { expect } = require('chai');
 
-let state, dom, trackManager, projectManager;
+let _state, dom, trackManager, projectManager;
 
 function installDom() {
   document.body.innerHTML = `
@@ -47,7 +47,7 @@ async function build(embed) {
 
 describe('buildProjectObject — 伴奏内嵌音频', () => {
   before(async () => {
-    ({ state, dom, trackManager } = await import('../src/renderer/state.js'));
+    ({ state: _state, dom, trackManager } = await import('../src/renderer/state.js'));
     projectManager = await import('../src/renderer/projectManager.js');
   });
 

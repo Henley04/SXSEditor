@@ -185,7 +185,7 @@ parentPort.on('message', async (msg) => {
           }
           notes = await rosvot.extractNotes(audioData, requireSampleRate(msg.sampleRate, 'pitchWorker.rosvot'), f0Array, msg.bpm || 120);
           if (!notes.some(n => n.pitch > 0)) notes = detector.f0ToNotes(f0Array, msg.bpm || 120);
-        } catch (err) {
+        } catch (_err) {
           try { rosvot?.dispose(); } catch (_) {}
           rosvot = null;
           notes = detector.f0ToNotes(f0Array, msg.bpm || 120);

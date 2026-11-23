@@ -11,7 +11,7 @@ import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLoc
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
 import { runVocoder, normalizePeakTo } from './postprocessing.js';
-import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
+import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM as _COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
@@ -93,7 +93,7 @@ async function _runSynthesisUnlocked(params) {
     // ===== Stage 1: Encoder =====
     if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
-    const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
+    const { combinedCond, totalCondFrames: _totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
         sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq, scoreMode,
     });
 

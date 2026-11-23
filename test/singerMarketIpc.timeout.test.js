@@ -20,7 +20,7 @@ const electronStub = {
 };
 
 const originalLoad = Module._load;
-Module._load = function (request, parent, isMain) {
+Module._load = function (request, _parent, _isMain) {
   if (request === 'electron') return electronStub;
   return originalLoad.apply(this, arguments);
 };
@@ -224,7 +224,7 @@ describe('singerMarketIpc request/timeout', function () {
     before(function () {
       handlers = {};
       const originalLoad2 = Module._load;
-      Module._load = function (request, parent, isMain) {
+      Module._load = function (request, _parent, _isMain) {
         if (request === 'electron') {
           return {
             ipcMain: { handle: (ch, fn) => { handlers[ch] = fn; } },

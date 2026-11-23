@@ -65,7 +65,7 @@ function decode(t) {
 function frameCosReport(name, ta, da, dims, seq) {
     const strides = new Array(dims.length); let acc = 1;
     for (let i = dims.length - 1; i >= 0; i--) { strides[i] = acc; acc *= dims[i]; }
-    let worstMin = 1, worstAx = -1, firstBadAll = -1, badPre = 0, badPost = 0, total = Math.max(0, seq - 2048);
+    let worstMin = 1, worstAx = -1, firstBadAll = -1, _badPre = 0, _badPost = 0, _total = Math.max(0, seq - 2048);
     let maxAbs = 0;
     for (let ax = 0; ax < dims.length; ax++) {
         if (dims[ax] !== seq) continue;
@@ -86,7 +86,7 @@ function frameCosReport(name, ta, da, dims, seq) {
             if (c < 0.999) { run++; if (firstBad < 0 && run >= 4) firstBad = idx - run + 1; } else run = 0;
         }
         if (firstBad >= 0 && (firstBadAll < 0 || firstBad < firstBadAll)) firstBadAll = firstBad;
-        for (let idx = 0; idx < seq; idx++) { if (idx >= 2048) badPost++; }
+        for (let idx = 0; idx < seq; idx++) { if (idx >= 2048) _badPost++; }
         if (min < worstMin) { worstMin = min; worstAx = ax; }
     }
     return { name, worstMin, worstAx, firstBadAll, maxAbs };

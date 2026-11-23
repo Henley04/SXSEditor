@@ -81,7 +81,7 @@ import {
   getAnchorDragHud,
   getTimbreVersion,
 } from './state.js';
-import { buildEffectiveValues, evalSortedCurve, buildPitchCurveSampleTimes } from './automationCurve.js';
+import { buildEffectiveValues, evalSortedCurve as _evalSortedCurve, buildPitchCurveSampleTimes } from './automationCurve.js';
 import { collectCurves, sampleCurve, applyCurveSpec } from '../shared/pluginCurve.js';
 import {
   hasF0PostprocessEffect,

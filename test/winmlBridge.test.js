@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { describe, it, before, beforeEach, afterEach } = require('mocha');
 const sinon = require('sinon');
-const path = require('node:path');
+const _path = require('node:path');
 
 // ---------------------------------------------------------------------------
 // Stub the native addon module BEFORE requiring anything that loads it.
@@ -16,7 +16,7 @@ const fakeAddon = {
         addonCalls.created.push({ modelPath, indices, providerOptions });
         return BigInt(fakeSessionCounter++);
     },
-    sessionInfo(id) {
+    sessionInfo(_id) {
         return {
             inputs: [
                 { name: 'xt_input', type: 'float16', dims: [1, -1, 128] },

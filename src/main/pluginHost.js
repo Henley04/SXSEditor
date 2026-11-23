@@ -165,7 +165,7 @@ function defaultLogSink(level, scope, message) {
  * 只在调用方未注入 pluginsDir 时才 require('electron')，保证纯 Node 可用。
  */
 function defaultPluginsDir() {
-  // eslint-disable-next-line global-require
+   
   const { app } = require('electron');
   return path.join(app.getPath('userData'), 'plugins');
 }
@@ -173,7 +173,7 @@ function defaultPluginsDir() {
 /** 宿主版本（传给插件 ctx.hostVersion）。 */
 function defaultHostVersion() {
   try {
-    // eslint-disable-next-line global-require
+     
     const { app } = require('electron');
     const v = app.getVersion();
     return typeof v === 'string' && v ? v : '0.0.0';
@@ -185,7 +185,7 @@ function defaultHostVersion() {
 /** ctx.getSetting() 的默认实现：读主进程设置（失败返回 undefined）。 */
 function defaultGetSetting(key) {
   try {
-    // eslint-disable-next-line global-require
+     
     const { loadSettings } = require('./settings');
     const settings = loadSettings();
     return settings ? settings[key] : undefined;
@@ -502,7 +502,7 @@ function findNonFiniteIndex(arr, maxScan) {
   const limit = Math.min(arr.length, Number.isFinite(maxScan) ? maxScan : arr.length);
   for (let i = 0; i < limit; i++) {
     const v = arr[i];
-    // eslint-disable-next-line no-self-compare
+     
     if (v !== v || v === Infinity || v === -Infinity) return i;
   }
   return -1;
@@ -1155,7 +1155,7 @@ function createPluginHost(options) {
    * @returns {Promise<object>} 插件元数据（name/version/capabilities/trackKinds/has）
    */
   async function spawnWorker(record) {
-    // eslint-disable-next-line global-require
+     
     const { Worker } = require('node:worker_threads');
     const entry = resolveWorkerEntry();
     if (!entry) {
@@ -1455,7 +1455,7 @@ function createPluginHost(options) {
       }
 
       // ---- in-process：插件代码直载进主进程（见文件头的"无法抢占"说明）----
-      // eslint-disable-next-line global-require
+       
       const mod = require(entry);
       const checkedModule = validateModule(mod, checkedManifest.value);
       if (!checkedModule.ok) {

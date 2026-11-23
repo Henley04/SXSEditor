@@ -11,7 +11,7 @@
  *   2. 映射表覆盖 forge.config.js 里每一个入口（入口改名/新增会立刻失败）；
  *   3. 裁剪表里出现的窗口标识都真实存在（防 `pluginmanager` 写成 `plugin_manager`）。
  */
-const fs = require('node:fs');
+const _fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert');
 

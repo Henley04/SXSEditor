@@ -27,7 +27,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const ort = require('onnxruntime-node');
+const _ort = require('onnxruntime-node');
 const C = require('../qdrift/scripts/common.js');
 
 const ITEM = process.argv[2] || 'prj_lagtrain_f0_s02';
@@ -206,7 +206,7 @@ async function main() {
         console.log(`plan ${k}: ${v.map(([s, e]) => `[${s},${e})`).join(' ')}`);
     }
     const allSpecs = new Map();
-    for (const [k, v] of Object.entries(plans)) {
+    for (const [_k, v] of Object.entries(plans)) {
         for (const [s, e] of v) {
             if (!allSpecs.has(`${s}-${e}`)) allSpecs.set(`${s}-${e}`, [s, e]);
         }
@@ -288,7 +288,7 @@ async function main() {
     // chunk 边界台阶量化：边界前后各 25 帧窗平均差
     console.log('\n--- chunk 边界台阶（X−Y，边界前后 25 帧均值跳变） ---');
     for (const [tag, r] of Object.entries(results)) {
-        for (const [cs, ce] of r.specs.slice(1)) {
+        for (const [cs, _ce] of r.specs.slice(1)) {
             const a0 = Math.max(0, cs - 25), a1 = cs;
             const b0 = cs, b1 = Math.min(tl, cs + 25);
             const avg = (a, b) => { let s = 0; for (let f = a; f < b; f++) s += r.d[f]; return s / (b - a); };

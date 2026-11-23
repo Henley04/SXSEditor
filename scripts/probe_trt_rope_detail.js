@@ -35,7 +35,7 @@ function makeFeeds(seq) {
     };
 }
 
-function toRows(t, dims, axesToSeq) {
+function _toRows(t, dims, axesToSeq) {
     // flatten and return {seqIdx -> per-channel slice} for the rope layout [1,seq,32]
     const isF16 = t.type === 'float16';
     const d = t.data;
@@ -63,8 +63,8 @@ async function main() {
         const seqAxT = td.findIndex((x) => x === SEQ), seqAxD = dd.findIndex((x) => x === SEQ);
         console.log(`\n=== ${name} dims trt=${JSON.stringify(td)} dml=${JSON.stringify(dd)} (seq axis: trt=${seqAxT} dml=${seqAxD}) ===`);
         const nCh = seqAxT === 2 ? td[1] : td[2];
-        const strideT = seqAxT === 2 ? 1 : td[2];  // [1,32,seq]: idx = ch*SEQ + f ; [1,seq,32]: idx = f*32 + ch
-        const baseT = seqAxT === 2 ? 0 : 0;
+        const _strideT = seqAxT === 2 ? 1 : td[2];  // [1,32,seq]: idx = ch*SEQ + f ; [1,seq,32]: idx = f*32 + ch
+        const _baseT = seqAxT === 2 ? 0 : 0;
         const valT = (ch, f) => {
             const isF16 = trt[name].type === 'float16';
             const d = trt[name].data;

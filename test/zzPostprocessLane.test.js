@@ -31,7 +31,7 @@ document.body.innerHTML = '<canvas id="piano-roll"></canvas><canvas id="piano-ke
 const state = require('../src/fragmentEditor/state');
 const uiControls = require('../src/fragmentEditor/uiControls');
 const cr = require('../src/fragmentEditor/canvasRenderer');
-const { POSTPROCESS_PARAM_LIST, POSTPROCESS_PARAMS } = require('../src/fragmentEditor/postprocessParams');
+const { POSTPROCESS_PARAM_LIST, POSTPROCESS_PARAMS: _POSTPROCESS_PARAMS } = require('../src/fragmentEditor/postprocessParams');
 const {
   getTimbreValueAt,
   buildF0ParamArrays,

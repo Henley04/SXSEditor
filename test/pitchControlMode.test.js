@@ -159,7 +159,7 @@ describe('runEncoder 在 score 模式下把 f0 条件清零', () => {
 
   function makeSequences(voicedF0) {
     const tokenCount = 3;
-    const totalFrames = 4;
+    const _totalFrames = 4;
     return {
       tokenCount,
       noteTextSeq: Int32Array.from([0, 6, 7]),

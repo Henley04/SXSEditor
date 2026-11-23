@@ -338,7 +338,7 @@ function registerPluginIpc() {
     } catch (err) {
       console.warn('[Main] Failed to create plugin directory:', err && err.message ? err.message : err);
     }
-    // eslint-disable-next-line global-require
+     
     const { shell } = require('electron');
     const opened = await shell.openPath(dir);
     // openPath 返回空串表示成功，否则是系统给出的错误描述

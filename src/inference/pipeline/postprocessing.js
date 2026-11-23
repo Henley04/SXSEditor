@@ -1278,7 +1278,7 @@ class Postprocessing {
      *        chunkInfo = { chunkIndex, sampleOffset, sampleEnd, audio: Float32Array, totalSamples, isLast }
      *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0, overlapFramesOverride = 0) {
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, _sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0, overlapFramesOverride = 0) {
         const _vocoderStartMs = performance.now();
         if (!sessions || !sessions.vocoder) {
             console.error(`[VocoderDiag] CRITICAL: sessions.vocoder is ${sessions ? (sessions.vocoder === undefined ? 'undefined' : 'null') : 'sessions is null'}! Vocoder will throw. sessionEPs=${JSON.stringify(sessions ? Object.keys(sessions) : [])}`);
@@ -1504,14 +1504,14 @@ class Postprocessing {
                 const hopSamples = vocoderHopSize; // 1 mel frame = hopSamples audio samples
                 const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
                 const parts = [];
-                let totalAbs = 0;
+                let _totalAbs = 0;
                 for (let f = 0; f < diagFrames; f++) {
                     let s = 0;
                     const s0 = f * hopSamples;
                     const s1 = Math.min(s0 + hopSamples, waveform.length);
                     for (let i = s0; i < s1; i++) s += waveform[i] * waveform[i];
                     const rms = Math.sqrt(s / Math.max(1, s1 - s0));
-                    totalAbs += rms;
+                    _totalAbs += rms;
                     parts.push(`f${f}=${rms.toFixed(5)}`);
                 }
                 // 同时统计 mel 开头能量（前 5 帧）
@@ -1886,7 +1886,7 @@ class Postprocessing {
                 }
             }
             return notePitches.length > 0 ? notePitches : null;
-        } catch (e) {
+        } catch (_e) {
             return null;
         }
     }
@@ -1909,7 +1909,7 @@ class Postprocessing {
                 }
             }
             return notePitches.length > 0 ? notePitches : null;
-        } catch (e) {
+        } catch (_e) {
             return null;
         }
     }

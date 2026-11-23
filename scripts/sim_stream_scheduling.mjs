@@ -116,7 +116,7 @@ class Sim {
   }
 
   step(dt) {
-    const prevCtx = this.ctx.currentTime;
+    const _prevCtx = this.ctx.currentTime;
     if (this.ctx.running) this.ctx.currentTime += dt;
 
     // fire source starts/ends on ctx clock

@@ -308,7 +308,7 @@ function parseMidiFile(buffer) {
   const ticksPerBeat = midi.header.ppq;
 
   const rawNotes = [];
-  for (const [trackIndex, track] of midi.tracks.entries()) {
+  for (const [_trackIndex, track] of midi.tracks.entries()) {
     if (track.instrument.percussion) continue;
     for (const note of track.notes) {
       rawNotes.push({

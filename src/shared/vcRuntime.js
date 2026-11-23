@@ -26,7 +26,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
+const _os = require('node:os');
 
 /** 三枚 DLL 缺任意一枚都会让 MSVC 原生模块加载失败。vcruntime140_1.dll 是
  *  VS2019 16.x+ / VS2022 引入的，旧机器最常见就缺这一枚。 */

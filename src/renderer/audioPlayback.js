@@ -3,7 +3,7 @@ import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
 import { buildMelPostprocessPayload, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
 import { t } from '../i18n/index.js';
 import { TRANSPORT, getTransportState, setTransport, setTransportProgress, clearTransportStatus } from './transport.js';
-import { setLabel } from '../icons/iconHelper.js';
+import { setLabel as _setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
@@ -25,7 +25,7 @@ import { clearPluginBlockingOverlay } from './pluginBlockingOverlay.js';
 // 清理型副作用（disconnect / stop / 退订）统一走 safeCleanup，失败留痕但不打断主流程。
 import safeCallModule from '../shared/safeCall.js';
 
-const { safeCleanup, safeCallAsync } = safeCallModule;
+const { safeCleanup, safeCallAsync: _safeCallAsync } = safeCallModule;
 
 // ==================== 插件后端接线 ====================
 
@@ -2116,11 +2116,11 @@ export async function runExportJob(opts) {
     sampler,
     autoShift,
     smartSegmentation,
-    cfgScheduleMode,
-    cfgStrengthStart,
-    cfgScheduleKeyframes,
-    dynamicThresholdEnabled,
-    dynamicThresholdPercentile,
+    cfgScheduleMode: _cfgScheduleMode,
+    cfgStrengthStart: _cfgStrengthStart,
+    cfgScheduleKeyframes: _cfgScheduleKeyframes,
+    dynamicThresholdEnabled: _dynamicThresholdEnabled,
+    dynamicThresholdPercentile: _dynamicThresholdPercentile,
     onFragmentProgress,
     onOverallProgress,
     onStatus,

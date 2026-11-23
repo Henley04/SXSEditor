@@ -633,7 +633,7 @@ async function cmdSynthProject(opts) {
   });
 
   try {
-    const tInit = Date.now();
+    const _tInit = Date.now();
     await pipeline.init();
     let eps = pipeline.sessionEPs || {};
     log(`[ep] diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);

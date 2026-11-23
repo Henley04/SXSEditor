@@ -126,7 +126,7 @@ class SvsWorkerClient {
 
   init(language) { return this._call('init', { language }); }
   synthesize(notes, bpm, options = {}) {
-    const { onProgress, onChunkAudio, refF0Extractor, ...serializable } = options;
+    const { onProgress, onChunkAudio, refF0Extractor: _refF0Extractor, ...serializable } = options;
     return this._call('synthesize', { notes, bpm, language: options.language, options: {
       ...serializable, __progress: !!onProgress, __chunkAudio: !!onChunkAudio,
     } }, { onProgress, onChunkAudio });

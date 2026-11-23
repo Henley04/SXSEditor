@@ -1,21 +1,21 @@
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
-import { initPipeline } from './pipeline.js';
+import { initPipeline as _initPipeline } from './pipeline.js';
 import {
   BEAT_WIDTH, NOTE_HEIGHT, HEADER_HEIGHT, PARAM_CURVE_HEIGHT, PARAM_MODES,
 } from './constants.js';
 import {
-  getNotes, setNotes,
+  getNotes, setNotes as _setNotes,
   getSnapGrid,
   getSelectedNoteIds, setSelectedNoteIds,
-  getSelectedAnchorIndices, setSelectedAnchorIndices,
+  getSelectedAnchorIndices, setSelectedAnchorIndices as _setSelectedAnchorIndices,
   getDragMode, setDragMode,
   getDragStartX, setDragStartX,
   getDragStartY, setDragStartY,
   getDragStartMouseTime, setDragStartMouseTime,
   getDragStartMousePitch, setDragStartMousePitch,
   getDragNoteStart, setDragNoteStart,
-  getDragNoteStarts, setDragNoteStarts,
+  getDragNoteStarts, setDragNoteStarts as _setDragNoteStarts,
   getScrollX, setScrollX,
   getScrollY, setScrollY,
   getZoomX, setZoomX,
@@ -25,7 +25,7 @@ import {
   getPitchDragAnchorIdx, setPitchDragAnchorIdx,
   getPitchDragStartValue, setPitchDragStartValue,
   getPitchDragStartTime, setPitchDragStartTime,
-  getPitchDragAnchorStarts, setPitchDragAnchorStarts,
+  getPitchDragAnchorStarts, setPitchDragAnchorStarts as _setPitchDragAnchorStarts,
   getPitchSmoothDragAnchorStarts, setPitchSmoothDragAnchorStarts,
   getPitchSmoothDragMoved, setPitchSmoothDragMoved,
   getPitchSmoothDragRightClickPos, setPitchSmoothDragRightClickPos,
@@ -38,7 +38,7 @@ import {
   getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
   getPhonemeDragState, setPhonemeDragState,
   getSelectedPhonemeNoteId, setSelectedPhonemeNoteId,
-  getSelectedPhonemeIndex, setSelectedPhonemeIndex,
+  getSelectedPhonemeIndex as _getSelectedPhonemeIndex, setSelectedPhonemeIndex,
   getHoveredNoteId, setHoveredNoteId,
   setActiveNoteId,
   setActiveAnchorIdx,
@@ -46,7 +46,7 @@ import {
   bumpNotesVersion,
   getParamEnvelopeDrag, setParamEnvelopeDrag,
   getActiveInlineInput, setActiveInlineInput,
-  getActiveInlineEditNote, setActiveInlineEditNote,
+  getActiveInlineEditNote as _getActiveInlineEditNote, setActiveInlineEditNote,
   getLyricEditOldValue, setLyricEditOldValue,
   getLyricEditNoteId, setLyricEditNoteId,
   getCurrentParamMode, setCurrentParamMode,
@@ -55,7 +55,7 @@ import {
   getFragmentIsPlaying,
   getFragmentIsSynthesizing,
   setFragmentPlayheadDragging,
-  getFragmentCurrentTime,
+  getFragmentCurrentTime as _getFragmentCurrentTime,
   getFragmentPlayStartPosition, setFragmentPlayStartPosition,
   getCurrentFragment,
   invalidatePitchCurveCache,
@@ -63,7 +63,7 @@ import {
   getEnvelopes,
   getParamPanelCollapsed, setParamPanelCollapsed,
   getParamPanelMode, setParamPanelMode,
-  getKanjiGroups, setKanjiGroups,
+  getKanjiGroups, setKanjiGroups as _setKanjiGroups,
   getPostprocessCurves, invalidateTimbreCache,
   getActiveTimbreParam,
   getSelectedTimbreAnchors, setSelectedTimbreAnchors,
@@ -75,9 +75,9 @@ import {
   setAnchorDragHud,
 } from './state.js';
 import {
-  canvas, ctx,
+  canvas, ctx as _ctx,
   timeToX, xToTime, pitchToY, yToPitch, yToPitchContinuous,
-  snapBeats, findNoteAt, findKanjiGroupAt, findPlayheadAt, getPlayheadX,
+  snapBeats, findNoteAt, findKanjiGroupAt, findPlayheadAt, getPlayheadX as _getPlayheadX,
   _getParamCurveAreaTop, _getParamCurveAreaBottom, _getParamCurveYRange,
   _valueToParamY, _paramYToValue,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
@@ -93,7 +93,7 @@ import {
   getParentHeightCached,
   _getCanvasRendererNotesIndex,
   _markNotesIndexDirty,
-  ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
+  ensureVibrato, DEFAULT_VIBRATO as _DEFAULT_VIBRATO, computeVibratoOffset as _computeVibratoOffset,
   transposePitchCurve, quantizePitchCurve, simplifyPitchCurve, smoothPitchCurve,
   getResolvedAuto, getClippedNotes,
   // 拖动自动曲线 → 派生副本（上一轮漏了这两个 import：点到自动曲线会抛
@@ -105,14 +105,14 @@ import {
 } from './canvasRenderer.js';
 import { computeMultiDragResult, findAdjacentBoundary, notesInRange } from './notesIndex.js';
 import {
-  autoDetectKanjiGroups, cleanupKanjiGroups,
+  autoDetectKanjiGroups, cleanupKanjiGroups as _cleanupKanjiGroups,
   findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
-  isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
+  isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds as _getAllGroupedNoteIds,
   invalidateKanjiGroupIndex,
 } from './kanjiGroupUtils.js';
-import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback, getCurrentSession } from './audioPlayback.js';
+import { stopFragmentPlayback, playFragment as _playFragment, exportFragment as _exportFragment, seekFragmentPlayback, getCurrentSession } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
+import { updateFragmentPlayButton as _updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
 import { snapshotAnchors, clampStrength, clampSmoothness } from './automationCurve.js';
 import {
   isManualVibrato, resolveAutoVibratoForNote, saltFromKey,

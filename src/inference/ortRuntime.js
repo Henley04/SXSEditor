@@ -29,7 +29,7 @@ let _ort = null;
  */
 function getOrt() {
   if (_ort) return _ort;
-  // eslint-disable-next-line global-require
+   
   _ort = require('onnxruntime-node');
   try {
     // 幂等：patch 内部有全局标记，重复调用无副作用
