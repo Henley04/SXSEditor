@@ -15,7 +15,7 @@ import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, tickPlayheadFollow, resetPlayheadFollow, settlePlayheadFollow, resetFollowAnchor } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
-import { registerTrackGain, clearTrackGains, applyAudibility, getOrCreateTrackGain } from './trackGainMixer.js';
+import { registerTrackGain, clearTrackGains, applyAudibility, getOrCreateTrackGain, subscribeAudibilityChange } from './trackGainMixer.js';
 // 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
 // （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
 import { getAudibleElapsedSec, getAudibleContextTime } from '../shared/audioOutputClock.js';
@@ -1554,16 +1554,64 @@ function _buildPlaybackChannels(vocalMono, bpm, includeAccompaniment = true) {
 }
 
 /**
+ * 按当前可听性重建人声单声道（独占输出用，计划 4.6）。
+ *
+ * 独占模式只有一个 PCM 流，无法像共享模式那样给每轨挂 GainNode 实时改音量，
+ * 所以每次 M/S 变化都要按 trackSegments + computeAudibility 重新混一遍：
+ *   · 有分轨 segments 时，只叠加"可听轨"的分片（静音/非 Solo 轨直接跳过）；
+ *   · 没有 segments（纯伴奏 / 旧缓存 / 测试直接注入 currentAudioData）时，
+ *     currentAudioData 已是混好的单条 buffer，无法逐轨拆分，只能整体沿用，
+ *     保持向后兼容。
+ * 总时长以 currentAudioData 为基准，并取所有 segment 末端最大值，避免
+ * segments 比旧混音更长时被截断。
+ */
+function _buildAudibleVocalMono() {
+  const singers = trackManager.getSingers();
+  const audibility = computeAudibility(singers);
+  const useSegments = state.trackSegmentsReady === true
+    && Array.isArray(state.trackSegments) && state.trackSegments.length > 0;
+
+  let totalSamples = state.currentAudioData ? state.currentAudioData.length : 0;
+  if (useSegments) {
+    for (const seg of state.trackSegments) {
+      if (!seg || !seg.audio) continue;
+      totalSamples = Math.max(totalSamples, seg.startSample + seg.audio.length);
+    }
+  }
+
+  const mono = new Float32Array(totalSamples);
+  if (useSegments) {
+    for (const seg of state.trackSegments) {
+      if (!seg || !seg.audio || !seg.audio.length) continue;
+      // 有 trackId 的片段按该轨当前可听性过滤；无 trackId 的旧片段兼容为可听。
+      let audible = true;
+      if (seg.trackId) {
+        const track = singers.find((s) => s.id === seg.trackId);
+        if (track) audible = audibility.audible(track);
+      }
+      if (!audible) continue;
+      const start = Math.max(0, seg.startSample | 0);
+      for (let i = 0; i < seg.audio.length && start + i < totalSamples; i++) {
+        mono[start + i] += seg.audio[i];
+      }
+    }
+  } else if (state.currentAudioData) {
+    mono.set(state.currentAudioData);
+  }
+  return mono;
+}
+
+/**
  * 独占输出（主进程 decibri）用的单声道混音。
  *
  * 共享播放把伴奏作为独立 BufferSource 交给 WebAudio（便于实时调音量），
  * 而独占输出只收到一份 Float32Array PCM，完全没有 WebAudio 这一层。
- * 旧实现直接把 state.currentAudioData（纯人声）送过去，于是独占模式下
- * 永远只有清唱。这里在发送前按轨道音量/起点把伴奏预混进来，再下混为
- * 单声道（decibri 的 PCM 写入是按单声道数据组织的）。
+ * 人声部分按当前可听性从 trackSegments 重建（M/S 变化时重新生成），
+ * 伴奏部分沿用 _buildPlaybackChannels（内部按可听性过滤伴奏轨，Solo 时伴奏静音），
+ * 最后下混为单声道（decibri 的 PCM 写入是按单声道数据组织的）。
  */
 function _buildExclusiveMonoMix() {
-  const channels = _buildPlaybackChannels(state.currentAudioData, state.project.bpm, true);
+  const channels = _buildPlaybackChannels(_buildAudibleVocalMono(), state.project.bpm, true);
   if (channels.length === 1) return channels[0];
   const length = channels[0].length;
   const mono = new Float32Array(length);
@@ -1811,6 +1859,30 @@ export async function startExclusivePlayback(offset) {
     startSharedPlayback(offset);
   }
 }
+
+// ---- 独占输出模式的实时 M/S（计划 4.6）----
+//
+// 独占只有一条 PCM，无法实时改单轨增益。M/S 变化时按当前可听性重建 PCM，
+// 从"耳朵听到的位置"续播。用 40ms 防抖合并快速连点，避免反复重启设备。
+// 共享模式完全不走这里（它靠 GainNode 零中断），因此只在独占在播时响应。
+const EXCLUSIVE_MS_REBUILD_DEBOUNCE_MS = 40;
+let _exclusiveMsRebuildTimer = null;
+
+function _rebuildExclusiveForAudibilityChange() {
+  if (!state.isPlaying || !state.useExclusiveMode) return;
+  if (_exclusiveMsRebuildTimer) clearTimeout(_exclusiveMsRebuildTimer);
+  _exclusiveMsRebuildTimer = setTimeout(() => {
+    _exclusiveMsRebuildTimer = null;
+    if (!state.isPlaying || !state.useExclusiveMode) return;
+    // 重建前先取当前可听位置（墙钟），作为新 PCM 的续播起点；播放头不重置、
+    // 传输态保持 PLAYING。startExclusivePlayback 内部会推进 session token，
+    // 让在途的旧 start 回执作废，不会复活、不会误回退共享。
+    const elapsed = Math.max(0, Date.now() / 1000 - state.playbackStartTime);
+    startExclusivePlayback(elapsed);
+  }, EXCLUSIVE_MS_REBUILD_DEBOUNCE_MS);
+}
+
+subscribeAudibilityChange(_rebuildExclusiveForAudibilityChange);
 
 export function startExclusivePlayheadAnimation(removeEndedListener, playbackStartWallTime) {
   _ensureVisibilityHandler();

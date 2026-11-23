@@ -160,23 +160,23 @@ export function applyAudibility(tracks) {
 
   // 先记下逐轨可听性（供 setTrackBaseGain 使用），再写增益。
   const nextAudible = new Map();
-  let changed = false;
   for (const t of list) {
     if (t && t.id !== undefined) nextAudible.set(t.id, aud.audible(t));
   }
   _lastAudibleById = nextAudible;
 
+  // 走到这里说明缓存键变了 = 可听性真的发生了变化。不能用 _gains 是否非空
+  // 来判断 changed：独占输出模式下根本没有 WebAudio 增益节点（_gains 为空），
+  // 但订阅者（独占 PCM 重建）仍必须被通知，否则 M/S 在独占模式不生效（4.6）。
+  const changed = true;
   for (const [id, entry] of _gains) {
     // 轨道已从工程删除：按不可听处理（不再出声）。
     const audible = nextAudible.has(id) ? nextAudible.get(id) : false;
     _ramp(entry, audible ? entry.baseGain : 0);
-    changed = true;
   }
 
-  if (changed) {
-    for (const fn of _subscribers) {
-      try { fn({ anySolo: aud.anySolo, audibleById: new Map(nextAudible) }); } catch (_err) { /* 订阅者异常不影响增益 */ }
-    }
+  for (const fn of _subscribers) {
+    try { fn({ anySolo: aud.anySolo, audibleById: new Map(nextAudible) }); } catch (_err) { /* 订阅者异常不影响增益 */ }
   }
   return { changed, anySolo: aud.anySolo };
 }

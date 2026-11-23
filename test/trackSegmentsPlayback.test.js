@@ -93,6 +93,9 @@ describe('非流式分轨播放 — 一轨一 source 接一轨一增益', () => 
   afterEach(() => {
     stopPlayback();
     clearTrackGains();
+    // 防止分轨状态泄漏到后续测试文件（独占混音会读取 trackSegments）。
+    state.trackSegments = [];
+    state.trackSegmentsReady = false;
   });
 
   it('trackSegments 每个片段各建一个 source，接到对应轨的 GainNode', () => {
