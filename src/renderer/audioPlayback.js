@@ -13,7 +13,7 @@ import { fragmentPitchMode } from '../shared/pitchControl.js';
 // F2/F3：主窗口参与合成的音符集合必须与分片编辑器同一套（过滤未激活重叠 + 排序）。
 import { computeActiveClippedNotes, firstNoteStart } from '../shared/activeNotes.js';
 import { formatTime } from './uiControls.js';
-import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, tickPlayheadFollow, resetPlayheadFollow, settlePlayheadFollow } from './timelineRenderer.js';
+import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, tickPlayheadFollow, resetPlayheadFollow, settlePlayheadFollow, resetFollowAnchor } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
 import { registerAccompanimentGain, clearAccompanimentGains } from './accompanimentMixer.js';
 // 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
@@ -24,6 +24,7 @@ import { clearPluginBlockingOverlay } from './pluginBlockingOverlay.js';
 // 2.4: 渲染进程此前没有统一的异常兜底策略，静默 catch 占全库 44.8%。
 // 清理型副作用（disconnect / stop / 退订）统一走 safeCleanup，失败留痕但不打断主流程。
 import safeCallModule from '../shared/safeCall.js';
+import { PROJECT_APPLIED_EVENT } from './constants.js';
 
 const { safeCleanup, safeCallAsync: _safeCallAsync } = safeCallModule;
 
@@ -491,23 +492,54 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
   });
 }
 
+/**
+ * 自然播完的统一收尾（4.12）：播放头停在内容末尾、**不回 0**，画暂停态并回 IDLE，
+ * 视口以末尾为锚点重新跟随一次（resetFollowAnchor），随后停止跟随。
+ *
+ * 与 Stop 的区别：Stop 是用户主动"回到开头"（回 0），这里是"播到头了"（停末尾）。
+ * 两者都不清播放头，只是位置不同。
+ *
+ * @param {number} endSeconds 内容末尾（currentAudioData 时长或流式前沿）
+ */
+function _finishNaturally(endSeconds) {
+  const end = Math.max(0, Number.isFinite(endSeconds) ? endSeconds : 0);
+  state.isPlaying = false;
+  state.playbackPauseOffset = end;
+  // settle 在途分页动画，但**不清**播放头（stopPlayheadAnimation 会 clear，故不用它）。
+  if (state.playheadRaf) {
+    cancelAnimationFrame(state.playheadRaf);
+    state.playheadRaf = null;
+  }
+  if (state.exclusivePlaybackRaf) {
+    cancelAnimationFrame(state.exclusivePlaybackRaf);
+    state.exclusivePlaybackRaf = null;
+  }
+  settlePlayheadFollow();
+  setTimeDisplay(formatTime(end));
+  drawPausedPlayheadAt(end);
+  // 以末尾为锚点复位：视口对齐到末尾附近的 20%，但播放头已停、不再推进跟随。
+  resetFollowAnchor();
+  setTransport(TRANSPORT.IDLE);
+}
+
 // 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
 // 提取为独立函数供人声 chunk 与伴奏 source 的 onended 共用，避免重复逻辑。
 function _finishStreamingPlayback() {
   console.log(`[MainPlay] PLAYBACK FINISHED | t=${Date.now()}`);
   state.streamingFinished = true;
-  state.isPlaying = false;
   // 流式路径不经过 stopAudioSource，需在这里清掉伴奏增益表，
   // 否则暂停/播完后 _gains 里仍是已停止的节点（滑块拖了"有值但无声"）。
   clearAccompanimentGains();
-  state.playbackPauseOffset = 0;
   state.streamingSources = [];
   _streamingActive = false;
   if (_scheduler) _scheduler.deactivate();
-  stopPlayheadAnimation();
-  setTimeDisplay(formatTime(0));
-  clearPlayheadLine();
-  setTransport(TRANSPORT.IDLE);
+  // 流式前沿 = max(人声 buffer 前沿, 伴奏末端)，作为播放头停留的末尾位置。
+  const frontier = Math.max(
+    _scheduler ? _scheduler.bufferEndSec : 0,
+    _streamingAccEndSec,
+    state.currentAudioData ? state.currentAudioData.length / SAMPLE_RATE : 0,
+  );
+  _finishNaturally(frontier);
 }
 
 function _ensureVisibilityHandler() {
@@ -1526,14 +1558,10 @@ export function startSharedPlayback(offset) {
       // 播放头停在当前位置 → 暂停态（Play 可点 = 继续）
       setTransport(TRANSPORT.PAUSED);
     } else {
-      // 自然播放结束：重置到 0
-      state.playbackPauseOffset = 0;
-      stopPlayheadAnimation();
-      setTimeDisplay(formatTime(0));
-      clearPlayheadLine();
+      // 自然播放结束：停在末尾（不回 0，播放头保持可见），视口以末尾为锚点复位。
       // 必须显式回 IDLE：PLAYING 下 Play 是 disabled 的，漏掉这一步会让
       // 播完之后 Play 永久变灰、Pause 亮着却因 isPlaying=false 空转。
-      setTransport(TRANSPORT.IDLE);
+      _finishNaturally((state.currentAudioData ? state.currentAudioData.length / SAMPLE_RATE : 0) || state.playbackPauseOffset);
     }
   };
 
@@ -1632,12 +1660,8 @@ export async function startExclusivePlayback(offset) {
         drawPausedPlayheadAt(state.playbackPauseOffset);
         setTransport(TRANSPORT.PAUSED);
       } else {
-        // 自然播放结束：重置到 0
-        state.playbackPauseOffset = 0;
-        stopPlayheadAnimation();
-        setTimeDisplay(formatTime(0));
-        clearPlayheadLine();
-        setTransport(TRANSPORT.IDLE);
+        // 自然播放结束：停在末尾（不回 0，播放头保持可见），视口以末尾为锚点复位。
+        _finishNaturally(state.currentAudioData ? state.currentAudioData.length / SAMPLE_RATE : state.playbackPauseOffset);
       }
     });
 
@@ -1685,11 +1709,8 @@ export function startExclusivePlayheadAnimation(removeEndedListener, playbackSta
         drawPausedPlayheadAt(state.playbackPauseOffset);
         setTransport(TRANSPORT.PAUSED);
       } else {
-        state.playbackPauseOffset = 0;
-        stopPlayheadAnimation();
-        setTimeDisplay(formatTime(0));
-        clearPlayheadLine();
-        setTransport(TRANSPORT.IDLE);
+        // 自然播放结束：停在末尾（不回 0，播放头保持可见）。
+        _finishNaturally(duration);
       }
       if (removeEndedListener) removeEndedListener();
       return;
@@ -1837,7 +1858,22 @@ export function stopPlayback() {
   stopAudioSource();
   state.isPlaying = false;
   state.playbackPauseOffset = 0;
-  stopPlayheadAnimation();
+  // Stop = 用户主动回 0：播放头仍显示（画在 0 秒），视口以 0 为锚点重新跟随。
+  // 用 drawPausedPlayheadAt(0) 替代原来的 stopPlayheadAnimation()->clearPlayheadLine()，
+  // 后者会把播放头一并擦掉；这里 settle 在途动画后再重置锚点。
+  settlePlayheadFollow();
+  if (state.playheadRaf) {
+    cancelAnimationFrame(state.playheadRaf);
+    state.playheadRaf = null;
+  }
+  if (state.exclusivePlaybackRaf) {
+    cancelAnimationFrame(state.exclusivePlaybackRaf);
+    state.exclusivePlaybackRaf = null;
+  }
+  _lastSharedTickAt = 0;
+  _lastExclusiveTickAt = 0;
+  resetFollowAnchor();
+  drawPausedPlayheadAt(0);
   // 只有"合成被取消"才丢弃渲染结果。播放中停止保留 currentAudioData /
   // currentAudioSignature / currentAudioBuffer：下次 Play 由
   // hasReusablePlaybackAudio() 用签名判断能否直接续播；输入改过签名就对不上，
@@ -1850,6 +1886,70 @@ export function stopPlayback() {
   setTimeDisplay(formatTime(0));
   setTransport(TRANSPORT.IDLE);
   clearTransportStatus();
+}
+
+/**
+ * 打开 / 新建工程时的播放状态复位（4.12）。
+ *
+ * 与 Stop 的区别：Stop 保留已渲染音频供下一次 Play 复用；切工程必须彻底丢弃
+ * 旧工程的音频、分段、签名与增益表 —— 否则新工程按 Play 会用 hasReusablePlaybackAudio()
+ * 命中旧签名、续播上一首歌的音频。位置严格复位到 0，播放头显示在 0 秒。
+ */
+export function resetPlaybackForProject() {
+  // 无条件停掉所有输出（共享 source / 独占设备 / 流式 chunk / 伴奏）。
+  state.streamingFinished = true;
+  _streamingActive = false;
+  if (_scheduler) _scheduler.deactivate();
+  if (state.streamingSources && state.streamingSources.length > 0) {
+    for (const src of state.streamingSources) {
+      if (!src) continue;
+      safeCleanup('audioPlayback.projectReset.src.stop', () => { src.onended = null; src.stop(); });
+    }
+    state.streamingSources = [];
+  }
+  stopExclusivePlayback();
+  stopAudioSource();
+  if (state.playheadRaf) {
+    cancelAnimationFrame(state.playheadRaf);
+    state.playheadRaf = null;
+  }
+  if (state.exclusivePlaybackRaf) {
+    cancelAnimationFrame(state.exclusivePlaybackRaf);
+    state.exclusivePlaybackRaf = null;
+  }
+  _lastSharedTickAt = 0;
+  _lastExclusiveTickAt = 0;
+  settlePlayheadFollow();
+
+  state.isPlaying = false;
+  state.isSynthesizing = false;
+  state.synthesisCancelled = false;
+  state.playbackPauseOffset = 0;
+  state.currentAudioData = null;
+  state.currentAudioChannels = null;
+  state.currentAudioBuffer = null;
+  state.currentAudioSignature = null;
+  state.trackSegments = [];
+  state.trackSegmentsReady = false;
+
+  // 视口以 0 为锚点复位，播放头显示在 0 秒。
+  resetFollowAnchor();
+  drawPausedPlayheadAt(0);
+  setTimeDisplay(formatTime(0));
+  setTransport(TRANSPORT.IDLE);
+  clearTransportStatus();
+}
+
+// 工程被装载（打开 / 新建 / 插件导入）时统一复位播放状态。
+// 走 PROJECT_APPLIED_EVENT 而非让 projectManager 直接 import 本模块 ——
+// 后者会与 timelineRenderer → projectManager 形成 ESM 循环依赖。
+// 该事件在 applyProjectDocument 与"新建工程"两条路径都会广播。
+if (typeof document !== 'undefined') {
+  document.addEventListener(PROJECT_APPLIED_EVENT, () => {
+    try { resetPlaybackForProject(); } catch (err) {
+      console.warn('[Audio] Failed to reset playback on project load:', err && err.message);
+    }
+  });
 }
 
 /**
@@ -2030,18 +2130,14 @@ export function startPlayheadAnimation() {
       if (_scheduler.inferenceDone && renderedElapsed >= totalFrontierSec + 0.5) {
         if (!state.streamingFinished) {
           state.streamingFinished = true;
-          state.isPlaying = false;
-          state.playbackPauseOffset = 0;
           _streamingActive = false;
           for (const src of (state.streamingSources || [])) {
             if (!src) continue;
             safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
           }
           state.streamingSources = [];
-          stopPlayheadAnimation();
-          setTimeDisplay(formatTime(0));
-          setTransport(TRANSPORT.IDLE);
-          clearPlayheadLine();
+          // 自然播完：停在末尾（不回 0），播放头保持可见。
+          _finishNaturally(totalFrontierSec);
         }
         return;
       }
@@ -2050,9 +2146,8 @@ export function startPlayheadAnimation() {
     if (state.currentAudioBuffer) {
       const duration = state.currentAudioBuffer.duration;
       if (renderedElapsed >= duration) {
-        stopPlayback();
-        setTimeDisplay(formatTime(0));
-        clearPlayheadLine();
+        // 兜底判定自然结束：停末尾（不回 0），播放头保持可见。
+        _finishNaturally(duration);
         return;
       }
     }

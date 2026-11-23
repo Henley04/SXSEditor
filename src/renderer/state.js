@@ -44,6 +44,11 @@ export const state = {
   synthesisCancelled: false,
   playheadRaf: null,
   currentAudioData: null,
+  // 分轨音频片段（见计划 3.1 / 4.3 / 4.4）：稀疏的 { trackId, startSample, audio } 列表。
+  // 共享播放用它做"一轨一 source"，M/S 实时改对应轨的增益；流式路径最终以主进程
+  // 返回的 segments 为权威数据。currentAudioData 仍是完整混音，兼容时长/MCP/导出。
+  trackSegments: [],
+  trackSegmentsReady: false,
   // 上面这份音频对应的输入签名（见 renderer/audioSignature.js）。
   // 只在**人声**合成完成时写入；纯伴奏路径不写（它的音频时长取决于伴奏
   // 轨道，跟人声签名不是一回事，留 null 让下一次 Play 重新走 playAll）。

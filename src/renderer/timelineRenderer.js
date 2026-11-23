@@ -859,9 +859,12 @@ export function renderFragmentTimeline() {
   //   · 播放中 / 等推理：沿用 rAF 最后给出的位置（等推理时位置本来就不动）；
   //   · 暂停：用 playbackPauseOffset（用户拖到哪就停在哪）。
   // 位置永远由时间轴推导（playbackTimeToX - scrollX），视图变化时它跟着内容走。
+  // 空闲工程也必须在 0 秒画播放头（DAW 契约：打开即可见的位置指示器）。
+  // 不再用 `playbackPauseOffset > 0 || currentAudioData` 前置条件——空工程、
+  // 0 秒、未播放时播放头同样存在，用户才能在 header 上点击定位/拖动。
   const playheadSeconds = state.isPlaying
-    ? _lastPlayheadSeconds
-    : (state.playbackPauseOffset > 0 || state.currentAudioData ? state.playbackPauseOffset : null);
+    ? (_lastPlayheadSeconds != null ? _lastPlayheadSeconds : (state.playbackPauseOffset || 0))
+    : (state.playbackPauseOffset || 0);
   if (playheadSeconds != null) {
     if (state.isPlaying) drawPlayheadLine(playheadSeconds);
     else drawPausedPlayheadAt(playheadSeconds);
@@ -921,6 +924,11 @@ function _getMaxScrollX() {
   return Math.max(0, metrics.canvasWidth - w);
 }
 
+/** 供 eventHandlers 的边缘自动滚屏 clamp 使用（与跟随器同一上限）。 */
+export function getMaxFragmentScrollX() {
+  return _getMaxScrollX();
+}
+
 function _ensureFollow() {
   if (_follow) return _follow;
   _follow = createPlayheadFollower({
@@ -944,6 +952,12 @@ export function tickPlayheadFollow(elapsedSeconds) {
   if (!Number.isFinite(elapsedSeconds)) return false;
   const w = _lastViewportWidth;
   if (!(w > 0)) return false;
+  // 状态机门控：用户滚轮/缩放（SUPPRESSED）或拖动播放头（SUSPENDED_BY_DRAG）
+  // 期间一律不推进分页跟随；其余状态交给核心算法（它自己还有 idleMs + 播放态门控）。
+  // in-flight 动画的收尾仍交给核心 tick（传 isPlaying=false 让它只推进/结束动画）。
+  if (!isFollowing()) {
+    return _ensureFollow().tick(playbackTimeToX(elapsedSeconds), w, false);
+  }
   const changed = _ensureFollow().tick(playbackTimeToX(elapsedSeconds), w);
   if (changed) renderFragmentTimeline();
   return changed;
@@ -980,6 +994,84 @@ export function setPlayheadFollowPointerDown(down) {
 /** 兜底解除按住状态（不动空闲计时，见 follower.clearPointerDown）。 */
 export function clearPlayheadFollowPointerDown() {
   if (_follow) _follow.clearPointerDown();
+}
+
+/**
+ * ==================== 跟随状态机（4.13）====================
+ * 在 playheadFollow.js 的分页算法外面包一层显式状态，协调"分页跟随"与
+ * 用户手动操作（滚轮/缩放/拖拽播放头）以及传输态（Stop/自然结束/切工程）。
+ * 不改动核心算法，只决定这一帧是否把世界坐标喂给 tick。
+ *
+ *   FOLLOWING ──(滚轮/缩放)──→ SUPPRESSED(计时) ──(超时)──→ FOLLOWING
+ *   FOLLOWING ──(开始拖播放头)──→ SUSPENDED_BY_DRAG ──(松手)──→ FOLLOWING(重建锚点)
+ *   FOLLOWING ──(Stop/切工程/自然结束)──→ RESET(锚点复位) ──→ FOLLOWING / IDLE
+ *   任何状态 ──(进入 IDLE/PAUSED)──→ 不推进跟随，保留当前视口
+ */
+
+// 用户手动操作（滚轮/缩放）后的抑制时长：与 playheadFollow 的 idleMs 对齐。
+const FOLLOW_SUPPRESS_MS = 3000;
+
+export const FOLLOW_STATE = Object.freeze({
+  FOLLOWING: 'FOLLOWING',
+  SUPPRESSED: 'SUPPRESSED',
+  SUSPENDED_BY_DRAG: 'SUSPENDED_BY_DRAG',
+  RESET: 'RESET',
+});
+
+let _followState = FOLLOW_STATE.FOLLOWING;
+let _suppressUntil = 0;
+
+function _nowMs() {
+  return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now() : Date.now();
+}
+
+/** 当前是否允许推进分页跟随（测试与 tick 的门控）。 */
+export function isFollowing() {
+  if (_followState === FOLLOW_STATE.SUPPRESSED && _nowMs() >= _suppressUntil) {
+    _followState = FOLLOW_STATE.FOLLOWING;
+  }
+  return _followState === FOLLOW_STATE.FOLLOWING;
+}
+
+export function getFollowState() {
+  if (_followState === FOLLOW_STATE.SUPPRESSED && _nowMs() >= _suppressUntil) {
+    _followState = FOLLOW_STATE.FOLLOWING;
+  }
+  return _followState;
+}
+
+/**
+ * 用户滚轮/缩放：进入计时抑制，并立刻终止在途分页动画（别和用户抢视口）。
+ * 抑制窗口内播放头继续前进，但 fragmentScrollX 不变。
+ */
+export function markUserViewActivity() {
+  _followState = FOLLOW_STATE.SUPPRESSED;
+  _suppressUntil = _nowMs() + FOLLOW_SUPPRESS_MS;
+  markPlayheadFollowViewportGesture();
+}
+
+/** 开始拖动播放头：显式暂停跟随（拖拽期间不允许 90%→20% 跳页）。 */
+export function pauseFollow() {
+  _followState = FOLLOW_STATE.SUSPENDED_BY_DRAG;
+  setPlayheadFollowPointerDown(true);
+}
+
+/**
+ * 松手 / Stop / 切工程 / 自然结束：把当前 fragmentScrollX 与当前播放头位置
+ * 作为新锚点。清掉在途动画、速度样本与按住态，抑制计时重新起算，避免下一帧
+ * 因播放头仍在 90% 附近立即跳页。
+ */
+export function resetFollowAnchor() {
+  _followState = FOLLOW_STATE.RESET;
+  _suppressUntil = _nowMs() + FOLLOW_SUPPRESS_MS;
+  if (_follow) _follow.reset({ reveal: false });
+  if (_follow) {
+    _follow.setPointerDown(false);
+    _follow.clearPointerDown();
+  }
+  // RESET 是一次瞬时复位：门控上直接回到 FOLLOWING（抑制窗口由 _suppressUntil 承担）。
+  _followState = FOLLOW_STATE.FOLLOWING;
 }
 
 /** 诊断/测试用。 */
