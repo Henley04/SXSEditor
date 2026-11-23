@@ -791,6 +791,8 @@ export async function playAll() {
           notes: clippedNotes,
           startTimeBeat: fragment.startTime,
           durationBeats: fragment.duration,
+          // 分轨路由（4.4）：chunk 带 trackId 才能实时进对应轨的 GainNode。
+          trackId: singer.id,
           // synthesizeMultiStreaming 是**逐分片**路由的（每个分片单独交给插件合成
           // 后按 startTimeBeat 混音），因此必须逐个分片带上自己轨道的 backend，
           // 不能整批沿用第一个分片的。混合多后端会被引擎拒绝，属预期行为。
@@ -840,6 +842,9 @@ export async function playAll() {
       let streamingStarted = false;
       state.streamingSources = [];
       state.streamingFinished = false;
+      // 新一轮合成：先清空旧分轨数据，避免失败时残留上一轮 segments。
+      state.trackSegments = [];
+      state.trackSegmentsReady = false;
 
       // 重置 streaming scheduler 状态
       _streamingActive = false;
@@ -868,7 +873,27 @@ export async function playAll() {
             audioBuffer.getChannelData(0).set(chunkInfo.audio);
             const source = ctx.createBufferSource();
             source.buffer = audioBuffer;
-            source.connect(state.gainNode);
+            // 分轨路由（4.4）：chunk 带 trackId 时接到该轨 GainNode，M/S 才能实时生效；
+            // 首 chunk 的初始增益按当前可听性设置，静音轨不漏音。无 trackId 时直连 master
+            // （兼容旧主进程）。
+            let chunkGain = state.gainNode;
+            if (chunkInfo.trackId) {
+              const currentSingers = trackManager.getSingers();
+              const currentAud = computeAudibility(currentSingers);
+              const track = currentSingers.find(s => s.id === chunkInfo.trackId);
+              const audible = track ? currentAud.audible(track) : true;
+              chunkGain = getOrCreateTrackGain(
+                chunkInfo.trackId,
+                () => {
+                  const g = ctx.createGain();
+                  g.connect(state.gainNode);
+                  return g;
+                },
+                1,
+                audible,
+              ) || state.gainNode;
+            }
+            source.connect(chunkGain);
 
             const chunkStartSec = chunkInfo.sampleOffset / SAMPLE_RATE;
             const chunkEndSec = chunkInfo.sampleEnd / SAMPLE_RATE;
@@ -1091,10 +1116,14 @@ export async function playAll() {
       }
 
       try {
-        const mixedAudio = await window.electronAPI.synthesizeMultiStreaming({
+        const result = await window.electronAPI.synthesizeMultiStreaming({
           fragments: multiFragments,
           bpm: state.project.bpm,
         });
+        // 返回结构升级为 { audio, segments }（4.4）；兼容旧主进程直接返回 Float32Array。
+        const mixedAudio = result && !ArrayBuffer.isView(result) && result.audio ? result.audio : result;
+        const returnedSegments = result && !ArrayBuffer.isView(result) && Array.isArray(result.segments)
+          ? result.segments : null;
 
         // 被新一轮播放取代的旧会话：推理可能刚好跑完（取消没赶上），这时绝不能
         // 覆盖共享状态 —— currentAudioData / 时间基准都属于新会话。
@@ -1109,6 +1138,12 @@ export async function playAll() {
 
         state.currentAudioData = mixedAudio;
         state.currentAudioSignature = mySignature;
+        // 流式 segments 以主进程返回为准（权威数据）：即使渲染层 chunk 丢失/延迟，
+        // 暂停/seek/取消静音后也能重建完整分轨播放。
+        if (returnedSegments) {
+          state.trackSegments = returnedSegments;
+          state.trackSegmentsReady = returnedSegments.length > 0;
+        }
         // Always rebuild the complete playback mix. On cache-fast replays the IPC
         // result can arrive before all chunk events are rendered; this provides a
         // correct accompaniment-inclusive fallback and fixes silent accompaniment
