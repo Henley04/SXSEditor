@@ -9,7 +9,7 @@ import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSin
 import { playAll, pausePlayback, stopPlayback, resynthesizePlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
 import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt, markPlayheadFollowActivity, markPlayheadFollowViewportGesture, setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt, markPlayheadFollowActivity, markPlayheadFollowViewportGesture, setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown, markUserViewActivity, pauseFollow, resetFollowAnchor, getMaxFragmentScrollX } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
@@ -60,6 +60,17 @@ export function _invalidateContainerRect() {
 // _playheadDragPendingSeconds 记录最新一次 mousemove 计算出的秒数，供 rAF 回调读取。
 let _playheadDragRaf = 0;
 let _playheadDragPendingSeconds = 0;
+
+// 拖动播放头到视口边缘时按距离加速自动滚屏（DAW 行为）。
+const EDGE_SCROLL_ZONE_PX = 32;
+const EDGE_SCROLL_MAX_SPEED_PX_S = 1500;
+const EDGE_SCROLL_MAX_DT_S = 0.05;
+let _edgeScrollRaf = 0;
+let _edgeScrollLastTs = 0;
+// P3: 滚到边界后循环会停；只有指针曾回到中间区再进入边缘才重启，避免边界处每帧空转。
+let _edgeScrollWasCentered = true;
+// 最近一次拖拽指针位置（clientX），供边缘滚屏每帧重算世界坐标。
+let _dragClientX = 0;
 
 function _ensurePlayheadTooltip() {
   if (_playheadTooltip && document.body.contains(_playheadTooltip)) return _playheadTooltip;
@@ -117,8 +128,8 @@ function _processHoverMove() {
   const x = _mouseToCanvasX(pending);
   const y = _mouseToCanvasY(pending);
   const playheadX = _getCurrentPlayheadX();
-  const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
-    && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+  // 空工程 / 0 秒 / 未播放时播放头同样可见可拖（DAW 契约），不再用音频/位置前置条件。
+  const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
   const onHeader = y <= HEADER_HEIGHT;
   if (onPlayhead || onHeader) {
     dom.fragmentCanvas.style.cursor = 'ew-resize';
@@ -188,6 +199,7 @@ function _updatePlayheadVisual(seconds) {
 function _endPlayheadDrag() {
   if (!_isPlayheadDragging) return;
   _isPlayheadDragging = false;
+  _stopEdgeScroll();
   _detachPlayheadDragWindowListeners();
   _hidePlayheadTooltip();
   if (_playheadDragRaf) {
@@ -195,6 +207,8 @@ function _endPlayheadDrag() {
     _playheadDragRaf = 0;
   }
   drawPausedPlayheadAt(state.playbackPauseOffset);
+  // 松手：以新视口/新播放头位置重建跟随锚点，避免下一帧立即跳页。
+  resetFollowAnchor();
   if (_wasPlayingBeforeDrag) {
     _wasPlayingBeforeDrag = false;
     if (state.isSynthesizing) {
@@ -217,6 +231,75 @@ function _endPlayheadDrag() {
   }
 }
 
+// 边缘自动滚屏：以 fragmentContainer 的视口为边界，指针距边缘越近滚动越快。
+// 与「分页跟随」互斥——拖拽开始已 pauseFollow()，tickPlayheadFollow 在拖拽态直接 return。
+function _applyEdgeScrollAtPointer() {
+  const rect = _getFragmentContainerRect();
+  const left = rect.left;
+  const right = rect.right;
+  // 距离越深速度越大：边缘处为 0，Zone 边界处为 MAX（近边缘慢、越往里越快）
+  let dir = 0;
+  let speed = 0;
+  if (_dragClientX < left + EDGE_SCROLL_ZONE_PX) {
+    const depth = Math.max(0, Math.min(EDGE_SCROLL_ZONE_PX, (left + EDGE_SCROLL_ZONE_PX) - _dragClientX));
+    dir = -1;
+    speed = (depth / EDGE_SCROLL_ZONE_PX) * EDGE_SCROLL_MAX_SPEED_PX_S;
+  } else if (_dragClientX > right - EDGE_SCROLL_ZONE_PX) {
+    const depth = Math.max(0, Math.min(EDGE_SCROLL_ZONE_PX, _dragClientX - (right - EDGE_SCROLL_ZONE_PX)));
+    dir = 1;
+    speed = (depth / EDGE_SCROLL_ZONE_PX) * EDGE_SCROLL_MAX_SPEED_PX_S;
+  }
+  return { dir, speed };
+}
+
+function _edgeScrollTick(ts) {
+  if (!_isPlayheadDragging) { _edgeScrollRaf = 0; return; }
+  // dt 上限：窗口挂起后第一帧可能间隔很久，钳住避免一次跳一大段。
+  const dt = _edgeScrollLastTs
+    ? Math.min(EDGE_SCROLL_MAX_DT_S, Math.max(0, (ts - _edgeScrollLastTs) / 1000))
+    : 0;
+  _edgeScrollLastTs = ts;
+
+  const { dir, speed } = _applyEdgeScrollAtPointer();
+  if (dir !== 0 && speed > 0 && dt > 0) {
+    const prevScroll = state.fragmentScrollX;
+    const maxScroll = getMaxFragmentScrollX();
+    const nextScroll = Math.max(0, Math.min(maxScroll, prevScroll + dir * speed * dt));
+    if (nextScroll !== prevScroll) {
+      state.fragmentScrollX = nextScroll;
+      // 关键顺序：先用最新指针位置 + 新 scrollX 算出时间、更新 playbackPauseOffset 与
+      // _lastPlayheadSeconds（drawPausedPlayheadAt 内部会写），再重绘时间轴。
+      // 若先 render 再更新，会用旧位置画一帧播放头，产生跳动。
+      const x = _dragClientX - _getFragmentCanvasRect().left + state.fragmentScrollX;
+      _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+      // 立即同步绘制一次，确保边缘滚屏时播放头始终跟手（不等下一次 rAF）。
+      state.playbackPauseOffset = _playheadDragPendingSeconds;
+      drawPausedPlayheadAt(state.playbackPauseOffset);
+      renderFragmentTimeline();
+    }
+    // 到达滚动上限且无法继续：停止循环（方向被 clamp 掉）
+    if (nextScroll === prevScroll && (dir < 0 ? prevScroll <= 0 : prevScroll >= maxScroll)) {
+      _edgeScrollRaf = 0;
+      return;
+    }
+  }
+  _edgeScrollRaf = requestAnimationFrame(_edgeScrollTick);
+}
+
+function _startEdgeScroll() {
+  if (_edgeScrollRaf) return;
+  _edgeScrollLastTs = 0;
+  _edgeScrollRaf = requestAnimationFrame(_edgeScrollTick);
+}
+
+function _stopEdgeScroll() {
+  if (_edgeScrollRaf) {
+    cancelAnimationFrame(_edgeScrollRaf);
+    _edgeScrollRaf = 0;
+  }
+  _edgeScrollLastTs = 0;
+}
+
 // Window 级拖拽跟踪：playhead 拖拽期间把 mousemove/mouseup 挂到 window，
 // 指针越出 canvas（甚至窗口）边界后仍持续跟踪，位置由 _canvasXToClampedSeconds
 // clamp 到真实边界（0 或 duration - margin）。
@@ -225,8 +308,18 @@ function _endPlayheadDrag() {
 // 速度），造成归零残留约 0.08~0.13s。
 function _onWindowPlayheadDragMove(e) {
   if (!_isPlayheadDragging) return;
+  _dragClientX = e.clientX;
   const x = _mouseToCanvasX(e);
   _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+  // P3: 滚到边界后循环已停（_edgeScrollRaf=0）。若指针回到中间区再进入边缘，
+  // 重启滚屏循环；仅在中间区重置标志，避免停在边界时每帧启停空转。
+  const { dir } = _applyEdgeScrollAtPointer();
+  if (dir === 0) {
+    _edgeScrollWasCentered = true;
+  } else if (_edgeScrollWasCentered && !_edgeScrollRaf) {
+    _edgeScrollWasCentered = false;
+    _startEdgeScroll();
+  }
 }
 function _onWindowPlayheadDragUp() {
   _endPlayheadDrag();
@@ -236,11 +329,14 @@ function _attachPlayheadDragWindowListeners() {
   window.addEventListener('mouseup', _onWindowPlayheadDragUp);
   // 兜底：拖拽中窗口失焦（如 Alt+Tab）时收尾，避免拖拽状态卡死
   window.addEventListener('blur', _onWindowPlayheadDragUp);
+  // pointercancel：触控/笔被系统取消时同样收尾并停掉边缘滚屏
+  window.addEventListener('pointercancel', _onWindowPlayheadDragUp);
 }
 function _detachPlayheadDragWindowListeners() {
   window.removeEventListener('mousemove', _onWindowPlayheadDragMove);
   window.removeEventListener('mouseup', _onWindowPlayheadDragUp);
   window.removeEventListener('blur', _onWindowPlayheadDragUp);
+  window.removeEventListener('pointercancel', _onWindowPlayheadDragUp);
 }
 
 // BPM and time signature inputs
@@ -384,8 +480,8 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   // 拖拽期间只更新视觉（不重启 source），mouseup 时若之前在播放则恢复播放。
   if (e.button === 0) {
     const playheadX = _getCurrentPlayheadX();
-    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
-      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+    // 与悬停命中一致：0 秒 / 空工程也能点击 header 定位、拖动播放头。
+    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
     const onHeader = y <= HEADER_HEIGHT;
     if (onPlayhead || onHeader) {
       const newSeconds = _canvasXToClampedSeconds(x);
@@ -396,7 +492,12 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
         _wasPlayingBeforeDrag = false;
       }
       _isPlayheadDragging = true;
+      _dragClientX = e.clientX;
+      // 拖拽期间暂停分页跟随，启动边缘自动滚屏；松手时 resetFollowAnchor() 重建锚点。
+      pauseFollow();
+      _edgeScrollWasCentered = true;
       _attachPlayheadDragWindowListeners();
+      _startEdgeScroll();
       _updatePlayheadVisual(newSeconds);
       _hidePlayheadTooltip();
       return;
@@ -774,8 +875,12 @@ dom.singerListEl.addEventListener('wheel', (e) => _pushWheel(e, dom.singerListEl
   }, true);
 
   window.addEventListener('wheel', (e) => {
-    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
-    else markPlayheadFollowActivity();
+    if (isViewportTarget(e.target)) {
+      // 滚轮/缩放：进入状态机的计时抑制窗口，并终止在途分页动画。
+      markUserViewActivity();
+    } else {
+      markPlayheadFollowActivity();
+    }
   }, { capture: true, passive: true });
 
   window.addEventListener('keydown', () => markPlayheadFollowActivity(), true);

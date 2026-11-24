@@ -475,7 +475,7 @@ async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
           + ` 超出上限（${MAX_PLUGIN_MIX_SECONDS} 秒 @ ${sr} Hz = ${maxSamples} 采样）：请检查工程的 startTimeBeat / BPM`,
       };
     }
-    parts.push({ audio: result.audio, offset });
+    parts.push({ audio: result.audio, offset, trackId: frag.trackId || frag.id || null });
     totalSamples = Math.max(totalSamples, endSample);
   }
 
@@ -484,7 +484,9 @@ async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
   for (const part of parts) {
     for (let i = 0; i < part.audio.length; i++) mixed[part.offset + i] += part.audio[i];
   }
-  return { ok: true, audio: mixed };
+  // 分轨片段：每片按自己的 trackId + 绝对起点保留，供渲染层实时 M/S。
+  const segments = parts.map(p => ({ trackId: p.trackId, startSample: p.offset, audio: p.audio }));
+  return { ok: true, audio: mixed, segments };
 }
 
 /**
@@ -535,14 +537,75 @@ async function _runApiGroup({ group, bpm, runtime, options, startPercent, endPer
     if (!Number.isFinite(endSample) || endSample > maxSamples) {
       throw new Error(`分片 ${i + 1}/${group.fragments.length} 的混音长度超出上限（${MAX_PLUGIN_MIX_SECONDS} 秒）`);
     }
-    parts.push({ audio, offset });
+    parts.push({ audio, offset, trackId: frag.trackId || frag.id || null });
     totalSamples = Math.max(totalSamples, endSample);
   }
   const mixed = new Float32Array(totalSamples);
   for (const part of parts) {
     for (let i = 0; i < part.audio.length; i++) mixed[part.offset + i] += part.audio[i];
   }
-  return mixed;
+  const segments = parts.map(p => ({ trackId: p.trackId, startSample: p.offset, audio: p.audio }));
+  return { audio: mixed, segments };
+}
+
+/**
+ * 把内置组累积的 segments 归一化到与其权威混音一致的峰值（P2-1）。
+ *
+ * 背景：内置 synthesizeMultiStreaming 在返回前对 mixedAudio 做了
+ * normalizePeakTo(0.95)，但 onChunkAudio 发出的 chunk（svsIpc 据此累积
+ * builtinSegments）是归一化前的原始峰值。若直接把这些 segments 交给
+ * _mixTrackAudio，它按"已归一化"的 audio 峰值算出的增益≈1，segments 保持
+ * 原始峰值 → 分轨播放比整段混音响、甚至削波；内置 + 插件混用时两组在 mix
+ * 与 segments 里的相对比例也不一致。
+ *
+ * 这里从 segments 重建混音峰值，按其与参考混音（归一化后的内置 audio）峰值
+ * 的比例缩放所有 segment，使二者峰值对齐。之后 _mixTrackAudio 的统一增益
+ * 对 audio 与 segments 就是同一系数。
+ *
+ * @param {Array<{trackId:string, startSample:number, audio:Float32Array}>} segments
+ * @param {Float32Array} referenceAudio 归一化后的内置组混音
+ * @returns {number} 实际应用到 segments 的增益（1 表示未改）
+ */
+function _alignBuiltinSegmentsToMix(segments, referenceAudio) {
+  if (!Array.isArray(segments) || segments.length === 0) return 1;
+  if (!referenceAudio || !referenceAudio.length) return 1;
+  let refPeak = 0;
+  for (let i = 0; i < referenceAudio.length; i++) {
+    const a = Math.abs(referenceAudio[i]);
+    if (a > refPeak) refPeak = a;
+  }
+  if (refPeak <= 0) return 1;
+
+  // 从 segments 按绝对起点重建混音，求其归一化前的峰值。
+  let maxLen = 0;
+  for (const seg of segments) {
+    if (seg && seg.audio && seg.audio.length) {
+      maxLen = Math.max(maxLen, (seg.startSample | 0) + seg.audio.length);
+    }
+  }
+  if (maxLen <= 0) return 1;
+  const rebuilt = new Float32Array(maxLen);
+  for (const seg of segments) {
+    if (!seg || !seg.audio || !seg.audio.length) continue;
+    const start = Math.max(0, seg.startSample | 0);
+    for (let i = 0; i < seg.audio.length && start + i < maxLen; i++) {
+      rebuilt[start + i] += seg.audio[i];
+    }
+  }
+  let segPeak = 0;
+  for (let i = 0; i < rebuilt.length; i++) {
+    const a = Math.abs(rebuilt[i]);
+    if (a > segPeak) segPeak = a;
+  }
+  if (segPeak <= 0) return 1;
+  const gain = refPeak / segPeak;
+  if (Number.isFinite(gain) && gain > 0 && Math.abs(gain - 1) > 1e-9) {
+    for (const seg of segments) {
+      if (!seg || !seg.audio) continue;
+      for (let i = 0; i < seg.audio.length; i++) seg.audio[i] *= gain;
+    }
+  }
+  return gain;
 }
 
 /**
@@ -554,17 +617,32 @@ async function _runApiGroup({ group, bpm, runtime, options, startPercent, endPer
  * 归一化：多组叠加后峰值可能远超 1.0（两条各 0.95 的音轨同时段叠加达 1.9），
  * Int16 转换会严重削波。这里统一按 0.95 阈值归一化 —— 与内置
  * synthesizeMultiStreaming 末尾的 normalizePeakTo 同一阈值、同一语义。
- * @param {Float32Array[]} tracks
- * @returns {Float32Array}
+ * 统一增益必须同时作用于混音与所有 segments，否则实时播放与重新 seek 后音量不一致（4.4）。
+ * @param {Array<Float32Array|{audio:Float32Array, segments:Array}>} tracks
+ * @param {Array<{trackId:string, startSample:number, audio:Float32Array}>} extraSegments
+ * @returns {{audio:Float32Array, segments:Array}}
  */
-function _mixTrackAudio(tracks) {
+function _mixTrackAudio(tracks, extraSegments = []) {
+  // 兼容：tracks 既可能是 Float32Array（内置管线 / 旧调用），也可能是
+  // { audio, segments }（插件 / API 组）。统一取出 audio 与逐轨 segments。
+  const audios = tracks.map(t => (t && ArrayBuffer.isView(t) ? t : (t && t.audio) || null));
+  const allSegments = [];
+  for (const t of tracks) {
+    if (t && !ArrayBuffer.isView(t) && Array.isArray(t.segments)) {
+      for (const seg of t.segments) if (seg && seg.audio && seg.audio.length) allSegments.push(seg);
+    }
+  }
+  for (const seg of extraSegments) {
+    if (seg && seg.audio && seg.audio.length) allSegments.push(seg);
+  }
+
   let totalSamples = 0;
-  for (const audio of tracks) {
+  for (const audio of audios) {
     if (audio && audio.length > totalSamples) totalSamples = audio.length;
   }
   const mixed = new Float32Array(totalSamples);
   let peak = 0;
-  for (const audio of tracks) {
+  for (const audio of audios) {
     if (!audio || audio.length === 0) continue;
     for (let i = 0; i < audio.length; i++) {
       const v = mixed[i] + audio[i];
@@ -573,11 +651,15 @@ function _mixTrackAudio(tracks) {
       if (abs > peak) peak = abs;
     }
   }
-  if (peak > 0.95) {
-    const gain = 0.95 / peak;
+  // 统一峰值增益：混音与 segments 乘同一个系数，否则实时播放与重新 seek 后音量不一致。
+  const gain = peak > 0.95 ? 0.95 / peak : 1;
+  if (gain !== 1) {
     for (let i = 0; i < totalSamples; i++) mixed[i] *= gain;
+    for (const seg of allSegments) {
+      for (let i = 0; i < seg.audio.length; i++) seg.audio[i] *= gain;
+    }
   }
-  return mixed;
+  return { audio: mixed, segments: allSegments };
 }
 
 // 进度节流发送器：100ms 最小间隔，且进度变化 <2% 时跳过；progress>=100 必发。
@@ -776,9 +858,22 @@ function registerSvsIpc() {
 
     // 参数装配与插件派发一律排在内置管线初始化之前（理由同 svs:synthesize）。
     const win = event.sender;
+    // 内置组的权威分轨数据：转发 chunk 的同时按 trackId 累积。
+    // chunk 只负责"边合成边听"；渲染层最终以这里返回的 segments 为准（4.4）。
+    const builtinSegments = [];
     const opts = {
       onProgress: _makeThrottledSender(win, IPC_CHANNELS.SVS_PROGRESS),
       onChunkAudio: (chunkInfo) => {
+        try {
+          if (chunkInfo && chunkInfo.trackId && chunkInfo.audio && chunkInfo.audio.length) {
+            builtinSegments.push({
+              trackId: chunkInfo.trackId,
+              startSample: chunkInfo.sampleOffset,
+              // chunkInfo.audio 会被结构化克隆发给渲染层；这里保留一份独立副本作权威数据。
+              audio: chunkInfo.audio.slice(),
+            });
+          }
+        } catch (_) {}
         try {
           if (win && !win.isDestroyed()) {
             win.send(IPC_CHANNELS.SVS_CHUNK_AUDIO, chunkInfo);
@@ -831,7 +926,7 @@ function registerSvsIpc() {
         if (!pluginResult.ok) {
           throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
         }
-        tracks.push(pluginResult.audio);
+        tracks.push({ audio: pluginResult.audio, segments: pluginResult.segments || [] });
       } else if (isApiMode()) {
         // API 模式：内置组分片逐个走远程合成，再按 startTimeBeat 混合成绝对路径
         // 布局的单声道，与内置 synthesizeMultiStreaming 返回形态一致。
@@ -843,7 +938,7 @@ function registerSvsIpc() {
           startPercent,
           endPercent,
         });
-        tracks.push(apiAudio);
+        tracks.push(apiAudio); // { audio, segments }
       } else {
         try {
           const pipeline = await ensurePipelineLanguage(language);
@@ -868,7 +963,15 @@ function registerSvsIpc() {
       }
     }
 
-    return _mixTrackAudio(tracks);
+    // P2-1: 内置组混音在 pipeline 末尾已归一化到 0.95，但 onChunkAudio 累积的
+    // builtinSegments 是归一化前的原始峰值。先把 segments 对齐到内置混音的峰值，
+    // 再交给 _mixTrackAudio 统一增益 —— 保证分轨播放与整段混音音量/比例一致。
+    const builtinMix = tracks.find(t => t && ArrayBuffer.isView(t));
+    if (builtinMix) _alignBuiltinSegmentsToMix(builtinSegments, builtinMix);
+
+    // 内置组的 segments 由 onChunkAudio 累积（builtinSegments）；插件/API 组随各自
+    // 返回值带上。统一峰值增益后一起返回给渲染层（结构升级为 { audio, segments }）。
+    return _mixTrackAudio(tracks, builtinSegments);
   });
 
   safeHandle(IPC_CHANNELS.SVS_CANCEL, async (_event, options) => {
@@ -1194,4 +1297,6 @@ module.exports = {
   detectJapaneseNotes: _detectJapaneseNotes,
   detectEnglishNotes: _detectEnglishNotes,
   resolveLanguage: _resolveLanguage,
+  // 供测试：分轨 segments 汇总（4.4）。这些是纯函数，导出不改变运行时行为。
+  __test: { _mixTrackAudio, _runPluginGroup, _runApiGroup, _alignBuiltinSegmentsToMix },
 };

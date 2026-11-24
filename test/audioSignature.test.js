@@ -268,34 +268,25 @@ describe('audioSignature — 全局参数与稳定性', () => {
   });
 });
 
-describe('audioSignature — 静音 / 独奏', () => {
+describe('audioSignature — Mute / Solo 是实时增益，不进签名', () => {
   const f1 = makeFragment('f1', 's1', [makeNote(0, 440)]);
   const f2 = makeFragment('f2', 's2', [makeNote(0, 494)]);
 
-  it('静音一条轨改变签名（否则按 Play 还会放出被静音那条的人声）', () => {
+  it('静音一条轨不改变签名（M/S 不触发重新合成，声音靠 GainNode 实时变化）', () => {
     const plain = [makeSinger('s1'), makeSinger('s2')];
     const muted = [makeSinger('s1', { mute: true }), makeSinger('s2')];
-    expect(project([f1, f2], plain)).to.not.equal(project([f1, f2], muted));
+    expect(project([f1, f2], plain)).to.equal(project([f1, f2], muted));
   });
 
-  it('静音前后的两个状态各自稳定，切回去能命中同一签名', () => {
+  it('独奏一条轨不改变签名（其余分片仍参与合成，播放期静音）', () => {
     const plain = [makeSinger('s1'), makeSinger('s2')];
-    const muted = [makeSinger('s1', { mute: true }), makeSinger('s2')];
-    const a = project([f1, f2], plain);
-    const b = project([f1, f2], muted);
-    expect(project([f1, f2], plain)).to.equal(a);
-    expect(project([f1, f2], muted)).to.equal(b);
-    expect(a).to.not.equal(b);
-  });
-
-  it('独奏一条轨与只保留那一条轨等价（其余分片被排除）', () => {
     const soloed = [makeSinger('s1', { solo: true }), makeSinger('s2')];
-    const onlyOne = [makeSinger('s1')];
-    expect(project([f1, f2], soloed)).to.equal(project([f1], onlyOne));
+    expect(project([f1, f2], plain)).to.equal(project([f1, f2], soloed));
   });
 
-  it('全部静音时签名为"没有可唱分片"（与空工程一致）', () => {
+  it('全部静音仍包含全部轨道的签名（不与空工程等价）', () => {
     const allMuted = [makeSinger('s1', { mute: true }), makeSinger('s2', { mute: true })];
-    expect(project([f1, f2], allMuted)).to.equal(project([], []));
+    expect(project([f1, f2], allMuted)).to.equal(project([f1, f2], [makeSinger('s1'), makeSinger('s2')]));
+    expect(project([f1, f2], allMuted)).to.not.equal(project([], []));
   });
 });

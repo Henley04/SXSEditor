@@ -4046,6 +4046,9 @@ class OnnxSVSPipeline {
             prepared.push({
                 fragIdx: frag.sourceFragIdx,
                 regionIdx: frag.regionIdx,
+                // 分轨路由（计划 4.4）：把来源轨道 id 透传到每个 chunk，渲染层据此
+                // 把 chunk 送到对应轨的 GainNode，M/S 才能实时静音/取消静音。
+                trackId: frag.trackId || frag.options?.singerId || null,
                 regionStartBeat: frag.regionStartBeat,
                 regionEndBeat: frag.regionEndBeat,
                 startTimeBeat: frag.startTimeBeat,
@@ -4138,6 +4141,7 @@ class OnnxSVSPipeline {
         // 新流的首 chunk 相对共享时钟必然迟到（被迫裁头=丢片段，或移位=错位）。
         const streamManifest = prepared.map(p => ({
             key: `${p.fragIdx}:${p.regionIdx}`,
+            trackId: p.trackId || null,
             firstStartSample: Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE) +
                 Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE),
         }));
@@ -4148,7 +4152,8 @@ class OnnxSVSPipeline {
             const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
             const relativeStartBeat = ((chunkInfo.sampleOffset - fragStartSample) / SAMPLE_RATE) * (bpm / 60);
             this._silenceNonVocalRegions(audio, p.filledNotes, bpm, relativeStartBeat);
-            const safeChunk = { ...chunkInfo, audio, streamManifest };
+            // trackId 随每个 chunk 下发（streamManifest 与 chunk 两处都带），供渲染层路由。
+            const safeChunk = { ...chunkInfo, trackId: p.trackId || null, audio, streamManifest };
             emittedChunks.push({ ...safeChunk, audio: audio.slice() });
             console.log(`[SegInfer][MAIN] chunk emitted | stream=${chunkInfo.streamKey} frag=${p.fragIdx} region=${p.regionIdx} offset=${chunkInfo.sampleOffset} end=${chunkInfo.sampleEnd} samples=${audio.length} streamLast=${!!chunkInfo.streamLast} isLast=${!!chunkInfo.isLast} cached=${!!chunkInfo.cached} t=${Date.now()}`);
             onChunkAudio(safeChunk);

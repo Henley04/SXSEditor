@@ -19,6 +19,9 @@
  *     （见 audioPlayback 的 _buildPlaybackChannels(vocalMono, bpm, false)），
  *     改伴奏音量/起始位置不影响人声 buffer，因此不进签名 —— 否则导一次伴奏
  *     就要把整首重推一遍。
+ *   · **Mute/Solo 不进签名**：M/S 是播放期的实时增益（见 renderer/trackGainMixer.js），
+ *     不是合成输入；所有非伴奏、有音符的分片都参与合成并进签名，静音轨也会预渲染。
+ *     把 M/S 算进签名会导致每次点 M/S 都要重推整首 —— 直接违背"按下即生效"的需求。
  *   · **纯函数**：不读全局 state、不碰 DOM，便于单测锁住字段覆盖。
  *
  * 字段覆盖对照（任一变化都必须改变签名）：
@@ -32,7 +35,6 @@
 import { hashNumberArray, hashString } from '../shared/hashSignature.js';
 import { computePromptCondSignature } from '../shared/promptCondSignature.js';
 import { computeActiveClippedNotes } from '../shared/activeNotes.js';
-import { computeAudibility } from '../shared/trackAudibility.js';
 import { buildMelPostprocessPayload, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
 import { fragmentPitchMode } from '../shared/pitchControl.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
@@ -239,13 +241,11 @@ export function computeProjectSignature({ fragments, singers, bpm, autoShift = f
     : new Map((singers || []).map((s) => [s.id, s]));
 
   // 伴奏轨不参与人声合成：跳过（见文件头「只覆盖真正影响人声音频的输入」）。
-  // 静音 / 独奏在这里就生效：不可听轨道的分片不参与合成，也就不该算进签名
-  // —— 否则静音一条轨后签名不变，按 Play 会继续播旧音频（还带着那条轨的人声）。
-  const audibility = computeAudibility(Array.from(singerMap.values()));
+  // 静音 / 独奏**不**在这里过滤：M/S 是播放期实时增益，所有非伴奏、有音符的分片
+  // 都参与合成并进签名。这样点 M/S 不改签名 → 不重推，声音靠 GainNode 立即变化。
   const list = (fragments || [])
     .filter((f) => f && f.notes && f.notes.length > 0)
     .filter((f) => singerMap.get(f.singerId)?.type !== 'accompaniment')
-    .filter((f) => audibility.audible(singerMap.get(f.singerId)))
     .slice()
     .sort((a, b) => (a.startTime - b.startTime) || String(a.id).localeCompare(String(b.id)));
 

@@ -303,6 +303,21 @@ export function createPlayheadFollower(deps) {
       return _apply(to, true);
     },
 
+    /**
+     * 诊断/测试用：彻底清空内部时钟与交互状态。
+     * 用于测试 stub 了 performance.now 之后恢复真实时钟，避免 lastActivityAt
+     * 残留一个未来时间导致空闲门控永久开启（测试隔离，生产路径不调用）。
+     */
+    resetAllForTest() {
+      anim = null;
+      lastSample = null;
+      cooldownUntil = -Infinity;
+      revealPending = false;
+      pointerDown = false;
+      lastActivityAt = -Infinity;
+      jumpCount = 0;
+    },
+
     /** 诊断/测试用快照。 */
     snapshot() {
       return {

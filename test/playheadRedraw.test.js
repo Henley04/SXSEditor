@@ -95,6 +95,8 @@ describe('播放头重绘 — 缩放 / 横向滚动后必须跟内容走', () =>
   it('播放中（含等待推理）横向滚动：按新 scrollX 重画，而不是留在原屏幕位置', () => {
     // 先渲染一次把播放头画布撑到容器尺寸（否则默认 300px 宽，4s 的位置直接落在画布外）
     renderFragmentTimeline();
+    // 空闲态现在也会画 0 秒播放头（DAW 契约），先清掉这次记录再测播放态。
+    playheadCtx().__reset();
     // 等待推理的形态：isPlaying 仍为 true，rAF 已取消，位置停在 4s
     state.isPlaying = true;
     drawPlayheadLine(4);
@@ -148,12 +150,13 @@ describe('播放头重绘 — 缩放 / 横向滚动后必须跟内容走', () =>
     expect(playheadX(), '播放头在视图外时不应被钳在 x=0').to.equal(null);
   });
 
-  it('空闲（无音频、位置 0）不画幽灵播放头', () => {
+  it('空闲（无音频、位置 0）仍画 0 秒播放头（DAW 契约：打开即可见）', () => {
     state.isPlaying = false;
     state.currentAudioData = null;
     state.playbackPauseOffset = 0;
     playheadCtx().__reset();
     renderFragmentTimeline();
-    expect(playheadX()).to.equal(null);
+    expect(playheadX(), '空闲 0 秒必须画播放头').to.be.a('number');
+    expect(playheadX()).to.be.closeTo(playbackTimeToX(0) - state.fragmentScrollX, 0.001);
   });
 });
