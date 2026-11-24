@@ -8,7 +8,7 @@
 const { expect } = require('chai');
 
 const { state, trackManager } = require('../src/renderer/state.js');
-const { clearTrackGains } = require('../src/renderer/trackGainMixer.js');
+const { clearTrackGains, applyAudibility, getOrCreateTrackGain } = require('../src/renderer/trackGainMixer.js');
 const { startSharedPlayback, stopPlayback, getCurrentPlaybackSeconds } = require('../src/renderer/audioPlayback.js');
 
 if (!global.requestAnimationFrame) {
@@ -170,5 +170,32 @@ describe('非流式分轨播放 — 一轨一 source 接一轨一增益', () => 
   it('getCurrentPlaybackSeconds 未播放时返回 pauseOffset', () => {
     state.playbackPauseOffset = 1.5;
     expect(getCurrentPlaybackSeconds()).to.equal(1.5);
+  });
+
+  it('startSharedPlayback 之后再 mute/solo，人声增益即时改变（P1-1 回归）', () => {
+    const s1 = trackManager.addSinger({ name: 's1', type: 'singer' });
+    const s2 = trackManager.addSinger({ name: 's2', type: 'singer' });
+    state.trackSegments = [
+      { trackId: s1.id, startSample: 0, audio: new Float32Array(48000) },
+      { trackId: s2.id, startSample: 0, audio: new Float32Array(48000) },
+    ];
+    state.trackSegmentsReady = true;
+
+    startSharedPlayback(0);
+
+    // 精确取出 s1/s2 的增益节点（master gain 也在 created.gains 里，不能用索引）。
+    const s1Gain = getOrCreateTrackGain(s1.id);
+    const s2Gain = getOrCreateTrackGain(s2.id);
+    expect(s1Gain, 's1 的 gain 应在 startSharedPlayback 中注册').to.exist;
+    expect(s2Gain, 's2 的 gain 应在 startSharedPlayback 中注册').to.exist;
+    expect(s1Gain.gain.value).to.equal(1);
+    expect(s2Gain.gain.value).to.equal(1);
+
+    // 播放中点 Mute s2 → refreshAll 的 applyAudibility 应立刻把 s2 的 gain 变 0，
+    // s1 保持 1。这要求 startSharedPlayback 的人声 gain 没被伴奏调度清掉。
+    s2.mute = true;
+    applyAudibility(trackManager.getSingers());
+    expect(s2Gain.gain.value, 's2 静音后 gain 应为 0').to.equal(0);
+    expect(s1Gain.gain.value, 's1 应仍可听').to.equal(1);
   });
 });

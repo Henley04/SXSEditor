@@ -1,0 +1,195 @@
+'use strict';
+/**
+ * P1-2 / P1-3 回归：共享播放的末尾语义与自然结束收尾。
+ *
+ *   · 播完（或拖到末尾）再按 Play：offset 落在内容末尾 → 回 0 重播，绝不假播放；
+ *   · 自然结束：人声 + 伴奏全部 source 结束才收尾，停在统一内容末尾（含伴奏 outro）；
+ *   · 收尾时停掉仍在响的伴奏 source；
+ *   · Pause 不能只看 currentAudioSource（分轨路径它可能已 onended 被清零）。
+ */
+const { expect } = require('chai');
+const sinon = require('sinon');
+
+const { state, trackManager } = require('../src/renderer/state.js');
+const { clearTrackGains } = require('../src/renderer/trackGainMixer.js');
+const ap = require('../src/renderer/audioPlayback.js');
+
+if (!global.requestAnimationFrame) {
+  global.requestAnimationFrame = (cb) => global.window.requestAnimationFrame(cb);
+  global.cancelAnimationFrame = (id) => global.window.cancelAnimationFrame(id);
+}
+
+/** 记录型 AudioContext：source 记录 start/stop 调用与 onended。 */
+function installRecordingAudioContext() {
+  const created = { sources: [], gains: [] };
+  class FakeGain {
+    constructor() {
+      this.gain = { value: 1, cancelScheduledValues() {}, setTargetAtTime(v) { this.value = v; } };
+      created.gains.push(this);
+    }
+    connect(dest) { return dest; }
+    disconnect() {}
+  }
+  class FakeBuffer {
+    constructor(ch, len, rate) {
+      this.numberOfChannels = ch;
+      this.length = len;
+      this.sampleRate = rate;
+      this.duration = len / rate;
+      this._data = Array.from({ length: ch }, () => new Float32Array(len));
+    }
+    getChannelData(i) { return this._data[i]; }
+  }
+  class FakeSource {
+    constructor() {
+      this.onended = null;
+      this.buffer = null;
+      this.startArgs = null;
+      this.stopped = false;
+      created.sources.push(this);
+    }
+    connect(dest) { return dest; }
+    start(when, offset, dur) { this.startArgs = { when, offset: offset || 0, dur }; }
+    stop() { this.stopped = true; }
+  }
+  const ctx = {
+    state: 'running',
+    currentTime: 0,
+    sampleRate: 24000,
+    destination: {},
+    outputLatency: 0,
+    baseLatency: 0,
+    createGain() { return new FakeGain(); },
+    createBuffer(ch, len, rate) { return new FakeBuffer(ch, len, rate); },
+    createBufferSource() { return new FakeSource(); },
+    resume() { return Promise.resolve(); },
+  };
+  global.window.AudioContext = function () { return ctx; };
+  global.AudioContext = global.window.AudioContext;
+  state.audioContext = null;
+  state.gainNode = null;
+  return created;
+}
+
+function addAccompaniment(seconds) {
+  const t = trackManager.addSinger({ name: 'acc', type: 'accompaniment' });
+  t.audioChannels = [new Float32Array(24000 * seconds)];
+  t.audioSampleRate = 24000;
+  t.accompanimentStartTime = 0;
+  t.accompanimentVolume = 1;
+  return t;
+}
+
+describe('共享播放末尾语义与自然结束收尾（P1-2 / P1-3）', () => {
+  let created;
+
+  beforeEach(() => {
+    created = installRecordingAudioContext();
+    clearTrackGains();
+    trackManager.clearAll();
+    state.project = { bpm: 120 };
+    state.isPlaying = false;
+    state.playbackPauseOffset = 0;
+    state.playheadRaf = null;
+    state.trackSources = [];
+    state.streamingSources = [];
+    state.currentAudioData = new Float32Array(24000); // 1s 人声混音
+    state.currentAudioSignature = null;
+    state.currentAudioChannels = null;
+    state.currentAudioBuffer = null;
+    global.window.electronAPI = { audioStop: async () => ({ success: true }) };
+  });
+
+  afterEach(() => {
+    stopSafely();
+    clearTrackGains();
+    state.trackSegments = [];
+    state.trackSegmentsReady = false;
+    sinon.restore();
+  });
+
+  function stopSafely() {
+    try { ap.stopPlayback(); } catch (_) { /* ignore */ }
+  }
+
+  it('P1-2: offset 落在内容末尾 → 回 0 重播，不进入假播放', () => {
+    const s1 = trackManager.addSinger({ name: 's1', type: 'singer' });
+    state.trackSegments = [
+      { trackId: s1.id, startSample: 0, audio: new Float32Array(24000) }, // 0–1s
+    ];
+    state.trackSegmentsReady = true;
+    // currentAudioData 1s → contentEndSec = 1
+    ap.startSharedPlayback(1.0);
+
+    expect(state.isPlaying, '末尾再播应真正进入播放态').to.be.true;
+    expect(state.playbackPauseOffset, 'offset 应回 0').to.equal(0);
+    expect(created.sources.length, '应有 source 被调度，不能假播放').to.be.greaterThan(0);
+    expect(created.sources[0].startArgs.offset, '应从片段开头播').to.be.closeTo(0, 0.01);
+  });
+
+  it('P1-2: 所有分片都在 offset 之前且无伴奏 → settle 保持暂停，不假播放', () => {
+    // 场景：只有人声片段 0–0.5s，offset=1s 在其之后，无伴奏轨。
+    // 没有任何 source 被调度时，修复后不能再置 isPlaying=true（那会假播放、Pause 失效）。
+    const s1 = trackManager.addSinger({ name: 's1', type: 'singer' });
+    state.trackSegments = [
+      { trackId: s1.id, startSample: 0, audio: new Float32Array(12000) }, // 0–0.5s
+    ];
+    state.trackSegmentsReady = true;
+    state.currentAudioData = new Float32Array(48000); // currentAudioData 2s → contentEnd=2s
+    ap.startSharedPlayback(1.0); // offset < 2s，不触发回 0
+
+    expect(created.sources.length).to.equal(0);
+    expect(state.isPlaying, '零 source 不能进入假播放').to.be.false;
+  });
+
+  it('P1-2: currentAudioSource 为 null 但 trackSources 仍有活跃 source 时 Pause 生效', () => {
+    const s1 = trackManager.addSinger({ name: 's1', type: 'singer' });
+    state.trackSegments = [
+      { trackId: s1.id, startSample: 0, audio: new Float32Array(24000) },
+    ];
+    state.trackSegmentsReady = true;
+    ap.startSharedPlayback(0);
+    state.isPlaying = true;
+    // 模拟代表 source 已 onended 被清零，但 trackSources 里仍有一条在播。
+    state.currentAudioSource = null;
+    state.trackSources[0] = { onended: null, stop() {} };
+
+    ap.pausePlayback();
+    expect(state.isPlaying, 'Pause 应成功（不因 currentAudioSource 缺失而失效）').to.be.false;
+    expect(state.playbackPauseOffset).to.be.a('number');
+  });
+
+  it('P1-3: 人声先结束但伴奏仍在响 → 不收尾；伴奏结束才停在末尾并停伴奏', () => {
+    const s1 = trackManager.addSinger({ name: 's1', type: 'singer' });
+    addAccompaniment(2); // 伴奏 2s，长于 1s 人声
+    state.trackSegments = [
+      { trackId: s1.id, startSample: 0, audio: new Float32Array(24000) }, // 1s
+    ];
+    state.trackSegmentsReady = true;
+
+    ap.startSharedPlayback(0);
+    // 调度出的 source：人声(1) + 伴奏(1)
+    expect(created.sources.length).to.be.greaterThanOrEqual(2);
+    const accSource = created.sources[created.sources.length - 1];
+
+    sinon.stub(performance, 'now').callsFake(() => 1e9);
+    try {
+      // 先触发所有人声分片 onended（当前实现只有一条人声）。
+      for (const src of state.trackSources.slice()) {
+        if (src && src.onended) src.onended();
+      }
+      // 人声先结束但伴奏仍在响 → 绝不能提前收尾（旧代码在此置 IDLE、伴奏继续响）。
+      expect(state.isPlaying, '伴奏未结束时不应收尾').to.be.true;
+      expect(state.playbackPauseOffset, '人声结束时不应把暂停点停到 1s').to.equal(0);
+
+      // 伴奏也结束 → 统一收尾。
+      accSource.onended();
+    } finally {
+      performance.now.restore();
+    }
+
+    expect(state.isPlaying, '全部 source 结束后应收尾').to.be.false;
+    // contentEndSec = max(人声 1s, currentAudioData 1s, 伴奏 2s) = 2s
+    expect(state.playbackPauseOffset, '应停在统一内容末尾 2s，不是人声末尾 1s').to.be.closeTo(2, 0.01);
+  });
+});
