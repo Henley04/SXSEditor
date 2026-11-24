@@ -549,6 +549,66 @@ async function _runApiGroup({ group, bpm, runtime, options, startPercent, endPer
 }
 
 /**
+ * 把内置组累积的 segments 归一化到与其权威混音一致的峰值（P2-1）。
+ *
+ * 背景：内置 synthesizeMultiStreaming 在返回前对 mixedAudio 做了
+ * normalizePeakTo(0.95)，但 onChunkAudio 发出的 chunk（svsIpc 据此累积
+ * builtinSegments）是归一化前的原始峰值。若直接把这些 segments 交给
+ * _mixTrackAudio，它按"已归一化"的 audio 峰值算出的增益≈1，segments 保持
+ * 原始峰值 → 分轨播放比整段混音响、甚至削波；内置 + 插件混用时两组在 mix
+ * 与 segments 里的相对比例也不一致。
+ *
+ * 这里从 segments 重建混音峰值，按其与参考混音（归一化后的内置 audio）峰值
+ * 的比例缩放所有 segment，使二者峰值对齐。之后 _mixTrackAudio 的统一增益
+ * 对 audio 与 segments 就是同一系数。
+ *
+ * @param {Array<{trackId:string, startSample:number, audio:Float32Array}>} segments
+ * @param {Float32Array} referenceAudio 归一化后的内置组混音
+ * @returns {number} 实际应用到 segments 的增益（1 表示未改）
+ */
+function _alignBuiltinSegmentsToMix(segments, referenceAudio) {
+  if (!Array.isArray(segments) || segments.length === 0) return 1;
+  if (!referenceAudio || !referenceAudio.length) return 1;
+  let refPeak = 0;
+  for (let i = 0; i < referenceAudio.length; i++) {
+    const a = Math.abs(referenceAudio[i]);
+    if (a > refPeak) refPeak = a;
+  }
+  if (refPeak <= 0) return 1;
+
+  // 从 segments 按绝对起点重建混音，求其归一化前的峰值。
+  let maxLen = 0;
+  for (const seg of segments) {
+    if (seg && seg.audio && seg.audio.length) {
+      maxLen = Math.max(maxLen, (seg.startSample | 0) + seg.audio.length);
+    }
+  }
+  if (maxLen <= 0) return 1;
+  const rebuilt = new Float32Array(maxLen);
+  for (const seg of segments) {
+    if (!seg || !seg.audio || !seg.audio.length) continue;
+    const start = Math.max(0, seg.startSample | 0);
+    for (let i = 0; i < seg.audio.length && start + i < maxLen; i++) {
+      rebuilt[start + i] += seg.audio[i];
+    }
+  }
+  let segPeak = 0;
+  for (let i = 0; i < rebuilt.length; i++) {
+    const a = Math.abs(rebuilt[i]);
+    if (a > segPeak) segPeak = a;
+  }
+  if (segPeak <= 0) return 1;
+  const gain = refPeak / segPeak;
+  if (Number.isFinite(gain) && gain > 0 && Math.abs(gain - 1) > 1e-9) {
+    for (const seg of segments) {
+      if (!seg || !seg.audio) continue;
+      for (let i = 0; i < seg.audio.length; i++) seg.audio[i] *= gain;
+    }
+  }
+  return gain;
+}
+
+/**
  * 把各组已渲染好的音频叠加到同一条 beat 0 起算的单声道。
  *
  * 每组结果都已经是“绝对路径”布局（内置管线 Phase 4 与插件组混合都按
@@ -903,6 +963,12 @@ function registerSvsIpc() {
       }
     }
 
+    // P2-1: 内置组混音在 pipeline 末尾已归一化到 0.95，但 onChunkAudio 累积的
+    // builtinSegments 是归一化前的原始峰值。先把 segments 对齐到内置混音的峰值，
+    // 再交给 _mixTrackAudio 统一增益 —— 保证分轨播放与整段混音音量/比例一致。
+    const builtinMix = tracks.find(t => t && ArrayBuffer.isView(t));
+    if (builtinMix) _alignBuiltinSegmentsToMix(builtinSegments, builtinMix);
+
     // 内置组的 segments 由 onChunkAudio 累积（builtinSegments）；插件/API 组随各自
     // 返回值带上。统一峰值增益后一起返回给渲染层（结构升级为 { audio, segments }）。
     return _mixTrackAudio(tracks, builtinSegments);
@@ -1232,5 +1298,5 @@ module.exports = {
   detectEnglishNotes: _detectEnglishNotes,
   resolveLanguage: _resolveLanguage,
   // 供测试：分轨 segments 汇总（4.4）。这些是纯函数，导出不改变运行时行为。
-  __test: { _mixTrackAudio, _runPluginGroup, _runApiGroup },
+  __test: { _mixTrackAudio, _runPluginGroup, _runApiGroup, _alignBuiltinSegmentsToMix },
 };

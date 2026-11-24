@@ -948,6 +948,11 @@ export async function playAll() {
             //   那样减一次会让首 chunk 提前 chunkStartSec 秒发声。）
             if (!streamingStarted) {
               streamingStarted = true;
+              // P2-2: 流式播放走 WebAudio（chunk source 直连每轨 GainNode），
+              // 不可能同时是独占 PCM 输出。这里显式清零，避免上一次会话残留的
+              // useExclusiveMode=true 让 M/S 变化触发独占重建、与仍在响的流式
+              // source 叠加（并混用 ctx 墙钟导致巨大 elapsed）。
+              state.useExclusiveMode = false;
               _streamingFirstChunkOffsetSec = chunkStartSec;
               state.playbackStartTime = ctx.currentTime + 0.05;
               state.playbackPauseOffset = 0;
@@ -1931,10 +1936,16 @@ const EXCLUSIVE_MS_REBUILD_DEBOUNCE_MS = 40;
 let _exclusiveMsRebuildTimer = null;
 
 function _rebuildExclusiveForAudibilityChange() {
+  // P2-2: 流式播放期间（即使 useExclusiveMode 残留为 true）绝不能重建独占输出 ——
+  // 流式 chunk 走 WebAudio，startExclusivePlayback 只停共享/伴奏 source、不会停
+  // streamingSources，独占 PCM 会与仍在响的 chunk 叠加。M/S 在流式路径本就靠
+  // 每轨 GainNode 实时生效，无需重建。
+  if (_streamingActive || (state.streamingSources && state.streamingSources.length > 0)) return;
   if (!state.isPlaying || !state.useExclusiveMode) return;
   if (_exclusiveMsRebuildTimer) clearTimeout(_exclusiveMsRebuildTimer);
   _exclusiveMsRebuildTimer = setTimeout(() => {
     _exclusiveMsRebuildTimer = null;
+    if (_streamingActive || (state.streamingSources && state.streamingSources.length > 0)) return;
     if (!state.isPlaying || !state.useExclusiveMode) return;
     // 重建前先取当前可听位置（墙钟），作为新 PCM 的续播起点；播放头不重置、
     // 传输态保持 PLAYING。startExclusivePlayback 内部会推进 session token，

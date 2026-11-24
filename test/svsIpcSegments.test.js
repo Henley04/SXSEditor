@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { __test } = require('../src/main/svsIpc.js');
 
-const { _mixTrackAudio } = __test;
+const { _mixTrackAudio, _alignBuiltinSegmentsToMix } = __test;
 
 describe('svsIpc 分轨 segments 汇总 (4.4)', () => {
   describe('_mixTrackAudio 纯逻辑', () => {
@@ -99,6 +99,64 @@ describe('svsIpc 分轨 segments 汇总 (4.4)', () => {
     });
   });
 
+  describe('内置组 segments 与混音峰值对齐 (P2-1)', () => {
+    it('segments 归一化前的峰值被对齐到内置混音峰值', () => {
+      // 模拟：pipeline 把混音归一化到 0.95，chunk 仍是原始峰值 1.9。
+      const segA = { trackId: 't1', startSample: 0, audio: new Float32Array([1.9]) };
+      const segB = { trackId: 't2', startSample: 0, audio: new Float32Array([1.9]) };
+      const segments = [segA, segB];
+      const normalizedMix = new Float32Array([0.95]); // 已归一化的内置混音
+
+      const gain = _alignBuiltinSegmentsToMix(segments, normalizedMix);
+
+      // 重建峰值 = 1.9+1.9 = 3.8；refPeak=0.95 → gain=0.25
+      expect(gain).to.be.closeTo(0.25, 1e-6);
+    });
+
+    it('对齐后 segments 叠加与归一化混音逐样本一致', () => {
+      // 两条轨不相交：各 1.9，重建峰值 1.9，归一化混音峰值 0.95 → gain=0.5
+      const segA = { trackId: 't1', startSample: 0, audio: new Float32Array([1.9, 0]) };
+      const segB = { trackId: 't2', startSample: 1, audio: new Float32Array([1.9]) };
+      const segments = [segA, segB];
+      const normalizedMix = new Float32Array([0.95, 0.95]);
+
+      _alignBuiltinSegmentsToMix(segments, normalizedMix);
+
+      expect(segA.audio[0]).to.be.closeTo(0.95, 1e-6);
+      expect(segB.audio[0]).to.be.closeTo(0.95, 1e-6);
+      const rebuilt = new Float32Array([segA.audio[0], segA.audio[1] + segB.audio[0]]);
+      expect([...rebuilt]).to.deep.equal([...normalizedMix]);
+    });
+
+    it('进入 _mixTrackAudio 后 segments 与 audio 用同一增益，比例一致', () => {
+      // 内置组：归一化 audio 峰值 0.95；segments 原始峰值 1.9（不相交两轨）。
+      const segA = { trackId: 't1', startSample: 0, audio: new Float32Array([1.9, 0]) };
+      const segB = { trackId: 't2', startSample: 1, audio: new Float32Array([1.9]) };
+      const builtinMix = new Float32Array([0.95, 0.95]);
+      _alignBuiltinSegmentsToMix([segA, segB], builtinMix);
+
+      // 混入插件组：峰值叠加 1.9 → 统一增益 0.5。
+      const pluginSeg = { trackId: 'p', startSample: 0, audio: new Float32Array([1.0, 0]) };
+      const out = _mixTrackAudio(
+        [builtinMix, { audio: new Float32Array([1.0, 0]), segments: [pluginSeg] }],
+        [segA, segB],
+      );
+
+      // 对齐后：segA=[0.95,0], segB=[0,0.95], pluginSeg=[1.0,0]
+      // 混音：[0.95+1.0, 0.95+0]=[1.95,0.95]，统一增益 g=0.95/1.95 作用二者。
+      // segments 叠加 = 混音逐样本一致。
+      expect(segA.audio[0] + pluginSeg.audio[0]).to.be.closeTo(out.audio[0], 1e-6);
+      expect(segB.audio[0]).to.be.closeTo(out.audio[1], 1e-6);
+    });
+
+    it('参考混音为空或 segments 为空时不改动', () => {
+      const seg = { trackId: 't', startSample: 0, audio: new Float32Array([0.5]) };
+      expect(_alignBuiltinSegmentsToMix([seg], new Float32Array(0))).to.equal(1);
+      expect(seg.audio[0]).to.equal(0.5);
+      expect(_alignBuiltinSegmentsToMix([], new Float32Array([0.5]))).to.equal(1);
+    });
+  });
+
   describe('分组函数与 handler 源码契约', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'svsIpc.js'), 'utf8');
 
@@ -117,6 +175,10 @@ describe('svsIpc 分轨 segments 汇总 (4.4)', () => {
       expect(src).to.include('const builtinSegments = []');
       expect(src).to.match(/builtinSegments\.push\(\{/);
       expect(src).to.include('return _mixTrackAudio(tracks, builtinSegments);');
+    });
+
+    it('内置组 segments 在混合前对齐到归一化混音峰值 (P2-1)', () => {
+      expect(src).to.include('_alignBuiltinSegmentsToMix(builtinSegments, builtinMix)');
     });
 
     it('插件组结果以 { audio, segments } 进入 tracks', () => {
