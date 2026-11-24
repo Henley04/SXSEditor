@@ -91,6 +91,12 @@ export function initPianoRoll() {
 
     _initEvents() {
       this._boundResize = debounce(() => this._resize(), 100);
+      // 非 debounce 的 rect 失效：window resize 可能先改变画布 top（顶部面板换行），
+      // 而 canvas 像素尺寸尚未变化；等 100ms 的 _resize 清缓存会让这段时间的
+      // hit-test 用旧 top。
+      this._boundResizeInvalidate = () => {
+        this._canvasRect = null;
+      };
       this._boundMouseUp = () => this._onMouseUp();
       this._boundKeyDown = (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -105,6 +111,7 @@ export function initPianoRoll() {
         }
       };
       window.addEventListener('resize', this._boundResize);
+      window.addEventListener('resize', this._boundResizeInvalidate);
       // 子元素尺寸变化（面板收/放、分隔条拖拽）不会触发 window resize：
       // 用 ResizeObserver 及时失效 rect 缓存，避免命中测试按旧坐标偏移。
       if (typeof ResizeObserver !== 'undefined') {
@@ -143,6 +150,7 @@ export function initPianoRoll() {
       }
       this._canvasRect = null;
       window.removeEventListener('resize', this._boundResize);
+      window.removeEventListener('resize', this._boundResizeInvalidate);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
       // W22: release offscreen static cache canvas + its context so they can be GC'd.

@@ -16,11 +16,15 @@ const ROOT = path.resolve(__dirname, '..');
 
 describe('preprocess panel collapse — 下方视图自动重排', function () {
   let state;
+  let dom;
   let refreshViewportAfterPanelToggle;
+  let getWaveformCanvasRect;
+  let invalidateWaveformCanvasRect;
 
   before(async function () {
-    ({ state } = await import('../src/audioPreprocess/state.js'));
+    ({ state, dom } = await import('../src/audioPreprocess/state.js'));
     ({ refreshViewportAfterPanelToggle } = await import('../src/audioPreprocess/panel.js'));
+    ({ getWaveformCanvasRect, invalidateWaveformCanvasRect } = await import('../src/audioPreprocess/canvasRenderer.js'));
   });
 
   afterEach(function () {
@@ -37,6 +41,27 @@ describe('preprocess panel collapse — 下方视图自动重排', function () {
     };
     refreshViewportAfterPanelToggle();
     expect(resize.calledOnce).to.equal(true);
+  });
+
+  it('面板折叠重排后 waveform rect 缓存失效', function () {
+    const originalCanvas = dom.waveformCanvas;
+    const rect = { left: 0, top: 120, width: 800, height: 180 };
+    const getRect = sinon.stub().returns(rect);
+    dom.waveformCanvas = { getBoundingClientRect: getRect };
+    try {
+      expect(getWaveformCanvasRect()).to.equal(rect);
+      // 缓存命中：同一 rect 不重复读布局
+      expect(getWaveformCanvasRect()).to.equal(rect);
+      expect(getRect.callCount).to.equal(1);
+
+      // 面板收/放只改变 canvas 的 top，尺寸不变 —— refresh 必须显式失效缓存。
+      refreshViewportAfterPanelToggle();
+      expect(getWaveformCanvasRect()).to.equal(rect);
+      expect(getRect.callCount).to.equal(2);
+    } finally {
+      invalidateWaveformCanvasRect();
+      dom.waveformCanvas = originalCanvas;
+    }
   });
 
   it('没有加载音频 / 没有卷帘时安全无操作', function () {

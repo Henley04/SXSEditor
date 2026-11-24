@@ -1,6 +1,6 @@
 import { state, dom } from './state.js';
 import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT, NOTE_HEIGHT, getF0AreaHeight, isF0AreaCollapsed, setF0AreaCollapsed } from './constants.js';
-import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH, getMaxScrollX, getMaxScrollY } from './canvasRenderer.js';
+import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH, getMaxScrollX, getMaxScrollY, getWaveformCanvasRect, invalidateWaveformCanvasRect } from './canvasRenderer.js';
 import { togglePlayback, startPlayback, stopPlayback, pausePlayback } from './playback.js';
 import { extractF0AndPitch } from './f0Extraction.js';
 import { extractF0BasicPitch, importMidiFile } from './midiExtraction.js';
@@ -20,20 +20,9 @@ let _playheadTooltip = null;
 let _playheadDragRaf = 0;
 let _playheadDragPendingSeconds = 0;
 
-// waveform canvas 的 getBoundingClientRect 缓存。mousemove / wheel 是高频路径，
-// 每次都读 rect 会强制同步 layout（与主窗口、分片编辑器已有的缓存策略对齐）。
-// ResizeObserver / window resize / 面板尺寸变化时失效。
-let _waveformRectCache = null;
+// waveform canvas 的 getBoundingClientRect 缓存位于 canvasRenderer
+// （面板重排时由 panel.js 显式失效，也与波形绘制共享同一份 DOM 引用）。
 let _waveformCursor = '';
-function _getWaveformRect() {
-  if (!_waveformRectCache) {
-    _waveformRectCache = dom.waveformCanvas.getBoundingClientRect();
-  }
-  return _waveformRectCache;
-}
-function _invalidateWaveformRect() {
-  _waveformRectCache = null;
-}
 function _setWaveformCursor(cursor) {
   if (_waveformCursor === cursor) return;
   _waveformCursor = cursor;
@@ -98,7 +87,7 @@ function _getCurrentPlayheadX() {
 }
 
 function _mouseToCanvasX(e) {
-  const rect = _getWaveformRect();
+  const rect = getWaveformCanvasRect();
   return e.clientX - rect.left;
 }
 
@@ -113,7 +102,7 @@ function _processHoverMove() {
   if (!pending) return;
   if (_isPlayheadDragging || !state.wavAudioBuffer) return;
 
-  const rect = _getWaveformRect();
+  const rect = getWaveformCanvasRect();
   const x = pending.clientX - rect.left;
   const y = pending.clientY - rect.top;
 
@@ -216,11 +205,14 @@ function _detachPlayheadDragWindowListeners() {
 
 export function setupEventHandlers() {
   // waveform rect 缓存的失效入口：窗口 resize、面板收/放、拖拽分隔条都会改变
-  // canvas 的尺寸或位置。ResizeObserver 能覆盖不触发 window resize 的子元素布局变化。
-  window.addEventListener('resize', _invalidateWaveformRect);
+  // canvas 的尺寸或位置。除 canvas 自身外还必须观察 #extract-panel —— 面板折叠
+  // 只改变画布的 top，画布尺寸不变（#waveform-section 是固定百分比高度），
+  // 只 observe canvas 的 ResizeObserver 不会触发。
+  window.addEventListener('resize', invalidateWaveformCanvasRect);
   if (typeof ResizeObserver !== 'undefined') {
-    const waveformResizeObserver = new ResizeObserver(_invalidateWaveformRect);
+    const waveformResizeObserver = new ResizeObserver(invalidateWaveformCanvasRect);
     waveformResizeObserver.observe(dom.waveformCanvas);
+    if (dom.extractPanel) waveformResizeObserver.observe(dom.extractPanel);
   }
 
   // Keyboard
@@ -286,7 +278,7 @@ export function setupEventHandlers() {
     if (!state.wavAudioBuffer || !state.wavDuration) return;
     if (e.button !== 0) return;
 
-    const rect = _getWaveformRect();
+    const rect = getWaveformCanvasRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
@@ -372,7 +364,7 @@ export function setupEventHandlers() {
       _wheelAcc.ev = null;
       if (!ev || !state.pianoRoll) return;
 
-      const rect = _getWaveformRect();
+      const rect = getWaveformCanvasRect();
       const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
 
       if (zoom) {

@@ -1235,11 +1235,21 @@ function _getPitchResolver(includeJitter = true, includeVibrato = true) {
  * 颤音取一次（采样循环里每帧上千次，二分成本翻倍）。绘制侧需要同时判断
  * "是否有音高"与"是否在音符内"时直接用返回值，避免再查一次。
  *
+ * 返回值是**模块内共享的可复用对象**：调用方必须在当次求值内立即消费
+ * （现有调用点均为即时解构/取属性），不得跨调用保存引用。这样采样循环
+ * 里每帧数千次的调用不再产生临时对象，减轻 GC 压力。
+ *
+ * @param {number} time
+ * @param {{pitch:number|null, note:object|null}} out
  * @returns {{pitch:number|null, note:object|null}}
  */
-function _getPitchStateAtTime(time) {
+function _evalPitchState(time, out) {
   const pitchCurve = getPitchCurve();
-  if (!pitchCurve.enabled) return { pitch: null, note: null };
+  if (!pitchCurve.enabled) {
+    out.pitch = null;
+    out.note = null;
+    return out;
+  }
 
   const resolver = _getPitchResolver();
   let basePitch = resolver.pitchAt(time);
@@ -1260,11 +1270,19 @@ function _getPitchStateAtTime(time) {
     basePitch += computeVibratoOffset(note, time);
   }
 
-  return { pitch: basePitch, note };
+  out.pitch = basePitch;
+  out.note = note;
+  return out;
+}
+
+const _pitchStateScratch = { pitch: null, note: null };
+
+function _getPitchStateAtTime(time) {
+  return _evalPitchState(time, _pitchStateScratch);
 }
 
 export function getPitchAtTime(time) {
-  return _getPitchStateAtTime(time).pitch;
+  return _evalPitchState(time, _pitchStateScratch).pitch;
 }
 
 /** 供渲染层判断某时刻是否处于手动作用域（决定自动曲线画白还是画灰）。 */
@@ -3157,22 +3175,26 @@ export function render() {
 
 /**
  * U3：把当前画布状态写成一句读屏可播报的摘要。
- * 只在音符数量 / 选中数量变化时才播报（announce 内部还会再节流一次），
- * 所以拖拽缩放之类的高频渲染不会刷屏。
+ *
+ * 这里只缓存「计数 → 文本」的映射，避免每帧重新拼串；`announce` 仍然每帧调用，
+ * 由它自己的 500ms 节流决定是否写入/重播 —— 不改变“相同文本在节流窗口结束后
+ * 仍可重播”的既有语义。
  */
-let _lastA11yCounts = { notes: -1, selected: -1 };
+let _lastA11yText = { key: '', text: '' };
 function _announceCanvasState() {
   const notes = getNotes();
   const sel = getSelectedNoteIds();
   const selCount = sel ? (sel.size ?? sel.length) : 0;
-  // 状态文本只由这两个计数决定：先比较再拼字符串，
-  // 避免每帧都做一次 getNotes/Map 查询 + 模板拼接。
-  if (_lastA11yCounts.notes === notes.length && _lastA11yCounts.selected === selCount) return;
-  _lastA11yCounts = { notes: notes.length, selected: selCount };
-  const text = selCount > 0
-    ? `共 ${notes.length} 个音符，已选中 ${selCount} 个`
-    : `共 ${notes.length} 个音符`;
-  announce('piano-roll-a11y-status', text);
+  const key = `${notes.length}|${selCount}`;
+  if (_lastA11yText.key !== key) {
+    _lastA11yText = {
+      key,
+      text: selCount > 0
+        ? `共 ${notes.length} 个音符，已选中 ${selCount} 个`
+        : `共 ${notes.length} 个音符`,
+    };
+  }
+  announce('piano-roll-a11y-status', _lastA11yText.text);
 }
 
 // Static layer cache (background + grid lines)
