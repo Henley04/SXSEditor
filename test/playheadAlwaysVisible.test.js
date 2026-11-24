@@ -11,6 +11,7 @@ const { state, dom, trackManager } = require('../src/renderer/state.js');
 const {
   renderFragmentTimeline,
   playbackTimeToX,
+  resetFollowForTest,
 } = require('../src/renderer/timelineRenderer.js');
 const ap = require('../src/renderer/audioPlayback.js');
 
@@ -108,7 +109,14 @@ describe('播放头始终可见 — 空工程 / 0 秒 / Stop / 自然结束', ()
     global.window.electronAPI = {
       audioStop: async () => ({ success: true }),
     };
+    resetFollowForTest();
     playheadCtx().__reset();
+  });
+
+  afterEach(() => {
+    // P3 测试隔离：natural-end 用例 stub 过 performance.now，恢复时钟后必须
+    // 彻底重置跟随状态，否则被污染的时间戳会让后续跟随用例被空闲门控挡住。
+    resetFollowForTest();
   });
 
   it('空工程未播放：renderFragmentTimeline 后 0 秒播放头可见', () => {

@@ -11,8 +11,9 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const { state, trackManager } = require('../src/renderer/state.js');
-const { clearTrackGains } = require('../src/renderer/trackGainMixer.js');
+const { clearTrackGains, getOrCreateTrackGain } = require('../src/renderer/trackGainMixer.js');
 const ap = require('../src/renderer/audioPlayback.js');
+const { resetFollowForTest } = require('../src/renderer/timelineRenderer.js');
 
 if (!global.requestAnimationFrame) {
   global.requestAnimationFrame = (cb) => global.window.requestAnimationFrame(cb);
@@ -105,6 +106,8 @@ describe('共享播放末尾语义与自然结束收尾（P1-2 / P1-3）', () =>
     clearTrackGains();
     state.trackSegments = [];
     state.trackSegmentsReady = false;
+    // P3 测试隔离：本套件 stub 过 performance.now 并触发自然结束重置锚点。
+    resetFollowForTest();
     sinon.restore();
   });
 
@@ -157,6 +160,18 @@ describe('共享播放末尾语义与自然结束收尾（P1-2 / P1-3）', () =>
     ap.pausePlayback();
     expect(state.isPlaying, 'Pause 应成功（不因 currentAudioSource 缺失而失效）').to.be.false;
     expect(state.playbackPauseOffset).to.be.a('number');
+  });
+
+  it('P3: 有 trackId 但轨道已删除的 segment 增益为 0（可听性统一约定）', () => {
+    // 无轨道匹配的 segment 必须视为不可听（安全默认），避免删轨后残留片段仍出声。
+    state.trackSegments = [
+      { trackId: 'deleted-singer', startSample: 0, audio: new Float32Array(24000) },
+    ];
+    state.trackSegmentsReady = true;
+    ap.startSharedPlayback(0);
+    const gain = getOrCreateTrackGain('deleted-singer');
+    expect(gain, '该轨 gain 应已注册').to.exist;
+    expect(gain.gain.value, '已删轨的 segment 增益应为 0').to.equal(0);
   });
 
   it('P1-3: 人声先结束但伴奏仍在响 → 不收尾；伴奏结束才停在末尾并停伴奏', () => {

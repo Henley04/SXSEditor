@@ -96,6 +96,19 @@ function getAccompanimentTracks({ includeInaudible = false } = {}) {
 }
 
 /**
+ * 统一的"分轨片段可听性"约定（P3）：
+ *   · 无 trackId（旧主进程 / 无分轨数据的兼容片段）→ 可听；
+ *   · 有 trackId 但工程里已找不到该轨（轨道被删除但 segments 残留）→ 不可听。
+ * 共享 / 流式 / 独占三条播放路径都走这里，避免同一份 segments 在不同模式下
+ * 可听性不一致（旧实现三处分别写了 true / false / true）。
+ */
+function _isTrackSegmentAudible(trackId, singersById, audibility) {
+  if (!trackId) return true;
+  const track = singersById.get(trackId);
+  return track ? audibility.audible(track) : false;
+}
+
+/**
  * Calculate the maximum end sample across all accompaniment tracks.
  * @param {number} bpm - Project BPM
  * @returns {number} Maximum end sample position
@@ -502,7 +515,8 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
 
 /**
  * 自然播完的统一收尾（4.12）：播放头停在内容末尾、**不回 0**，画暂停态并回 IDLE，
- * 视口以末尾为锚点重新跟随一次（resetFollowAnchor），随后停止跟随。
+ * resetFollowAnchor() 以当前视口/播放头位置重建跟随锚点并进入短暂抑制窗口（不强制
+ * 把末尾滚进视口），保证下一次起播不会立即跳页。
  *
  * 与 Stop 的区别：Stop 是用户主动"回到开头"（回 0），这里是"播到头了"（停末尾）。
  * 两者都不清播放头，只是位置不同。
@@ -529,7 +543,7 @@ function _finishNaturally(endSeconds) {
   settlePlayheadFollow();
   setTimeDisplay(formatTime(end));
   drawPausedPlayheadAt(end);
-  // 以末尾为锚点复位：视口对齐到末尾附近的 20%，但播放头已停、不再推进跟随。
+  // 以当前视口/播放头位置重建锚点并抑制一小段时间；不强制 reveal（播放头已停）。
   resetFollowAnchor();
   setTransport(TRANSPORT.IDLE);
 }
@@ -732,6 +746,11 @@ export async function playAll() {
       .sort((a, b) => a.startTime - b.startTime);
 
     const accTracks = getAccompanimentTracks();
+    // P3: 流式调度要建"所有有音频的伴奏轨"（含当前不可听的），初值 0，
+    // 这样播放中取消静音 / 取消 Solo 时 applyAudibility 能把它们实时拉起来。
+    // 旧的 accTracks 仍用于"是否有可播内容"判断，语义不变。
+    const allAccTracks = getAccompanimentTracks({ includeInaudible: true });
+    const streamAccAudibility = computeAudibility(trackManager.getSingers());
 
     if (allFragments.length === 0 && accTracks.length === 0) {
       showAlertDialog(t('main.noFragmentsToPlay'));
@@ -889,8 +908,8 @@ export async function playAll() {
             if (chunkInfo.trackId) {
               const currentSingers = trackManager.getSingers();
               const currentAud = computeAudibility(currentSingers);
-              const track = currentSingers.find(s => s.id === chunkInfo.trackId);
-              const audible = track ? currentAud.audible(track) : true;
+              const currentSingersById = new Map(currentSingers.map(s => [s.id, s]));
+              const audible = _isTrackSegmentAudible(chunkInfo.trackId, currentSingersById, currentAud);
               chunkGain = getOrCreateTrackGain(
                 chunkInfo.trackId,
                 () => {
@@ -968,17 +987,20 @@ export async function playAll() {
               // 伴奏也计入活跃 source 计数与播放前沿：完成判定需等待伴奏结束，
               // 避免伴奏长于人声时人声一结束就提前终止播放并孤立伴奏 source，
               // 导致伴奏无法被暂停/停止。
-              for (const accTrack of accTracks) {
+              for (const accTrack of allAccTracks) {
                 const accChannels = accTrack.audioChannels?.length ? accTrack.audioChannels : [accTrack.audioBuffer];
                 const accBuffer = ctx.createBuffer(accChannels.length, accChannels[0].length, accTrack.audioSampleRate || SAMPLE_RATE);
                 for (let ch = 0; ch < accChannels.length; ch++) accBuffer.getChannelData(ch).set(accChannels[ch]);
                 const accSource = ctx.createBufferSource();
                 accSource.buffer = accBuffer;
                 const accGain = ctx.createGain();
-                accGain.gain.value = Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1;
+                const accBaseGain = Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1;
+                // P3: 不可听伴奏初值 0，播放中 M/S 恢复时由 applyAudibility 拉起。
+                const accAudible = streamAccAudibility.audible(accTrack);
+                accGain.gain.value = accAudible ? accBaseGain : 0;
                 accSource.connect(accGain).connect(state.gainNode);
                 // 登记给音量滑块 / M-S：流式路径同样支持播放中实时生效。
-                registerTrackGain(accTrack.id, accGain, Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1);
+                registerTrackGain(accTrack.id, accGain, accBaseGain, accAudible);
                 const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
                 const safeNow = ctx.currentTime + 0.01;
@@ -1583,6 +1605,7 @@ function _buildPlaybackChannels(vocalMono, bpm, includeAccompaniment = true) {
 function _buildAudibleVocalMono() {
   const singers = trackManager.getSingers();
   const audibility = computeAudibility(singers);
+  const singersById = new Map(singers.map((s) => [s.id, s]));
   const useSegments = state.trackSegmentsReady === true
     && Array.isArray(state.trackSegments) && state.trackSegments.length > 0;
 
@@ -1598,13 +1621,8 @@ function _buildAudibleVocalMono() {
   if (useSegments) {
     for (const seg of state.trackSegments) {
       if (!seg || !seg.audio || !seg.audio.length) continue;
-      // 有 trackId 的片段按该轨当前可听性过滤；无 trackId 的旧片段兼容为可听。
-      let audible = true;
-      if (seg.trackId) {
-        const track = singers.find((s) => s.id === seg.trackId);
-        if (track) audible = audibility.audible(track);
-      }
-      if (!audible) continue;
+      // 统一约定（P3）：无 trackId 的旧片段兼容为可听；有 trackId 但轨道已删除 → 不可听。
+      if (!_isTrackSegmentAudible(seg.trackId, singersById, audibility)) continue;
       const start = Math.max(0, seg.startSample | 0);
       for (let i = 0; i < seg.audio.length && start + i < totalSamples; i++) {
         mono[start + i] += seg.audio[i];
@@ -1751,9 +1769,8 @@ export function startSharedPlayback(offset) {
       source.buffer = audioBuffer;
 
       // 该轨的 GainNode（首次用到时创建并接到 master）；初值按当前可听性设置，
-      // 静音轨首个 chunk 不漏音。
-      const singer = singersById.get(seg.trackId);
-      const audible = singer ? audibility.audible(singer) : false;
+      // 静音轨首个 chunk 不漏音。可听性走统一约定（P3）。
+      const audible = _isTrackSegmentAudible(seg.trackId, singersById, audibility);
       const gain = getOrCreateTrackGain(
         seg.trackId,
         () => {

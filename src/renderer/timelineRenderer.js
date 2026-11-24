@@ -1059,24 +1059,34 @@ export function pauseFollow() {
 
 /**
  * 松手 / Stop / 切工程 / 自然结束：把当前 fragmentScrollX 与当前播放头位置
- * 作为新锚点。清掉在途动画、速度样本与按住态，抑制计时重新起算，避免下一帧
- * 因播放头仍在 90% 附近立即跳页。
+ * 作为新锚点。reset() 清掉在途动画与速度样本并重建锚点，因此下一帧不会因
+ * 播放头仍在 90% 附近立即跳页；这里不启用计时抑制（抑制由用户滚轮/缩放的
+ * markUserViewActivity 负责），松手后立即恢复跟随。
  */
 export function resetFollowAnchor() {
   _followState = FOLLOW_STATE.RESET;
   _suppressUntil = _nowMs() + FOLLOW_SUPPRESS_MS;
   if (_follow) _follow.reset({ reveal: false });
-  if (_follow) {
-    _follow.setPointerDown(false);
-    _follow.clearPointerDown();
-  }
-  // RESET 是一次瞬时复位：门控上直接回到 FOLLOWING（抑制窗口由 _suppressUntil 承担）。
+  // P3: 只解除按住态、不记用户活动。setPointerDown(false) 会把 now() 写进
+  // follower 的 lastActivityAt，让后续用例（尤其 stub 了时钟的测试）被空闲门控卡住。
+  if (_follow) _follow.clearPointerDown();
+  // reset() 已经清掉在途动画/速度样本并重置锚点（lastSample），所以松手后
+  // 下一帧不会因播放头仍在 90% 附近立即跳页——这里直接回到 FOLLOWING 是安全的。
+  // _suppressUntil 在此不再起"计时抑制"作用（那是 markUserViewActivity 的职责）；
+  // 保留赋值只是防御性，真正的"避免立即跳页"由 reset() 重建锚点完成。
   _followState = FOLLOW_STATE.FOLLOWING;
 }
 
 /** 诊断/测试用。 */
 export function getPlayheadFollowSnapshot() {
   return _follow ? _follow.snapshot() : null;
+}
+
+/** 测试隔离用：恢复时钟后彻底重置跟随状态（含被 stub 污染的时间戳）。 */
+export function resetFollowForTest() {
+  _followState = FOLLOW_STATE.FOLLOWING;
+  _suppressUntil = 0;
+  if (_follow) _follow.resetAllForTest();
 }
 
 export function drawPlayheadLine(elapsedSeconds, options = {}) {

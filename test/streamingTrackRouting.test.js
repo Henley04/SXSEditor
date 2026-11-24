@@ -225,5 +225,22 @@ describe('流式分轨路由 (4.4)', () => {
       expect(src).to.match(/state\.trackSegments = returnedSegments;/);
       expect(src).to.match(/state\.trackSegmentsReady = returnedSegments\.length > 0;/);
     });
+
+    it('P3: 流式调度所有伴奏（含不可听），初值按可听性设置', () => {
+      expect(src).to.include('getAccompanimentTracks({ includeInaudible: true })');
+      expect(src).to.match(/for \(const accTrack of allAccTracks\)/);
+      expect(src).to.match(/accGain\.gain\.value = accAudible \? accBaseGain : 0;/);
+      expect(src).to.match(/registerTrackGain\(accTrack\.id, accGain, accBaseGain, accAudible\)/);
+    });
+
+    it('P3: 三条路径可听性统一走 _isTrackSegmentAudible', () => {
+      expect(src).to.include('_isTrackSegmentAudible(seg.trackId, singersById, audibility)');
+      expect(src).to.include('_isTrackSegmentAudible(chunkInfo.trackId, currentSingersById, currentAud)');
+      expect(src).to.include('_isTrackSegmentAudible(seg.trackId, singersById, audibility)');
+    });
+
+    it('P2-2: 流式首 chunk 强制关闭独占模式', () => {
+      expect(src).to.match(/state\.useExclusiveMode = false;/);
+    });
   });
 });

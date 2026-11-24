@@ -67,7 +67,9 @@ const EDGE_SCROLL_MAX_SPEED_PX_S = 1500;
 const EDGE_SCROLL_MAX_DT_S = 0.05;
 let _edgeScrollRaf = 0;
 let _edgeScrollLastTs = 0;
-// 最近一次拖拽指针位置（clientX/clientY），供边缘滚屏每帧重算世界坐标。
+// P3: 滚到边界后循环会停；只有指针曾回到中间区再进入边缘才重启，避免边界处每帧空转。
+let _edgeScrollWasCentered = true;
+// 最近一次拖拽指针位置（clientX），供边缘滚屏每帧重算世界坐标。
 let _dragClientX = 0;
 
 function _ensurePlayheadTooltip() {
@@ -309,6 +311,15 @@ function _onWindowPlayheadDragMove(e) {
   _dragClientX = e.clientX;
   const x = _mouseToCanvasX(e);
   _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+  // P3: 滚到边界后循环已停（_edgeScrollRaf=0）。若指针回到中间区再进入边缘，
+  // 重启滚屏循环；仅在中间区重置标志，避免停在边界时每帧启停空转。
+  const { dir } = _applyEdgeScrollAtPointer();
+  if (dir === 0) {
+    _edgeScrollWasCentered = true;
+  } else if (_edgeScrollWasCentered && !_edgeScrollRaf) {
+    _edgeScrollWasCentered = false;
+    _startEdgeScroll();
+  }
 }
 function _onWindowPlayheadDragUp() {
   _endPlayheadDrag();
@@ -484,6 +495,7 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
       _dragClientX = e.clientX;
       // 拖拽期间暂停分页跟随，启动边缘自动滚屏；松手时 resetFollowAnchor() 重建锚点。
       pauseFollow();
+      _edgeScrollWasCentered = true;
       _attachPlayheadDragWindowListeners();
       _startEdgeScroll();
       _updatePlayheadVisual(newSeconds);

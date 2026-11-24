@@ -76,6 +76,16 @@ describe('播放头拖拽边缘滚屏 — 与跟随协调', () => {
     expect(state.fragmentScrollX).to.equal(300);
   });
 
+  it('P3: 滚到边界停止后，指针回中间再进边缘能重启滚屏（源码契约）', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'eventHandlers.js'), 'utf8');
+    // 拖拽 move handler 必须在指针回到中间（dir===0）重置标志，并在再次进入边缘时重启。
+    expect(src).to.include('_edgeScrollWasCentered = true');
+    expect(src).to.include('_edgeScrollWasCentered && !_edgeScrollRaf');
+    expect(src).to.include('_startEdgeScroll()');
+  });
+
   it('scrollX clamp 在 [0, maxScroll] 内', () => {
     const max = getMaxFragmentScrollX();
     state.fragmentScrollX = max + 1000;
