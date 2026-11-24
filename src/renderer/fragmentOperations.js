@@ -86,6 +86,7 @@ export function finishDrag() {
     const newDuration = fragment.duration;
     const newSingerId = fragment.singerId;
     const fragmentId = fragment.id;
+    const routing = { singerId: newSingerId, previousSingerId: oldSingerId };
 
     if (oldStart !== newStart || oldDuration !== newDuration || oldSingerId !== newSingerId) {
       history.push({
@@ -123,10 +124,14 @@ export function finishDrag() {
         }
       });
       markDirty();
-      _syncFragmentToEditor(fragmentId,
-        { startTime: newStart, duration: newDuration },
-        { singerId: newSingerId, previousSingerId: oldSingerId });
     }
+
+    // 无条件做最终精确同步：拖拽期间的 IPC 被节流到 ~32ms，最后一帧可能停在
+    // 中间值。用户拖出去再拖回原位（净变化为 0）时上面的 changed 分支不会进入，
+    // 若不在这里补发，编辑器/主进程快照会停留在中间边界。
+    _syncFragmentToEditor(fragmentId,
+      { startTime: newStart, duration: newDuration },
+      routing);
   }
   state.dragState = null;
   state.fragmentDragSnapshot = null;

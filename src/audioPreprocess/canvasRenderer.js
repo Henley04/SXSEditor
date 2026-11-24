@@ -22,6 +22,23 @@ function currentBpm() {
 let _waveformCacheCanvas = null;
 let _waveformCacheKey = '';
 
+// waveform canvas 的 getBoundingClientRect 缓存。hover / wheel / 拖拽是高频路径，
+// 每次都读 rect 会强制同步 layout。注意：面板收起/展开会改变画布的 top，
+// 但画布尺寸不变（#waveform-section 是固定百分比高度），ResizeObserver 观察
+// canvas 本身不会触发 —— 因此调用方必须观察 #extract-panel，或在重排时显式失效。
+let _waveformCanvasRectCache = null;
+
+export function getWaveformCanvasRect() {
+  if (!_waveformCanvasRectCache && dom.waveformCanvas) {
+    _waveformCanvasRectCache = dom.waveformCanvas.getBoundingClientRect();
+  }
+  return _waveformCanvasRectCache;
+}
+
+export function invalidateWaveformCanvasRect() {
+  _waveformCanvasRectCache = null;
+}
+
 export function drawWaveformWithPlayhead(currentTime, options = {}) {
   if (!state.wavAudioBuffer) return;
 

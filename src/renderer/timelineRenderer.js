@@ -6,7 +6,7 @@ import {
   HEADER_HEIGHT,
   FRAGMENT_BASE_BEAT_WIDTH,
 } from './constants.js';
-import { t } from '../i18n/index.js';
+import { t, getLocale } from '../i18n/index.js';
 // U3: 分片时间轴是 canvas，DOM 里没有可读节点 —— 渲染时把摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
@@ -439,18 +439,19 @@ function drawClippedText(ctx, text, x, y, maxWidth, clipRect) {
 
 // 时间轴尺寸的唯一计算入口：syncFragmentScroll 与 renderFragmentTimeline
 // 都需要 totalBeats / 虚拟宽度 / 内容高度，抽一次避免两处重复遍历与漂移。
-function _computeTimelineMetrics(singers, fragments, beatWidth) {
+function _computeTimelineMetrics(singers, fragments, beatWidth, bpm = state.project ? state.project.bpm : 120) {
   const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
   const accompanimentMaxBeat = singers.reduce((max, singer) => {
     if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
     const endBeat = (singer.accompanimentStartTime || 0)
-      + singer.audioDuration / 60 * state.project.bpm;
+      + singer.audioDuration / 60 * bpm;
     return Math.max(max, endBeat);
   }, 0);
   const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
   return {
     beatWidth,
+    bpm,
     totalBeats,
     canvasWidth: totalBeats * beatWidth,
     contentHeight: singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT,
@@ -461,6 +462,9 @@ let _lastCanvasTransform = '';
 // 最近一次渲染时的视口宽度（px）。播放头的分页跟随每帧都要它，而
 // `dom.fragmentContainer.clientWidth` 会触发同步 layout —— 缓存下来只在渲染时刷新。
 let _lastViewportWidth = 0;
+// 最近一次渲染算出的时间轴 metrics。分页跟随的 _getMaxScrollX 会在跳转规划时
+// 读取滚动上限；内容尺寸只在渲染时变化，没必要每次重新遍历全部片段/歌手。
+let _lastTimelineMetrics = null;
 
 export function syncFragmentScroll(metrics) {
   let m = metrics;
@@ -468,6 +472,7 @@ export function syncFragmentScroll(metrics) {
     const singers = trackManager.getSingers();
     const fragments = trackManager.getFragments();
     m = _computeTimelineMetrics(singers, fragments, getBeatWidth());
+    _lastTimelineMetrics = m;
   }
   const containerW = m.viewportWidth ?? dom.fragmentContainer.clientWidth;
   const containerH = m.viewportHeight ?? dom.fragmentContainer.clientHeight;
@@ -488,6 +493,12 @@ export function syncFragmentScroll(metrics) {
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
+// 读屏摘要的文案只由片段/歌手数量与语言决定：缓存拼好的字符串，
+// 避免拖拽/缩放的高频渲染每帧都做 i18n 查询与模板构造。
+// 注意仍要每帧调用 announce —— 它内部依赖"同文案 + 节流窗口"的重复播报语义
+// （见 shared 的零宽哨兵实现），这里只跳过字符串构造，不改变播报行为。
+let _lastA11yText = { key: '', text: '' };
+
 export function renderFragmentTimeline() {
   const ctx = dom.fragmentCanvas.getContext('2d');
   const singers = trackManager.getSingers();
@@ -495,13 +506,21 @@ export function renderFragmentTimeline() {
   const dpr = window.devicePixelRatio || 1;
 
   // U3：读屏播报（内容相同/过频时 announce 内部自动跳过）
-  announce('fragment-canvas-a11y-status', t('main.a11yFragmentTimelineStatus', {
-    fragments: fragments.length,
-    singers: singers.length,
-  }));
+  const a11yKey = `${fragments.length}|${singers.length}|${getLocale()}`;
+  if (_lastA11yText.key !== a11yKey) {
+    _lastA11yText = {
+      key: a11yKey,
+      text: t('main.a11yFragmentTimelineStatus', {
+        fragments: fragments.length,
+        singers: singers.length,
+      }),
+    };
+  }
+  announce('fragment-canvas-a11y-status', _lastA11yText.text);
 
   const beatWidth = getBeatWidth();
   const metrics = _computeTimelineMetrics(singers, fragments, beatWidth);
+  _lastTimelineMetrics = metrics;
   const totalBeats = metrics.totalBeats;
   const virtualWidth = metrics.canvasWidth;
   const contentHeight = metrics.contentHeight;
@@ -920,7 +939,15 @@ function _getMaxScrollX() {
   if (!(w > 0)) return 0;
   // 与 renderFragmentTimeline 的 clamp 同源：虚拟宽度 - 视口宽度。
   // 虚拟宽度自带 256 拍 padding，播放头永远能走到锚点位置，不会卡在末尾。
-  const metrics = _computeTimelineMetrics(trackManager.getSingers(), trackManager.getFragments(), getBeatWidth());
+  // 复用最近一次渲染的 metrics：跟随只读，内容尺寸在渲染时已更新。
+  // 但不能假设"一定先渲染过"：若 zoom/bpm 已变而新的渲染还没发生，缓存的
+  // canvasWidth 就是旧值，这里校验同源输入并回退到实时计算。
+  const bpm = state.project ? state.project.bpm : 120;
+  let metrics = _lastTimelineMetrics;
+  if (!metrics || metrics.beatWidth !== getBeatWidth() || metrics.bpm !== bpm) {
+    metrics = _computeTimelineMetrics(
+      trackManager.getSingers(), trackManager.getFragments(), getBeatWidth(), bpm);
+  }
   return Math.max(0, metrics.canvasWidth - w);
 }
 

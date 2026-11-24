@@ -3,7 +3,7 @@ import { getOptions, saveOptions, applyPreset, resolveOptions } from './extracti
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { toggleSynth } from './synthPreview.js';
-import { drawWaveformWithPlayhead, invalidateWaveformCache } from './canvasRenderer.js';
+import { drawWaveformWithPlayhead, invalidateWaveformCache, invalidateWaveformCanvasRect } from './canvasRenderer.js';
 
 /** 根据 MIDI 提取工具显示/隐藏 FCPE 参数面板 */
 export async function updateFcpePanelVisibility() {
@@ -12,6 +12,9 @@ export async function updateFcpePanelVisibility() {
   const tool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'fcpe';
   const isFcpe = tool === 'fcpe';
   dom.extractPanelBody.style.display = isFcpe ? '' : 'none';
+  // 面板 body 显隐会改变 #extract-panel 的高度，从而移动下方 waveform canvas
+  // 的 top（画布尺寸不变，canvas 的 ResizeObserver 不触发）。
+  invalidateWaveformCanvasRect();
   if (dom.fcpeParamsNotice) {
     if (!isFcpe) {
       const toolName = tool === 'rmvpe' ? 'RMVPE' : 'Basic Pitch';
@@ -109,6 +112,9 @@ function bindControls() {
  */
 export function refreshViewportAfterPanelToggle() {
   const pr = state.pianoRoll;
+  // 面板高度变化会平移 waveform canvas（尺寸不变），必须显式失效 rect 缓存，
+  // 否则 hover/点击仍按旧 top 判定 header 热区。
+  invalidateWaveformCanvasRect();
   if (pr) {
     // _resize() 会按父容器新尺寸重设画布、clamp 滚动位置并重绘（含滚动条）。
     pr._resize();
