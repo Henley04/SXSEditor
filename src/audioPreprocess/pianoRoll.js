@@ -78,6 +78,10 @@ export function initPianoRoll() {
 
     _staticCache: null,
     _staticCacheDirty: true,
+    // canvas.getBoundingClientRect() 缓存：_getMousePos 在拖拽/F0 笔刷的
+    // mousemove 热路径上高频调用，每次读 rect 都会强制同步 layout。
+    // _resize / ResizeObserver 时置空。
+    _canvasRect: null,
 
     // 命中测试用的「按 start 排序」视图缓存：避免每次 mousemove 反向线性扫描。
     // notes 数组被替换 / 长度变化 / 音符被就地移动时置空（见 _invalidateSortedNotes）。
@@ -101,6 +105,14 @@ export function initPianoRoll() {
         }
       };
       window.addEventListener('resize', this._boundResize);
+      // 子元素尺寸变化（面板收/放、分隔条拖拽）不会触发 window resize：
+      // 用 ResizeObserver 及时失效 rect 缓存，避免命中测试按旧坐标偏移。
+      if (typeof ResizeObserver !== 'undefined') {
+        this._canvasResizeObserver = new ResizeObserver(() => {
+          this._canvasRect = null;
+        });
+        this._canvasResizeObserver.observe(this.canvas);
+      }
       this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
       this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
       document.addEventListener('mouseup', this._boundMouseUp);
@@ -125,6 +137,11 @@ export function initPianoRoll() {
         this._wheelRaf = 0;
       }
       this._wheelAcc = null;
+      if (this._canvasResizeObserver) {
+        this._canvasResizeObserver.disconnect();
+        this._canvasResizeObserver = null;
+      }
+      this._canvasRect = null;
       window.removeEventListener('resize', this._boundResize);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
@@ -151,6 +168,7 @@ export function initPianoRoll() {
       this.canvas.height = Math.floor(height * this.dpr);
       this.width = width;
       this.height = height;
+      this._canvasRect = null;
       this.ctx = this.canvas.getContext('2d');
       this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       // 视口尺寸变化后，原有 scrollX/scrollY 可能超出新的最大值，需重新 clamp
@@ -162,7 +180,10 @@ export function initPianoRoll() {
     },
 
     _getMousePos(e) {
-      const rect = this.canvas.getBoundingClientRect();
+      if (!this._canvasRect) {
+        this._canvasRect = this.canvas.getBoundingClientRect();
+      }
+      const rect = this._canvasRect;
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     },
 

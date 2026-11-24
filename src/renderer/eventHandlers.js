@@ -22,6 +22,12 @@ import { appendPluginContextItems, pluginContextItems } from './plugins/contribu
 let _clickStartPos = null;
 const CLICK_THRESHOLD = 3;
 
+// 拖拽期间同步分片边界给编辑器的节流间隔。每个 rAF 都 invoke 一次
+// updateFragmentBounds 会带来持续的跨进程开销；30Hz 足够让编辑器跟随，
+// mouseup 时 finishDrag 再做一次精确同步。
+const BOUNDS_SYNC_INTERVAL_MS = 32;
+let _lastBoundsSyncAt = -Infinity;
+
 // Playhead drag state — 拖拽进度条时记录是否在拖拽 playhead
 let _isPlayheadDragging = false;
 // 拖拽开始时是否正在播放。mouseup 时若为 true，则从新位置恢复播放。
@@ -515,12 +521,18 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
         }
       }
       renderFragmentTimeline();
+      // 跨进程同步降频：拖拽期间每 ~32ms 一次，mouseup 的 finishDrag
+      // 仍会做最终精确同步（含换轨路由），编辑器跟随观感不受影响。
       if (window.electronAPI?.updateFragmentBounds && state.dragState?.fragment) {
-        const frag = state.dragState.fragment;
-        window.electronAPI.updateFragmentBounds(frag.id, {
-          startTime: frag.startTime,
-          duration: frag.duration,
-        });
+        const now = performance.now();
+        if (now - _lastBoundsSyncAt >= BOUNDS_SYNC_INTERVAL_MS) {
+          _lastBoundsSyncAt = now;
+          const frag = state.dragState.fragment;
+          window.electronAPI.updateFragmentBounds(frag.id, {
+            startTime: frag.startTime,
+            duration: frag.duration,
+          });
+        }
       }
       state.renderPending = false;
     });

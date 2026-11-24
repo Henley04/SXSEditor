@@ -120,6 +120,9 @@ let _renderInFlight = 0;
 // 失效，其余时间复用缓存值，避免 hit-test（mousemove 高频路径）反复触发
 // 同步 layout 读取。
 let _layoutCacheValid = false;
+// inline 歌词编辑框相对容器的偏移缓存：updateInlineInputPosition 每帧调用，
+// 旧实现每帧读两次 getBoundingClientRect。位置只在布局变化时改变。
+let _inlineGeomCache = null;
 
 function _getParentHeight() {
   if (_layoutCacheValid && _cachedParentHeight > 0) return _cachedParentHeight;
@@ -136,6 +139,7 @@ export function invalidateLayoutCache() {
   _layoutCacheValid = false;
   _cachedParentHeight = 0;
   _cachedParentWidth = 0;
+  _inlineGeomCache = null;
 }
 
 /**
@@ -1225,39 +1229,42 @@ function _getPitchResolver(includeJitter = true, includeVibrato = true) {
 }
 
 /**
- * 某时刻的曲线层音高（含自动层与手动作用域，不含颤音）。
+ * 某时刻的曲线层音高 + 该时刻的激活音符。
  *
- * 优先级：手动（作用域内）> 自动 > null（调用方回退 note.pitch）。
- * 与主窗口 buildFragmentPitchCurveF0 走同一个 shared resolver —— 两条路径
- * 不再各自复刻一份数学（历史上因此丢过锚点强度、也分叉过 inactive 过滤）。
+ * 单次求值内只做一次 `_findActiveNoteAtTime`：旧实现先为回退取一次、又为
+ * 颤音取一次（采样循环里每帧上千次，二分成本翻倍）。绘制侧需要同时判断
+ * "是否有音高"与"是否在音符内"时直接用返回值，避免再查一次。
+ *
+ * @returns {{pitch:number|null, note:object|null}}
  */
-export function getPitchAtTime(time) {
+function _getPitchStateAtTime(time) {
   const pitchCurve = getPitchCurve();
-  if (!pitchCurve.enabled) return null;
+  if (!pitchCurve.enabled) return { pitch: null, note: null };
 
   const resolver = _getPitchResolver();
   let basePitch = resolver.pitchAt(time);
+  const note = _findActiveNoteAtTime(time);
 
   // 回退：作用域外且自动层关闭时，曲线层没有值 → 用激活音符的音高。
   // 这是旧行为（v2.0.2 的 getPitchAtTime 同样在锚点/笔刷都未覆盖时回落到
   // note.pitch），保留它以免"auto 关闭"时渲染与 F0 构建出现 null。
-  if (basePitch === null) {
-    const active = _findActiveNoteAtTime(time);
-    if (active) basePitch = active.pitch;
-  }
+  if (basePitch === null && note) basePitch = note.pitch;
 
   // 颤音叠加：在锚点/笔刷/自动音高之上加正弦调制。
   // 兼容性说明：
   //   - 若 note 有自定义锚点/笔刷，颤音在它们算出的音高上叠加（保留滑音等表现）。
   //   - 若 note 没有自定义曲线，颤音在 note.pitch 上叠加，并把 basePitch 从 null 提升为
   //     note.pitch，让 buildPitchCurveF0Data 能为该帧生成 F0（否则该帧 F0=0 静音）。
-  const note = _findActiveNoteAtTime(time);
   if (note && note.vibrato && note.vibrato.enabled) {
     if (basePitch === null) basePitch = note.pitch;
     basePitch += computeVibratoOffset(note, time);
   }
 
-  return basePitch;
+  return { pitch: basePitch, note };
+}
+
+export function getPitchAtTime(time) {
+  return _getPitchStateAtTime(time).pitch;
 }
 
 /** 供渲染层判断某时刻是否处于手动作用域（决定自动曲线画白还是画灰）。 */
@@ -2505,9 +2512,17 @@ function renderPitchCurve(c) {
     }
   }
 
-  function _coverageColorAt(t) {
-    for (const r of coverage) if (t >= r.start && t <= r.end) return c.pitchAutoMuted;
-    return c.pitchAutoActive;
+  /**
+   * 采样焦点在时间上是单调递增的（ts 升序，取相邻两点中点），
+   * 因此 coverage 的线性查找可以用「区间指针只前进」代替每次从头扫描。
+   */
+  function _makeCoverageColorAt() {
+    let idx = 0;
+    return function coverageColorAt(t) {
+      while (idx < coverage.length && t > coverage[idx].end) idx++;
+      const r = coverage[idx];
+      return r && t >= r.start ? c.pitchAutoMuted : c.pitchAutoActive;
+    };
   }
 
   /**
@@ -2535,6 +2550,7 @@ function renderPitchCurve(c) {
   function drawAutoCurve() {
     if (!autoOn) return;
     const ts = curveSampleTimes();
+    const coverageColorAt = _makeCoverageColorAt();
 
     ctx.save();
     ctx.lineWidth = 2;
@@ -2543,17 +2559,21 @@ function renderPitchCurve(c) {
     let started = false;
     let lastX = 0;
     let lastY = 0;
+    // 相邻采样段共享端点：上一段的 p1 就是下一段的 p0，直接复用，
+    // 采样求值次数约减半（t1===t0 的重复时刻也由这里兜住）。
+    let prevP = null;
     for (let i = 0; i < ts.length - 1; i++) {
       const t0 = ts[i];
       const t1 = ts[i + 1];
       if (t1 === t0) continue;
-      const p0 = getPitchAtTime(t0);
+      const p0 = prevP !== null ? prevP : getPitchAtTime(t0);
       const p1 = getPitchAtTime(t1);
+      prevP = p1;
       if (p0 === null || p1 === null) {
         if (started) { ctx.stroke(); started = false; color = null; }
         continue;
       }
-      const col = _coverageColorAt((t0 + t1) / 2);
+      const col = coverageColorAt((t0 + t1) / 2);
       if (col !== color) {
         if (started) ctx.stroke();
         ctx.strokeStyle = col;
@@ -2679,10 +2699,11 @@ function renderPitchCurve(c) {
     let first = true;
     for (let i = 0; i < ts.length; i++) {
       const t = ts[i];
-      const pitch = getPitchAtTime(t);
+      // 一次求值同时拿到音高与「是否在激活音符内」，不再额外二分一次。
+      const { pitch, note: activeNote } = _getPitchStateAtTime(t);
       // 音符外不画（与 F0=0 一致）：锚点曲线会在音符空隙内外推插值，
       // 必须按音符覆盖断开路径，不能把空隙两侧连成直线。
-      if (pitch === null || !_findActiveNoteAtTime(t)) {
+      if (pitch === null || !activeNote) {
         if (!first) { ctx.stroke(); ctx.beginPath(); first = true; }
         continue;
       }
@@ -3139,10 +3160,15 @@ export function render() {
  * 只在音符数量 / 选中数量变化时才播报（announce 内部还会再节流一次），
  * 所以拖拽缩放之类的高频渲染不会刷屏。
  */
+let _lastA11yCounts = { notes: -1, selected: -1 };
 function _announceCanvasState() {
   const notes = getNotes();
   const sel = getSelectedNoteIds();
   const selCount = sel ? (sel.size ?? sel.length) : 0;
+  // 状态文本只由这两个计数决定：先比较再拼字符串，
+  // 避免每帧都做一次 getNotes/Map 查询 + 模板拼接。
+  if (_lastA11yCounts.notes === notes.length && _lastA11yCounts.selected === selCount) return;
+  _lastA11yCounts = { notes: notes.length, selected: selCount };
   const text = selCount > 0
     ? `共 ${notes.length} 个音符，已选中 ${selCount} 个`
     : `共 ${notes.length} 个音符`;
@@ -3745,26 +3771,38 @@ function drawPlayhead(ctxToUse, w, h, c) {
   ctxToUse.restore();
 }
 
+/**
+ * inline 编辑框相对容器的偏移：只在布局变化（resizeCanvases /
+ * invalidateLayoutCache）后需要重新读 rect。
+ */
+function _getInlineGeometry() {
+  if (!_inlineGeomCache) {
+    const container = canvas.parentElement;
+    const containerRect = container.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    _inlineGeomCache = {
+      offsetX: canvasRect.left - containerRect.left,
+      offsetY: canvasRect.top - containerRect.top,
+    };
+  }
+  return _inlineGeomCache;
+}
+
 function updateInlineInputPosition() {
   const activeInlineInput = getActiveInlineInput();
   const activeInlineEditNote = getActiveInlineEditNote();
   if (!activeInlineInput || !activeInlineEditNote) return;
 
   const note = activeInlineEditNote;
-  const container = canvas.parentElement;
-  const containerRect = container.getBoundingClientRect();
-  const canvasRect = canvas.getBoundingClientRect();
-
-  const offsetX = canvasRect.left - containerRect.left;
-  const offsetY = canvasRect.top - containerRect.top;
+  const { offsetX, offsetY } = _getInlineGeometry();
 
   const nx = timeToX(note.start);
   const ny = pitchToY(note.pitch);
   const nw = note.duration * BEAT_WIDTH * getZoomX();
   const nh = NOTE_HEIGHT;
 
-  const visible = nx + nw >= 0 && nx <= container.clientWidth &&
-                  ny + nh >= HEADER_HEIGHT && ny <= container.clientHeight;
+  const visible = nx + nw >= 0 && nx <= _getParentWidth() &&
+                  ny + nh >= HEADER_HEIGHT && ny <= _getParentHeight();
 
   if (visible) {
     activeInlineInput.style.display = '';

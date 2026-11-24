@@ -461,6 +461,9 @@ let _lastCanvasTransform = '';
 // 最近一次渲染时的视口宽度（px）。播放头的分页跟随每帧都要它，而
 // `dom.fragmentContainer.clientWidth` 会触发同步 layout —— 缓存下来只在渲染时刷新。
 let _lastViewportWidth = 0;
+// 最近一次渲染算出的时间轴 metrics。分页跟随的 _getMaxScrollX 会在跳转规划时
+// 读取滚动上限；内容尺寸只在渲染时变化，没必要每次重新遍历全部片段/歌手。
+let _lastTimelineMetrics = null;
 
 export function syncFragmentScroll(metrics) {
   let m = metrics;
@@ -468,6 +471,7 @@ export function syncFragmentScroll(metrics) {
     const singers = trackManager.getSingers();
     const fragments = trackManager.getFragments();
     m = _computeTimelineMetrics(singers, fragments, getBeatWidth());
+    _lastTimelineMetrics = m;
   }
   const containerW = m.viewportWidth ?? dom.fragmentContainer.clientWidth;
   const containerH = m.viewportHeight ?? dom.fragmentContainer.clientHeight;
@@ -488,6 +492,10 @@ export function syncFragmentScroll(metrics) {
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
+// 读屏摘要只由片段/歌手数量决定：先比较再翻译 + 拼串，
+// 避免拖拽/缩放的高频渲染每帧都做一遍 i18n 查询与模板构造。
+let _lastA11yFragmentCounts = { fragments: -1, singers: -1 };
+
 export function renderFragmentTimeline() {
   const ctx = dom.fragmentCanvas.getContext('2d');
   const singers = trackManager.getSingers();
@@ -495,13 +503,18 @@ export function renderFragmentTimeline() {
   const dpr = window.devicePixelRatio || 1;
 
   // U3：读屏播报（内容相同/过频时 announce 内部自动跳过）
-  announce('fragment-canvas-a11y-status', t('main.a11yFragmentTimelineStatus', {
-    fragments: fragments.length,
-    singers: singers.length,
-  }));
+  if (_lastA11yFragmentCounts.fragments !== fragments.length
+      || _lastA11yFragmentCounts.singers !== singers.length) {
+    _lastA11yFragmentCounts = { fragments: fragments.length, singers: singers.length };
+    announce('fragment-canvas-a11y-status', t('main.a11yFragmentTimelineStatus', {
+      fragments: fragments.length,
+      singers: singers.length,
+    }));
+  }
 
   const beatWidth = getBeatWidth();
   const metrics = _computeTimelineMetrics(singers, fragments, beatWidth);
+  _lastTimelineMetrics = metrics;
   const totalBeats = metrics.totalBeats;
   const virtualWidth = metrics.canvasWidth;
   const contentHeight = metrics.contentHeight;
@@ -917,7 +930,9 @@ function _getMaxScrollX() {
   if (!(w > 0)) return 0;
   // 与 renderFragmentTimeline 的 clamp 同源：虚拟宽度 - 视口宽度。
   // 虚拟宽度自带 256 拍 padding，播放头永远能走到锚点位置，不会卡在末尾。
-  const metrics = _computeTimelineMetrics(trackManager.getSingers(), trackManager.getFragments(), getBeatWidth());
+  // 复用最近一次渲染的 metrics：跟随只读，内容尺寸在渲染时已更新。
+  const metrics = _lastTimelineMetrics
+    || _computeTimelineMetrics(trackManager.getSingers(), trackManager.getFragments(), getBeatWidth());
   return Math.max(0, metrics.canvasWidth - w);
 }
 
