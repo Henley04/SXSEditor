@@ -1,9 +1,13 @@
 // 音频输出子进程：使用 decibri (Speaker) 进行 WASAPI/系统音频播放。
 //
-// 该文件由 audioOutputManager.js 通过 child_process.fork 启动，并通过 IPC
-// (process.send / process.on('message')) 通信。它不直接被 webpack 打包，
-// 而是由 CopyPlugin 复制到 .webpack/main/audio/ 下运行，因此其 require
-// 的相对模块（./audioFormatUtils）也必须由 CopyPlugin 一并复制。
+// 该文件由 audioOutputManager.js 通过 Electron utilityProcess.fork 启动，
+// 并通过 process.parentPort 的 MessagePort 通信（runAsNode fuse 关闭后
+// child_process.fork 不可用）。它不直接被 webpack 打包，而是由 CopyPlugin
+// 复制到 .webpack/main/audio/ 下运行，因此其 require 的相对模块
+// （./audioFormatUtils）也必须由 CopyPlugin 一并复制。
+//
+// 纯 Node 单测里没有 parentPort，收发自动回退到 process.send / process.on，
+// 以便测试进程内驱动消息处理（见 test/audioWorkerNonBlockingStart.test.js）。
 //
 // decibri 的 Speaker 是一个 Writable stream，仅支持 'int16' 与 'float32'
 // 两种 dtype，不支持 int24 / int32 / 独占模式 / 自定义 bufferSize。
@@ -70,11 +74,18 @@ function _scheduleIdleShutdown() {
   if (_idleTimer && typeof _idleTimer.unref === 'function') _idleTimer.unref();
 }
 
-// W2: process.send wrapper — avoids ERR_IPC_CHANNEL_CLOSED crashes when the
-// parent has already disconnected.
+// W2: 发送包装：Electron utilityProcess 里走 process.parentPort（MessagePort），
+// 纯 Node 单测里回退到 process.send。capability 检测在模块加载时做一次，
+// 避免每条消息都判环境。
+const _parentPort = process.parentPort && typeof process.parentPort.postMessage === 'function'
+  ? process.parentPort
+  : null;
+
 function _safeSend(msg) {
   try {
-    if (process.connected && typeof process.send === 'function') {
+    if (_parentPort) {
+      _parentPort.postMessage(msg);
+    } else if (process.connected && typeof process.send === 'function') {
       process.send(msg);
     }
   } catch (_) { /* channel closed */ }
@@ -400,7 +411,9 @@ function _stopPositionTracking() {
 
 // 消息处理必须是"可重入"的：start 里有 await（writeAsync），期间到达的
 // stop 必须立刻执行 —— 否则暂停/停止又要退化成靠父进程超时杀进程。
-process.on('message', async (msg) => {
+// utilityProcess 的 MessagePort 把负载放在 event.data；纯 Node 单测的
+// process.on('message') 直接给负载，这里统一取一次。
+async function _handleParentMessage(msg) {
   const { id, type } = msg;
   _cancelIdleShutdown();
 
@@ -436,7 +449,13 @@ process.on('message', async (msg) => {
   // Successful start keeps the process alive for the playback session;
   // everything else (queries, stops, errors) rearms idle shutdown.
   if (!_isPlaying) _scheduleIdleShutdown();
-});
+}
+
+if (_parentPort) {
+  _parentPort.on('message', (event) => _handleParentMessage(event && event.data !== undefined ? event.data : event));
+} else {
+  process.on('message', _handleParentMessage);
+}
 
 // W2: Handle SIGTERM so worker.kill() from the parent runs handleStop()
 // (→ Speaker.stop()) and cleanly releases native audio device handles.

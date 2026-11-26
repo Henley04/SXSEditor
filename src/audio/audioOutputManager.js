@@ -1,6 +1,34 @@
-const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
+
+// 音频 worker 子进程入口。
+//
+// 必须用 Electron 的 utilityProcess.fork()，不能用 child_process.fork()：
+// 打包后 runAsNode fuse 是关闭的（见 forge.config.js），child_process.fork 会
+// 直接抛 "child_process.fork() is not supported when the runAsNode fuse is
+// disabled"。utilityProcess 是 Electron 自带的 Node 子进程通道，不受该 fuse
+// 影响，且同样是真进程（native decibri 崩溃不会拖垮主进程）。
+//
+// 惰性取 utilityProcess + 可注入的 fork 桩，让本模块在纯 Node 单测里也能加载
+// （test/electronBinaryFallback 下 require('electron') 只是路径字符串）。
+let _forkWorkerForTests = null;
+function _setForkWorkerForTests(fn) { _forkWorkerForTests = fn || null; }
+
+function _forkWorker(workerScript) {
+  if (_forkWorkerForTests) return _forkWorkerForTests(workerScript);
+  const { utilityProcess } = require('electron');
+  const env = { ...process.env };
+  // 与 PluginRuntimeManager 同理：绝不能带 ELECTRON_RUN_AS_NODE，否则
+  // utility 进程被当成纯 Node 启动，Chromium 的 --type=utility 开关变成非法参数。
+  for (const key of ['ELECTRON_RUN_AS_NODE', 'ELECTRON_ENABLE_LOGGING', 'ELECTRON_ENABLE_STACK_DUMPING']) {
+    delete env[key];
+  }
+  return utilityProcess.fork(workerScript, [], {
+    serviceName: 'sxseditor-audio-output',
+    stdio: 'pipe',
+    env,
+  });
+}
 
 // start 要把整段 PCM 交给 native Speaker；正常情况毫秒级就有回执，8s 还没回
 // 只可能是子进程卡在设备打开/写入上。等满 15s 会让每次点播放都白等这么久。
@@ -58,6 +86,8 @@ class AudioOutputManager {
     // "结束先到"，start 的 success 回执会把 _isPlaying 错误地反转回 true。
     this._starting = false;
     this._endedDuringStart = false;
+    // fork 失败的 fuse 错误只记录一次（每次 isAvailable/start 都会重试 fork）。
+    this._forkFailureLogged = false;
   }
 
   _ensureWorker() {
@@ -74,13 +104,14 @@ class AudioOutputManager {
     }
 
     try {
-      this._worker = child_process.fork(workerScript, [], {
-        stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-        env: { ...process.env },
-        serialization: 'advanced',
-      });
+      this._worker = _forkWorker(workerScript);
     } catch (e) {
-      console.error('[AudioOutputManager] fork child process failed:', e.message);
+      // 每条 start/isAvailable 都会触发一次 fork 尝试；同一个 fuse 错误每次刷
+      // 两行 ERROR 只会淹没有效日志。首次记录完整原因，后续只静默降级。
+      if (!this._forkFailureLogged) {
+        console.warn('[AudioOutputManager] audio worker unavailable, falling back to shared audio:', e.message);
+        this._forkFailureLogged = true;
+      }
       this._worker = null;
       return null;
     }
@@ -140,9 +171,15 @@ class AudioOutputManager {
       }
     });
 
-    worker.on('error', (err) => {
+    worker.on('error', (typeOrErr, location) => {
       if (this._worker !== worker) return;
-      console.error('[AudioOutputManager] child process error:', err.message);
+      // Electron UtilityProcess 的 error 事件是 (type, location, report)，
+      // 不是 Error 对象；纯 Node 测试桩仍可能给 Error。两种形状都取到有意义的
+      // 文本，避免日志里打出 undefined。
+      const detail = (typeOrErr && typeOrErr.message)
+        || [typeOrErr, location].filter(Boolean).join(' ')
+        || 'unknown child process error';
+      console.error('[AudioOutputManager] child process error:', detail);
       this._workerReady = false;
       this._workerAvailable = false;
       // S12: Mark crashed so _ensureWorker() won't fork zombies during polls.
@@ -152,7 +189,7 @@ class AudioOutputManager {
         this._readyResolve(false);
         this._readyResolve = null;
       }
-      this._rejectAllPending(err);
+      this._rejectAllPending(new Error(detail));
     });
 
     worker.on('exit', (code) => {
@@ -215,10 +252,11 @@ class AudioOutputManager {
     this._handleWorkerDeath();
     this._rejectAllPending(new Error('Audio worker did not respond'));
     if (!worker) return;
+    // UtilityProcess.kill() 无参数（d.ts: kill(): boolean），传 'SIGKILL' 会被忽略。
+    // 它底层走的是进程终止而非 SIGTERM，本身已经是强杀；延迟再调一次仅作兜底。
     try { worker.kill(); } catch (_) {}
-    // Windows 上卡在 native 音频调用里的线程可能不响应 SIGTERM，兜底强杀。
     const forceTimer = setTimeout(() => {
-      try { worker.kill('SIGKILL'); } catch (_) {}
+      try { worker.kill(); } catch (_) {}
     }, 500);
     if (forceTimer && typeof forceTimer.unref === 'function') forceTimer.unref();
   }
@@ -236,7 +274,9 @@ class AudioOutputManager {
     }
   }
 
-  _sendCommand(type, data = {}, transferList = null, timeoutMs = 15000) {
+  // transferList 保留为位置参数（旧调用点把 timeoutMs 放在第 4 位），但
+  // utilityProcess 不再支持 ArrayBuffer transfer，实际发送时忽略它。
+  _sendCommand(type, data = {}, _transferList = null, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
       const worker = this._ensureWorker();
       if (!worker) {
@@ -264,10 +304,12 @@ class AudioOutputManager {
         reject: (err) => { clearTimeout(timeout); reject(err); },
       });
 
-      // W4: transferList must be passed in the options argument (3rd param),
-      // not as sendHandle (2nd param). Passing an array as the 2nd arg silently
-      // falls back to structured clone (full copy of large audio buffers).
-      worker.send({ id, type, ...data }, undefined, transferList ? { transferList } : undefined);
+      // utilityProcess 的 postMessage 第二参数只接受 MessagePortMain 数组
+      // （Electron 45 electron.d.ts / electron_api_utility_process.cc：
+      // "transferables must be an array of MessagePorts"），不能传 ArrayBuffer。
+      // 因此 PCM 走结构化克隆（复制一份）而非 transfer —— 一首 3 分钟 24kHz
+      // fp32 约 17MB，复制是毫秒级；正确性优先于零拷贝。
+      worker.postMessage({ id, type, ...data });
     });
   }
 
@@ -476,4 +518,4 @@ AudioOutputManager.getHostAPIs = function () {
   return [];
 };
 
-module.exports = { AudioOutputManager };
+module.exports = { AudioOutputManager, _setForkWorkerForTests };

@@ -79,6 +79,11 @@ async function findElectronZip() {
       asar: { unpack: '**/*.{node,dll}' },
       electronVersion: ELECTRON_VERSION,
       quiet: false,
+      // nightly：CI 注入的数字 X.Y.Z.W 只写进 PE 资源；release 无此变量时保持
+      // packager 从 package.json 读 version 的原有行为（issue #47）。
+      ...(process.env.SXS_FILE_VERSION
+        ? { win32metadata: { FileVersion: process.env.SXS_FILE_VERSION, ProductVersion: process.env.SXS_FILE_VERSION } }
+        : {}),
     };
     if (cachedZip) {
       // Point packager at the pre-downloaded zip so it skips re-downloading.

@@ -1,17 +1,17 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const child_process = require('child_process');
 
-const { AudioOutputManager } = require('../src/audio/audioOutputManager');
+const { AudioOutputManager, _setForkWorkerForTests } = require('../src/audio/audioOutputManager');
 
 /**
- * 构造一个 fake worker 子进程，用于模拟 child_process.fork 的返回值。
+ * 构造一个 fake worker 子进程，用于模拟 utilityProcess.fork 的返回值。
  * 通过 _emit(event, msg) 从子进程方向投递消息，触发主进程注册的监听器。
+ * 注意 utilityProcess 用 postMessage 而非 child_process.fork 的 send。
  */
 function createFakeWorker() {
   const handlers = {};
   return {
-    send: sinon.stub(),
+    postMessage: sinon.stub(),
     on: sinon.stub().callsFake((event, cb) => {
       handlers[event] = cb;
     }),
@@ -29,7 +29,8 @@ describe('AudioOutputManager', () => {
 
   beforeEach(() => {
     fakeWorker = createFakeWorker();
-    forkStub = sinon.stub(child_process, 'fork').returns(fakeWorker);
+    forkStub = sinon.stub().returns(fakeWorker);
+    _setForkWorkerForTests(forkStub);
     mgr = new AudioOutputManager();
   });
 
@@ -42,9 +43,9 @@ describe('AudioOutputManager', () => {
       mgr = null;
     }
     if (forkStub) {
-      forkStub.restore();
       forkStub = null;
     }
+    _setForkWorkerForTests(null);
   });
 
   describe('isAvailable', () => {
@@ -77,7 +78,7 @@ describe('AudioOutputManager', () => {
       fakeWorker._emit('message', { id: 1, type: 'getDevices', result: { devices: [{ id: 0, name: 'A' }], isAvailable: true } });
       const devices = await promise;
       expect(devices).to.deep.equal([{ id: 0, name: 'A' }]);
-      expect(fakeWorker.send.calledWithMatch({ type: 'getDevices' })).to.be.true;
+      expect(fakeWorker.postMessage.calledWithMatch({ type: 'getDevices' })).to.be.true;
     });
 
     it('returns empty array when worker reports an error', async () => {

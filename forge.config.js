@@ -114,6 +114,13 @@ module.exports = {
       return !keep;
     },
     icon: './assets/SXS',
+    // nightly：SXS_FILE_VERSION 是 CI 注入的数字 X.Y.Z.W（如 3.0.0.345），只写进
+    // Windows PE 文件版本资源。release 分支不设该变量，走原来的 "从 package.json
+    // 读 version" 路径，行为完全不变。这样 app.getVersion() 始终返回语义版本，
+    // 内置插件的 >=2.0.0 门禁不再被构建号污染（issue #47）。
+    ...(process.env.SXS_FILE_VERSION
+      ? { win32metadata: { FileVersion: process.env.SXS_FILE_VERSION, ProductVersion: process.env.SXS_FILE_VERSION } }
+      : {}),
     // docs / mcp / 文件图标都必须落在 asar 之外：
     //   · docs 要给系统浏览器以 file:// 打开，浏览器读不了 asar 内部路径；
     //   · mcp 是独立 node 进程的 stdio 服务器，客户端配置里写的是磁盘绝对路径，

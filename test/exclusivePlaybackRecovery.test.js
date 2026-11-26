@@ -13,7 +13,6 @@
  */
 const { expect } = require('chai');
 const sinon = require('sinon');
-const child_process = require('child_process');
 
 // jsdom 的 rAF 挂在 window 上；audioPlayback.js 用的是全局 requestAnimationFrame
 if (!global.requestAnimationFrame) {
@@ -21,7 +20,7 @@ if (!global.requestAnimationFrame) {
   global.cancelAnimationFrame = (id) => global.window.cancelAnimationFrame(id);
 }
 
-const { AudioOutputManager } = require('../src/audio/audioOutputManager');
+const { AudioOutputManager, _setForkWorkerForTests } = require('../src/audio/audioOutputManager');
 const { state, trackManager } = require('../src/renderer/state.js');
 const { stopPlayback, startExclusivePlayback } = require('../src/renderer/audioPlayback.js');
 const { TRANSPORT, getTransportState } = require('../src/renderer/transport.js');
@@ -70,7 +69,7 @@ function installFakeAudioContext() {
 function createFakeWorker() {
   const handlers = {};
   return {
-    send: sinon.stub(),
+    postMessage: sinon.stub(),
     on: sinon.stub().callsFake((event, cb) => { handlers[event] = cb; }),
     kill: sinon.stub(),
     removeAllListeners: sinon.stub(),
@@ -85,13 +84,15 @@ describe('独占音频 start 超时后的恢复', () => {
 
   beforeEach(() => {
     fakeWorker = createFakeWorker();
-    forkStub = sinon.stub(child_process, 'fork').returns(fakeWorker);
+    forkStub = sinon.stub().returns(fakeWorker);
+    _setForkWorkerForTests(forkStub);
     mgr = new AudioOutputManager();
   });
 
   afterEach(() => {
     if (mgr) { mgr.destroy(); mgr = null; }
-    if (forkStub) { forkStub.restore(); forkStub = null; }
+    if (forkStub) { forkStub = null; }
+    _setForkWorkerForTests(null);
   });
 
   it('start 超时后终止 worker、清空 pending，不留可出声的幽灵播放', async () => {
@@ -99,7 +100,7 @@ describe('独占音频 start 超时后的恢复', () => {
     try {
       const promise = mgr.start(new Float32Array(100), { sampleRate: 24000 });
       await clock.tickAsync(0);
-      expect(fakeWorker.send.calledWithMatch({ type: 'start' })).to.be.true;
+      expect(fakeWorker.postMessage.calledWithMatch({ type: 'start' })).to.be.true;
 
       await clock.tickAsync(9000);
       let err;
@@ -119,7 +120,7 @@ describe('独占音频 start 超时后的恢复', () => {
     const promise = mgr.start(new Float32Array(100), { sampleRate: 24000 });
     await Promise.resolve();
     await Promise.resolve();
-    const cmd = fakeWorker.send.lastCall.args[0];
+    const cmd = fakeWorker.postMessage.lastCall.args[0];
     expect(cmd.type).to.equal('start');
 
     // 短音频：worker 先报 ended，start 回执随后才到。
@@ -139,7 +140,7 @@ describe('独占音频 start 超时后的恢复', () => {
     const result = await promise;
 
     expect(result.success).to.be.true;
-    expect(fakeWorker.send.calledWithMatch({ type: 'stop' })).to.be.true;
+    expect(fakeWorker.postMessage.calledWithMatch({ type: 'stop' })).to.be.true;
   });
 
   it('从未 fork 过 worker 时 forceStop 是 no-op，不会凭空创建子进程', async () => {

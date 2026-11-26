@@ -191,20 +191,22 @@ jobs:
             PRERELEASE="false"
             IS_RELEASE="true"
             MAKE_LATEST="true"
+            # Release 行为保持不变：BUILD_VERSION 写进 package.json，既供 resedit
+            # 读 Windows 文件版本，也供 app.getVersion() 使用。
+            node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$BUILD_VERSION"
           else
-            # Display version stays descriptive for the release name/body;
-            # BUILD_VERSION must be numeric (X.Y.Z.W) because Windows resedit
-            # (@electron/packager) requires integer version components.
+            # A+B：语义版本（3.0.0）继续留在 package.json —— app.getVersion()、
+            # build-info.json、splash 与插件版本门禁都读它；Windows 需要的数字
+            # X.Y.Z.W 版本只通过 SXS_FILE_VERSION 注入 PE 资源，不再污染应用版本。
             NEW_VERSION="nightly_${DATE}_${SHORT_SHA}"
-            BUILD_VERSION="1.0.0.${{ github.run_number }}"
+            PKG_VERSION=$(node -p "require('./package.json').version")
+            BUILD_VERSION="${PKG_VERSION}.${{ github.run_number }}"
             TAG="nightly"
             PRERELEASE="true"
             IS_RELEASE="false"
             MAKE_LATEST="false"
+            echo "SXS_FILE_VERSION=$BUILD_VERSION" >> $GITHUB_ENV
           fi
-          # Write BUILD_VERSION to package.json (NOT committed; only for this build).
-          # resedit rejects non-integer components like "nightly_20260630_abc1234".
-          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$BUILD_VERSION"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "build_version=$BUILD_VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT

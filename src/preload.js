@@ -687,66 +687,72 @@ const _fullElectronAPI = {
   // ==================== Plugin Host v2（全应用插件） ====================
   // 窄接口：只暴露"列出/安装/卸载/跑命令/面板 RPC/事件"，不暴露任何文件路径或
   // 进程句柄。面板 iframe 的能力由 pluginHost.panelRpc 再收一道（apiScopes）。
+  //
+  // 全部 invoke 走 invokeHeavy：插件宿主的所有 handler 都在主进程
+  // runHeavyStartup() → pluginService.init() 里注册（窗口 reveal 之后），早于
+  // 它的调用（如设置页 installPluginSettings → api.list()）会撞上
+  // "No handler registered for 'plugin-host:*'"（issue #47）。invokeHeavy 先等
+  // APP_WAIT_FOR_HEAVY_IPC 就绪再真正 invoke，消除这条冷启动竞态。
   pluginHost: {
-    list: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_LIST),
-    admin: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_ADMIN),
-    install: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL),
-    installFromPath: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL_PATH, filePath),
-    uninstall: (id, keepData) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_UNINSTALL, id, !!keepData),
+    list: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_LIST),
+    admin: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_ADMIN),
+    install: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_INSTALL),
+    installFromPath: (filePath) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_INSTALL_PATH, filePath),
+    uninstall: (id, keepData) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_UNINSTALL, id, !!keepData),
     // ---- M6：签名与信任 ----
     // 信任的是**公钥指纹**，不是包自称的发布者名。管理器把指纹显示给用户核对。
-    trustList: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_LIST),
-    trustAdd: (input) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_ADD, input || {}),
-    trustRemove: (keyId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE, keyId),
-    setRequireSignature: (enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE, !!enabled),
-    verifyInstall: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL, id),
+    trustList: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_TRUST_LIST),
+    trustAdd: (input) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_TRUST_ADD, input || {}),
+    trustRemove: (keyId) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE, keyId),
+    setRequireSignature: (enabled) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE, !!enabled),
+    verifyInstall: (id) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL, id),
     // ---- M6：市场接口 ----
     // 搜索是"取一次索引、本地过滤"，不逐键发请求；预览一定会下载整包 ——
     // 索引里的签名字段只是源的自述，包内 signature.json 才是判定依据。
-    marketSources: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_SOURCES),
-    marketAddSource: (input) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_ADD_SOURCE, input || {}),
-    marketRemoveSource: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_REMOVE_SOURCE, id),
-    marketSearch: (query, options) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_SEARCH, query, options || {}),
+    marketSources: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_MARKET_SOURCES),
+    marketAddSource: (input) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_MARKET_ADD_SOURCE, input || {}),
+    marketRemoveSource: (id) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_MARKET_REMOVE_SOURCE, id),
+    marketSearch: (query, options) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_MARKET_SEARCH, query, options || {}),
     marketPreview: (sourceId, pluginId, options) => (
-      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_PREVIEW, sourceId, pluginId, options || {})
+      invokeHeavy(IPC_CHANNELS.PLUGINHOST_MARKET_PREVIEW, sourceId, pluginId, options || {})
     ),
     marketInstall: (sourceId, pluginId, options) => (
-      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_INSTALL, sourceId, pluginId, options || {})
+      invokeHeavy(IPC_CHANNELS.PLUGINHOST_MARKET_INSTALL, sourceId, pluginId, options || {})
     ),
-    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_ENABLED, id, !!enabled),
-    reload: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RELOAD),
-    runCommand: (commandId, args) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RUN_COMMAND, commandId, args || {}),
-    panelRpc: (request) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_PANEL_RPC, request || {}),
-    openPluginsFolder: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DIR),
-    getLog: (limit) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_GET_LOG, limit),
+    setEnabled: (id, enabled) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_SET_ENABLED, id, !!enabled),
+    reload: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_RELOAD),
+    runCommand: (commandId, args) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_RUN_COMMAND, commandId, args || {}),
+    panelRpc: (request) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_PANEL_RPC, request || {}),
+    openPluginsFolder: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_OPEN_DIR),
+    getLog: (limit) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_GET_LOG, limit),
     // ---- M2：界面贡献点 ----
     // 设置页读写的只是 manifest 里声明过的表单值；值域收敛在主进程做，
     // 这里不做任何判断（渲染层判权限等于把锁挂在门框上）。
-    settingsGet: (pluginId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET, pluginId),
-    settingsSet: (pluginId, patch) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET, pluginId, patch || {}),
-    setKeybindings: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS, pluginId, !!enabled),
-    setAutomation: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_AUTOMATION, pluginId, !!enabled),
+    settingsGet: (pluginId) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET, pluginId),
+    settingsSet: (pluginId, patch) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET, pluginId, patch || {}),
+    setKeybindings: (pluginId, enabled) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS, pluginId, !!enabled),
+    setAutomation: (pluginId, enabled) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_SET_AUTOMATION, pluginId, !!enabled),
     // iframe 地址由主进程 mint：manifest.entry 只在主进程可见
-    overlayUrl: (pluginId, overlayId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, pluginId, overlayId),
+    overlayUrl: (pluginId, overlayId) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, pluginId, overlayId),
     // 请主窗口把某个面板挂到右侧抽屉（设置分区/管理器用）
-    openPanel: (pluginId, panelId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST, pluginId, panelId),
+    openPanel: (pluginId, panelId) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST, pluginId, panelId),
     // M4 数据面：按扩展名路由到插件 codec，拿回校验过的工程文档。
     // 失败时返回 { ok:false, code, message }（没有插件接管 / 没权限 / 文档非法），
     // 由渲染层决定怎么提示。
-    openDocument: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT, filePath),
+    openDocument: (filePath) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT, filePath),
     // 保存/导出：把当前工程文档交给插件编码，写盘仍由主进程完成。
     saveDocument: (filePath, document, options) => (
-      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, filePath, document, options || {})
+      invokeHeavy(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, filePath, document, options || {})
     ),
-    fileFilters: (role) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, role || 'open'),
+    fileFilters: (role) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, role || 'open'),
     // 工程级渲染意图（document.extSchema[*].render）：pipeline 在主进程跑，
     // 这是"这份工程要求谁做后处理"唯一能过去的路。传 null 表示回到默认语义。
-    setRenderIntent: (intent) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_RENDER_INTENT, intent || null),
+    setRenderIntent: (intent) => invokeHeavy(IPC_CHANNELS.PLUGINHOST_SET_RENDER_INTENT, intent || null),
     // 音频导出器：清单 + 执行。音频走结构化克隆（Float32Array 原样过），
     // 不要在这里 JSON 化 —— 14M 个采样点转成数组会慢到用户以为卡死。
-    listExporters: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_LIST_EXPORTERS),
+    listExporters: () => invokeHeavy(IPC_CHANNELS.PLUGINHOST_LIST_EXPORTERS),
     exportAudio: (filePath, ref, audio) => (
-      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_EXPORT_AUDIO, filePath, ref || {}, audio || {})
+      invokeHeavy(IPC_CHANNELS.PLUGINHOST_EXPORT_AUDIO, filePath, ref || {}, audio || {})
     ),
     // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
     onSync: (callback) => {
