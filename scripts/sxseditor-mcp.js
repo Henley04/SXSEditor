@@ -18,6 +18,15 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 
+function getAppVersion() {
+  for (const candidate of [path.join(__dirname, '..', 'package.json'), path.join(__dirname, 'version.json')]) {
+    try {
+      return require(candidate).version;
+    } catch (_) { /* try the packaged layout */ }
+  }
+  return 'unknown';
+}
+
 /**
  * 按运行时布局定位 schema 模块，返回 { schema }。
  *
@@ -266,7 +275,7 @@ async function handle(x) {
       return ok(id, {
         protocolVersion: requested,
         capabilities: { tools: {}, resources: {}, prompts: {} },
-        serverInfo: { name: 'sxseditor', version: '2.0.0' },
+        serverInfo: { name: 'sxseditor', version: getAppVersion() },
         instructions: 'Call sxs_capabilities first, then sxs_schema for parameter schemas. '
           + 'Use sxs_project_get with fields/includeNotes to limit payloads, and async=true for long exports.',
       });

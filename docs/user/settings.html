@@ -155,19 +155,14 @@
             <td><code>ORTNODE</code></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Device Mode</span><span data-lang="zh">设备模式</span></td>
-            <td><span data-lang="en"><strong>Smart</strong> (auto-select best device, prefer discrete GPU), <strong>Manual</strong> (specify single device for all models), <strong>Advanced</strong> (assign different devices per model group: SVS Diffusion, SVS Encoder, SVS Auxiliary, RMVPE, RosVot)</span><span data-lang="zh"><strong>Smart</strong>（自动选择最佳设备，优先独显）、<strong>Manual</strong>（为所有模型指定单一设备）、<strong>Advanced</strong>（为每个模型组单独指定设备：SVS Diffusion、SVS Encoder、SVS Auxiliary、RMVPE、RosVot）</span></td>
-            <td><span data-lang="en">Smart</span><span data-lang="zh">Smart</span></td>
-          </tr>
-          <tr>
-            <td><span data-lang="en">Inference Hardware</span><span data-lang="zh">推理硬件</span></td>
-            <td><span data-lang="en">Auto-select (prefer discrete GPU) or a specific device. Available devices: Discrete GPU, Integrated GPU (via DirectML), NPU (via WebNN), CPU (fallback).</span><span data-lang="zh">自动选择（优先独显）或指定设备。可用设备：独立显卡、集成显卡（通过 DirectML）、NPU（通过 WebNN）、CPU（回退）。</span></td>
-            <td><span data-lang="en">Auto</span><span data-lang="zh">Auto</span></td>
+            <td><span data-lang="en">Native Execution Backend</span><span data-lang="zh">本机执行后端</span></td>
+            <td><span data-lang="en"><strong>Auto</strong> (prefer Windows ML, fall back to DirectML), <strong>Windows ML</strong>, <strong>DirectML</strong>, or <strong>CPU (all models)</strong>. CPU forces every model onto CPU; device selection and per-model mapping have no effect in that mode.</span><span data-lang="zh"><strong>自动</strong>（优先 Windows ML，失败回退 DirectML）、<strong>Windows ML</strong>、<strong>DirectML</strong> 或 <strong>CPU（全部模型）</strong>。CPU 会强制所有模型使用 CPU；此模式下设备选择与按模型组映射不生效。</span></td>
+            <td><span data-lang="en">Auto</span><span data-lang="zh">自动</span></td>
           </tr>
         </tbody>
       </table>
-      <p data-lang="en">The settings page shows real-time status of WebNN, NPU, and GPU availability. Hardware detection runs once after app startup and caches results (no re-probing during synthesis).</p>
-      <p data-lang="zh">设置页会实时显示 WebNN、NPU 和 GPU 的可用状态。硬件检测在应用启动后仅运行一次并缓存结果（合成时不再重复探测）。</p>
+      <p data-lang="en">The settings page shows the execution providers and GPU adapters detected for the selected backend. WinML probes are cached and deduplicated; Help → Environment Check also reports GPU, WinML and VC++ runtime status.</p>
+      <p data-lang="zh">设置页显示所选后端探测到的执行提供器与 GPU 适配器。WinML 探测结果会缓存并去重；「帮助 → 环境检测」还可查看 GPU、WinML 与 VC++ 运行库状态。</p>
 
       <h3>
         <span data-lang="en">API (Remote Inference)</span>
@@ -250,15 +245,15 @@
           </tr>
           <tr>
             <td>FP16</td>
-            <td><span data-lang="en">fp16 / fp16 (TrueFP16)</span><span data-lang="zh">fp16 / fp16（TrueFP16）</span></td>
-            <td><span data-lang="en">≈0.5× VRAM, ≈2× speed</span><span data-lang="zh">≈0.5× 显存，≈2× 速度</span></td>
-            <td><span data-lang="en">Default for a discrete GPU. Slightly less detail than the official CUDA mixed-precision FP16; the vocoder is the limiting stage (~32 dB SNR vs FP32). Q-Drift turns on automatically.</span><span data-lang="zh">独显默认。细节略逊于官方的 CUDA 混合精度 FP16；瓶颈在 vocoder（相对 FP32 约 32 dB SNR）。Q-Drift 会自动开启。</span></td>
+            <td><span data-lang="en">fp16 / fp16 (TrueFP16); vocoder W16A32</span><span data-lang="zh">fp16 / fp16（TrueFP16）；vocoder 为 W16A32</span></td>
+            <td><span data-lang="en">Lower VRAM than FP32; hardware-dependent speed</span><span data-lang="zh">显存低于 FP32；速度取决于硬件</span></td>
+            <td><span data-lang="en">Optional precision, not the global default. The W16A32 vocoder avoids the old full-FP16 underflow problem. Q-Drift is enabled by default unless explicitly set.</span><span data-lang="zh">可选精度，不是全局默认。W16A32 声码器避免了旧全 FP16 的下溢问题。未显式设置时 Q-Drift 默认开启。</span></td>
           </tr>
           <tr>
             <td>INT8</td>
-            <td><span data-lang="en">int8 / fp32 I/O</span><span data-lang="zh">int8 / fp32 I/O</span></td>
-            <td><span data-lang="en">≈0.4× VRAM, fastest</span><span data-lang="zh">≈0.4× 显存，最快</span></td>
-            <td><span data-lang="en">Integrated GPU or low VRAM. Larger quality loss than FP16.</span><span data-lang="zh">核显或低显存。音质损失比 FP16 明显。</span></td>
+            <td><span data-lang="en">W8A32 (INT8 weights / FP32 activations)</span><span data-lang="zh">W8A32（INT8 权重 / FP32 激活）</span></td>
+            <td><span data-lang="en">Smaller weights; speed depends on hardware</span><span data-lang="zh">权重更小；速度取决于硬件</span></td>
+            <td><span data-lang="en">Optional low-VRAM precision. Q-Drift has a calibration table but measured W8A32 benefit is negligible, so it is off by default and opt-in.</span><span data-lang="zh">可选低显存精度。虽有 Q-Drift 校正表，但 W8A32 实测收益可忽略，因此默认关闭、需手动开启。</span></td>
           </tr>
           <tr>
             <td>INT8-NPU</td>
@@ -271,8 +266,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">FP16 is a full half-precision build: weights and activations are both fp16. Compared with FP32, the only audible difference is a faint noise floor in near-silent passages; use FP32 for masters and releases.</p>
-          <p data-lang="zh">FP16 为全半精度构建，权重与激活均为 fp16。与 FP32 相比，唯一可闻的差异是极安静段落中的轻微底噪；母带与发布建议使用 FP32。</p>
+          <p data-lang="en"><strong>FP32 is the default.</strong> FP16 is TrueFP16 (FP16 weights and activations); only its vocoder uses W16A32 (FP16 weights / FP32 activations). Different precisions coexist in separate folders, but switching still requires the selected set to be installed. Use FP32 for masters and A/B quality comparisons.</p>
+          <p data-lang="zh"><strong>FP32 为默认精度。</strong>FP16 为 TrueFP16（权重与激活均为 FP16），只有 vocoder 采用 W16A32（FP16 权重 / FP32 激活）。各精度独立存放，但切换前仍需安装所选精度。母带与音质 A/B 对比建议使用 FP32。</p>
         </div>
       </div>
 
@@ -363,6 +358,12 @@
           <p data-lang="zh">Extrapolated Euler 与 STORK-2 都需要跨步速度历史。在<strong>分块预览推理</strong>（长片段被切成多块）时，每块边界都会重置历史，使其优势减弱——分块预览通常 Euler 或 Heun 更稳妥。求解器设置存储于 <code>previewSampler</code> / <code>exportSampler</code>；旧值 <code>stork</code> 会被静默映射为 <code>extrap</code> 以保持向后兼容。</p>
         </div>
       </div>
+
+      <h3>
+        <span data-lang="en">diffStep Chunked Preview</span><span data-lang="zh">diffStep 分块预览</span>
+      </h3>
+      <p data-lang="en">Chunked diffusion preview is <strong>enabled by default</strong> to reduce time to first audio. The default target chunk is 500 frames with 50 overlap frames; short fragments are not split. This changes preview execution only — export still renders a complete sequence per call, and chunk boundaries may produce small artifacts.</p>
+      <p data-lang="zh">扩散分块预览<strong>默认开启</strong>，用于缩短首音等待时间。目标分块默认 500 帧、重叠 50 帧；短分片不会拆分。该设置只改变预览执行方式——导出仍按完整序列单次推理，分块边界可能产生轻微伪影。</p>
 
       <h3>
         <span data-lang="en">Vocoder Chunk Settings</span>

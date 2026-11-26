@@ -6,7 +6,7 @@
 
   AI Singing Voice Synthesis Workstation
 
-  [![Version](https://img.shields.io/badge/version-2.0.3-blue?style=flat-square)](https://github.com/Henley04/SXSEditor/releases)
+  [![Version](https://img.shields.io/badge/version-3.0.0-blue?style=flat-square)](https://github.com/Henley04/SXSEditor/releases)
   [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
   [![Platform](https://img.shields.io/badge/platform-Windows%20(primary)%20%C2%B7%20macOS%2FLinux%20(source%20build%2C%20CPU%2Donly%2C%20unverified)-lightgrey?style=flat-square)]()
   [![SVS Languages](https://img.shields.io/badge/SVS-EN%20|%20ZH%20|%20JP-orange?style=flat-square)]()
@@ -23,7 +23,7 @@
 
 ## English
 
-SXSEditor is an open-source desktop application for singing voice synthesis. It uses the SoulX-Singer neural model running on ONNX Runtime with DirectML GPU, WebNN NPU/GPU, and CPU support. On Windows 11 24H2+, an experimental **Windows ML acceleration** option (Settings → ORT advanced) can additionally accelerate the main models (diff_step / vocoder / preflow) via plugin execution providers — NVIDIA RTX → TensorRT-RTX, Intel/AMD → OpenVINO/MIGraphX, Snapdragon NPU → QNN — with automatic fallback to DirectML/CPU.
+SXSEditor is an open-source desktop application for singing voice synthesis. It uses the SoulX-Singer neural model running on ONNX Runtime with DirectML GPU and CPU support. The native backend selector offers **Auto / Windows ML / DirectML / CPU (all models)**. Auto prioritizes Windows ML on Windows 11 24H2+ — NVIDIA RTX → TensorRT-RTX, Intel/AMD → OpenVINO/MIGraphX, Snapdragon NPU → QNN — and falls back to DirectML. The older WebNN path belongs to the deprecated `ortweb` inference system.
 
 Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese**.
 
@@ -53,7 +53,7 @@ Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese
 
 ## 中文
 
-SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU/GPU 和 CPU 推理。在 Windows 11 24H2+ 上，可在设置中开启实验性的 **Windows ML 加速**，通过插件执行提供者加速主模型（diff_step / vocoder / preflow）：NVIDIA RTX → TensorRT-RTX，Intel/AMD → OpenVINO/MIGraphX，高通 NPU → QNN；失败自动回落 DirectML/CPU。
+SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU 与 CPU 推理。本机后端选择器提供 **自动 / Windows ML / DirectML / CPU（全部模型）**。自动模式在 Windows 11 24H2+ 上优先使用 Windows ML：NVIDIA RTX → TensorRT-RTX，Intel/AMD → OpenVINO/MIGraphX，高通 NPU → QNN；失败回退 DirectML。旧 WebNN 路径属于已弃用的 `ortweb` 推理系统。
 
 支持的合成语言：**中文（普通话）**、**英语** 和 **日语**。
 
@@ -83,7 +83,7 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 
 ## 日本語
 
-SXSEditor は歌声合成のためのオープンソースデスクトップアプリケーションです。SoulX-Singer ニューラルモデルを ONNX Runtime 上で動作させ、DirectML GPU、WebNN NPU/GPU、CPU をサポートします。
+SXSEditor は歌声合成のためのオープンソースデスクトップアプリケーションです。SoulX-Singer ニューラルモデルを ONNX Runtime 上で動作させ、DirectML GPU と CPU をサポートします。ネイティブバックエンドは **自動 / Windows ML / DirectML / CPU（全モデル）** から選択できます。旧 WebNN 経路は非推奨の `ortweb` 推論システムに属します。
 
 対応言語：**中国語（普通話）**、**英語**、**日本語**。
 

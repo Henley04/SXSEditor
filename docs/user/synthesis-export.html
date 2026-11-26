@@ -149,8 +149,8 @@
           </tr>
           <tr>
             <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
-            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
-            <td><span data-lang="en">STORK-2</span><span data-lang="zh">STORK-2</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
             <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
           </tr>
         </tbody>
@@ -160,13 +160,13 @@
         <span data-lang="en">Diffusion Sampler</span>
         <span data-lang="zh">扩散求解器</span>
       </h2>
-      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; <strong>STORK-2</strong> is the default. The preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
-      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器，默认使用 <strong>STORK-2</strong>；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
+      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; <strong>Euler</strong> is the default, matching the official sampling contract. The preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
+      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器，默认使用对齐官方采样合约的 <strong>Euler</strong>；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
       <ul>
         <li><span data-lang="en"><strong>Euler</strong> — 1 NFE/step. First-order explicit, midpoint time evaluation. Fastest, the original baseline.</span><span data-lang="zh"><strong>Euler</strong> — 每步 1 次推理。一阶显式，中点时间评估。最快，原始基线。</span></li>
         <li><span data-lang="en"><strong>Heun</strong> — 2 NFE/step. Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Final step falls back to Euler to avoid <code>t &gt; 1</code>.</span><span data-lang="zh"><strong>Heun</strong> — 每步 2 次推理。二阶改进欧拉（梯形公式）。精度更高，推理时间约 2 倍。末步退化为 Euler 以避免 <code>t &gt; 1</code> 越界。</span></li>
         <li><span data-lang="en"><strong>Extrapolated Euler</strong> — 1 NFE/step. Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation; not the full stabilized RK formulation. Best when the velocity field changes smoothly; falls back to Euler when extrapolation is unsafe.</span><span data-lang="zh"><strong>Extrapolated Euler</strong> — 每步 1 次推理。受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度做线性外推；非论文完整 stabilized RK 格式。速度场缓变时效果最佳；外推不安全时退化为 Euler。</span></li>
-        <li><span data-lang="en"><strong>STORK-2</strong> (default) — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong>（默认）— 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
+        <li><span data-lang="en"><strong>STORK-2</strong> — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong>— 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
       </ul>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -322,15 +322,15 @@
           </tr>
           <tr>
             <td>FP16</td>
-            <td><span data-lang="en">fp16 / fp16 (TrueFP16)</span><span data-lang="zh">fp16 / fp16（TrueFP16）</span></td>
-            <td><span data-lang="en">≈0.5× / ≈2×</span><span data-lang="zh">≈0.5× / ≈2×</span></td>
-            <td><span data-lang="en">Everyday editing and preview on a discrete GPU.</span><span data-lang="zh">独显上的日常编辑与预览。</span></td>
+            <td><span data-lang="en">fp16 / fp16 (TrueFP16); vocoder W16A32</span><span data-lang="zh">fp16 / fp16（TrueFP16）；vocoder 为 W16A32</span></td>
+            <td><span data-lang="en">Lower VRAM / hardware-dependent</span><span data-lang="zh">显存更低 / 速度取决于硬件</span></td>
+            <td><span data-lang="en">Optional faster preview; Q-Drift defaults on.</span><span data-lang="zh">可选加速预览；Q-Drift 默认开启。</span></td>
           </tr>
           <tr>
             <td>INT8</td>
-            <td><span data-lang="en">int8 / fp32 I/O</span><span data-lang="zh">int8 / fp32 I/O</span></td>
-            <td><span data-lang="en">≈0.4× / fastest</span><span data-lang="zh">≈0.4× / 最快</span></td>
-            <td><span data-lang="en">Low VRAM, integrated GPU.</span><span data-lang="zh">低显存、核显。</span></td>
+            <td><span data-lang="en">W8A32 (INT8 / FP32 activations)</span><span data-lang="zh">W8A32（INT8 权重 / FP32 激活）</span></td>
+            <td><span data-lang="en">Smaller weights / hardware-dependent</span><span data-lang="zh">权重更小 / 速度取决于硬件</span></td>
+            <td><span data-lang="en">Low VRAM; Q-Drift opt-in.</span><span data-lang="zh">低显存；Q-Drift 需手动开启。</span></td>
           </tr>
           <tr>
             <td>INT8-NPU</td>
@@ -340,8 +340,8 @@
           </tr>
         </tbody>
       </table>
-      <p data-lang="en">FP16 uses fp16 weights and activations throughout. Its difference from FP32 is limited to a very faint noise floor in near-silent passages; it is inaudible during editing and preview, but FP32 remains the right choice for masters and releases.</p>
-      <p data-lang="zh">FP16 全程使用 fp16 权重与激活，与 FP32 的差异仅体现在极安静段落中极轻的底噪：日常编辑与预览难以察觉，母带与发布仍建议使用 FP32。</p>
+      <p data-lang="en"><strong>FP32 is the default.</strong> FP16 is TrueFP16 (FP16 weights and activations); only the vocoder uses W16A32 (FP16 weights, FP32 activations). When Q-Drift is not explicitly configured, it defaults on for FP16, off for INT8 and FP32; an explicit user choice takes precedence. INT8 has its own calibration table, but measured W8A32 benefit is negligible, so keep it opt-in. Use FP32 for masters and quality comparisons.</p>
+      <p data-lang="zh"><strong>FP32 为默认精度。</strong>FP16 为 TrueFP16（权重与激活均为 FP16），只有 vocoder 采用 W16A32（FP16 权重、FP32 激活）。未显式配置 Q-Drift 时，FP16 默认开启，INT8 与 FP32 默认关闭；用户显式选择优先。INT8 虽有独立校正表，但 W8A32 实测收益可忽略，建议保持手动开启。母带与音质对比请使用 FP32。</p>
 
       <h2>
         <span data-lang="en">Exporting to WAV</span>

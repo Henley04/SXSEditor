@@ -64,12 +64,14 @@
 
       <p data-lang="en">This guide walks you through the complete workflow: from installing SXSEditor to synthesizing your first singing voice. Follow each step in order.</p>
       <p data-lang="zh">本指南将引导你完成完整工作流程：从安装 SXSEditor 到合成第一段歌声。请按顺序逐步操作。</p>
+      <p data-lang="en">On a normal launch, the welcome page offers New, Open, Close and recent projects. Each recent entry shows its name, path and local date/time; loading a project also dismisses the welcome page.</p>
+      <p data-lang="zh">正常启动时会先显示欢迎页，可新建、打开、关闭工程，或查看最近工程。最近工程显示名称、路径与本地日期时间；载入工程后欢迎页会自动关闭。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">SXSEditor is a desktop application for singing voice synthesis (SVS). It uses the SoulX-Singer neural model on ONNX Runtime with DirectML GPU, WebNN NPU, and CPU support. Supported singing languages: <strong>English</strong>, <strong>Chinese (Mandarin)</strong>, and <strong>Japanese</strong> (via English phoneme migration or hybrid phoneme mapping on the base model; the JP LoRA model mode is still in development and currently disabled in Settings).</p>
-          <p data-lang="zh">SXSEditor 是一个歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU 和 CPU 推理。支持的合成语言：<strong>英语</strong>、<strong>中文（普通话）</strong> 和 <strong>日语</strong>（通过英语音素迁移或混合音素映射在基础模型上合成；日语 LoRA 模型模式仍在开发中，当前已在设置中禁用）。</p>
+          <p data-lang="en">SXSEditor is a desktop application for singing voice synthesis (SVS). It uses the SoulX-Singer neural model on ONNX Runtime with Auto / Windows ML / DirectML / CPU native backends. WebNN remains only in the deprecated <code>ortweb</code> inference system. Supported singing languages: <strong>English</strong>, <strong>Chinese (Mandarin)</strong>, and <strong>Japanese</strong> (via English phoneme migration or hybrid phoneme mapping on the base model; the JP LoRA model mode is still in development and currently disabled in Settings).</p>
+          <p data-lang="zh">SXSEditor 是一个歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，本机后端支持自动 / Windows ML / DirectML / CPU。WebNN 仅保留在已弃用的 <code>ortweb</code> 推理系统中。支持的合成语言：<strong>英语</strong>、<strong>中文（普通话）</strong> 和 <strong>日语</strong>（通过英语音素迁移或混合音素映射在基础模型上合成；日语 LoRA 模型模式仍在开发中，当前已在设置中禁用）。</p>
         </div>
       </div>
 
@@ -302,7 +304,7 @@
       <ol>
         <li><span data-lang="en">Back in the main window, press <strong>▶ Play</strong> in the toolbar.</span><span data-lang="zh">回到主窗口，点击工具栏的 <strong>▶ Play</strong>。</span></li>
         <li><span data-lang="en">The first synthesis takes longer as the SVS pipeline initializes (loads all 9 ONNX models into GPU memory). Subsequent plays are faster.</span><span data-lang="zh">首次合成较慢，因为 SVS 管线需要初始化（将 9 个 ONNX 模型加载到 GPU 显存）。之后再次播放会更快。</span></li>
-        <li><span data-lang="en">Use <strong>⏸ Pause</strong> and <strong>⏹ Stop</strong> to control playback. Stop keeps the rendered audio, so playing again resumes instantly; use <strong>⟳ Retake</strong> when you want a different take from the same edits.</span><span data-lang="zh">使用 <strong>⏸ Pause</strong> 和 <strong>⏹ Stop</strong> 控制播放。停止会保留已渲染的音频，再次播放直接续播；想在同样的编辑下换一版演唱，用 <strong>⟳ 重新合成</strong>。</span></li>
+        <li><span data-lang="en">Use <strong>⏸ Pause</strong> and <strong>⏹ Stop</strong> to control playback. Stop returns the playhead to zero and keeps the completed render, so playing again replays instantly from the beginning; use <strong>⟳ Retake</strong> when you want a different take from the same edits.</span><span data-lang="zh">使用 <strong>⏸ Pause</strong> 和 <strong>⏹ Stop</strong> 控制播放。停止会将播放头归零并保留已完成的渲染，再次播放会从开头即时重播；想在同样的编辑下换一版演唱，用 <strong>⟳ 重新合成</strong>。</span></li>
       </ol>
       <div class="callout tip">
         <div class="callout-icon">💡</div>
@@ -332,7 +334,7 @@
       </h2>
       <ul>
         <li><span data-lang="en">Press <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> or use the <strong>File → Save</strong> menu. The project is saved as a <code>.sxsproj</code> file.</span><span data-lang="zh">按 <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> 或使用 <strong>File → Save</strong> 菜单。项目以 <code>.sxsproj</code> 文件保存。</span></li>
-        <li><span data-lang="en">Use <strong>File → Save As</strong> (<kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd>) to save to a new location. You can optionally check "Embed singer files into project file" to make the project self-contained.</span><span data-lang="zh">使用 <strong>File → Save As</strong>（<kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd>）保存到新位置。可选勾选 "Embed singer files into project file" 让项目自包含。</span></li>
+        <li><span data-lang="en">Use <strong>File → Save As</strong> (<kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd>) to save to a new location. Singer-file and accompaniment-audio embedding are independent options; enable either to make those assets self-contained.</span><span data-lang="zh">使用 <strong>File → Save As</strong>（<kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd>）保存到新位置。歌手文件与伴奏音频的嵌入是独立选项，可按需勾选以使相应素材自包含。</span></li>
       </ul>
 
       <h2>

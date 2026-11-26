@@ -232,9 +232,9 @@ The diffusion model iteratively denoises a mel spectrogram by solving an ODE. Th
 | **Euler** | Fastest | Baseline | Most predictable; best for chunked previews |
 | **Heun** | 2× slower | Higher accuracy | Second-order trapezoidal rule |
 | **Extrapolated Euler** | Same as Euler | Heuristic improvement | Reuses previous step's velocity; benefit is strongest with smooth velocity fields |
-| **STORK-2** (default) | Same as Euler | Designed for stiff ODEs | Paper-faithful (ICLR 2026); higher per-step algebraic cost |
+| **STORK-2** | Same as Euler | Designed for stiff ODEs | Paper-faithful (ICLR 2026); higher per-step algebraic cost |
 
-**STORK-2** is the default for both preview and export. **Euler** and **Heun** remain selectable as lighter, more predictable alternatives (Euler is the safest choice for chunked previews). Samplers can be configured independently for preview and export in Settings.
+**Euler** is the default for both preview and export, with 32 diffusion steps. Heun, Extrapolated Euler and STORK-2 remain selectable; Euler is the safest choice for chunked previews. Samplers can be configured independently for preview and export in Settings.
 
 ### What is Dynamic Thresholding?
 
@@ -252,8 +252,12 @@ The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz,
 
 | File | Extension | Description |
 |------|-----------|-------------|
-| Project | `.sxsproj` | Contains all singers, fragments, and project settings |
-| Singer | `.sxssinger` | Contains singer metadata, reference audio, and preprocessed data |
+| Project | `.sxsproj` / `.sxs` | Native projects with singers, fragments and settings |
+| Singer | `.sxssinger` | Singer metadata, reference audio and preprocessed data |
+| Plugin package | `.sxsp` | Signed/installable plugin package |
+| Official project interchange | `.vsqx`, `.vpr`, `.svp` | Open/save through the bundled official plugin; round-trips are lossy |
+
+VPR can carry accompaniment audio. SVP accompaniment uses relative WAV references; VSQX does not carry accompaniment.
 
 ### Should I embed singer files in the project?
 

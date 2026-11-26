@@ -409,15 +409,15 @@
         <span data-lang="en">The extracted notes do not line up with the waveform</span>
         <span data-lang="zh">提取出来的音符和波形对不齐</span>
       </h3>
-      <p data-lang="en">Fixed in v2.0.4: the waveform, playhead, notes, pitch curve and grid now share one BPM, and a change applies immediately. Earlier builds used different time bases in these layers, which made notes drift away from the waveform.</p>
-      <p data-lang="zh">v2.0.4 起，波形、播放头、音符、音高曲线与网格共用同一 BPM，修改后立即生效。此前这四层使用不同的时间基准，会导致音符与波形错位；升级后打开旧工程即可恢复正常。</p>
+      <p data-lang="en">Fixed in v3.0.0: the waveform, playhead, notes, pitch curve and grid now share one BPM, and a change applies immediately. Earlier builds used different time bases in these layers, which made notes drift away from the waveform.</p>
+      <p data-lang="zh">v3.0.0 起，波形、播放头、音符、音高曲线与网格共用同一 BPM，修改后立即生效。此前这四层使用不同的时间基准，会导致音符与波形错位；升级后打开旧工程即可恢复正常。</p>
 
       <h3>
         <span data-lang="en">The progress bar runs slightly ahead of the sound</span>
         <span data-lang="zh">进度条比声音快一点点</span>
       </h3>
-      <p data-lang="en">Fixed in v2.0.4 for the audio-preprocessing window; the main window and the fragment editor already had this since v2.0.3. The playhead is a UI element and Web Audio's <code>currentTime</code> marks where the <em>renderer</em> is, not where the speaker is — the sound still has to travel through the output buffer, which costs 20–120 ms on Windows. A playhead driven by the raw render clock therefore leads the audio by exactly that much, and it looks like the picture is running away from the music. SXSEditor now subtracts <code>AudioContext.outputLatency</code> (falling back to <code>baseLatency</code>, then to no compensation) for anything that describes position — playhead, timecode, seek position — while sample scheduling keeps using the raw clock, because mixing the two would make the audio itself land off the timeline. If you use WASAPI exclusive output, the compensation is estimated from one device buffer, since no context latency is available on that path.</p>
-      <p data-lang="zh">v2.0.4 已修复音频预处理窗口；主窗口与分片编辑器自 v2.0.3 起就是这样。播放头是界面元素，而 Web Audio 的 <code>currentTime</code> 表示<strong>渲染线程</strong>的进度，并非扬声器实际输出的位置：声音还需经过输出缓冲，Windows 上为 20–120 ms。用渲染时钟直接驱动播放头，就正好会领先声音这么多，看起来就是"画面在甩开音乐"。现在凡描述位置的量（播放头、时间码、跳转位置）都扣除 <code>AudioContext.outputLatency</code>（没有则退到 <code>baseLatency</code>，再没有就不补偿），而采样调度仍用原始时钟——两者混用会让音频本身偏离时间轴。如果你用的是 WASAPI 独占输出，这条路径拿不到 context 的延迟值，补偿量按一个设备缓冲估算。</p>
+      <p data-lang="en">Fixed in v3.0.0 for the audio-preprocessing window; the main window and the fragment editor already had this since v2.0.3. The playhead is a UI element and Web Audio's <code>currentTime</code> marks where the <em>renderer</em> is, not where the speaker is — the sound still has to travel through the output buffer, which costs 20–120 ms on Windows. A playhead driven by the raw render clock therefore leads the audio by exactly that much, and it looks like the picture is running away from the music. SXSEditor now subtracts <code>AudioContext.outputLatency</code> (falling back to <code>baseLatency</code>, then to no compensation) for anything that describes position — playhead, timecode, seek position — while sample scheduling keeps using the raw clock, because mixing the two would make the audio itself land off the timeline. If you use WASAPI exclusive output, the compensation is estimated from one device buffer, since no context latency is available on that path.</p>
+      <p data-lang="zh">v3.0.0 已修复音频预处理窗口；主窗口与分片编辑器自 v2.0.3 起就是这样。播放头是界面元素，而 Web Audio 的 <code>currentTime</code> 表示<strong>渲染线程</strong>的进度，并非扬声器实际输出的位置：声音还需经过输出缓冲，Windows 上为 20–120 ms。用渲染时钟直接驱动播放头，就正好会领先声音这么多，看起来就是"画面在甩开音乐"。现在凡描述位置的量（播放头、时间码、跳转位置）都扣除 <code>AudioContext.outputLatency</code>（没有则退到 <code>baseLatency</code>，再没有就不补偿），而采样调度仍用原始时钟——两者混用会让音频本身偏离时间轴。如果你用的是 WASAPI 独占输出，这条路径拿不到 context 的延迟值，补偿量按一个设备缓冲估算。</p>
 
 
       <h2>

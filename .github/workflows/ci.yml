@@ -167,10 +167,9 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE=$(date -u +%Y%m%d)
           if [ "$BRANCH" = "release" ]; then
-            # Tag is the semver X.Y.Z itself. Find the highest existing semver
-            # git tag and bump the patch component. Git tags are the source of
-            # truth (more reliable than the releases API which can be delayed,
-            # paginated, or silently fail on auth errors).
+            # A package.json version newer than the highest tag is an explicit
+            # release target (including major upgrades); otherwise bump patch.
+            # Tags remain the source of truth for already published versions.
             echo "[ci] Listing all semver tags..."
             git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 20
             LAST_VERSION=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
@@ -180,8 +179,13 @@ jobs:
             else
               echo "[ci] Last semver tag: $LAST_VERSION"
             fi
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
-            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            PACKAGE_VERSION=$(node -p "require('./package.json').version")
+            if node -e "const p=require('./package.json').version.split('.').map(Number),l='$LAST_VERSION'.split('.').map(Number);const gt=p[0]>l[0]||(p[0]===l[0]&&(p[1]>l[1]||(p[1]===l[1]&&p[2]>l[2])));process.exit(p.length===3&&p.every(Number.isInteger)&&gt?0:1)"; then
+              NEW_VERSION="$PACKAGE_VERSION"
+            else
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
+              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            fi
             BUILD_VERSION="$NEW_VERSION"
             TAG="$NEW_VERSION"
             PRERELEASE="false"

@@ -209,7 +209,8 @@ The Audio Preprocessing window extracts MIDI notes and F0 (fundamental frequency
 Click **RMVPE Extract F0**:
 - Uses the RMVPE neural model to detect pitch from the audio.
 - The F0 curve appears in the bottom panel.
-- This is a read-only visualization of the detected pitch contour.
+- This is a read-only visualization of the detected pitch contour. It generates F0 only, not MIDI notes.
+- Non-positive F0 frames represent unvoiced/clear audio. There is no separate editable UV channel; the singer file stores MIDI notes, F0 data and singerData.
 
 ### Step 2: Extract MIDI Notes
 
@@ -217,6 +218,7 @@ Click **Extract MIDI**:
 - Uses FCPE (recommended, ONNX-based) to detect note boundaries and pitches. Alternatively, Basic Pitch (TensorFlow.js) or RMVPE can be selected in Settings.
 - Extracted notes appear on the MIDI canvas.
 - Note count is displayed.
+- An existing RMVPE F0 curve is preserved when FCPE or Basic Pitch extracts MIDI. BPM defaults to 120 and auto-detection is off; successful FCPE auto-BPM fills the panel and drives note-time conversion, singer duration, waveform and playhead alignment. BPM does not time-stretch the reference audio.
 
 Alternatively, click **Import MIDI** to load notes from an existing `.mid` or `.midi` file. This replaces any notes currently on the canvas. Standard MIDI files (format 0/1/2, including SMPTE and multi-track) are supported; drum tracks (channel 10) are filtered out automatically.
 
@@ -488,7 +490,13 @@ When a fragment already contains Japanese kana (hiragana or katakana) in any not
 
 ## Pitch Curves
 
-Pitch curves add vibrato, pitch slides, and other expressive effects on top of the base MIDI pitch.
+Pitch curves define expressive absolute MIDI pitches, vibrato and slides. They are not offsets added to the MIDI note pitch.
+
+### Pitch Control Modes
+
+- **Manual** follows the pitch curve. With no curve content it produces a flat curve at the MIDI pitch.
+- **Score** sends no F0 condition: the model receives note pitches and generates its own contour. Pitch-curve editing is unavailable in this mode.
+- **Auto** is the compatibility state. It resolves to Manual when anchors, brush strokes, baked segments, automatic pitch processing or note vibrato exist; otherwise it resolves to Score. Explicitly disabling curves still counts as Manual.
 
 ### Switching to Pitch Mode
 
@@ -497,7 +505,7 @@ Press `2` or click the **Pitch** button in the toolbar. The pitch curve editing 
 ### Anchor Points
 
 - **Click** to add an anchor point on the pitch curve.
-- **Drag** an anchor to move it (changes both time and pitch offset).
+- **Drag** an anchor to move it (changes both time and absolute MIDI pitch).
 - **Right-click** an anchor to delete it.
 - **Select** anchors with box-select (middle-click drag).
 - **Delete** selected anchors with the Delete key.
@@ -523,15 +531,15 @@ Every anchor carries two extra properties beyond time and pitch:
 
 ### Reset
 
-Click **↺ Reset** to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.
+Click **↺ Reset** to clear pitch-curve modifications. The resulting behavior follows the current control mode; do not assume every mode returns to the same MIDI-generated curve.
 
 ### Pitch Curve Data
 
 The pitch curve consists of:
-- **Anchor points**: Fixed points with time and pitch offset values.
+- **Anchor points**: Fixed points with time and absolute MIDI pitch values.
 - **Brush segments**: Freehand-drawn segments (stored as sequences of points).
 
-The final pitch is: MIDI note pitch + pitch curve offset.
+In Manual mode, these values define the F0 condition sent to the model.
 
 ---
 
@@ -658,12 +666,12 @@ When you press Play, SXSEditor:
 
 | Parameter | Preview | Export |
 |-----------|---------|--------|
-| Diffusion Steps | 16 (default) | 32 (default) |
+| Diffusion Steps | 32 (default) | 32 (default) |
 | CFG Strength | 3.0 | 3.0 |
 | CFG Rescale | 0.75 | 0.75 |
-| Sampler | STORK-2 (default) | STORK-2 (default) |
+| Sampler | Euler (default) | Euler (default) |
 
-Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings. The Sampler (diffusion ODE solver) is also configurable per path — see [Diffusion Sampler](#diffusion-sampler).
+Preview and export use the same official sampling defaults. Both are configurable in Settings, and the Sampler (diffusion ODE solver) can be selected independently per path — see [Diffusion Sampler](#diffusion-sampler). Chunked preview is enabled by default; export still renders the full sequence per call.
 
 ### Playback Controls
 
@@ -805,18 +813,13 @@ Open Settings from the menu bar: **SXSEditor > Settings**.
 
 Configure which hardware devices are used for neural network inference.
 
-**Device Modes**:
-- **Smart Mode** (recommended): Automatically selects the best device and assigns models optimally. Prefers discrete GPU; falls back to integrated GPU or CPU.
-- **Manual Mode**: Specify a single device for all models.
-- **Advanced Mode**: Assign different devices to different model groups (SVS Diffusion, SVS Encoder, SVS Auxiliary, RMVPE).
+**Native execution backends**:
+- **Auto** (default): prefers an available Windows ML execution provider and falls back to DirectML.
+- **Windows ML**: uses compatible Windows ML providers.
+- **DirectML**: uses GPU adapters detected by DirectML.
+- **CPU (all models)**: forces every model onto CPU; device selection and per-model mapping have no effect.
 
-**Available devices**:
-- Discrete GPU (NVIDIA, AMD, Intel) via DirectML
-- Integrated GPU via DirectML
-- NPU via WebNN
-- CPU (fallback)
-
-**WebNN/NPU Status**: The settings page shows whether WebNN and NPU are available on your system.
+WebNN belongs to the deprecated `ortweb` inference system, not the native backend selector. Help → Environment Check reports GPU, WinML and VC++ runtime status.
 
 #### Preview Inference Parameters
 
@@ -824,10 +827,10 @@ Used when playing back in the editor (fast preview):
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
-| Diffusion Steps | 16 | 4–64 | Fewer steps = faster, lower quality |
+| Diffusion Steps | 32 | 4–64 | Fewer steps = faster, lower quality |
 | CFG Strength | 3.0 | 0–10 | Higher = more aligned with conditions. 0 = skip unconditional prediction (2x speed) |
 | CFG Rescale | 0.75 | 0–1 | Mitigates over-guidance artifacts |
-| Sampler | STORK-2 | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: STORK-2). See [Diffusion Sampler](#diffusion-sampler) below. |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: Euler). See [Diffusion Sampler](#diffusion-sampler) below. |
 
 #### Export Inference Parameters
 
@@ -838,7 +841,7 @@ Used when exporting WAV files (high quality):
 | Diffusion Steps | 32 | 4–64 | More steps = higher quality |
 | CFG Strength | 3.0 | 0–10 | Same as preview |
 | CFG Rescale | 0.75 | 0–1 | Same as preview |
-| Sampler | STORK-2 | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: STORK-2). The export dialog also lets you override this per export. |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: Euler). The export dialog also lets you override this per export. |
 
 #### Diffusion Sampler
 
@@ -849,7 +852,7 @@ The diffusion model iteratively denoises a mel spectrogram by integrating the fl
 | **Euler** | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
 | **Heun** | 2 | Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating `t > 1`. |
 | **Extrapolated Euler** | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation. Not the full stabilized RK formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Falls back to Euler when extrapolation is unsafe (amplitude / sign-flip / NaN guards). |
-| **STORK-2** (default) | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
+| **STORK-2** | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
 
 > **Note**: Extrapolated Euler and STORK-2 carry cross-step velocity state. In **chunked preview inference** (long fragments split into chunks), this state resets at every chunk boundary, reducing their benefit — for chunked previews, Euler or Heun is usually the safer choice. The sampler setting is stored in `previewSampler` / `exportSampler`; the legacy value `stork` is silently mapped to `extrap` for backward compatibility.
 
@@ -933,9 +936,11 @@ Slider from 0% to 100%.
 #### Model Precision
 
 Select which precision of ONNX models to use:
-- FP16, FP32, INT8, INT8-NPU
-- Different precisions are stored independently and coexist.
-- Switching does not require re-downloading — each precision has its own subdirectory.
+- **FP32** (default), FP16, INT8 and INT8-NPU.
+- FP16 is **TrueFP16** (FP16 weights and activations); only its vocoder uses **W16A32** (FP16 weights / FP32 activations).
+- INT8 uses **W8A32** (INT8 weights / FP32 activations).
+- Different precisions are stored independently and coexist. Switching requires the selected set to be installed.
+- Q-Drift defaults on for FP16 and off for INT8/FP32 unless explicitly configured. INT8 correction is opt-in because measured W8A32 benefit is negligible.
 - See the precision info box in Settings for detailed descriptions.
 
 #### Model Status
@@ -1073,9 +1078,9 @@ Every edit in a Fragment Editor window (MIDI notes, lyrics, pitch curve, VOL/PAN
 
 - **Auto-save**: After each fragment sync (flow #1 above), the main window auto-saves to `state.currentProjectFilePath` if a path is already set (i.e., you have saved or loaded a project at least once). This is silent — no dialog.
 - **Manual save** (File → Save / `Ctrl+S`): If a project path exists, writes silently to the same path. If no path exists yet, falls back to Save As.
-- **Save As** (File → Save As / `Ctrl+Shift+S`): Opens a dialog with the **embed singer files** option:
-  - **Embed**: Singer reference audio and preprocessed data are included in the project file. Makes the project self-contained but larger.
-  - **Don't embed**: The project references external `.sxssinger` files by path. Smaller file, but requires singer files to be accessible.
+- **Save As** (File → Save As / `Ctrl+Shift+S`): Opens a dialog with independent **embed singer files** and **embed accompaniment audio** options:
+  - **Embed**: The selected assets are included in the project file, making it more self-contained but larger.
+  - **Don't embed**: The project references external `.sxssinger` files and/or accompaniment audio by path. Those files must remain accessible.
 - **Unsaved changes on close**: When closing the main window with unsaved changes, a dialog offers **Save & Exit**, **Don't Save**, or **Cancel**.
 
 #### 3. Singer Creator → `.sxssinger` file (singer file save)

@@ -73,6 +73,8 @@ macOS and Linux: build from source (CPU inference only — no DirectML/Windows M
 
 ## Getting Started
 
+A normal launch opens the welcome page with New, Open, Close and recent projects. Recent entries show the project name, path and local date/time.
+
 New to SXSEditor? Follow the **[Quick Start Guide](Quick-Start)** for a step-by-step walkthrough covering:
 1. Installing and launching
 2. Downloading models (first launch)

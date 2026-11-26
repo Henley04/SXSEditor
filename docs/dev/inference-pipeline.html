@@ -723,11 +723,18 @@ with _autocast_if(use_fp16):           # torch.amp.autocast('cuda')
     generated_audio = self.vocoder(...).float()</code></pre>
       <p data-lang="en"><code>torch.autocast</code> keeps softmax, LayerNorm, exponentiation and reductions in FP32 even though the weights are half. Two consequences: (1) upstream FP16 is only ever active on CUDA (<code>pt_wav.is_cuda</code>), and (2) its numerics are not reproducible by a fully-half ONNX graph.</p>
       <p data-lang="zh"><code>torch.autocast</code> 会在权重为 half 的情况下，把 softmax、LayerNorm、指数与归约类算子保持在 FP32。这带来两个后果：(1) 上游 FP16 只在 CUDA 上真正启用（<code>pt_wav.is_cuda</code>）；(2) 它的数值行为无法用一个"全 half"的 ONNX 图复现。</p>
-      <p data-lang="en">SXSEditor loads the <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> checkpoints, i.e. weights <em>and</em> activations in fp16, on DirectML / TensorRT-RTX. Only one place compensates without touching the arithmetic:</p>
-      <p data-lang="zh">SXSEditor 加载的是 <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> 权重，权重<em>与</em>激活都是 fp16，跑在 DirectML / TensorRT-RTX 上。只有一处在不改动算术的前提下做了补偿：</p>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Historical measurement (pre-W16A32).</strong> The full-FP16 vocoder described below had a 32–33 dB noise floor. The current FP16 suite ships the re-exported <strong>W16A32 vocoder</strong> (FP16 weights / FP32 activations) to address underflow. Do not apply the old vocoder SNR figure to the current model.</p>
+          <p data-lang="zh"><strong>历史实测（W16A32 之前）。</strong>下文所述全 FP16 声码器存在 32–33 dB 底噪。当前 FP16 套件已改为重新导出的 <strong>W16A32 声码器</strong>（FP16 权重 / FP32 激活）以解决下溢问题，旧声码器 SNR 不适用于当前模型。</p>
+        </div>
+      </div>
+      <p data-lang="en">SXSEditor loads the <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> checkpoints on DirectML / TensorRT-RTX. The suite is TrueFP16 (FP16 weights and activations), except that the current vocoder is W16A32. Q-Drift compensates without changing the model arithmetic:</p>
+      <p data-lang="zh">SXSEditor 在 DirectML / TensorRT-RTX 上加载 <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> 检查点。该套件为 TrueFP16（权重与激活均为 FP16），只有当前 vocoder 使用 W16A32。Q-Drift 在不改变模型算术的前提下提供补偿：</p>
       <ul>
         <li><span data-lang="en"><strong>Q-Drift is opt-out.</strong> A sampler-side per-channel correction (see <code>qdrift/</code>) that upstream does not have. It is on by default for FP16 and locks the sampler contract; for like-for-like comparison with upstream it must be switched off.</span><span data-lang="zh"><strong>Q-Drift 可关闭。</strong>采样器侧的逐通道校正（见 <code>qdrift/</code>），上游没有对应实现。FP16 下默认开启并锁定采样合约；要与上游做对等对比时必须关闭。</span></li>
-        <li><span data-lang="en"><strong>Everything else is identical arithmetic.</strong> CFG combine, variance rescale (<code>cfgRescale</code>), Euler update and the vocoder input are the same formulas as <code>reverse_diffusion</code>; only the dtype of the model evaluations differs. In particular the mel transform is loaded at the same precision as every other stage — see below.</span><span data-lang="zh"><strong>其余算术完全一致。</strong>CFG 合并、方差 rescale（<code>cfgRescale</code>）、Euler 更新与 vocoder 输入都使用与 <code>reverse_diffusion</code> 相同的公式，区别只在模型评估的 dtype。mel 变换也与其他阶段同一精度加载——见下。</span></li>
+        <li><span data-lang="en"><strong>The diffusion arithmetic is unchanged.</strong> CFG combine, variance rescale (<code>cfgRescale</code>), Euler update and the vocoder input are the same formulas as <code>reverse_diffusion</code>; only the dtype of the model evaluations differs. The mel transform follows the TrueFP16 path; the W16A32 exception is limited to the vocoder — see below.</span><span data-lang="zh"><strong>扩散阶段算术不变。</strong>CFG 合并、方差 rescale（<code>cfgRescale</code>）、Euler 更新与 vocoder 输入都使用与 <code>reverse_diffusion</code> 相同的公式，区别只在模型评估的 dtype。mel 变换遵循 TrueFP16 路径；W16A32 例外仅限 vocoder——见下。</span></li>
       </ul>
       <p data-lang="en">Measured error against FP32 on the same machine (<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>):</p>
       <p data-lang="zh">同机实测相对 FP32 的误差（<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>）：</p>

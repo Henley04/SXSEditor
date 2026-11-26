@@ -31,6 +31,8 @@ describe('MCP 随包分发目录（mcp/）', () => {
       expect(fs.existsSync(path.join(mcpDir, to)), `mcp/${to} 缺失`).to.equal(true);
     }
     expect(fs.existsSync(path.join(mcpDir, 'README.md')), 'mcp/README.md 缺失').to.equal(true);
+    expect(JSON.parse(fs.readFileSync(path.join(mcpDir, 'version.json'), 'utf8')).version)
+      .to.equal(require('../package.json').version);
   });
 
   it('每份副本与仓库真源逐字节一致（改了真源要重跑 build-mcp-resources）', () => {
@@ -79,6 +81,7 @@ describe('MCP 随包分发目录（mcp/）', () => {
       const list = responses.find((r) => r.id === 2);
       expect(init, '缺少 initialize 响应').to.be.an('object');
       expect(init.result.protocolVersion).to.equal('2025-06-18');
+      expect(init.result.serverInfo.version).to.equal(require('../package.json').version);
       expect(list, '缺少 tools/list 响应').to.be.an('object');
       expect(list.result.tools.length).to.be.greaterThan(50);
     } finally {

@@ -1425,8 +1425,9 @@ class OnnxSVSPipeline {
      *
      * 官方 SoulX-Singer 的 FP16 是 **CUDA 混合精度**：model.half() 之后
      * model.mel.float()，再用 torch.autocast 包住编码器/扩散/vocoder
-     * （softmax、LayerNorm 等敏感算子自动回到 FP32）。本应用是 ONNX TrueFP16
-     * （权重与激活都是 fp16），两者数值路径不同，听感存在差异属于预期。
+     * （softmax、LayerNorm 等敏感算子自动回到 FP32）。本应用除 vocoder 使用
+     * W16A32（权重 fp16 / 激活 fp32）外，其余为 ONNX TrueFP16（权重与激活都是
+     * fp16），两者数值路径不同，听感存在差异属于预期。
      *
      * 摘要把"实际生效"的四段精度与 Q-Drift 状态摊开，避免设置里选的是 FP16、
      * 实际却因为加载回退跑成了别的组合（如 W16A32 的 diff_step）。

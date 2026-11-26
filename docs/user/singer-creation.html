@@ -223,7 +223,7 @@
       </h3>
       <ul>
         <li><span data-lang="en">Click <strong>RMVPE Extract F0</strong>. This uses the RMVPE neural model to detect the fundamental frequency curve from the audio.</span><span data-lang="zh">点击 <strong>RMVPE Extract F0</strong>。此操作使用 RMVPE 神经网络模型从音频中检测基频曲线。</span></li>
-        <li><span data-lang="en">The F0 curve appears in the bottom panel. This is a <strong>read-only</strong> visualization of the detected pitch contour — you cannot edit it directly.</span><span data-lang="zh">F0 曲线显示在底部面板。这是检测到的音高轮廓的<strong>只读</strong>可视化——无法直接编辑。</span></li>
+        <li><span data-lang="en">The F0 curve appears in the bottom panel. This is a <strong>read-only</strong> visualization of the detected pitch contour — you cannot edit it directly. Non-positive F0 frames represent unvoiced/clear audio; there is no separate editable UV channel.</span><span data-lang="zh">F0 曲线显示在底部面板。这是检测到的音高轮廓的<strong>只读</strong>可视化——无法直接编辑。非正 F0 帧表示无声/清音，没有独立可编辑的 UV 通道。</span></li>
       </ul>
 
       <h3>
@@ -232,7 +232,7 @@
       </h3>
       <ul>
         <li><span data-lang="en">Click <strong>Extract MIDI</strong>. This runs the tool selected in <a href="settings.html">Settings &gt; Audio &gt; MIDI Extraction Tool</a> — <strong>FCPE by default</strong> (recommended: an ONNX-based pitch detector with a configurable post-processing pipeline), Basic Pitch (neural network, stable), or RMVPE (F0-to-notes, experimental). FCPE needs its optional model downloaded; the window will prompt you if it is missing.</span><span data-lang="zh">点击 <strong>Extract MIDI</strong>。此操作使用<a href="settings.html">设置 &gt; 音频 &gt; MIDI 提取工具</a>中所选的工具——<strong>默认为 FCPE</strong>（推荐：基于 ONNX 的音高检测器，配有可配置的后处理流水线）、Basic Pitch（神经网络，结果稳定）或 RMVPE（F0 转音符，实验性）。FCPE 需要下载其可选模型；若缺失，窗口会提示你下载。</span></li>
-        <li><span data-lang="en">Extracted notes appear on the MIDI canvas, and the note count is displayed.</span><span data-lang="zh">提取的音符显示在 MIDI 画布上，并显示音符数量。</span></li>
+        <li><span data-lang="en">Extracted notes appear on the MIDI canvas, and the note count is displayed. An existing RMVPE F0 curve is preserved when FCPE or Basic Pitch extracts notes.</span><span data-lang="zh">提取的音符显示在 MIDI 画布上，并显示音符数量。使用 FCPE 或 Basic Pitch 提取音符时，已有 RMVPE F0 曲线会保留。</span></li>
       </ul>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -258,11 +258,13 @@
       <ul>
         <li><span data-lang="en"><strong>Move notes</strong>: Drag up/down (pitch) or left/right (timing).</span><span data-lang="zh"><strong>移动音符</strong>：上下拖动（音高）或左右拖动（时序）。</span></li>
         <li><span data-lang="en"><strong>Resize notes</strong>: Drag the right edge.</span><span data-lang="zh"><strong>调整音符长度</strong>：拖动右边缘。</span></li>
-        <li><span data-lang="en"><strong>Add notes</strong>: Click on empty space.</span><span data-lang="zh"><strong>添加音符</strong>：在空白处点击。</span></li>
+        <li><span data-lang="en"><strong>Add notes</strong>: Click on empty space, or drag across an empty area to create a note with the chosen duration.</span><span data-lang="zh"><strong>添加音符</strong>：在空白处点击，或在空白区域拖动以创建指定时长的音符。</span></li>
         <li><span data-lang="en"><strong>Delete notes</strong>: Select and press <kbd class="kbd">Delete</kbd>.</span><span data-lang="zh"><strong>删除音符</strong>：选中后按 <kbd class="kbd">Delete</kbd>。</span></li>
         <li><span data-lang="en"><strong>Edit lyrics</strong>: Double-click a note. <strong>You must type the lyrics yourself</strong> — they are not auto-detected.</span><span data-lang="zh"><strong>编辑歌词</strong>：双击音符。<strong>歌词必须自己输入</strong>——系统不会自动识别歌词。</span></li>
         <li><span data-lang="en"><strong>One syllable over multiple pitches</strong>: Enter the lyric on the first note and enter the ASCII hyphen <code>-</code> on each following note. The editor converts those notes to continuation notes. Leave lyrics empty only for rests.</span><span data-lang="zh"><strong>一字多音高</strong>：在第一个音符填写歌词，后续音符输入半角连字符 <code>-</code>。编辑器会将后续音符转换为连音。只有休止音符才应留空歌词。</span></li>
       </ul>
+      <p data-lang="en">The F0 area can be collapsed. Preview playback uses the audible clock, so the playhead follows the sound rather than leading it by a device buffer. The saved <code>.sxssinger</code> contains MIDI notes, F0 data and singerData, not a separate UV track.</p>
+      <p data-lang="zh">F0 区域可折叠。试听播放使用可听时钟，播放头跟随实际声音，不再领先一个设备缓冲。保存的 <code>.sxssinger</code> 包含 MIDI 音符、F0 数据与 singerData，不包含独立 UV 轨道。</p>
 
       <h3>
         <span data-lang="en">Step 4: Fill in Lyrics (Mandatory)</span>

@@ -16,6 +16,7 @@
  *   mcp/mcpSchema.js            ← src/shared/mcpSchema.js
  *   mcp/modelContract.js        ← src/shared/modelContract.js
  *   mcp/skills/mcp-driver/SKILL.md ← .atomcode/skills/mcp-driver/SKILL.md
+ *   mcp/version.json             ← package.json 的构建版本
  *
  * 服务器的 resolveSchema() 优先从源码树加载，找不到才用同目录副本，所以源码
  * 运行始终用唯一真源，副本只服务安装包。test/mcpBundle.test.js 会比对每组副本
@@ -67,9 +68,10 @@ function main() {
     if (!fs.existsSync(src)) throw new Error(`缺少源文件：${from}`);
     fs.copyFileSync(src, path.join(outDir, to));
   }
+  fs.writeFileSync(path.join(outDir, 'version.json'), JSON.stringify({ version: require('../package.json').version }) + '\n', 'utf8');
   fs.writeFileSync(path.join(outDir, 'README.md'), README, 'utf8');
   process.stdout.write(
-    `[mcp] 已生成 mcp/：${COPIES.length} 份源文件副本 + README（extraResource → resources/mcp）\n`,
+    `[mcp] 已生成 mcp/：${COPIES.length} 份源文件副本 + version.json + README（extraResource → resources/mcp）\n`,
   );
 }
 

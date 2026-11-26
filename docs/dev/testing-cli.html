@@ -339,7 +339,12 @@ SXSEditor.exe --cli &lt;command&gt; [options]</code></pre>
           <tr>
             <td><code>synth-project</code></td>
             <td><span data-lang="en">Synthesize a window of a real <code>.sxsproj</code> project (with its singer reference) and print the execution provider actually used</span><span data-lang="zh">合成真实 <code>.sxsproj</code> 工程的指定窗口（含歌手参考），并输出实际使用的执行提供器</span></td>
-            <td><code>--file &lt;.sxsproj&gt;</code> (required), <code>--fragment &lt;N&gt;</code>, <code>--from/--to/--duration</code>, <code>--singer</code>, <code>--precision</code>, <code>--steps</code>, <code>--sampler</code>, <code>--cfg</code>, <code>--cfg-rescale</code>, <code>--cfg-schedule</code>, <code>--qdrift</code>, <code>--seed</code>, <code>--dry-run</code></td>
+            <td><code>--file &lt;.sxsproj&gt;</code> (required), <code>--out</code>, <code>--fragment &lt;N&gt;</code>, <code>--from/--to/--duration</code>, <code>--singer</code>, <code>--precision</code>, <code>--steps</code>, <code>--sampler</code>, <code>--cfg</code>, <code>--cfg-rescale</code>, <code>--cfg-schedule</code>, <code>--qdrift</code>, <code>--seed</code>, <code>--pitch-control score|manual</code>, <code>--diff-step-chunk</code>, <code>--diff-step-chunk-frames &lt;N&gt;</code>, <code>--dry-run</code></td>
+          </tr>
+          <tr>
+            <td><code>plugin</code></td>
+            <td><span data-lang="en">Manage plugin-provided automation: <code>list</code>, <code>methods</code>, <code>call</code>, <code>automation</code>, <code>trust</code>, <code>policy</code>, <code>verify</code>, and <code>market</code> search/preview/install</span><span data-lang="zh">管理插件自动化：<code>list</code>、<code>methods</code>、<code>call</code>、<code>automation</code>、<code>trust</code>、<code>policy</code>、<code>verify</code>，以及 <code>market</code> 搜索/预览/安装</span></td>
+            <td><code>--plugin &lt;id&gt;</code>, <code>--params &lt;json&gt;</code>, <code>--local</code>; market install requires <code>--yes</code></td>
           </tr>
           <tr>
             <td><code>qdrift-conds</code></td>
