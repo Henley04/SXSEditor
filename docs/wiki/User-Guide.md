@@ -709,6 +709,8 @@ In the main window, click **📤 Export**:
 4. A file save dialog appears.
 5. The mixed WAV file is saved.
 
+> **8192-frame export limit** — the diff_step model accepts at most **8192 mel frames per call** (50 fps, about **163.8 seconds**), including the reference prompt. Export currently runs the whole target in one pass and does not split automatically; if the input exceeds the limit, the reference prompt is trimmed first, and the target is clamped only if it still exceeds the limit. Automatic smart segmented export is planned for a future release. Until then, avoid excessively long single fragments — especially continuous notes or rest-free passages near the limit — and split long songs into shorter fragments. Chunked preview is on by default, so this limit mainly affects export.
+
 ### Export Progress
 
 During export, a progress indicator shows:

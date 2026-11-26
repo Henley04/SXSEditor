@@ -379,6 +379,13 @@
           <p data-lang="zh">导出范围在导出对话框中选择：<em>混合</em>（默认，如上）、<em>仅人声</em>或<em>仅伴奏</em>。仅人声不混入伴奏，也不会被伴奏的尾长拉长；仅伴奏不执行合成，因此不会加载模型。轨道的静音与独奏状态在播放、音频导出与 MIDI 中一致生效——独奏某条人声轨时伴奏一并静音。</p>
         </div>
       </div>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>8192-frame limit and very long fragments.</strong> The diff_step model accepts at most <strong>8192 mel frames per call</strong> (50 fps, about <strong>163.8 seconds</strong>), including the reference prompt. Export currently renders the whole target in one pass and does not split automatically: if the input exceeds the limit, the reference prompt is trimmed first, and the target is clamped only if it still exceeds the limit. Automatic smart segmented export is planned for a future release. Until then, avoid making a single fragment excessively long — especially a continuous note or rest-free passage near the limit — and split long songs into shorter fragments. Chunked preview is enabled by default, so this limit mainly concerns export.</p>
+          <p data-lang="zh"><strong>8192 帧上限与超长分片。</strong>diff_step 模型单次调用最多接受 <strong>8192 个梅尔帧</strong>（50 fps，约 <strong>163.8 秒</strong>），其中包含参考 prompt。当前导出仍是整段推理，不会自动分块：输入超过上限时会先截短参考 prompt，若目标本身仍超限才截断目标。后续版本将实现自动智能分片导出；在此之前，请避免把单个分片做得过长——尤其是接近上限的单个连续音符或没有休止间隔的长段——并尽量把长歌曲拆成多个较短的分片。预览已默认启用分块，因此该上限主要影响导出。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Exporting the Project as MIDI</span>
