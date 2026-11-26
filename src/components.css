@@ -1,5 +1,26 @@
 /* Shared component styles — imported via common.css */
 
+/* ==================== 0. Status semantics ====================
+ * 五种状态的唯一语义来源。此前各处直接拿 --warning / --accent / --success
+ * 拼状态，同为"检测中"在不同页面一个蓝一个黄，同为"未安装"有深灰浅灰两档。
+ * 以后状态点/状态文字只认这五个名字：
+ *   idle      未开始 / 不适用 / 未安装   灰
+ *   busy      进行中（检测、下载、计算）  蓝
+ *   attention 需要用户操作（可更新、缺文件） 橙
+ *   error     失败                      红
+ *   ready     就绪 / 已安装              绿
+ * 刻意定义在这里而不是 themeFallback.css：后者被 test/themeFallback.test.js
+ * 与 themeBootstrap.js 逐项比对，加新变量会牵动启动兜底链路；而这里只是
+ * 对既有主题变量的别名，取值随换肤自动变化，无需测试同步。
+ */
+:root {
+  --status-idle: var(--fg-muted);
+  --status-busy: var(--accent);
+  --status-attention: var(--warning);
+  --status-error: var(--danger);
+  --status-ready: var(--success);
+}
+
 /* ==================== 0. Motion Keyframes ==================== */
 
 @keyframes button-hover-glow {
@@ -326,12 +347,12 @@
 
 .toast-success {
   border-color: var(--success);
-  color: var(--success);
+  color: var(--success-fg);
 }
 
 .toast-error {
   border-color: var(--danger);
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .toast-info {
@@ -404,7 +425,7 @@
 }
 .info-box--success::before { background-color: var(--success); }
 .info-box--success strong,
-.info-box--success .info-box__title { color: var(--success); }
+.info-box--success .info-box__title { color: var(--success-fg); }
 
 .info-box--warning {
   --info-box-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");
@@ -413,7 +434,7 @@
 }
 .info-box--warning::before { background-color: var(--warning); }
 .info-box--warning strong,
-.info-box--warning .info-box__title { color: var(--warning); }
+.info-box--warning .info-box__title { color: var(--warning-fg); }
 
 .info-box--danger {
   --info-box-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
@@ -422,7 +443,7 @@
 }
 .info-box--danger::before { background-color: var(--danger); }
 .info-box--danger strong,
-.info-box--danger .info-box__title { color: var(--danger); }
+.info-box--danger .info-box__title { color: var(--danger-fg); }
 
 /* ==================== 6. Section Title (panel headers) ==================== */
 
@@ -753,19 +774,19 @@ input[type="checkbox"].switch:disabled {
 }
 
 .chip--success {
-  color: var(--success);
+  color: var(--success-fg);
   background: var(--success-soft);
   border-color: transparent;
 }
 
 .chip--warning {
-  color: var(--warning);
+  color: var(--warning-fg);
   background: var(--warning-soft);
   border-color: var(--warning-line);
 }
 
 .chip--danger {
-  color: var(--danger);
+  color: var(--danger-fg);
   background: var(--danger-soft);
   border-color: transparent;
 }

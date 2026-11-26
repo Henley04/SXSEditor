@@ -55,54 +55,54 @@ let _webnnReadModelFileReqId = 0;
 //   · 被裁剪的方法替换成抛明确错误的函数，而不是 undefined —— 万一白名单漏了，
 //     会立刻在控制台看到"哪个窗口缺哪个能力"，而不是一个莫名的 undefined 报错。
 // ---------------------------------------------------------------------------
+const { windowIdFromPath, applyWindowCapabilityRedaction } = require('./shared/windowCapabilities');
+
 const WINDOW_ID = (() => {
   try {
-    const m = String(location.pathname || '').match(/\/([A-Za-z0-9_-]+)\.html$/);
-    return m ? m[1].toLowerCase() : null;
+    return windowIdFromPath(location.pathname);
   } catch (_) {
     return null;
   }
 })();
 
-// 能力路径（支持一层嵌套，如 pluginAPI.synthesize）→ 允许使用它的窗口
-const HIGH_RISK_METHOD_WINDOWS = [
-  { path: ['saveFile'], windows: ['index', 'fragmenteditor', 'singercreator', 'audiopreprocess', 'settings', 'singermarket'] },
-  { path: ['saveSettings'], windows: ['index', 'settings'] },
-  { path: ['openExternal'], windows: ['index', 'settings', 'updatenotification', 'singermarket'] },
-  { path: ['showItemInFolder'], windows: ['index', 'settings', 'singermarket'] },
-  // 插件合成：只有主窗口与分片编辑器会真正驱动第三方歌声后端
-  { path: ['pluginAPI', 'synthesize'], windows: ['index', 'fragmenteditor'] },
-];
+// ---------------------------------------------------------------------------
+// 渲染进程调试日志统一由主进程的 webContents 'console-message' 事件落盘
+// （见 src/main/crashReporter.js 的 attachRendererErrorHandler）。
+//
+// 不能在这里用 webFrame.executeJavaScript 往主世界注入 console 包装：
+// 渲染进程 CSP 为 script-src 'self'，该调用会被当成 eval 直接拒绝
+// （Uncaught EvalError）。因此对象参数在 console-message 里会退化为
+// "[object Object]"，需要完整结构的诊断日志请在调用点用
+// JSON.stringify(...) 拼成字符串再输出。
+// ---------------------------------------------------------------------------
 
-function denyCapability(name) {
-  return function () {
-    throw new Error(`[preload] 当前窗口（${WINDOW_ID || 'unknown'}）未授权调用 ${name}()`);
-  };
-}
-
-function applyWindowCapabilityRedaction(api) {
-  if (!WINDOW_ID) return api; // 无法识别窗口：保守起见保持全量
-  for (const entry of HIGH_RISK_METHOD_WINDOWS) {
-    if (entry.windows.includes(WINDOW_ID)) continue;
-    let holder = api;
-    for (let i = 0; i < entry.path.length - 1; i++) {
-      holder = holder && holder[entry.path[i]];
-      if (!holder) break;
-    }
-    if (!holder) continue;
-    const name = entry.path.join('.');
-    if (typeof holder[entry.path[entry.path.length - 1]] === 'function') {
-      holder[entry.path[entry.path.length - 1]] = denyCapability(name);
-    }
-  }
-  return api;
+function redactApi(api) {
+  // 无法识别窗口（例如未来新增的入口）→ 不裁剪，保持全量，不冒险
+  return applyWindowCapabilityRedaction(api, WINDOW_ID);
 }
 
 const _fullElectronAPI = {
   onMcpAutomationRequest: callback => { const h=(_e,m)=>callback(m); ipcRenderer.on(IPC_CHANNELS.MCP_AUTOMATION_REQUEST,h); return ()=>ipcRenderer.removeListener(IPC_CHANNELS.MCP_AUTOMATION_REQUEST,h); },
   sendMcpAutomationResponse: message => ipcRenderer.send(IPC_CHANNELS.MCP_AUTOMATION_RESPONSE,message),
+  sendMcpAutomationEvent: event => ipcRenderer.send(IPC_CHANNELS.MCP_AUTOMATION_EVENT,event),
   showSaveDialog: (options) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SAVE, options),
   showOpenDialog: (options) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN, options),
+  // 系统投递进来的文件（双击 / 打开方式）。take 取走即清空，重复调用只会拿到一次。
+  takePendingOpenFile: () => ipcRenderer.invoke(IPC_CHANNELS.APP_TAKE_PENDING_FILE),
+  onFileRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.APP_FILE_REQUESTED, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_FILE_REQUESTED, handler);
+  },
+  // 欢迎页「最近的工程」。列表的真源在主进程（userData 下一份配置文件），
+  // 渲染层只读写这一份，不在 localStorage 里另建一套 —— 两套必然漂移。
+  recents: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_LIST),
+    record: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_RECORD, filePath),
+    remove: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_REMOVE, filePath),
+    clear: () => ipcRenderer.invoke(IPC_CHANNELS.RECENTS_CLEAR),
+  },
+  openSingerFileAt: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.SINGER_OPEN_AT, filePath),
   saveFile: (filePath, data) => ipcRenderer.invoke(IPC_CHANNELS.FILE_SAVE, filePath, data),
   readFile: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ, filePath),
   readFileBuffer: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ_BUFFER, filePath),
@@ -124,6 +124,13 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.LOAD_FRAGMENT, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.LOAD_FRAGMENT, handler);
   },
+  // 主窗口侧改完分片数据后推给已打开的编辑器（MCP / 自动流程用）
+  pushFragmentPatch: (fragmentId, patch) => ipcRenderer.invoke(IPC_CHANNELS.PUSH_FRAGMENT_PATCH, fragmentId, patch),
+  onFragmentDataPatched: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.FRAGMENT_DATA_PATCH, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_DATA_PATCH, handler);
+  },
   updateFragmentBounds: (fragmentId, data) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_FRAGMENT_BOUNDS, fragmentId, data),
   onFragmentBoundsChanged: (callback) => {
     const handler = (event, data) => callback(data);
@@ -137,6 +144,13 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.PROJECT_SETTINGS_CHANGED, handler);
   },
   openSingerCreator: () => ipcRenderer.invoke(IPC_CHANNELS.OPEN_SINGER_CREATOR),
+  // 打开已有 .sxssinger 进入「歌手编辑」：沿用预处理窗口，保存时写回原文件。
+  openSingerEditor: () => ipcRenderer.invoke(IPC_CHANNELS.OPEN_SINGER_EDITOR),
+  onSingerUpdated: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.SINGER_UPDATED, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.SINGER_UPDATED, handler);
+  },
   openSingerMarket: () => ipcRenderer.invoke('openSingerMarket'),
   saveSingerFile: (singerData) => ipcRenderer.invoke(IPC_CHANNELS.SAVE_SINGER_FILE, singerData),
   onSingerCreatorSaveRequest: (callback) => {
@@ -167,15 +181,23 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.LOAD_PREPROCESS_DATA, handler);
   },
   getModelDir: () => ipcRenderer.invoke(IPC_CHANNELS.GET_MODEL_DIR),
-  initSVSPipeline: () => invokeHeavy('svs:init'),
+  initSVSPipeline: (options) => invokeHeavy('svs:init', options),
   synthesizeSVS: (data) => invokeHeavy('svs:synthesize', data),
   synthesizeMultiStreaming: (data) => invokeHeavy('svs:synthesizeMultiStreaming', data),
-  cancelSVSSynthesis: () => invokeHeavy('svs:cancel'),
+  // 可选 {streamId}：分片编辑器用它确保旧会话的取消不会误伤新一轮推理。
+  // 主页面不传，行为与原来逐字一致。
+  cancelSVSSynthesis: (options) => invokeHeavy('svs:cancel', options),
   disposeSVSPipeline: () => invokeHeavy('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on(IPC_CHANNELS.SVS_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.SVS_PROGRESS, handler);
+  },
+  // 模型加载进度（svs:loadProgress）：{ stage, percent, current, total, name }
+  onSVSLoadProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.SVS_LOAD_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.SVS_LOAD_PROGRESS, handler);
   },
   onSVSChunkAudio: (callback) => {
     const handler = (event, data) => callback(data);
@@ -188,7 +210,7 @@ const _fullElectronAPI = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.SVS_MODEL_INCOMPATIBLE, handler);
   },
   getFragmentSVSSampleRate: () => invokeHeavy('fragment-svs:getSampleRate'),
-  initFragmentSVSPipeline: () => invokeHeavy('fragment-svs:init'),
+  initFragmentSVSPipeline: (options) => invokeHeavy('fragment-svs:init', options),
   synthesizeFragmentSVS: async (data) => {
     const result = await invokeHeavy('fragment-svs:synthesize', data);
     if (result.error) {
@@ -199,7 +221,9 @@ const _fullElectronAPI = {
   resolvePhonemes: (lyrics) => invokeHeavy('fragment-svs:resolvePhonemes', { lyrics }),
   disposeFragmentSVSPipeline: () => invokeHeavy('fragment-svs:dispose'),
   onFragmentSVSProgress: (callback) => {
-    const handler = (event, data) => callback(data.progress);
+    // 保留完整 payload：synthesisId 用于过滤旧任务的迟到进度。
+    // 老调用方若只读数字，可继续用 data.progress，不影响兼容。
+    const handler = (event, data) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, handler);
   },
@@ -207,6 +231,11 @@ const _fullElectronAPI = {
     const handler = (event, data) => callback(data);
     ipcRenderer.on(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, handler);
+  },
+  onFragmentSVSStreamEnd: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, handler);
   },
   extractF0: (data) => invokeHeavy('extractF0:onnx', data),
   extractMidiRosvot: (data) => invokeHeavy('extractMidi:rosvot', data),
@@ -221,19 +250,33 @@ const _fullElectronAPI = {
   // Used by the Settings → About page (license / papers / acknowledgments).
   openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, url),
   getDMLDevices: (options = {}) => invokeHeavy('settings:getDMLDevices', options),
-  getWinmlProviders: () => invokeHeavy('settings:getWinmlProviders'),
+  getWinmlProviders: (options = {}) => invokeHeavy('settings:getWinmlProviders', options),
   getHardwareStatus: () => invokeHeavy('settings:getHardwareStatus'),
   getCurrentHardware: () => invokeHeavy('settings:getCurrentHardware'),
   getVocoderChunkFramesInfo: () => invokeHeavy('settings:getVocoderChunkFramesInfo'),
   getVocoderChunkFramesTable: () => invokeHeavy('settings:getVocoderChunkFramesTable'),
   getSettings: () => invokeHeavy('settings:getSettings'),
   saveSettings: (settings) => invokeHeavy('settings:saveSettings', settings),
+
+  // ---- API Provider（远程推理）----
+  // 用普通 invoke 而非 invokeHeavy：设置页可在重型 IPC 就绪前打开，
+  // Provider 管理不依赖 ONNX 模型加载。
+  apiProvidersList: () => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDERS_LIST),
+  apiProviderSave: (input) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_SAVE, input),
+  apiProviderDelete: (id) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_DELETE, id),
+  apiProviderSetActive: (id) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_SET_ACTIVE, id),
+  apiProviderResetBuiltin: () => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_RESET_BUILTIN),
+  apiProviderTest: (draft) => ipcRenderer.invoke(IPC_CHANNELS.API_PROVIDER_TEST, draft),
   checkModels: () => invokeHeavy('settings:check-models'),
   runTrtRtxDiagnostic: () => invokeHeavy('settings:run-trtrtx-diagnostic'),
+  clearInferenceCaches: () => invokeHeavy(IPC_CHANNELS.SETTINGS_CLEAR_INFERENCE_CACHE),
   getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_VERSION),
   getAudioDevices: () => invokeHeavy('audio:getDevices'),
   audioPlay: (audioData, options) => invokeHeavy('audio:play', { audioData, options }),
-  audioStop: () => invokeHeavy('audio:stop'),
+  // sessionId：本次 stop 所属的 UI 会话号（见 renderer/audioPlayback.js 的
+  // _exclusiveSessionToken）。主进程据此丢弃"已被更新命令取代"的旧 stop，
+  // 避免它把新会话刚开始的声音掐掉；不传则保持旧行为（无条件停止）。
+  audioStop: (sessionId) => invokeHeavy('audio:stop', { sessionId }),
   audioGetPosition: () => invokeHeavy('audio:getPosition'),
   audioIsAvailable: () => invokeHeavy('audio:isAvailable'),
   onAudioEnded: (callback) => {
@@ -365,6 +408,35 @@ const _fullElectronAPI = {
     ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_SAVE_AS_REQUEST, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_SAVE_AS_REQUEST, handler);
   },
+  onMainMenuExportMidiRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST, handler);
+  },
+  onMainMenuImportMidiRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_IMPORT_MIDI_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_IMPORT_MIDI_REQUEST, handler);
+  },
+  onMainMenuAudioToMidiRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_AUDIO_TO_MIDI_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_AUDIO_TO_MIDI_REQUEST, handler);
+  },
+  onMainMenuMcpSetupRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_MCP_SETUP_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_MCP_SETUP_REQUEST, handler);
+  },
+  mcpSetupGetInfo: () => ipcRenderer.invoke(IPC_CHANNELS.MCP_SETUP_GET_INFO),
+  // 帮助 → 环境检测：report 是毫秒级内存快照，probes 才做原生桥/EP 探测。
+  onMainMenuEnvCheckRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.MAIN_MENU_ENV_CHECK_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.MAIN_MENU_ENV_CHECK_REQUEST, handler);
+  },
+  envCheckGetReport: () => ipcRenderer.invoke(IPC_CHANNELS.ENV_CHECK_GET_REPORT),
+  envCheckGetProbes: () => ipcRenderer.invoke(IPC_CHANNELS.ENV_CHECK_GET_PROBES),
   // 资源管理器
   resmgrOpen: () => ipcRenderer.invoke(IPC_CHANNELS.RESMGR_OPEN),
   resmgrGetGPUInfo: () => ipcRenderer.invoke(IPC_CHANNELS.RESMGR_GET_GPU_INFO),
@@ -612,6 +684,122 @@ const _fullElectronAPI = {
     },
   },
 
+  // ==================== Plugin Host v2（全应用插件） ====================
+  // 窄接口：只暴露"列出/安装/卸载/跑命令/面板 RPC/事件"，不暴露任何文件路径或
+  // 进程句柄。面板 iframe 的能力由 pluginHost.panelRpc 再收一道（apiScopes）。
+  pluginHost: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_LIST),
+    admin: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_ADMIN),
+    install: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL),
+    installFromPath: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_INSTALL_PATH, filePath),
+    uninstall: (id, keepData) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_UNINSTALL, id, !!keepData),
+    // ---- M6：签名与信任 ----
+    // 信任的是**公钥指纹**，不是包自称的发布者名。管理器把指纹显示给用户核对。
+    trustList: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_LIST),
+    trustAdd: (input) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_ADD, input || {}),
+    trustRemove: (keyId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_TRUST_REMOVE, keyId),
+    setRequireSignature: (enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_REQUIRE_SIGNATURE, !!enabled),
+    verifyInstall: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_VERIFY_INSTALL, id),
+    // ---- M6：市场接口 ----
+    // 搜索是"取一次索引、本地过滤"，不逐键发请求；预览一定会下载整包 ——
+    // 索引里的签名字段只是源的自述，包内 signature.json 才是判定依据。
+    marketSources: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_SOURCES),
+    marketAddSource: (input) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_ADD_SOURCE, input || {}),
+    marketRemoveSource: (id) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_REMOVE_SOURCE, id),
+    marketSearch: (query, options) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_SEARCH, query, options || {}),
+    marketPreview: (sourceId, pluginId, options) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_PREVIEW, sourceId, pluginId, options || {})
+    ),
+    marketInstall: (sourceId, pluginId, options) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_MARKET_INSTALL, sourceId, pluginId, options || {})
+    ),
+    setEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_ENABLED, id, !!enabled),
+    reload: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RELOAD),
+    runCommand: (commandId, args) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_RUN_COMMAND, commandId, args || {}),
+    panelRpc: (request) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_PANEL_RPC, request || {}),
+    openPluginsFolder: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DIR),
+    getLog: (limit) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_GET_LOG, limit),
+    // ---- M2：界面贡献点 ----
+    // 设置页读写的只是 manifest 里声明过的表单值；值域收敛在主进程做，
+    // 这里不做任何判断（渲染层判权限等于把锁挂在门框上）。
+    settingsGet: (pluginId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_GET, pluginId),
+    settingsSet: (pluginId, patch) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SETTINGS_SET, pluginId, patch || {}),
+    setKeybindings: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_KEYBINDINGS, pluginId, !!enabled),
+    setAutomation: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_AUTOMATION, pluginId, !!enabled),
+    // iframe 地址由主进程 mint：manifest.entry 只在主进程可见
+    overlayUrl: (pluginId, overlayId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OVERLAY_URL, pluginId, overlayId),
+    // 请主窗口把某个面板挂到右侧抽屉（设置分区/管理器用）
+    openPanel: (pluginId, panelId) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL_REQUEST, pluginId, panelId),
+    // M4 数据面：按扩展名路由到插件 codec，拿回校验过的工程文档。
+    // 失败时返回 { ok:false, code, message }（没有插件接管 / 没权限 / 文档非法），
+    // 由渲染层决定怎么提示。
+    openDocument: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_OPEN_DOCUMENT, filePath),
+    // 保存/导出：把当前工程文档交给插件编码，写盘仍由主进程完成。
+    saveDocument: (filePath, document, options) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SAVE_DOCUMENT, filePath, document, options || {})
+    ),
+    fileFilters: (role) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_FILE_FILTERS, role || 'open'),
+    // 工程级渲染意图（document.extSchema[*].render）：pipeline 在主进程跑，
+    // 这是"这份工程要求谁做后处理"唯一能过去的路。传 null 表示回到默认语义。
+    setRenderIntent: (intent) => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_SET_RENDER_INTENT, intent || null),
+    // 音频导出器：清单 + 执行。音频走结构化克隆（Float32Array 原样过），
+    // 不要在这里 JSON 化 —— 14M 个采样点转成数组会慢到用户以为卡死。
+    listExporters: () => ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_LIST_EXPORTERS),
+    exportAudio: (filePath, ref, audio) => (
+      ipcRenderer.invoke(IPC_CHANNELS.PLUGINHOST_EXPORT_AUDIO, filePath, ref || {}, audio || {})
+    ),
+    // 主进程 → 渲染进程：投影更新 / 插件事件 / 工程写入请求
+    onSync: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_SYNC, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_SYNC, handler);
+    },
+    onEvent: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_EVENT, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_EVENT, handler);
+    },
+    onProjectApply: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_PROJECT_APPLY, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_PROJECT_APPLY, handler);
+    },
+    sendProjectApplyResult: (payload) => ipcRenderer.send(IPC_CHANNELS.PLUGINHOST_PROJECT_APPLY_RESULT, payload),
+    // 菜单点了"打开面板" → 主进程下发已算好的 plugin:// URL，渲染层挂 iframe
+    onOpenPanel: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PLUGINHOST_OPEN_PANEL, handler);
+    },
+  },
+
+  // ==================== 模型调用面（设计方案 §12） ====================
+  // 设置页读写端点/绑定/授权/审计；主窗口只参与首次调用的确认。
+  // 密钥永远不经过渲染层：这里没有任何"读密钥"的方法，写进去就不再回来。
+  models: {
+    snapshot: () => ipcRenderer.invoke(IPC_CHANNELS.MODELS_SNAPSHOT),
+    upsertEndpoint: (endpoint) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_ENDPOINT_UPSERT, { endpoint: endpoint || {} }),
+    removeEndpoint: (id) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_ENDPOINT_REMOVE, { id }),
+    bind: (payload) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_BIND, payload || {}),
+    unbind: (task, endpointId) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_UNBIND, { task, endpointId }),
+    setDefault: (task, endpointId) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_SET_DEFAULT, { task, endpointId }),
+    grant: (subject, endpointId, decision, scope) => ipcRenderer.invoke(
+      IPC_CHANNELS.MODELS_GRANT, { subject, endpointId, decision, scope },
+    ),
+    revoke: (subject, endpointId) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_REVOKE, { subject, endpointId }),
+    setSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_SET_SETTINGS, patch || {}),
+    audit: (query) => ipcRenderer.invoke(IPC_CHANNELS.MODELS_AUDIT, query || {}),
+    // 主进程 → 渲染层：请求确认（渲染层画模态，30s 无响应由主进程判拒）
+    onConsentRequest: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.MODELS_CONSENT_REQUEST, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.MODELS_CONSENT_REQUEST, handler);
+    },
+    consentReply: (requestId, answer) => ipcRenderer.invoke(
+      IPC_CHANNELS.MODELS_CONSENT_REPLY, { requestId, answer },
+    ),
+  },
+
   // ==================== Crash Reporting API ====================
   // Used by settings/help UI to surface log/dump file locations so users can
   // attach them when filing issues. Log forwarding (window.onerror /
@@ -625,4 +813,4 @@ const _fullElectronAPI = {
   },
 };
 
-contextBridge.exposeInMainWorld('electronAPI', applyWindowCapabilityRedaction(_fullElectronAPI));
+contextBridge.exposeInMainWorld('electronAPI', redactApi(_fullElectronAPI));

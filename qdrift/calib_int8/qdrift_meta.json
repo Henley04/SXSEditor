@@ -1,0 +1,415 @@
+{
+  "method": "Q-Drift (arXiv:2603.18095)",
+  "solver": "euler",
+  "n_steps": 32,
+  "mel_dim": 128,
+  "cfg": 3,
+  "rescale_cfg": 0.7,
+  "sigma_i": [
+    0.015625,
+    0.046875,
+    0.078125,
+    0.109375,
+    0.140625,
+    0.171875,
+    0.203125,
+    0.234375,
+    0.265625,
+    0.296875,
+    0.328125,
+    0.359375,
+    0.390625,
+    0.421875,
+    0.453125,
+    0.484375,
+    0.515625,
+    0.546875,
+    0.578125,
+    0.609375,
+    0.640625,
+    0.671875,
+    0.703125,
+    0.734375,
+    0.765625,
+    0.796875,
+    0.828125,
+    0.859375,
+    0.890625,
+    0.921875,
+    0.953125,
+    0.984375
+  ],
+  "delta_sigma": 0.03125,
+  "precision": "int8",
+  "target": "FP32 ONNX (onnx_models\\diff_step_dml.onnx)",
+  "quantized": "INT8 ONNX (.workbuddy\\tmp_ms_int8_v2\\diff_step_dml.onnx)",
+  "subgraph": "diff_step_dml",
+  "execution_provider": "DmlExecutionProvider (onnxruntime-node, 与应用同一运行时)",
+  "n_calib_items": 46,
+  "n_calib_trajectories": 138,
+  "item_tag_breakdown": {
+    "nat": 8,
+    "prj": 38
+  },
+  "seeds": [
+    1234,
+    7777,
+    20260924
+  ],
+  "data_dirs": [
+    "qdrift/conds_bin",
+    "qdrift/conds_proj"
+  ],
+  "items": [
+    {
+      "item": "nat_000",
+      "seconds": 13.54,
+      "prompt_len": 446,
+      "target_len": 677
+    },
+    {
+      "item": "nat_001",
+      "seconds": 10.7,
+      "prompt_len": 582,
+      "target_len": 535
+    },
+    {
+      "item": "nat_002",
+      "seconds": 10.02,
+      "prompt_len": 369,
+      "target_len": 501
+    },
+    {
+      "item": "nat_003",
+      "seconds": 9.56,
+      "prompt_len": 533,
+      "target_len": 478
+    },
+    {
+      "item": "nat_004",
+      "seconds": 9.26,
+      "prompt_len": 368,
+      "target_len": 463
+    },
+    {
+      "item": "nat_005",
+      "seconds": 8.98,
+      "prompt_len": 417,
+      "target_len": 449
+    },
+    {
+      "item": "nat_006",
+      "seconds": 8.9,
+      "prompt_len": 386,
+      "target_len": 445
+    },
+    {
+      "item": "nat_007",
+      "seconds": 8.82,
+      "prompt_len": 402,
+      "target_len": 441
+    },
+    {
+      "item": "prj_example_f1_s00",
+      "seconds": 9.62,
+      "prompt_len": 457,
+      "target_len": 481
+    },
+    {
+      "item": "prj_example_f1_s01",
+      "seconds": 9.3,
+      "prompt_len": 457,
+      "target_len": 465
+    },
+    {
+      "item": "prj_lagtrain_f0_s00",
+      "seconds": 14.18,
+      "prompt_len": 1500,
+      "target_len": 709
+    },
+    {
+      "item": "prj_lagtrain_f0_s02",
+      "seconds": 14.22,
+      "prompt_len": 1500,
+      "target_len": 711
+    },
+    {
+      "item": "prj_lagtrain_f0_s04",
+      "seconds": 13.82,
+      "prompt_len": 600,
+      "target_len": 691
+    },
+    {
+      "item": "prj_lagtrain_f0_s06",
+      "seconds": 16.62,
+      "prompt_len": 600,
+      "target_len": 831
+    },
+    {
+      "item": "prj_lagtrain_f0_s08",
+      "seconds": 13.5,
+      "prompt_len": 600,
+      "target_len": 675
+    },
+    {
+      "item": "prj_lagtrain_f0_s10",
+      "seconds": 13.82,
+      "prompt_len": 600,
+      "target_len": 691
+    },
+    {
+      "item": "prj_lagtrain_f0_s12",
+      "seconds": 13.82,
+      "prompt_len": 600,
+      "target_len": 691
+    },
+    {
+      "item": "prj_lagtrain_f0_s14",
+      "seconds": 8.62,
+      "prompt_len": 600,
+      "target_len": 431
+    },
+    {
+      "item": "prj_lagtrain_f1_s00",
+      "seconds": 5.14,
+      "prompt_len": 600,
+      "target_len": 257
+    },
+    {
+      "item": "prj_lagtrain_f1_s01",
+      "seconds": 11.62,
+      "prompt_len": 600,
+      "target_len": 581
+    },
+    {
+      "item": "prj_lagtrain_f1_s02",
+      "seconds": 11.62,
+      "prompt_len": 600,
+      "target_len": 581
+    },
+    {
+      "item": "prj_lagtrain_f1_s03",
+      "seconds": 13,
+      "prompt_len": 600,
+      "target_len": 650
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s00",
+      "seconds": 15.26,
+      "prompt_len": 457,
+      "target_len": 763
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s02",
+      "seconds": 14.2,
+      "prompt_len": 457,
+      "target_len": 710
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s04",
+      "seconds": 16.36,
+      "prompt_len": 457,
+      "target_len": 818
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s05",
+      "seconds": 12.9,
+      "prompt_len": 457,
+      "target_len": 645
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s07",
+      "seconds": 14.04,
+      "prompt_len": 457,
+      "target_len": 702
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s08",
+      "seconds": 12.28,
+      "prompt_len": 457,
+      "target_len": 614
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s10",
+      "seconds": 14.94,
+      "prompt_len": 457,
+      "target_len": 747
+    },
+    {
+      "item": "prj_monitoring_explict_f3_s12",
+      "seconds": 15.46,
+      "prompt_len": 457,
+      "target_len": 773
+    },
+    {
+      "item": "prj_xinzuo_f0_s00",
+      "seconds": 19.42,
+      "prompt_len": 600,
+      "target_len": 971
+    },
+    {
+      "item": "prj_xinzuo_f0_s02",
+      "seconds": 14.24,
+      "prompt_len": 600,
+      "target_len": 712
+    },
+    {
+      "item": "prj_xinzuo_f0_s03",
+      "seconds": 13.42,
+      "prompt_len": 600,
+      "target_len": 671
+    },
+    {
+      "item": "prj_xinzuo_f0_s05",
+      "seconds": 19.58,
+      "prompt_len": 600,
+      "target_len": 979
+    },
+    {
+      "item": "prj_xinzuo_f0_s06",
+      "seconds": 14.24,
+      "prompt_len": 600,
+      "target_len": 712
+    },
+    {
+      "item": "prj_xinzuo_f0_s08",
+      "seconds": 13.42,
+      "prompt_len": 600,
+      "target_len": 671
+    },
+    {
+      "item": "prj_xinzuo_f0_s09",
+      "seconds": 13.42,
+      "prompt_len": 600,
+      "target_len": 671
+    },
+    {
+      "item": "prj_xinzuo_f0_s11",
+      "seconds": 19.42,
+      "prompt_len": 600,
+      "target_len": 971
+    },
+    {
+      "item": "prj_zhangxf_f0_s00",
+      "seconds": 17.28,
+      "prompt_len": 457,
+      "target_len": 864
+    },
+    {
+      "item": "prj_zhangxf_f0_s02",
+      "seconds": 13.08,
+      "prompt_len": 457,
+      "target_len": 654
+    },
+    {
+      "item": "prj_zhangxf_f0_s03",
+      "seconds": 13.68,
+      "prompt_len": 457,
+      "target_len": 684
+    },
+    {
+      "item": "prj_zhangxf_f0_s05",
+      "seconds": 13,
+      "prompt_len": 457,
+      "target_len": 650
+    },
+    {
+      "item": "prj_zhangxf_f0_s06",
+      "seconds": 13.54,
+      "prompt_len": 457,
+      "target_len": 677
+    },
+    {
+      "item": "prj_zhangxf_f0_s08",
+      "seconds": 15.52,
+      "prompt_len": 457,
+      "target_len": 776
+    },
+    {
+      "item": "prj_zhangxf_f0_s09",
+      "seconds": 12.66,
+      "prompt_len": 457,
+      "target_len": 633
+    },
+    {
+      "item": "prj_zhangxf_f0_s11",
+      "seconds": 10.46,
+      "prompt_len": 457,
+      "target_len": 523
+    }
+  ],
+  "sequence_regime_sec": [
+    5.14,
+    19.58
+  ],
+  "aggregation": "channel-wise conditional variance V = E[dv^2] - E[dv]^2, scalarized over frames & samples",
+  "c_formula": "c_i = V_i / (2*(i+0.5))",
+  "V_mean_per_step": [
+    0.00009127728378643951,
+    0.00010750836548822917,
+    0.00014278003959589114,
+    0.00014971494613291725,
+    0.00014444709563576907,
+    0.00013454467256224234,
+    0.0001253616821372816,
+    0.00011676520381342925,
+    0.00010978810365713798,
+    0.00010397406180118196,
+    0.00009897608219944232,
+    0.00009496698024236139,
+    0.00009187179176706195,
+    0.00008967280356841911,
+    0.00008822287716725441,
+    0.00008746340901666372,
+    0.00008746101647716387,
+    0.00008841517453106462,
+    0.00009058212040713443,
+    0.00009357836293588662,
+    0.00009673261610032569,
+    0.00010022422060274039,
+    0.00010365619925778446,
+    0.00010851596579186662,
+    0.00011459590706408562,
+    0.0001222193208718636,
+    0.00013307901400594346,
+    0.00014651107034069355,
+    0.00016411424104489925,
+    0.0001878404474950912,
+    0.00022385356930954003,
+    0.00021783222564408788
+  ],
+  "c_mean_per_step": [
+    0.00009127728378643951,
+    0.000035836121682564226,
+    0.000028556007919178228,
+    0.000021387849436393935,
+    0.000016049677270757456,
+    0.00001223133389061104,
+    0.000009643206318799002,
+    0.000007784346937711462,
+    0.000006458123742447697,
+    0.000005472319038801743,
+    0.000004713146765311649,
+    0.000004128999146146839,
+    0.000003674871681624836,
+    0.0000033212149475048136,
+    0.0000030421681742609508,
+    0.0000028214002920634584,
+    0.0000026503338270700283,
+    0.0000025261478313609587,
+    0.0000024481654188335256,
+    0.0000023994452007514155,
+    0.000002359332096801836,
+    0.000002330795833671573,
+    0.00000230347109120288,
+    0.00000230885034024908,
+    0.000002338691978742702,
+    0.0000023964572735124534,
+    0.0000025109248049659527,
+    0.0000026638376393606222,
+    0.0000028791972175312708,
+    0.00000318373640162406,
+    0.0000036697306402544427,
+    0.0000034576543654907255
+  ]
+}

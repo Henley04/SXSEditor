@@ -2,10 +2,37 @@ const { safeHandle } = require('./ipcSafe');
 const path = require('node:path');
 const fs = require('node:fs');
 const { Worker } = require('node:worker_threads');
-const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
-const { BasicPitchDetector } = require('../inference/basicPitch');
-const { RosvotDetector } = require('../inference/rosvotDetector');
-const { FcpePitchDetector } = require('../inference/fcpePitchDetector');
+// 这四个检测器的 require 从模块顶层下沉到各自的 lazy factory 里。
+//
+// 冷启动审查：它们在启动时被 pitchMidiIpc 一次性全部拉起，其中
+// basicPitch.js 会连带加载 @tensorflow/tfjs-core + tfjs-converter +
+// backend-cpu + backend-wasm 四个包（还要准备 .wasm），而 BASIC-PITCH
+// 只在用户点"音频转 MIDI"时才用；rmvpe/rosvot/fcpe 三个则各自 require 一份
+// onnxruntime-node。把它们搬进下面的 factory，首次真正用到时才付这份成本。
+//
+// 注意：createLazyInitializer 本来就只在首次 get() 时跑 factory，所以把 require
+// 放进去之后，这些模块在"用户没用过对应功能"的整个会话里都不会被加载。
+const _detectorCtors = {};
+function getDetectorCtor(name) {
+  if (_detectorCtors[name]) return _detectorCtors[name];
+  switch (name) {
+    case 'rmvpe':
+      _detectorCtors[name] = require('../inference/rmvpePitchDetector').RmvpePitchDetector;
+      break;
+    case 'basicPitch':
+      _detectorCtors[name] = require('../inference/basicPitch').BasicPitchDetector;
+      break;
+    case 'rosvot':
+      _detectorCtors[name] = require('../inference/rosvotDetector').RosvotDetector;
+      break;
+    case 'fcpe':
+      _detectorCtors[name] = require('../inference/fcpePitchDetector').FcpePitchDetector;
+      break;
+    default:
+      throw new Error(`Unknown pitch detector: ${name}`);
+  }
+  return _detectorCtors[name];
+}
 const { requireSampleRate } = require('../inference/shared/pitchF0Utils');
 const pp = require('../inference/pitchPostprocess');
 const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
@@ -41,7 +68,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
   console.log(`[Main] Initialize RMVPE Pitch Detector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
-  const detector = new RmvpePitchDetector(modelPath, { deviceId });
+  const detector = new (getDetectorCtor('rmvpe'))(modelPath, { deviceId });
   await detector.init();
   return detector;
 });
@@ -49,7 +76,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
 const basicPitchLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
   console.log(`[Main] Initialize Basic Pitch Detector, model path: ${modelPath}`);
-  const detector = new BasicPitchDetector(modelPath);
+  const detector = new (getDetectorCtor('basicPitch'))(modelPath);
   await detector.init();
   return detector;
 });
@@ -59,7 +86,7 @@ const rosvotLazy = createLazyInitializer(async () => {
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
   console.log(`[Main] Initialize RosvotDetector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
-  const detector = new RosvotDetector(modelPath, { deviceId });
+  const detector = new (getDetectorCtor('rosvot'))(modelPath, { deviceId });
   await detector.init();
   return detector;
 });
@@ -69,7 +96,7 @@ const fcpeLazy = createLazyInitializer(async () => {
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
   console.log(`[Main] Initialize FcpePitchDetector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
-  const detector = new FcpePitchDetector(modelPath, { deviceId });
+  const detector = new (getDetectorCtor('fcpe'))(modelPath, { deviceId });
   await detector.init();
   return detector;
 });
@@ -406,6 +433,12 @@ function registerPitchMidiIpc() {
     }
   });
 
+  // P9（未迁移）: 这里直接在**主线程**跑 tfjs Basic Pitch，长音频会让所有窗口
+  // 冻结数秒（见本文件 :308 附近的同类说明）。RMVPE / FCPE 已经迁到
+  // pitchWorker；Basic Pitch 尚未迁移，原因是 worker 脚本位于
+  // src/inference/pitchWorker.js（本次修复范围之外），需要新增
+  // 'extract-basicpitch' 消息类型 + basicPitch 检测器的 worker 侧加载路径。
+  // 后续应迁入 worker，IPC 契约（{ success, f0Array, notes }）保持不变。
   safeHandle(IPC_CHANNELS.EXTRACT_F0_BASIC_PITCH, async (event, { audioData, sampleRate, bpm }) => {
     try {
       const detector = await basicPitchLazy.get();

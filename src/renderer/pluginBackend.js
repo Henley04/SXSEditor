@@ -92,7 +92,7 @@ export function ensurePluginCatalog(force = false) {
       return _catalog;
     })
     .catch((err) => {
-      console.warn('[plugins] 插件清单加载失败：', err && err.message ? err.message : err);
+      console.warn('[plugins] Failed to load plugin manifest:', err && err.message ? err.message : err);
       _catalog = { plugins: [], pluginsDir: '', errors: [], failed: true };
       _catalogPromise = null;
       return _catalog;
@@ -169,7 +169,7 @@ export async function fetchVoices(pluginId, kindId) {
     _voiceCache.set(key, voices);
     return voices;
   } catch (err) {
-    console.warn('[plugins] 音色列表加载失败：', err && err.message ? err.message : err);
+    console.warn('[plugins] Failed to load timbre list:', err && err.message ? err.message : err);
     _voiceCache.set(key, []);
     return [];
   }

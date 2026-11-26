@@ -26,7 +26,11 @@
 
         <div class="rm-section summary-section">
             <h3 class="section-title" data-i18n="resourceManager.summary">汇总</h3>
-            <div id="summaryContent" class="summary-content"></div>
+            <div id="summaryContent" class="summary-content">
+                <!-- 数据到位前这里是一个空 div，整张卡看起来像渲染失败。
+                     放一句占位文案，renderSummary() 第一步会把它清掉。 -->
+                <div class="gpu-no-data" data-i18n="resourceManager.loading">Loading...</div>
+            </div>
         </div>
 
         <div class="rm-actions">

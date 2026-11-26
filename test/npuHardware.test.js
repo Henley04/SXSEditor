@@ -82,6 +82,13 @@ describe('NPU hardware (PnP) detection', () => {
   });
 
   describe('detectNPUByPnp', () => {
+    // detectNPUByPnp 在非 Windows 上按设计直接返回 false（不 spawn PowerShell），
+    // 而这里桩的正是 PowerShell 探针语义。不加门控会让 Linux/macOS 出现
+    // "期望 true 实得 false" 的假失败——那是平台不匹配，不是回归。
+    before(function () {
+      if (process.platform !== 'win32') this.skip();
+    });
+
     let stub;
     beforeEach(() => { invalidatePnpNpuCache(); });
     afterEach(() => { if (stub) { stub.restore(); stub = null; } });

@@ -16,7 +16,7 @@
  * 路径，与旧版本逐位一致）——只有开启后处理才需要编辑器构建 F0 曲线。
  */
 const { expect } = require('chai');
-const { buildFragmentPitchCurveF0, computePitchCurveF0 } = require('../src/renderer/f0Utils.js');
+const { buildFragmentPitchCurveF0 } = require('../src/renderer/f0Utils.js');
 const { buildMelPostprocessPayload } = require('../src/shared/postprocessCurves.js');
 const { sortAnchors, buildEffectiveValues, evalSortedCurve } = require('../src/fragmentEditor/automationCurve.js');
 
@@ -159,11 +159,11 @@ describe('主窗口 F0 的锚点强度 / 平滑', () => {
     const eff = buildEffectiveValues(sorted, 'pitch');
     for (let i = 0; i < f0.length; i++) {
       const beat = (i * HOP) / SAMPLE_RATE / 60 * BPM;
-      // 锚点区间内必须与真源逐点一致；区间外回落到 note.pitch（60，
-      // 与末锚点同值，两条语义在这里自然重合）
+      // 锚点区间内与真源逐点一致；区间外**延续首/末锚点值**（F4 修复）——
+      // 旧实现回落到 note.pitch，会在末锚点之后造成 12 半音级的可闻台阶。
       const expected = beat >= first && beat <= last
         ? expectHz(evalSortedCurve(sorted, eff, beat))
-        : expectHz(60);
+        : expectHz(beat < first ? eff[0] : eff[eff.length - 1]);
       expect(f0[i], `帧 ${i}（拍 ${beat.toFixed(2)}）`).to.be.closeTo(expected, 1e-3);
     }
   });
@@ -189,7 +189,7 @@ describe('主窗口 F0 的锚点强度 / 平滑', () => {
     }
   });
 
-  it('computePitchCurveF0 同样应用锚点强度（同源复刻守护）', () => {
+  it('主窗口真函数同样应用锚点强度（统一求值入口守护）', () => {
     const mkFrag = (strength) => ({
       id: 'f1',
       startTime: 0,
@@ -203,11 +203,14 @@ describe('主窗口 F0 的锚点强度 / 平滑', () => {
         ],
         brushSegments: [],
       },
+      notes: [{ id: 'n1', start: 0, duration: 2, pitch: 60, lyric: 'a' }],
+      postprocess: null,
     });
-    const notes = [{ id: 'n1', start: 0, duration: 2, pitch: 60, lyric: 'a' }];
-    // 拍 1 = 帧 25（24k/480，bpm 120）
-    expect(computePitchCurveF0([mkFrag(100)], notes, BPM)[25]).to.be.closeTo(expectHz(72), 1e-3);
-    expect(computePitchCurveF0([mkFrag(0)], notes, BPM)[25]).to.be.closeTo(expectHz(60), 1e-3);
-    expect(computePitchCurveF0([mkFrag(50)], notes, BPM)[25]).to.be.closeTo(expectHz(66), 1e-3);
+    const clippedNotes = [{ id: 'n1', start: 0, duration: 2, pitch: 60, lyric: 'a' }];
+    // 拍 1 = 帧 25（24k/480，bpm 120）。直接测生产函数
+    // buildFragmentPitchCurveF0（内部走 shared/pitchCurveEval），不再守护复刻。
+    expect(buildFragmentPitchCurveF0(mkFrag(100), clippedNotes, BPM)[25]).to.be.closeTo(expectHz(72), 1e-3);
+    expect(buildFragmentPitchCurveF0(mkFrag(0), clippedNotes, BPM)[25]).to.be.closeTo(expectHz(60), 1e-3);
+    expect(buildFragmentPitchCurveF0(mkFrag(50), clippedNotes, BPM)[25]).to.be.closeTo(expectHz(66), 1e-3);
   });
 });

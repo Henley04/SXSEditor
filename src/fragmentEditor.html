@@ -12,6 +12,21 @@
         <div class="loading-content">
           <div class="loading-spinner"></div>
           <div class="loading-text" data-i18n="fragment.loadingModel">正在加载推理模型，请稍候...</div>
+          <!-- 主进程其实一直在推 svs:loadProgress（stage/percent/current/total），
+               之前没人订阅，遮罩只能干等。这里接上：进度条 + 阶段 + 文件计数。
+               没有进度事件时（旧后端 / CLI）这行保持隐藏，退回"已等待 N 秒"。 -->
+          <div class="loading-progress" id="model-loading-progress" hidden>
+            <div class="loading-progress-track">
+              <div class="loading-progress-fill" id="model-loading-progress-fill"></div>
+            </div>
+            <div class="loading-progress-meta" id="model-loading-progress-meta"></div>
+          </div>
+          <div class="loading-elapsed" id="model-loading-elapsed"></div>
+          <!-- 真取消做不到（主进程的 init 没有中止通道），但"继续在前台干等"不该是
+               唯一选项：音符编辑不依赖模型，用户可以先把音符改完。 -->
+          <button type="button" id="btn-loading-background" class="loading-background"
+                  data-i18n="fragment.loadingBackground"
+                  data-i18n-title="fragment.loadingBackgroundHint">先在后台加载</button>
         </div>
       </div>
 
@@ -19,8 +34,25 @@
       <div id="toolbar">
       <div class="toolbar-group">
         <button id="btn-play-fragment" title="Space" data-i18n="fragment.play" data-icon="play">播放</button>
-        <button id="btn-export-fragment" data-i18n="fragment.export" data-icon="download">导出</button>
-        <button id="btn-export-fragment-midi" data-i18n="fragment.exportMidi" data-icon="music">导出MIDI</button>
+      </div>
+      <div class="toolbar-divider"></div>
+      <!-- 导出与传输分开：原先 Play/Export/ExportMIDI 挤在同一组里，
+           和右侧的 tab（Manual/Score/MIDI/Pitch）形成"三个维度并排"的观感。
+           两个导出再收进一个 ▾：它们共享同一个对象（当前分片），只是格式不同，
+           并排两个按钮会让人先读两个名字才能决定点哪个。
+           注意：两个按钮的 id / 事件监听一律不动，只是搬进弹出层。 -->
+      <div class="toolbar-group export-group">
+        <div class="toolbar-popover-anchor">
+          <button id="btn-export-menu" type="button" class="btn-export-menu"
+                  aria-haspopup="menu"
+                  data-i18n="fragment.export" data-icon="download">导出</button>
+          <div class="toolbar-popover" id="export-menu-panel" hidden role="menu">
+            <button id="btn-export-fragment" role="menuitem"
+                    data-i18n="fragment.exportAudio" data-icon="download">导出音频</button>
+            <button id="btn-export-fragment-midi" role="menuitem"
+                    data-i18n="fragment.exportMidi" data-icon="music">导出MIDI</button>
+          </div>
+        </div>
       </div>
       <div class="toolbar-divider"></div>
       <div class="toolbar-group">
@@ -29,27 +61,28 @@
       <div class="toolbar-divider"></div>
       <div class="toolbar-group">
         <button id="btn-import-midi" data-i18n="fragment.importMidi" data-icon="music">导入MIDI</button>
-        <input type="checkbox" id="autoShiftCheck"><label for="autoShiftCheck">Auto Shift</label>
+        <input type="checkbox" id="autoShiftCheck"><label for="autoShiftCheck" data-i18n="fragment.autoShiftToggle">自动移调</label>
+      </div>
+      <div class="toolbar-divider"></div>
+      <div class="toolbar-group pitch-mode-group" id="pitch-mode-group">
+        <button id="btn-pitch-mode-manual" class="btn-pitch-mode active"
+                data-i18n="fragment.pitchModeManual"
+                data-i18n-title="fragment.pitchModeManualTitle">Manual</button>
+        <button id="btn-pitch-mode-score" class="btn-pitch-mode"
+                data-i18n="fragment.pitchModeScore"
+                data-i18n-title="fragment.pitchModeScoreTitle">Score</button>
       </div>
       <div class="toolbar-divider"></div>
       <div class="toolbar-group param-group">
         <button id="btn-param-MIDI" class="btn-param active" title="1">MIDI</button>
-        <button id="btn-param-Pitch" class="btn-param" title="2">Pitch</button>
+        <button id="btn-param-Pitch" class="btn-param" title="2" data-i18n="fragment.modePitch">音高</button>
       </div>
-      <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
-      <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
-          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
-          <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键调节平滑 · 中键框选</span>
-          <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
-          <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
-          <span class="pitch-hint" id="brush-smoothing-label">30</span>
-      </div>
-        <div class="toolbar-spacer"></div>
+      <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
-          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助"
+          <button id="btn-shortcuts" class="btn-shortcuts" aria-label="快捷键帮助"
                   data-icon="keyboard" data-icon-class="icon-only"
                   data-i18n-title="fragment.shortcutHelpTitle" data-i18n-aria-label="fragment.shortcutHelpTitle"></button>
-          <button id="btn-close" title="关闭窗口" data-i18n="fragment.close" data-icon="close">关闭</button>
+          <button id="btn-close" data-i18n-title="fragment.close" data-i18n="fragment.close" data-icon="close">关闭</button>
         </div>
       </div>
 
@@ -72,35 +105,67 @@
         </div>
         <div id="inspector-resize" class="inspector-resize"></div>
         <div id="inspector" class="inspector-panel">
-          <!-- Singer info -->
-          <div class="insp-section">
-            <div class="insp-head"><span data-i18n="fragment.inspSinger">歌手</span> <span class="tag" id="singer-tag">--</span></div>
+          <!-- Pitch curve tools：原先挂在工具栏右侧。Pitch 模式一开就多出 8 个
+               控件（约 500px），1000px 窗口的工具栏装不下，只能压扁或折行。
+               挪到这里：竖排后每个控件都有完整宽度，工具栏也不再溢出。
+               本节只在 Pitch 模式显示（见 uiControls.syncParamMode）。 -->
+          <div class="insp-section" id="pitch-curve-section" hidden>
+            <div class="insp-head"><span data-i18n="fragment.inspPitchCurve">音高曲线</span></div>
             <div class="insp-body">
-              <div class="singer-card">
-                <div class="singer-avatar" data-icon="microphone"></div>
-                <div class="singer-meta">
-                  <div class="singer-name" id="singer-name">--</div>
-                  <div class="singer-desc" id="singer-desc">--</div>
+              <div id="pitch-tools" class="pitch-tools-group">
+                <div class="field-row">
+                  <label class="lbl" for="auto-pitch-enabled" data-i18n="fragment.autoPitch">自动</label>
+                  <div class="ctrl">
+                    <input type="checkbox" id="auto-pitch-enabled">
+                    <select id="auto-pitch-preset" class="auto-pitch-preset" data-i18n-title="fragment.autoPitchPresetTitle">
+                      <option value="natural" data-i18n="fragment.autoPresetNatural">自然</option>
+                      <option value="soft" data-i18n="fragment.autoPresetSoft">柔和</option>
+                      <option value="power" data-i18n="fragment.autoPresetPower">有力</option>
+                      <option value="ballad" data-i18n="fragment.autoPresetBallad">叙事</option>
+                      <option value="off" data-i18n="fragment.autoPresetOff">关闭</option>
+                    </select>
+                  </div>
                 </div>
+                <div class="field-row pitch-btn-row">
+                  <button id="btn-pitch-reset" class="btn-pitch-tool" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
+                  <button id="btn-auto-pitch-params" class="btn-pitch-tool" data-i18n="fragment.autoPitchParams">参数</button>
+                </div>
+                <div class="field-row">
+                  <label class="lbl" for="pitch-batch-action" data-i18n="fragment.inspBatch">批量</label>
+                  <div class="ctrl">
+                    <select id="pitch-batch-action" class="auto-pitch-preset" data-i18n-title="fragment.pitchBatchTitle">
+                      <option value="" data-i18n="fragment.batchAction">批量…</option>
+                      <option value="up" data-i18n="fragment.batchUp">整体 +1 半音</option>
+                      <option value="down" data-i18n="fragment.batchDown">整体 −1 半音</option>
+                      <option value="quantize" data-i18n="fragment.batchQuantize">贴合到半音</option>
+                      <option value="simplify" data-i18n="fragment.batchSimplify">抽稀锚点</option>
+                      <option value="smooth" data-i18n="fragment.batchSmooth">平滑锚点</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <label class="lbl" for="brush-smoothing" data-i18n="fragment.smoothing">平滑</label>
+                  <div class="ctrl">
+                    <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
+                    <span class="pitch-smooth-value" id="brush-smoothing-label">30</span>
+                  </div>
+                </div>
+                <p class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键按住拖动调强度/平滑 · 中键框选</p>
               </div>
             </div>
           </div>
-          <!-- Note properties -->
-          <div class="insp-section" id="note-props-section">
-            <div class="insp-head"><span data-i18n="fragment.inspNote">音符属性</span> <span class="tag" id="note-select-tag" data-i18n="fragment.inspNoneSelected">未选中</span></div>
-            <div class="insp-body">
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspPitch">音高</div><div class="ctrl"><input type="text" id="note-pitch" value="--" style="flex:0 0 50px;text-align:center" readonly><div class="chip" id="note-freq"><span class="d"></span>-- Hz</div></div></div>
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspStart">起始</div><div class="ctrl"><input type="text" id="note-start" value="--" readonly></div></div>
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspDuration">时长</div><div class="ctrl"><input type="text" id="note-duration" value="--" readonly></div></div>
-              <div class="field-row"><div class="lbl" data-i18n="fragment.inspLyric">歌词</div><div class="ctrl"><input type="text" id="note-lyric" value="--"></div></div>
+          <!-- 自然度自检：把"听起来自然吗"变成可测量的数值 -->
+          <div class="insp-section" id="naturalness-section">
+            <div class="insp-head">
+              <span data-i18n="fragment.natTitle">自然度自检</span>
+              <span class="tag" id="nat-score-tag">--</span>
             </div>
-          </div>
-          <!-- Phoneme info -->
-          <div class="insp-section" id="phoneme-section">
-            <div class="insp-head"><span data-i18n="fragment.inspPhoneme">音素</span> <span class="tag" id="phoneme-tag" data-i18n="fragment.inspAuto">自动</span></div>
             <div class="insp-body">
-              <div class="phoneme-preview" id="phoneme-preview">--</div>
-              <div class="phoneme-grid" id="phoneme-grid"></div>
+              <div class="nat-actions">
+                <button type="button" id="btn-nat-run" data-i18n="fragment.natRun">运行自检</button>
+                <span class="nat-hint" data-i18n="fragment.natHint">对当前曲线采样，与真人歌唱区间比对</span>
+              </div>
+              <div id="nat-rows" class="nat-rows"></div>
             </div>
           </div>
           <!-- Expression / Timbre -->
@@ -122,20 +187,20 @@
       <!-- Bottom panel: parameter lanes -->
       <div id="param-panel">
         <div id="param-panel-header" class="param-panel-header">
-          <button id="btn-param-toggle" class="btn-param-toggle" title="收起/展开参数面板" aria-label="收起/展开参数面板"
+          <button id="btn-param-toggle" class="btn-param-toggle" aria-label="收起/展开参数面板"
                   data-icon="chevron-up" data-icon-class="icon-only"
                   data-i18n-title="fragment.paramPanelToggle" data-i18n-aria-label="fragment.paramPanelToggle"></button>
           <!-- Hidden select kept for JS compatibility (uiControls.js reads/writes it) -->
           <select id="param-mode-select" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
             <option value="VOL">VOL</option>
             <option value="PAN">PAN</option>
-            <option value="Phoneme">Phoneme</option>
+            <option value="Phoneme" data-i18n="fragment.lanePhoneme">音素</option>
             <option value="Timbre" data-i18n="fragment.laneTimbre">音色</option>
           </select>
           <div class="param-lane-tabs" id="param-lane-tabs">
             <button class="param-lane-tab active" data-lane="VOL">VOL</button>
             <button class="param-lane-tab" data-lane="PAN">PAN</button>
-            <button class="param-lane-tab" data-lane="Phoneme">Phoneme</button>
+            <button class="param-lane-tab" data-lane="Phoneme" data-i18n="fragment.lanePhoneme">音素</button>
             <button class="param-lane-tab" data-lane="Timbre" data-i18n="fragment.laneTimbre">音色</button>
           </div>
           <!-- 音色 lane 的参数子标签：每个参数一条独立曲线（量纲不同，不能共用一条曲线）。
@@ -146,14 +211,14 @@
 
       <!-- Status bar -->
       <div id="statusbar" class="statusbar">
-        <div class="s-item"><span class="led"></span><span data-i18n="fragment.statusReady">Ready</span></div>
+        <div class="s-item" id="status-model"><span class="led" id="status-model-led"></span><span id="status-model-text" data-i18n="fragment.statusReady">Ready</span></div>
         <div class="s-div"></div>
-        <div class="s-item"><span class="led led-accent"></span>SVS Pipeline</div>
+        <div class="s-item"><span class="led led-accent"></span><span data-i18n="fragment.statusPipeline">推理管线</span></div>
         <div class="s-div"></div>
         <div class="s-item"><span data-i18n="fragment.statusSampleRate">采样率</span> <b>24kHz</b></div>
         <div class="s-right">
           <div class="s-item" id="auto-save-indicator" title="" data-i18n="fragment.autoSaveIndicator" data-i18n-title="fragment.autoSaveHint">自动同步</div>
-          <div class="s-item">Hop <b>480</b></div>
+          <div class="s-item"><span data-i18n="fragment.statusHop">帧移</span> <b>480</b></div>
         </div>
       </div>
 
@@ -257,20 +322,30 @@
         <button type="button" class="pitch-ctx-preset" data-smoothness="100" data-i18n="fragment.smoothStrong">强烈</button>
       </div>
       <div class="pitch-ctx-divider"></div>
+      <div class="pitch-ctx-header">
+        <span data-i18n="fragment.anchorPitch">音高</span>
+        <span class="pitch-ctx-value" id="pitch-ctx-pitch-cents">+0¢</span>
+      </div>
+      <div class="pitch-ctx-numeric">
+        <input type="number" id="pitch-ctx-pitch-input" step="0.01" min="0" max="127" inputmode="decimal" data-i18n-title="fragment.pitchCentsHint">
+        <button type="button" id="pitch-ctx-pitch-apply" data-i18n="fragment.apply">应用</button>
+      </div>
+      <div class="pitch-ctx-divider"></div>
       <button type="button" id="pitch-ctx-delete" class="pitch-ctx-action pitch-ctx-danger" data-i18n="fragment.deleteAnchor">删除锚点</button>
     </div>
 
     <!-- Kanji group right-click context menu -->
     <div id="kanji-group-context-menu" class="kanji-ctx-menu" role="menu" aria-hidden="true" style="display:none">
-      <div class="kanji-ctx-header">汉字设置</div>
-      <button type="button" id="kanji-ctx-set-chinese" class="kanji-ctx-action">设为中文</button>
-      <button type="button" id="kanji-ctx-set-japanese" class="kanji-ctx-action">设为日语</button>
+      <div class="kanji-ctx-header" data-i18n="fragment.noteCtxKanji">汉字设置</div>
+      <button type="button" id="kanji-ctx-set-chinese" class="kanji-ctx-action" data-i18n="fragment.kanjiSetChinese">设为中文</button>
+      <button type="button" id="kanji-ctx-set-japanese" class="kanji-ctx-action" data-i18n="fragment.kanjiSetJapanese">设为日语</button>
     </div>
 
     <!-- Note right-click context menu (vibrato + fade) -->
     <div id="note-context-menu" class="note-ctx-menu" role="menu" aria-hidden="true" style="display:none">
       <div class="note-ctx-header">
         <span data-i18n="fragment.noteCtxVibrato">颤音</span>
+        <span id="note-ctx-vibrato-src" class="note-ctx-src" hidden></span>
         <label class="note-ctx-toggle" aria-hidden="true">
           <input type="checkbox" id="note-ctx-vibrato-toggle">
           <span class="note-ctx-toggle-track"><span class="note-ctx-toggle-thumb"></span></span>
@@ -338,6 +413,58 @@
           <button type="button" id="note-ctx-clear" class="note-ctx-action note-ctx-danger" data-i18n="fragment.noteCtxClear">清除效果</button>
         </div>
       </div>
+    </div>
+
+    <div id="auto-pitch-panel" class="auto-pitch-panel" hidden>
+      <div class="auto-pitch-panel-head">
+        <span data-i18n="fragment.autoPitchPanelTitle">自动音高曲线参数</span>
+        <button id="btn-auto-pitch-close" class="auto-pitch-close" data-i18n-title="fragment.close">×</button>
+      </div>
+      <div class="auto-pitch-grid">
+        <label data-i18n="fragment.autoParam.attackMs">起音时长 ms<input type="number" data-auto-param="attackMs" min="0" max="200" step="5"></label>
+        <label data-i18n="fragment.autoParam.attackCents">起音音分<input type="number" data-auto-param="attackCents" min="-200" max="50" step="5"></label>
+        <label data-i18n="fragment.autoParam.overshootCap">过冲上限 ¢<input type="number" data-auto-param="overshootMaxCents" min="0" max="120" step="5"></label>
+        <label data-i18n="fragment.autoParam.overshootRatio">过冲比例<input type="number" data-auto-param="overshootRatio" min="0" max="0.6" step="0.05"></label>
+        <label data-i18n="fragment.autoParam.prep">预备 ¢<input type="number" data-auto-param="prepCents" min="-60" max="0" step="5"></label>
+        <label data-i18n="fragment.autoParam.glide">滑音 ms<input type="number" data-auto-param="glideMs" min="0" max="300" step="10"></label>
+        <label data-i18n="fragment.autoParam.glideMin">滑音阈值 半音<input type="number" data-auto-param="glideMinSemitones" min="0" max="12" step="1"></label>
+        <label data-i18n="fragment.autoParam.releaseFall">句尾下滑 ¢<input type="number" data-auto-param="releaseCents" min="-100" max="0" step="5"></label>
+        <label data-i18n="fragment.autoParam.jitter">抖动 ¢<input type="number" data-auto-param="jitterCents" min="0" max="25" step="1"></label>
+        <label data-i18n="fragment.autoParam.quantize">量化 半音<input type="number" data-auto-param="quantize" min="0" max="1" step="0.5"></label>
+        <label data-i18n="fragment.autoParam.vibDepth">自动颤音深度 ¢<input type="number" data-auto-param="autoVibrato.depth" min="0" max="100" step="2"></label>
+        <label data-i18n="fragment.autoParam.vibRate">自动颤音速率 Hz<input type="number" data-auto-param="autoVibrato.rate" min="1" max="12" step="0.1"></label>
+        <label data-i18n="fragment.autoParam.vibRateDrift">颤音速率漂移 %<input type="number" data-auto-param="autoVibrato.drift" min="0" max="30" step="1"></label>
+        <label data-i18n="fragment.autoParam.vibDepthDrift">颤音幅度漂移 %<input type="number" data-auto-param="autoVibrato.depthDrift" min="0" max="40" step="1"></label>
+        <label data-i18n="fragment.autoParam.crossfade">边界过渡 ms<input type="number" data-auto-param="crossfadeMs" min="0" max="100" step="5"></label>
+        <label data-i18n="fragment.autoParam.transitionOwner">换音过渡归属
+          <select id="auto-glide-ownership">
+            <option value="auto" data-i18n="fragment.autoParam.ownerAuto">自动曲线接管</option>
+            <option value="post" data-i18n="fragment.autoParam.ownerPost">后处理接管</option>
+            <option value="both" data-i18n="fragment.autoParam.ownerBoth">两者叠加</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="auto-pitch-subhead" data-i18n="fragment.autoParam.subhead">自然度：逐音差异</div>
+      <div class="auto-pitch-grid">
+        <label data-i18n="fragment.autoParam.probVibrato">颤音概率 0–1<input type="number" data-auto-param="vibratoProbability" min="0" max="1" step="0.05"></label>
+        <label data-i18n="fragment.autoParam.probOvershoot">过冲概率 0–1<input type="number" data-auto-param="overshootProbability" min="0" max="1" step="0.05"></label>
+        <label data-i18n="fragment.autoParam.probPrep">预备概率 0–1<input type="number" data-auto-param="prepProbability" min="0" max="1" step="0.05"></label>
+        <label data-i18n="fragment.autoParam.probRelease">句尾概率 0–1<input type="number" data-auto-param="releaseProbability" min="0" max="1" step="0.05"></label>
+        <label data-i18n="fragment.autoParam.releaseScope">句尾作用域
+          <select id="auto-release-scope" data-auto-enum="releaseScope">
+            <option value="phrase" data-i18n="fragment.autoParam.scopePhrase">只在乐句尾/休止前</option>
+            <option value="always" data-i18n="fragment.autoParam.scopeAlways">每个音尾都下滑</option>
+          </select>
+        </label>
+        <label data-i18n="fragment.autoParam.releaseMinBeats">长音下滑阈值 拍<input type="number" data-auto-param="releaseMinBeats" min="0" max="8" step="0.5"></label>
+        <label data-i18n="fragment.autoParam.legatoGap">连奏间隙 拍<input type="number" data-auto-param="legatoGapBeats" min="0" max="1" step="0.02"></label>
+        <label data-i18n="fragment.autoParam.staccatoGap">断奏间隙 拍<input type="number" data-auto-param="staccatoGapBeats" min="0" max="2" step="0.05"></label>
+        <label data-i18n="fragment.autoParam.phraseGap">乐句间隙 拍<input type="number" data-auto-param="phraseGapBeats" min="0" max="4" step="0.1"></label>
+        <label data-i18n="fragment.autoParam.microGlide">级进微滑 ms<input type="number" data-auto-param="microGlideMs" min="0" max="150" step="5"></label>
+        <label data-i18n="fragment.autoParam.variation">逐音变化 %<input type="number" data-auto-param="variation" min="0" max="100" step="5"></label>
+      </div>
+      <div class="auto-pitch-note" data-i18n="fragment.autoParam.note">换音过渡归属设为「自动曲线接管」时，音色面板的「过渡」参数会被忽略，避免重复过冲。</div>
     </div>
   </body>
 </html>

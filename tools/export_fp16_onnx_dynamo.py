@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Export FP16 PyTorch model to ONNX via dynamo, optimize with Olive (DML GPU target),
-then compare speed and precision against FP32 ONNX.
+"""Export FP16/W16A32 PyTorch models to ONNX via dynamo, optimize with Olive
+(DML GPU target), then compare speed and precision against FP32 ONNX.
 
 Pipeline:
-  Phase 1: Export FP16 ONNX (dynamo=True, opset=20) for diff_step + vocoder
-  Phase 2: Olive optimization (AcceleratorSpec GPU + DmlExecutionProvider)
-  Phase 3: Compare FP16 vs FP32 ONNX (speed + precision: SNR, cos, L0)
+  Phase 1: Export ONNX (dynamo=True, opset=20) for diff_step + vocoder
+  Phase 2: Olive DML optimization; vocoder uses true W16A32 weight quantization
+  Phase 3: Compare FP16/W16A32 vs FP32 ONNX (speed + precision: SNR, cos, L0)
 
 Usage:
   python export_fp16_onnx_dynamo.py --phase export
@@ -195,29 +195,31 @@ def export_diff_step_fp16(model, config, output_dir):
 
 
 def export_vocoder_fp16(model_fp16, model_fp32, config, output_dir):
-    """Export vocoder as FP32 ONNX via dynamo=True, FP16 conversion deferred to Olive.
+    """Export vocoder as FP32 ONNX via dynamo=True; W16A32 conversion is in Phase 2.
 
     VocosFullWrapper cannot be directly exported as FP16 because ISTFT buffers
     (cos_basis, sin_basis, window) require FP32 precision, and dynamo export
     fails on mixed dtype operations (FP16 backbone output + FP32 ISTFT buffer).
 
-    Strategy: export FP32 ONNX with dynamo=True, then use Olive OnnxFloatToFloat16
-    (W16A32) in Phase 2 to convert weights to FP16 while keeping sensitive ops
-    (Exp, Cos, Sin, LayerNormalization) in FP32 via op_block_list.
+    Strategy: export FP32 ONNX with dynamo=True, then in Phase 2 convert only
+    Conv/MatMul weight initializers to FP16 and insert Cast(FP16->FP32) before
+    each consumer. All activations stay FP32. This is the true W16A32 path;
+    it is NOT Olive's OnnxFloatToFloat16 block-list output, which leaves many
+    activations in FP16 and can reproduce W16A16-style local 爆音.
     """
     from export_shared import VocosFullWrapper
 
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, 'vocoder_dml.onnx')
 
-    logger.info("Exporting vocoder ONNX (dynamo=True, opset=20, FP32 base for Olive W16A32)...")
+    logger.info("Exporting vocoder ONNX (dynamo=True, opset=20, FP32 base for true W16A32)...")
     t0 = time.time()
 
     # Use FP32 model for vocoder export (ISTFT requires FP32 precision)
     wrapper = VocosFullWrapper(model_fp32.vocoder).eval()
 
     param_count = sum(p.numel() for p in wrapper.parameters())
-    logger.info(f"  vocoder: {param_count/1e6:.1f}M params (FP32, will be W16A32 via Olive)")
+    logger.info(f"  vocoder: {param_count/1e6:.1f}M params (FP32, will be true W16A32: FP16 weights + FP32 activations)")
 
     voc_seq_len = 500
     mel = torch.randn(1, voc_seq_len, 128, dtype=torch.float32)
@@ -272,9 +274,9 @@ def phase_export():
     """Phase 1: Export FP16 ONNX models.
 
     diff_step: exported directly from FP16 PyTorch model (pure FP16 weights)
-    vocoder: exported from FP32 PyTorch model (FP16 conversion deferred to Olive
-             W16A32, because VocosFullWrapper ISTFT buffers require FP32 and
-             dynamo export fails on mixed dtype operations)
+    vocoder: exported from FP32 PyTorch model (true W16A32 conversion in Phase 2,
+             because VocosFullWrapper ISTFT buffers require FP32 and dynamo
+             export fails on mixed dtype operations)
 
     Skips models whose output already exists (set FORCE_REEXPORT=1 to override).
     """
@@ -294,7 +296,7 @@ def phase_export():
         del model_fp16
         gc.collect()
 
-    # vocoder: use FP32 model (ISTFT precision, FP16 via Olive W16A32)
+    # vocoder: use FP32 model (ISTFT precision, true W16A32 in Phase 2)
     vocoder_path = os.path.join(FP16_ONNX_DIR, 'vocoder_dml.onnx')
     if not force and os.path.exists(vocoder_path) and os.path.exists(vocoder_path + '.data'):
         logger.info(f"vocoder_dml.onnx already exists, skipping (set FORCE_REEXPORT=1 to re-export)")
@@ -430,9 +432,10 @@ def phase_optimize(models=None):
 
     diff_step: OnnxQuantizationPreprocess -> OnnxPeepholeOptimizer -> resolve_neg1
                (already FP16 weights from dynamo export)
-    vocoder:  OnnxQuantizationPreprocess -> OnnxPeepholeOptimizer -> OnnxFloatToFloat16
-              (W16A32) -> resolve_neg1
-              (FP32 base, FP16 conversion via Olive with op_block_list for sensitive ops)
+    vocoder:  OnnxQuantizationPreprocess -> OnnxPeepholeOptimizer ->
+               fix_neg1_const_reshapes -> quantize_weights_to_fp16 ->
+               repair_fp16_consumer_edges
+               (FP16 Conv/MatMul weights + Cast(FP16->FP32); all activations FP32)
 
     Args:
         models: optional list of model names to process (e.g. ['vocoder_dml.onnx']).
@@ -443,8 +446,7 @@ def phase_optimize(models=None):
     from olive.model import ONNXModelHandler
     from olive.passes.onnx.quantization import OnnxQuantizationPreprocess
     from olive.passes.onnx.peephole_optimizer import OnnxPeepholeOptimizer
-    from olive.passes.onnx.float16_conversion import OnnxFloatToFloat16
-    from export_shared import resolve_neg1_in_reshape_shapes
+    from export_shared import resolve_neg1_in_reshape_shapes, quantize_weights_to_fp16
     import onnx
     from onnx import shape_inference
 
@@ -460,19 +462,10 @@ def phase_optimize(models=None):
 
     os.makedirs(FP16_ONNX_DIR, exist_ok=True)
 
-    # Vocoder W16A32 op_block_list: keep sensitive ops in FP32
-    # (ISTFT Exp/Cos/Sin, LayerNormalization, etc.)
-    # DML-targeted FP16 conversion is more aggressive than CPU-targeted, so we
-    # must also block Div and Clip to protect the window envelope normalization:
-    #   y = y / window_envelope.clamp(min=1e-11)
-    # In FP16, 1e-11 underflows to 1e-7, and the Div in FP16 loses precision,
-    # causing output explosion (std 0.7 vs expected 0.005).
-    VOCODER_OP_BLOCK_LIST = [
-        'Softmax', 'LayerNormalization', 'ReduceMean', 'Pow', 'Sqrt',
-        'Reciprocal', 'Exp', 'Cos', 'Sin', 'Erf', 'Sigmoid', 'Tanh',
-        'Div', 'Clip',  # window envelope normalization must stay FP32
-    ]
-
+    # NOTE: The vocoder intentionally does NOT use Olive OnnxFloatToFloat16.
+    # That pass (even with op_block_list) leaves many Conv/Gelu/Add/Mul
+    # activations in FP16, which causes localized 爆音. True W16A32 means only
+    # Conv/MatMul weights are FP16; every activation stays FP32.
     all_models = ['diff_step_dml.onnx', 'vocoder_dml.onnx']
     if models:
         all_models = [m for m in all_models if m in models]
@@ -528,48 +521,43 @@ def phase_optimize(models=None):
         model = peephole_pass.run(model, peephole_dir)
         logger.info("OnnxPeepholeOptimizer completed")
 
-        # Step 3: For vocoder, apply OnnxFloatToFloat16 (W16A32) conversion
-        if is_vocoder:
-            logger.info(f"Step 3: OnnxFloatToFloat16 (W16A32, op_block_list={VOCODER_OP_BLOCK_LIST})")
-            fp16_dir = str(work_dir / "fp16")
-            fp16_config = OnnxFloatToFloat16.generate_config(
-                ACCEL_SPEC,
-                {
-                    "op_block_list": VOCODER_OP_BLOCK_LIST,
-                    "keep_io_types": True,
-                },
-            )
-            fp16_pass = OnnxFloatToFloat16(ACCEL_SPEC, fp16_config)
-            model = fp16_pass.run(model, fp16_dir)
-            logger.info("OnnxFloatToFloat16 completed")
-
-        # Post-processing: resolve_neg1 for DML compat + save final output
-        #
-        # IMPORTANT: For vocoder, the load+save cycle after FP16 conversion
-        # corrupts ISTFT basis precision (SNR drops from 33dB to -43dB).
-        # The Olive OnnxFloatToFloat16 output must be used directly (copy only).
-        # resolve_neg1_in_reshape_shapes is only needed for diff_step (dynamo
-        # export produces Concat([..., -1, ...]) shapes unsupported by DML).
-        # The vocoder's dynamo export doesn't produce -1 Reshape shapes, so
-        # it works on DML without resolve_neg1.
+        # Post-processing: DML shape fixes + dtype conversion + save.
+        # - diff_step: dynamo export already has FP16 weights; only resolve -1
+        #   Reshape specs, then save.
+        # - vocoder: the Olive output is still FP32. Apply true W16A32:
+        #   fix DML -1 Reshape specs, convert only Conv/MatMul weights to FP16,
+        #   and insert Cast(FP16->FP32) for every weight edge (including
+        #   weight-first MatMul chains). All activations remain FP32.
         final_model_path = Path(model.model_path)
 
         if is_vocoder:
-            # Vocoder: copy Olive output directly (load+save corrupts FP16 ISTFT)
-            logger.info("Copying Olive output directly (vocoder: load+save corrupts FP16 precision)")
+            from export_vocoder_w16a32_pt import (
+                fix_neg1_const_reshapes,
+                repair_fp16_consumer_edges,
+            )
+
+            logger.info("Step 3: true W16A32 conversion (FP16 weights, FP32 activations)")
+            pre_proto = onnx.load(str(final_model_path), load_external_data=True)
+            pre_proto = fix_neg1_const_reshapes(pre_proto)
+            pre_proto = quantize_weights_to_fp16(pre_proto)
+            extra = repair_fp16_consumer_edges(pre_proto)
+            logger.info(f"  repair_fp16_consumer_edges: +{extra} Cast node(s)")
+
+            logger.info("Saving W16A32 output with external data format")
             if model_path.exists():
                 model_path.unlink()
             old_data = model_path.with_name(model_path.name + ".data")
             if old_data.exists():
                 old_data.unlink()
 
-            shutil.copy2(str(final_model_path), str(model_path))
-            # Copy external data file
-            olive_data = final_model_path.with_name(final_model_path.name + ".data")
-            if olive_data.exists():
-                target_data = model_path.with_name(model_path.name + ".data")
-                shutil.copy2(str(olive_data), str(target_data))
-            logger.info("Vocoder output copied (no load+save cycle)")
+            onnx.save_model(
+                pre_proto,
+                str(model_path),
+                save_as_external_data=True,
+                all_tensors_to_one_file=True,
+                location=model_path.name + ".data",
+                size_threshold=1024,
+            )
         else:
             # diff_step: resolve_neg1_in_reshape_shapes + save
             logger.info("Step 3: resolve_neg1_in_reshape_shapes (diff_step)")
@@ -616,6 +604,64 @@ def phase_optimize(models=None):
         logger.info(f"Final model: {node_count} nodes")
         for op, cnt in sorted(op_counts.items(), key=lambda x: -x[1])[:8]:
             logger.info(f"  {op}: {cnt}")
+
+        # Post-save W16A32 sanity check. True W16A32 means:
+        #   1. FP16 initializers are weights only;
+        #   2. every FP16 initializer feeds a Cast(FP16->FP32);
+        #   3. no Cast downcasts anything to FP16;
+        #   4. graph I/O stays FP32.
+        # Any FP16 weight consumed directly by an op (or any FP16 downcast) means
+        # activations can become FP16, i.e. the W16A16-style 爆音 risk is back.
+        if is_vocoder:
+            fp16_inits = {
+                init.name for init in result_model.graph.initializer
+                if init.data_type == onnx.TensorProto.FLOAT16
+            }
+            casts_to_fp32 = {
+                node.input[0] for node in result_model.graph.node
+                if node.op_type == 'Cast' and node.input
+                and any(attr.name == 'to' and attr.i == onnx.TensorProto.FLOAT
+                        for attr in node.attribute)
+            }
+            downcasts = [
+                node.output[0] for node in result_model.graph.node
+                if node.op_type == 'Cast' and node.output
+                and any(attr.name == 'to' and attr.i == onnx.TensorProto.FLOAT16
+                        for attr in node.attribute)
+            ]
+            missing_cast = sorted(fp16_inits - casts_to_fp32)
+            direct_fp16_edges = [
+                f"{node.op_type} <- {inp}"
+                for node in result_model.graph.node
+                for inp in node.input
+                if inp in fp16_inits and node.op_type != 'Cast'
+            ]
+            cast_count = sum(1 for n in result_model.graph.node if n.op_type == 'Cast')
+            logger.info(
+                f"W16A32 check: {len(fp16_inits)} FP16 initializers, "
+                f"{cast_count} Cast nodes, {len(missing_cast)} weight(s) without FP32 cast"
+            )
+            non_float_inputs = [
+                i.name for i in result_model.graph.input
+                if i.type.tensor_type.elem_type != onnx.TensorProto.FLOAT
+            ]
+            logger.info(f"  graph inputs: {[(i.name, i.type.tensor_type.elem_type) for i in result_model.graph.input]}")
+            if (
+                not fp16_inits
+                or missing_cast
+                or direct_fp16_edges
+                or downcasts
+                or non_float_inputs
+            ):
+                logger.error(
+                    f"W16A32 check FAILED: missing_cast={missing_cast[:5]}, "
+                    f"direct_fp16_edges={direct_fp16_edges[:5]}, "
+                    f"downcasts={downcasts[:5]}, non_float_inputs={non_float_inputs}"
+                )
+                raise RuntimeError(
+                    "Vocoder is not true W16A32: FP16 activations would be possible"
+                )
+            logger.info("  W16A32 check passed: FP16 weights only, all activations FP32")
 
     logger.info("Phase 2 complete.")
 

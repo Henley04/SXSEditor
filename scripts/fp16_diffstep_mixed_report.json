@@ -1,0 +1,210 @@
+{
+  "softmax_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[Softmax]",
+        "sqnr_db": 47.89202021816824,
+        "p50_ms": 23.75,
+        "p90_ms": 24.71,
+        "min_ms": 20.47
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 22.49,
+        "p90_ms": 25.54,
+        "min_ms": 19.6
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 43.37,
+        "p90_ms": 45.98,
+        "min_ms": 41.55
+      }
+    ]
+  },
+  "ln_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[ReduceMean,Sqrt,Reciprocal,Pow]",
+        "sqnr_db": 47.504001773233064,
+        "p50_ms": 21.23,
+        "p90_ms": 25.79,
+        "min_ms": 20.58
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 21.32,
+        "p90_ms": 24.85,
+        "min_ms": 19.09
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 41.18,
+        "p90_ms": 43.64,
+        "min_ms": 40.23
+      }
+    ]
+  },
+  "ln_silu_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[ReduceMean,Sqrt,Reciprocal,Pow,Sigmoid]",
+        "sqnr_db": 48.65999632942539,
+        "p50_ms": 22.65,
+        "p90_ms": 24.29,
+        "min_ms": 21.47
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 21.4,
+        "p90_ms": 22.62,
+        "min_ms": 19.56
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 40.07,
+        "p90_ms": 40.62,
+        "min_ms": 39.46
+      }
+    ]
+  },
+  "ln_time_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[ReduceMean,Sqrt,Reciprocal,Pow,Sin,Cos]",
+        "sqnr_db": 47.504001773233064,
+        "p50_ms": 21.78,
+        "p90_ms": 27.44,
+        "min_ms": 20.71
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 20.71,
+        "p90_ms": 23.62,
+        "min_ms": 19.67
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 39.96,
+        "p90_ms": 42.05,
+        "min_ms": 39.1
+      }
+    ]
+  },
+  "gemm_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[Gemm]",
+        "sqnr_db": 47.502627700861254,
+        "p50_ms": 19.02,
+        "p90_ms": 21.38,
+        "min_ms": 18.44
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 21.23,
+        "p90_ms": 23.98,
+        "min_ms": 19.36
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 41.56,
+        "p90_ms": 43.38,
+        "min_ms": 38.6
+      }
+    ]
+  },
+  "gemm_ln_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[Gemm,ReduceMean,Sqrt,Reciprocal,Pow,Sigmoid]",
+        "sqnr_db": 48.65999632942539,
+        "p50_ms": 23.88,
+        "p90_ms": 26.14,
+        "min_ms": 22.03
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 22.58,
+        "p90_ms": 25.47,
+        "min_ms": 19.63
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 40.76,
+        "p90_ms": 45.17,
+        "min_ms": 39.91
+      }
+    ]
+  },
+  "gemm_fp32_only": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[MatMul,Gemm]",
+        "sqnr_db": 49.876628640792795,
+        "p50_ms": 53.08,
+        "p90_ms": 56.15,
+        "min_ms": 47.75
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 27.11,
+        "p90_ms": 28.48,
+        "min_ms": 22.01
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 50.74,
+        "p90_ms": 52.06,
+        "min_ms": 49.72
+      }
+    ]
+  },
+  "addmul_fp32": {
+    "seq": 256,
+    "results": [
+      {
+        "label": "mixed[Add,Mul]",
+        "sqnr_db": 46.98117518742416,
+        "p50_ms": 30.35,
+        "p90_ms": 35.27,
+        "min_ms": 26.3
+      },
+      {
+        "label": "fp16(all)",
+        "sqnr_db": 48.12816864194241,
+        "p50_ms": 20.71,
+        "p90_ms": 24.82,
+        "min_ms": 20.28
+      },
+      {
+        "label": "fp32(dml)",
+        "sqnr_db": 115.1704488699431,
+        "p50_ms": 44.86,
+        "p90_ms": 48.0,
+        "min_ms": 43.43
+      }
+    ]
+  }
+}

@@ -36,6 +36,7 @@ const BOOLEAN_SETTING_KEYS = new Set([
   'previewEnableQDrift',
   'exportEnableQDrift',
   'diagnosticMode',
+  'pluginFileAssociations',
   'previewDynamicThresholdEnabled',
   'exportDynamicThresholdEnabled',
 ]);
@@ -58,6 +59,9 @@ function isValidSettingValue(key, value) {
       return value >= 1 && value <= 4096;
     case 'modelPrecision':
       return VALID_MODEL_PRECISIONS.includes(value);
+    case 'winmlPreferredDevice':
+      // 只接受三种硬件类型或空串（空 = 该 EP 的全部设备）。
+      return typeof value === 'string' && ['', 'gpu', 'cpu', 'npu'].includes(value.toLowerCase());
     case 'previewDynamicThresholdPercentile':
     case 'exportDynamicThresholdPercentile':
       if (typeof value !== 'number' || !Number.isFinite(value)) return false;
@@ -71,6 +75,14 @@ function isValidSettingValue(key, value) {
 }
 
 let cachedDMLDevices = null;
+
+// P12: SETTINGS_CHECK_MODELS 会同步扫描 4 个精度目录下的全部模型文件，
+// 设置页每次打开/切精度都会调用。以 modelDir 为键做 30s TTL 缓存，
+// 避免重复的同步 IO 阻塞主进程；返回结构保持不变。
+const MODEL_CHECK_CACHE_TTL_MS = 30000;
+// 存在缺失文件时的短 TTL：下载完成后用户会立刻回到设置页。
+const MODEL_CHECK_MISSING_TTL_MS = 3000;
+let _modelCheckCache = { key: null, at: 0, result: null };
 
 function setCachedDMLDevices(devices) {
   cachedDMLDevices = devices;
@@ -126,10 +138,14 @@ function registerSettingsIpc() {
     }
   });
 
-  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async () => {
+  // 设置页的设备下拉需要"EP + 硬件"粒度（OpenVINO 的 GPU / CPU / NPU 分开选），
+  // 因此返回 listProviderDevices 而不是裸的 catalog 名单。门控关闭时它内部会
+  // 自动降级成"只有 EP 名、没有设备"，不会去注册 EP。
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async (_event, options = {}) => {
     if (process.platform !== 'win32') return [];
     try {
-      return await require('../inference/winml/winmlProvider').listCompatibleProviders();
+      return await require('../inference/winml/winmlProvider')
+        .listProviderDevices({ forceRefresh: options?.forceRefresh === true });
     } catch (err) {
       console.warn('[Main] Windows ML provider discovery failed:', err.message);
       return [];
@@ -260,6 +276,17 @@ function registerSettingsIpc() {
       await updateLocaleSetting(settings.locale);
     }
 
+    // 系统关联开关变了：立刻同步注册表。非 Windows / 未打包时这个调用内部直接
+    // 返回 —— 开发机上不该因为点了个设置项就去写注册表。
+    if (filtered.pluginFileAssociations !== undefined) {
+      try {
+        const { syncWindowsPluginFileAssociations } = require('./fileAssociation');
+        await syncWindowsPluginFileAssociations();
+      } catch (err) {
+        console.warn('[Main] Failed to sync plugin file associations:', err && err.message);
+      }
+    }
+
     // 精度 / 设备设置变化时必须重置 pipeline，
     // 否则切换 INT8-NPU 等精度后仍使用旧 pipeline（模型仍加载在旧设备上）
     //
@@ -283,6 +310,12 @@ function registerSettingsIpc() {
         // Windows ML vendor EP 开关影响 diffStep/vocoder/preflow 会话创建路径，
         // 切换后必须重建 pipeline（重建时 createSessionWithValidation 才会尝试 WinML 链）
         'winmlEnabled',
+        // 手动指定的 WinML EP / 硬件（如 OpenVINO→NPU）只在建会话时生效，
+        // 不重建 pipeline 的话用户改了设备却仍是旧会话在跑。
+        'winmlPreferredEp', 'winmlPreferredDevice',
+        // 显式后端（auto / winml / dml）也要参与判定：它与 winmlEnabled 一起
+        // 决定 WinML 门控，只比较派生值会漏掉"后端改了但派生值相同"的情形。
+        'nativeInferenceBackend',
     ];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
@@ -294,10 +327,26 @@ function registerSettingsIpc() {
     const vocoderTypeChanged = current.vocoderType !== merged.vocoderType;
     const sifiganPrecisionChanged = current.sifiganPrecision !== merged.sifiganPrecision;
     if (needsPipelineReset) {
+      // 后端在 DML 与 Windows ML 间切换时，主进程 winmlProvider 里缓存的
+      // EP 解析结果、运行期失败 pin、已注册集合必须一并失效。只重建 pipeline
+      // 不会清这些模块级单例：DML 期间缓存的空 EP 列表会让切回 Windows ML
+      // 后所有模型继续回退 DML，界面 EP 恒定显示 DML。
+      const backendChanged = current.nativeInferenceBackend !== merged.nativeInferenceBackend
+        || current.winmlEnabled !== merged.winmlEnabled;
+      if (backendChanged) {
+        try {
+          require('../inference/winml/winmlProvider').resetEpState();
+        } catch (err) {
+          console.warn('[Main] WinML EP state reset failed:', err && err.message);
+        }
+      }
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
+      // R23: 设备/精度相关设置已变，旧的 DML 设备列表缓存不再可信（原先该函数
+      // 定义并导出但全仓无调用），下次 SETTINGS_GET_DML_DEVICES 重新枚举。
+      invalidateDMLDevices();
       // Windows ML 开启时后台预热：立即解析/下载兼容 EP 的 MSIX 运行库，
       // 下一次合成 spawn worker 时 getReadyEpLibraries() 即可拿到就绪列表。
       if (merged.winmlEnabled === true && current.winmlEnabled !== true) {
@@ -345,8 +394,8 @@ function registerSettingsIpc() {
     if (jpVocalizationChanged && !needsPipelineReset) {
       const pipeline = getSvsPipeline();
       if (pipeline && pipeline._textProcessing) {
-        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'hybrid';
-        pipeline._japaneseVocalization = merged.japaneseVocalization || 'hybrid';
+        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
+        pipeline._japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
         // Clear synthesis cache: phoneme processing changed, old results are stale
         if (typeof pipeline.clearSynthCache === 'function') {
           pipeline.clearSynthCache();
@@ -356,14 +405,44 @@ function registerSettingsIpc() {
     }
 
     // 硬件探测仅在应用启动后执行一次并缓存复用，
-    // 保存设置时不再失效 GPU/DML 缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
+    // 保存设置时不再失效 GPU 探测缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
     // 同时规避检测与推理并发提交命令流导致 DXGI_ERROR_DEVICE_REMOVED 的风险）。
+    // 注意：上面 needsPipelineReset 分支里的 invalidateDMLDevices() 只清空
+    // 设备列表缓存，下一次 SETTINGS_GET_DML_DEVICES 才会重新枚举，本身不触发探测。
 
     return { success: true };
   });
 
-  safeHandle(IPC_CHANNELS.GET_LOCALE, async () => {
-    return require('./locale').getLocale();
+  // GET_LOCALE 已上移到 main.js 的 STEP 1.5 单独注册（渲染进程首启的 initI18n()
+  // 会在 did-finish-load 之前就询问语言，等不到本文件所在的 STEP 4）。
+  // 注意 ipcMain.handle 对同一 channel 重复注册会抛错，所以这里必须移除而不是保留。
+
+  // 清理推理层持久化缓存：dummy 校验记录 + WinML EP 探测结果 + TRT engine。
+  // 这是缓存误命中（换卡 / 换驱动 / 引擎损坏）时唯一的用户级恢复入口，
+  // 否则只能手动去 userData / %TEMP% 删文件。
+  safeHandle(IPC_CHANNELS.SETTINGS_CLEAR_INFERENCE_CACHE, async () => {
+    const result = { validation: false, detection: false, trtEngines: 0 };
+    try {
+      await require('../inference/pipeline/sessionValidationCache').clearValidationCache();
+      result.validation = true;
+    } catch (err) {
+      console.warn('[Settings] Failed to clear session validation cache:', err && err.message);
+    }
+    try {
+      await require('../inference/winml/winmlDetectionCache').clear();
+      result.detection = true;
+    } catch (err) {
+      console.warn('[Settings] Failed to clear WinML probe cache:', err && err.message);
+    }
+    try {
+      result.trtEngines = require('../inference/winml/winmlProvider').clearTRTEngineCache();
+    } catch (err) {
+      console.warn('[Settings] Failed to clear TRT engine cache:', err && err.message);
+    }
+    // 内存里的 _validatedSessionModels / EP 状态不清：它们描述的是当前进程
+    // 已建好的 session，清掉只会让正在使用的管线重复校验，不会改变磁盘缓存。
+    console.log('[Settings] Inference cache cleared:', result);
+    return result;
   });
 
   safeHandle(IPC_CHANNELS.SETTINGS_RUN_TRTRTX_DIAGNOSTIC, async () => {
@@ -475,14 +554,38 @@ function registerSettingsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.SETTINGS_CHECK_MODELS, async () => {
-    const { checkMissingFiles } = require('../modelManager');
     const modelDir = getModelDir();
+    const cacheKey = modelDir || '';
+    const now = Date.now();
+    if (_modelCheckCache.key === cacheKey
+      && _modelCheckCache.result
+      && now - _modelCheckCache.at < (_modelCheckCache.ttl || MODEL_CHECK_CACHE_TTL_MS)) {
+      return _modelCheckCache.result;
+    }
+    const { checkMissingFiles } = require('../modelManager');
     const precisions = ['fp32', 'fp16', 'int8', 'int8-npu'];
     const result = {};
     for (const p of precisions) {
       const { missing, existing } = checkMissingFiles(modelDir, p);
-      result[p] = { ready: missing.length === 0, missing: missing.length, total: missing.length + existing.length };
+      // 界面要在行内显示"还差多少体积"，否则只有一句 "18 files missing"，
+      // 用户既不知道要下多久，也没有就地开始的入口。manifest 条目自带 size。
+      const missingBytes = missing.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
+      result[p] = {
+        ready: missing.length === 0,
+        missing: missing.length,
+        total: missing.length + existing.length,
+        missingBytes,
+      };
     }
+    // 全量就绪时缓存 30s；存在缺失时只缓存 3s —— 用户刚下载完模型返回设置页
+    // 必须立刻看到“已就绪”，30s 的陈旧负结果会被误读成下载失败。
+    const allReady = precisions.every((p) => result[p].ready);
+    _modelCheckCache = {
+      key: cacheKey,
+      at: now,
+      result,
+      ttl: allReady ? MODEL_CHECK_CACHE_TTL_MS : MODEL_CHECK_MISSING_TTL_MS,
+    };
     return result;
   });
 

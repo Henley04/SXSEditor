@@ -1,5 +1,5 @@
 const { expect } = require('chai');
-const sinon = require('sinon');
+const _sinon = require('sinon');
 
 describe('ortOptions', () => {
   let buildSessionOptions, LOG_SEVERITY_MAP, GRAPH_OPT_LEVELS;

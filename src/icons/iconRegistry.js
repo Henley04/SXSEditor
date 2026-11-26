@@ -33,6 +33,8 @@ export const ICON_REGISTRY = {
     music: () => '<path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
     'music-note': () => '<path d="M10 18V5l9-2v13"/><circle cx="7" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>',
     'file-music': () => '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><circle cx="11" cy="16" r="2"/><path d="M13 16V11l3-1v6"/><circle cx="14" cy="15" r="2"/>',
+    // 欢迎页「新建工程」：一张带加号的空白文件（不是加号本身，语义是"新建文件"）。
+    'file-plus': () => '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M12 11v6"/><path d="M9 14h6"/>',
     sliders: () => '<path d="M4 6h10"/><path d="M18 6h2"/><path d="M4 12h4"/><path d="M12 12h8"/><path d="M4 18h12"/><path d="M20 18h0"/><circle cx="16" cy="6" r="2.2"/><circle cx="10" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
     search: () => '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/>',
     market: () => '<path d="M3 7h18l-1.5 12a1 1 0 0 1-1 0.9H5.5a1 1 0 0 1-1-0.9z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/>',
@@ -57,6 +59,8 @@ export const ICON_REGISTRY = {
     'chevron-up': () => '<path d="M6 15l6-6 6 6"/>',
     'chevron-down': () => '<path d="M6 9l6 6 6-6"/>',
     'chevron-right': () => '<path d="M9 6l6 6-6 6"/>',
+    // 顶栏"更多操作"。三个圆点，不用省略号字符（各平台字形宽度不一致）。
+    'more-horizontal': () => '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
 
     // ===== Status / utility =====
     info: () => '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.5" r="0.8" fill="currentColor" stroke="none"/>',

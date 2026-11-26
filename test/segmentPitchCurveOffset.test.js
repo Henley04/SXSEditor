@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const { OnnxSVSPipeline } = require('../src/inference/pipeline');
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, COND_DIM } = require('../src/inference/pipeline/constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM: _MEL_DIM, COND_DIM } = require('../src/inference/pipeline/constants');
 
 /**
  * 多 segment 合成中 pitchCurveF0 的绝对时间对齐回归测试。

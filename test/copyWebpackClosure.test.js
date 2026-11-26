@@ -26,6 +26,7 @@ const MAIN_OUT = path.join(ROOT, '.webpack', 'main');
 
 const webpackMain = require(path.join(ROOT, 'webpack.main.config.js'));
 const configs = Array.isArray(webpackMain) ? webpackMain : [webpackMain];
+const { BUILTIN_PLUGIN_IDS } = require(path.join(ROOT, 'src/shared/builtinPluginIds.js'));
 
 /**
  * 裸加载入口 = 单独（而非随目录）拷贝的 .js 文件，外加少量显式登记项。
@@ -41,6 +42,10 @@ const EXTRA_RAW_ENTRIES = [
   // pluginWorker.js 落在 `src/main` 目录拷贝范围内，但它是 worker 入口
   // （见 pluginHost.js 的 WORKER_ENTRY_CANDIDATES），必须按路径裸加载。
   path.join(MAIN_OUT, 'main', 'pluginWorker.js'),
+  // 插件 runtime 入口：由 utilityProcess.fork 按路径拉起（见
+  // PluginRuntimeManager.resolveRuntimeEntry），同样落在 `src/main` 树拷贝里。
+  // 它 require 的同目录 ortRunner.js / sandbox.js 必须一起被拷到。
+  path.join(MAIN_OUT, 'main', 'plugins', 'runtime', 'pluginRuntimeEntry.js'),
 ];
 
 function toPosix(p) {
@@ -199,5 +204,48 @@ describe('CopyPlugin 拷贝树依赖闭包', () => {
       0,
       '裸加载入口存在未被拷贝的依赖：\n  - ' + problems.join('\n  - ')
     );
+  });
+
+  it('清单里的每个内置插件都整目录随包分发到 bundled-plugins，入口相对依赖自洽', () => {
+    // 清单驱动：打包拷贝、启动安装与这份守卫共用 src/shared/builtinPluginIds.js。
+    // 遍历而不是写死某几个 id，是为了让"新增内置插件但漏配 CopyPlugin"直接失败。
+    assert.ok(BUILTIN_PLUGIN_IDS.length > 0, '内置插件清单为空，守卫形同虚设');
+
+    for (const id of BUILTIN_PLUGIN_IDS) {
+      const bundled = path.join(MAIN_OUT, 'bundled-plugins', id);
+      const srcDir = path.join(ROOT, 'plugins', id);
+
+      const srcFiles = [];
+      const walk = (dir) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const abs = path.join(dir, e.name);
+          if (e.isDirectory()) walk(abs);
+          else srcFiles.push(toPosix(path.relative(srcDir, abs)));
+        }
+      };
+      walk(srcDir);
+      assert.ok(srcFiles.length > 0, `未找到内置插件 ${id} 的源码文件`);
+
+      // 打包后 builtinPlugins.js 从 app.asar/.webpack/main/bundled-plugins/<id>/
+      // 复制整目录；少任何一个文件，首次启动都会装出一个缺依赖的插件。
+      for (const rel of srcFiles) {
+        assert.ok(
+          copied.has(path.join(bundled, rel)),
+          `内置插件 ${id} 的文件 ${rel} 未被 CopyPlugin 拷贝到 bundled-plugins —— 首次启动会装出不完整的插件`
+        );
+      }
+
+      // 插件 runtime 按路径 require main.js，它的相对依赖必须都在同一个随包目录内。
+      const mainText = fs.readFileSync(path.join(srcDir, 'main.js'), 'utf8');
+      REQUIRE_RE.lastIndex = 0;
+      let m;
+      while ((m = REQUIRE_RE.exec(mainText)) !== null) {
+        const rel = toPosix(path.normalize(m[2])).replace(/^\.\//, '');
+        const hit = srcFiles.some(
+          (f) => f === rel || f === `${rel}.js` || f === `${rel}.json` || f === `${rel}/index.js`
+        );
+        assert.ok(hit, `内置插件 ${id} 的 main.js require('${m[2]}') 不在随包目录内，打包后会 MODULE_NOT_FOUND`);
+      }
+    }
   });
 });

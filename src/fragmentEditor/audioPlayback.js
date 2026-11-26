@@ -1,56 +1,58 @@
 // B2: wavEncoder.js is now CommonJS — use require instead of ESM import.
 const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
-// 2.4: 清理型副作用统一走 safeCleanup，失败留痕不打断主流程（原先是 12 处空 catch）
 import safeCallModule from '../shared/safeCall.js';
 
-const { safeCleanup } = safeCallModule;
+const { safeCleanup: _safeCleanup } = safeCallModule;
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
-import { StreamingScheduler } from '../shared/streamingScheduler.js';
-// 播放头必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
-// （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
-import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
 import {
   getSampleRate,
-  getFragmentAudioContext, setFragmentAudioContext,
-  getFragmentAudioSource, setFragmentAudioSource,
   getFragmentAudioData, setFragmentAudioData,
-  getFragmentIsPlaying, setFragmentIsPlaying,
-  getFragmentIsSynthesizing, setFragmentIsSynthesizing,
+  getFragmentIsPlaying,
+  getFragmentIsSynthesizing,
+  beginFragmentSynthesis, finishFragmentSynthesis,
+  getFragmentSynthesisId, waitForFragmentPlayheadDragEnd,
   getFragmentIsAutoInferring, setFragmentIsAutoInferring,
   getFragmentIsExporting, setFragmentIsExporting,
-  getFragmentPlaybackStartTime, setFragmentPlaybackStartTime,
-  getFragmentPlaybackOffset, setFragmentPlaybackOffset,
-  getFragmentPlayheadRaf, setFragmentPlayheadRaf,
-  getFragmentCurrentTime, setFragmentCurrentTime,
-  getFragmentGainNode, setFragmentGainNode,
-  getFragmentUseExclusiveMode, setFragmentUseExclusiveMode,
-  getFragmentExclusiveRaf, setFragmentExclusiveRaf,
-  getFragmentAudioSettings, setFragmentAudioSettings,
-  getFragmentPlayStartPosition, setFragmentPlayStartPosition,
+  getFragmentCurrentTime as _getFragmentCurrentTime, setFragmentCurrentTime,
+  getFragmentUseExclusiveMode as _getFragmentUseExclusiveMode,
+  getFragmentAudioSettings,
+  getFragmentPlayStartPosition as _getFragmentPlayStartPosition, setFragmentPlayStartPosition,
   getFragmentAudioDataSignature, setFragmentAudioDataSignature,
   getPipelineInitialized,
   getWavFileBuffer,
+  getSingerAnnotation,
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
   getTrackBackend,
 } from './state.js';
-import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
+import { getClippedNotes, buildPitchCurveF0Data, isScorePitchMode, render, resetPlayheadFollow } from './canvasRenderer.js';
+import { firstNoteStart } from '../shared/activeNotes.js';
+// 哈希算法与主进程合成缓存键、主窗口播放签名共用一份（src/shared/hashSignature.js）。
+import { hashNumberArray, hashString } from '../shared/hashSignature.js';
+import { computePromptCondSignature } from '../shared/promptCondSignature.js';
 import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
+// 播放侧的全部状态与行为都在 playbackSession.js（会话独占）。本文件只负责
+// 合成编排：缓存签名、IPC 调用、结果落地、导出、后台推理。
+import {
+  createSession, getCurrentSession, stopPlayback, playheadTick,
+  getFragmentAudioContextInternal, loadFragmentAudioSettings,
+} from './playbackSession.js';
 
-// 独占模式 onAudioEnded 退订函数的模块级持有。旧实现只在 rAF 闭包内能退订，
-// stop/pause/seek（均经 stopFragmentPlayback → stopFragmentExclusivePlayback）
-// cancel rAF 后监听器永远泄漏——每次播放累积一个 IPC 监听。
-let _fragmentRemoveEndedListener = null;
-function _detachFragmentEndedListener() {
-  if (_fragmentRemoveEndedListener) {
-    safeCleanup('fragmentAudio.detachEndedListener', _fragmentRemoveEndedListener);
-    _fragmentRemoveEndedListener = null;
-  }
+export { getFragmentAudioContextInternal, loadFragmentAudioSettings, getCurrentSession };
+/** 兼容旧调用名：播放头循环现在由会话驱动。 */
+export const updateFragmentPlayhead = playheadTick;
+
+// 每次合成一个独立 streamId：chunk / 结束屏障 / cancel 全链路带上它，
+// 旧请求的迟到数据就不会被新会话当成自己的音频（IPC channel 是全局共享的）。
+let _fragmentStreamSeq = 0;
+function nextFragmentStreamId() {
+  _fragmentStreamSeq += 1;
+  return `frag-${Date.now().toString(36)}-${_fragmentStreamSeq}`;
 }
 
 /**
@@ -58,15 +60,10 @@ function _detachFragmentEndedListener() {
  *
  * 约定见 src/main/svsIpc.js 的 _resolvePluginBackend()：只要 options.backend.type
  * === 'plugin'，主进程就把这一个 options 引用整体交给插件，不再走内置 pipeline。
- * 分片编辑器此前完全没接这条线 —— 插件轨道在这里的预览播放 / 后台推理 / 导出
- * 会静默跑内置 SoulX-Singer，与轨道上显示的插件名不符。
  *
  * 两条纪律（与 src/renderer/audioPlayback.js 的 attachPluginBackend 保持一致）：
  *   · 内置后端不留痕：{type:'sxs'} 时压根不写 backend 字段，内置链路零差异。
  *   · 其余参数一个都不删：需求要求"给模型的参数都要能传给插件"，这里只追加。
- *
- * @param {object} options
- * @returns {object} options 本身
  */
 function attachPluginBackend(options) {
   if (!options) return options;
@@ -81,716 +78,93 @@ function attachPluginBackend(options) {
 
 /**
  * 构建导出用的 per-note 渐入/渐出列表（与 wavEncoder.applyEnvelopesToAudio 对接）。
- * 跳过 fadeIn=0 且 fadeOut=0 的 note，节省计算。
  * 时间单位：start/duration 用 beats，fadeIn/fadeOut 用秒。
  */
 function _buildNoteFadesForExport() {
   const notes = getClippedNotes();
   const out = [];
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i];
+  for (const n of notes) {
     const fadeInSec = (n.fadeIn && n.fadeIn > 0) ? n.fadeIn / 1000 : 0;
     const fadeOutSec = (n.fadeOut && n.fadeOut > 0) ? n.fadeOut / 1000 : 0;
     if (fadeInSec <= 0 && fadeOutSec <= 0) continue;
-    out.push({
-      startBeat: n.start,
-      durationBeats: n.duration,
-      fadeInSec,
-      fadeOutSec,
-    });
+    out.push({ startBeat: n.start, durationBeats: n.duration, fadeInSec, fadeOutSec });
   }
   return out;
-}
-
-/**
- * 计算实时播放时 per-note 渐入/渐出的 WebAudio 自动化调度参数。
- * 返回 [{ atSec, rampEndSec, fromGain, toGain }] 列表，由调用方 setValueAtTime /
- * linearRampToValueAtTime 应用到 fadeGainNode。
- * 仅包含 fadeIn>0 或 fadeOut>0 的 note。
- *
- * 重要：fadeOut 后增益会停留在 0，导致后续无 fadeIn 的音符静音。
- * 调用方 _scheduleFadeAutomation 会在每个 fadeOut ramp 结束后插入恢复事件
- * (setValueAtTime(1, rampEndSec)) 把增益拉回 1。
- */
-function _buildNoteFadesForRealtime(bpm) {
-  const notes = getClippedNotes();
-  const out = [];
-  const secondsPerBeat = 60 / bpm;
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i];
-    const noteStartSec = n.start * secondsPerBeat;
-    const noteEndSec = noteStartSec + n.duration * secondsPerBeat;
-    if (n.fadeIn && n.fadeIn > 0) {
-      const fadeInSec = n.fadeIn / 1000;
-      out.push({
-        atSec: noteStartSec,
-        rampEndSec: noteStartSec + fadeInSec,
-        fromGain: 0,
-        toGain: 1,
-      });
-    }
-    if (n.fadeOut && n.fadeOut > 0) {
-      const fadeOutSec = n.fadeOut / 1000;
-      out.push({
-        atSec: Math.max(noteStartSec, noteEndSec - fadeOutSec),
-        rampEndSec: noteEndSec,
-        fromGain: 1,
-        toGain: 0,
-      });
-    }
-  }
-  return out;
-}
-
-/**
- * 将 fade 事件调度到 fadeGainNode 上。
- *
- * 修复 fadeOut 静音 bug：fadeOut ramp 把增益降到 0 后，如果后续音符没有 fadeIn，
- * 增益会一直保持 0，导致后续音符完全静音。解决方案是在每个 fadeOut ramp 结束后
- * 立即调度 setValueAtTime(1, rampEndSec) 把增益恢复为 1。
- *
- * 事件顺序保证：WebAudio 同一时刻的事件按调度顺序处理。fadeOut 的 restore 事件
- * 在 fadeOut ramp 之后调度，若下一个 fadeIn 的 setValueAtTime(0, noteStartSec)
- * 在 restore 之后调度且 noteStartSec === rampEndSec，则 gain 最终为 0（fadeIn 正确）。
- * 若后续无 fadeIn，gain 保持 1（正确）。
- *
- * 注意：重叠音符场景下，单增益节点无法同时表达多个音符的独立 fade。
- * 导出路径 (wavEncoder) 对重叠音符的 fade gain 做乘积，实时路径用单增益曲线，
- * 两者行为在重叠时不同。非重叠 SVS 场景（正常情况）两者一致。
- */
-function _scheduleFadeAutomation(fadeGainNode, ctx, fades, startOffset) {
-  if (!fades || fades.length === 0) return;
-  const now = ctx.currentTime;
-  fadeGainNode.gain.setValueAtTime(1, now);
-  // 按 atSec 排序，确保 restore 事件与后续 fadeIn 事件的调度顺序正确
-  const sorted = [...fades].sort((a, b) => a.atSec - b.atSec);
-  for (let i = 0; i < sorted.length; i++) {
-    const f = sorted[i];
-    // 仅调度 startOffset 之后的事件；起播位置之前的自动化直接跳过
-    if (f.rampEndSec <= startOffset) continue;
-    const atSec = Math.max(f.atSec, startOffset);
-    const fromGain = f.atSec <= startOffset
-      // 起播位置落在 fade 内：估算起播点处的 gain
-      ? (f.toGain - f.fromGain) * Math.max(0, Math.min(1, (startOffset - f.atSec) / Math.max(0.0001, f.rampEndSec - f.atSec))) + f.fromGain
-      : f.fromGain;
-    fadeGainNode.gain.setValueAtTime(fromGain, now + (atSec - startOffset));
-    fadeGainNode.gain.linearRampToValueAtTime(f.toGain, now + (f.rampEndSec - startOffset));
-    // fadeOut 结束后恢复增益为 1，防止后续音符静音
-    if (f.toGain === 0) {
-      fadeGainNode.gain.setValueAtTime(1, now + (f.rampEndSec - startOffset));
-    }
-  }
-}
-
-/**
- * 对单声道音频就地应用 per-note fade（用于独占模式，该模式不经 WebAudio 图）。
- * 逻辑与 wavEncoder.applyEnvelopesToAudio 的 fade 部分一致：每个音符在自己的
- * 采样区间内施加 fadeIn/fadeOut 包络，区间外保持 1。重叠音符的 gain 做乘积。
- * 返回新的 Float32Array（不修改输入）。
- */
-function _applyFadesToMonoAudio(audioData, bpm) {
-  const notes = getClippedNotes();
-  const fades = [];
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i];
-    const fadeInSec = (n.fadeIn && n.fadeIn > 0) ? n.fadeIn / 1000 : 0;
-    const fadeOutSec = (n.fadeOut && n.fadeOut > 0) ? n.fadeOut / 1000 : 0;
-    if (fadeInSec <= 0 && fadeOutSec <= 0) continue;
-    fades.push({
-      startBeat: n.start,
-      durationBeats: n.duration,
-      fadeInSec,
-      fadeOutSec,
-    });
-  }
-  if (fades.length === 0) return audioData;
-
-  const sampleRate = getSampleRate();
-  const numSamples = audioData.length;
-  const out = new Float32Array(numSamples);
-  out.set(audioData);
-  const secondsPerBeat = 60 / bpm;
-  for (let f = 0; f < fades.length; f++) {
-    const nf = fades[f];
-    const noteStartSec = nf.startBeat * secondsPerBeat;
-    const noteDurSec = nf.durationBeats * secondsPerBeat;
-    const noteEndSec = noteStartSec + noteDurSec;
-    const startSample = Math.max(0, Math.floor(noteStartSec * sampleRate));
-    const endSample = Math.min(numSamples, Math.ceil(noteEndSec * sampleRate));
-    const fadeInSamples = Math.max(1, Math.floor(nf.fadeInSec * sampleRate));
-    const fadeOutSamples = Math.max(1, Math.floor(nf.fadeOutSec * sampleRate));
-    for (let i = startSample; i < endSample; i++) {
-      let g = 1;
-      if (nf.fadeInSec > 0 && i < startSample + fadeInSamples) {
-        g = (i - startSample) / fadeInSamples;
-      }
-      if (nf.fadeOutSec > 0 && i > endSample - fadeOutSamples) {
-        const fo = Math.max(0, (endSample - i) / fadeOutSamples);
-        if (fo < g) g = fo;
-      }
-      if (g < 0) g = 0;
-      if (g > 1) g = 1;
-      out[i] *= g;
-    }
-  }
-  return out;
-}
-
-// 流式播放状态（vocoder chunk 边合成边播放）
-// streamingSources: 已调度的 AudioBufferSourceNode 列表（按顺序）
-// streamingCleanup: chunk 监听器 cleanup 函数
-// streamingFadeGainNode: 流式播放共享的 fade 增益节点，所有 chunk source 经它
-//   连接到 master gain。首个 chunk 到达时创建并调度 fade 自动化，使流式播放
-//   也应用 per-note fade（与 playFragmentShared 一致）。
-let streamingSources = [];
-let streamingCleanup = null;
-let streamingNextStart = 0;
-let streamingFinished = false;
-let streamingFadeGainNode = null;
-// 用户主动停止标记：stopFragmentPlayback 置位后，playFragment 的"合成完成兜底播放"
-// 不再自动开播（否则点停止 → 合成完成 → 又自动开始播放）。
-let _streamingUserStopped = false;
-// 合成进行中用户拖拽播放头时记录的新位置：合成完成后由 playFragment 从该位置
-// 播放新音频。合成中不能用旧缓存音频重启播放（旧音频与新音符不匹配 → 错位/杂音，
-// 且会与合成完成后的兜底播放叠加成双路音频）。
-let _pendingSeekStartTime = null;
-
-// Buffer underrun protection: shared infrastructure (AudioContext suspend/resume,
-// watchdog, underrun detection, source counting) via StreamingScheduler.
-let _streamingStarted = false;            // true after first chunk initializes playback
-let _streamingFirstChunkAudioOffset = 0; // playStartPosition > firstNoteStartSec 时需跳过的前导音频秒数
-let _scheduler = null;
-
-function _createFragmentScheduler() {
-  _scheduler = new StreamingScheduler({
-    getCtx: () => getFragmentAudioContext(),
-    getElapsed: () => {
-      // 必须与 rAF 路径（_checkFragmentStreamingUnderrun）同基准：绝对播放位置
-      // = playbackOffset + (ctx.currentTime - playbackStartTime)。漏加 offset 时
-      // watchdog 传出的 elapsed 比真实播放头小 playbackOffset 秒 —— 从中段起播
-      // 时 watchdog 要多等 offset 秒才触发，窗口最小化时 AudioContext 不会被
-      // suspend，播放头直接冲进静音区无人接管。
-      const ctx = getFragmentAudioContext();
-      return ctx ? getFragmentPlaybackOffset() + (ctx.currentTime - getFragmentPlaybackStartTime()) : 0;
-    },
-    onWaitStateChange: (isWaiting) => {
-      if (isWaiting) {
-        // 进入等待推理（rAF / watchdog 两条路径统一入口）：
-        // 取消 playhead rAF（恢复时由 chunk 回调重启，避免双循环叠加），
-        // 并在按钮上给出"等待推理"反馈——否则用户只会看到播放头无端冻住。
-        const raf = getFragmentPlayheadRaf();
-        if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-        const btn = document.getElementById('btn-play-fragment');
-        if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
-      } else {
-        updateFragmentPlayButton();
-      }
-    },
-    // watchdog 兜底检测带 0.3s 提前量（>= 250ms tick 周期 + suspend 延迟），
-    // 使冻结发生在 buffer 前沿之前：恢复时 chunk 的原始调度时间仍在未来，
-    // 按原位无缝衔接，播放头不会先冲过前沿再回跳（可听静音缝 + 视觉跳动）。
-    watchdogMarginSec: 0.3,
-    onFinish: _onFragmentStreamingFinished,
-  });
-}
-
-function _onFragmentStreamingFinished() {
-  streamingFinished = true;
-  streamingSources = [];
-  setFragmentIsPlaying(false);
-  const raf = getFragmentPlayheadRaf();
-  if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-  setFragmentCurrentTime(0);
-  setFragmentPlayStartPosition(0);
-  updateFragmentPlayButton();
-  render();
-}
-
-// visibilitychange handler: pause rAF-driven UI updates when tab hidden
-// (audio playback continues via WebAudio/WASAPI in background).
-// Registered once per module; update fns stored for resume.
-let _visibilityHandlerRegistered = false;
-let _exclusiveUpdateFn = null;
-let _sharedUpdateFn = null;
-
-function _ensureVisibilityHandler() {
-  if (_visibilityHandlerRegistered) return;
-  _visibilityHandlerRegistered = true;
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      const exclusiveRaf = getFragmentExclusiveRaf();
-      if (exclusiveRaf) {
-        cancelAnimationFrame(exclusiveRaf);
-        setFragmentExclusiveRaf(null);
-      }
-      const sharedRaf = getFragmentPlayheadRaf();
-      if (sharedRaf) {
-        cancelAnimationFrame(sharedRaf);
-        setFragmentPlayheadRaf(null);
-      }
-    } else {
-      if (getFragmentIsPlaying() && getFragmentUseExclusiveMode() && _exclusiveUpdateFn && !getFragmentExclusiveRaf()) {
-        setFragmentExclusiveRaf(requestAnimationFrame(_exclusiveUpdateFn));
-      } else if (getFragmentIsPlaying() && !getFragmentUseExclusiveMode() && _sharedUpdateFn && !getFragmentPlayheadRaf()) {
-        // 等待推理（underrun 冻结）期间不重启 rAF：underrun 分支已取消循环，
-        // 若在此复活，tick 会把 currentTime 推进到已收音频前沿之外的静音区，
-        // 使播放头与人声脱节；等待结束由 chunk 回调重启动画。
-        if (_scheduler && _scheduler.isWaiting) return;
-        setFragmentPlayheadRaf(requestAnimationFrame(_sharedUpdateFn));
-      }
-    }
-  });
-}
-
-function stopStreamingPlayback() {
-  // 与主页面 stopPlayback 语义一致：设 streamingFinished=true 拦截已在事件队列中
-  // 排队的 onChunkAudio 回调（IPC 监听器虽已移除，但已派发的回调仍可能到达）。
-  // playFragment 开头会显式重置为 false 启动新一轮流式合成。
-  streamingFinished = true;
-  _streamingStarted = false;
-  _streamingFirstChunkAudioOffset = 0;
-  for (const src of streamingSources) {
-    if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-    safeCleanup('fragmentAudio.src.stop', () => { src.onended = null; src.stop(); });
-  }
-  streamingSources = [];
-  if (streamingCleanup) {
-    safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
-    streamingCleanup = null;
-  }
-  // 断开并释放流式 fade 增益节点
-  if (streamingFadeGainNode) {
-    safeCleanup('fragmentAudio.streamingFadeGain.disconnect', () => streamingFadeGainNode.disconnect());
-    streamingFadeGainNode = null;
-  }
-  // 停止 scheduler：解除 AudioContext 冻结 + 取消 watchdog
-  if (_scheduler) _scheduler.deactivate();
-}
-
-export async function getFragmentAudioContextInternal() {
-  let ctx = getFragmentAudioContext();
-  if (!ctx || ctx.state === 'closed') {
-    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: getSampleRate() });
-    setFragmentAudioContext(ctx);
-    const gainNode = ctx.createGain();
-    gainNode.connect(ctx.destination);
-    setFragmentGainNode(gainNode);
-    await applyFragmentAudioSettings();
-  }
-  if (ctx.state === 'suspended') {
-    await ctx.resume();
-  }
-  return ctx;
-}
-
-export async function loadFragmentAudioSettings() {
-  try {
-    const settings = await window.electronAPI.getSettings();
-    setFragmentAudioSettings(settings);
-    setFragmentUseExclusiveMode(settings?.audioOutputMode === 'exclusive');
-  } catch (_e) {
-    setFragmentAudioSettings({});
-  }
-}
-
-async function applyFragmentAudioSettings() {
-  const settings = getFragmentAudioSettings();
-  if (!settings) return;
-
-  const gainNode = getFragmentGainNode();
-  if (gainNode && settings.audioVolume !== undefined) {
-    gainNode.gain.value = settings.audioVolume;
-  }
-
-  const ctx = getFragmentAudioContext();
-  if (ctx && settings.audioOutputDevice !== undefined && settings.audioOutputDevice !== -1) {
-    const sinkId = String(settings.audioOutputDevice);
-    if (ctx.setSinkId && typeof ctx.setSinkId === 'function') {
-      try {
-        await ctx.setSinkId(sinkId);
-      } catch (err) {
-        console.warn('[FragmentAudio] 设置输出设备失败:', err.message);
-      }
-    }
-  }
 }
 
 export function stopFragmentPlayback() {
-  // 用户主动停止：标记后合成完成时的兜底路径不会自动重新开播
-  _streamingUserStopped = true;
-  // 清理流式播放（边合成边播的 chunk sources）
-  stopStreamingPlayback();
-  const source = getFragmentAudioSource();
-  if (source) {
-    try {
-      source.onended = null;
-      source.stop();
-    } catch (_e) {}
-    setFragmentAudioSource(null);
+  stopPlayback();
+}
+
+/**
+ * 取消正在进行的推理（与主页面 stopPlayback 的"合成中取消"语义一致）。
+ *
+ * 分片编辑器此前只停本地音频、从不通知主进程：用户点停止后 GPU 仍会把整段
+ * 推理跑完（长分片几十秒），期间按钮停在"合成中"且不可点，下一次播放被
+ * `isSynthesizing` 的守卫静默挡住 —— 也就是"停止停不掉推理"。
+ *
+ * @returns {boolean} 是否确实取消了在途推理
+ */
+export function cancelFragmentSynthesis() {
+  if (!getFragmentIsSynthesizing()) return false;
+  // 模型加载阶段不能发 cancel：主进程会落到"无活跃任务 → resetSvsPipeline()"，
+  // 把正在初始化的 lazy 实例作废，下次播放要重新加载（与主页面同一守卫）。
+  const sess = getCurrentSession();
+  if (getPipelineInitialized() && window.electronAPI?.cancelSVSSynthesis) {
+    // 带 streamId：主进程若已在跑新一轮，会忽略这次迟到的取消。
+    window.electronAPI.cancelSVSSynthesis(sess?.streamId ? { streamId: sess.streamId } : undefined).catch(() => {});
   }
-  stopFragmentExclusivePlayback();
-  setFragmentIsPlaying(false);
-  const raf = getFragmentPlayheadRaf();
-  if (raf) {
-    cancelAnimationFrame(raf);
-    setFragmentPlayheadRaf(null);
-  }
+  // 立即放开重入锁：否则 IDLE 下按钮可点、playFragment 的 guard 却静默 return，
+  // 用户看到的是"点了没反应"。旧会话会在最近的检查点（sess.isCurrent）退出。
+  // 只有当前 token 的拥有者才允许清合成状态；旧任务迟到结束时不能误清新任务。
+  finishFragmentSynthesis(getFragmentSynthesisId());
+  // dispose 会话 → 在途 chunk / 收尾 / 兜底播放全部作废
+  stopPlayback();
   updateFragmentPlayButton();
+  return true;
 }
 
 /**
  * 播放中拖拽 playhead 时跳转到新位置。
  * 不重新合成：直接复用已缓存的 fragmentAudioData，从 newStartTime 开始播放。
- * 需要先停止当前播放（source.stop / audioStop），再用现有 audioData 重启。
  */
 export async function seekFragmentPlayback(newStartTime) {
-  // 合成进行中的拖拽：不能用旧缓存音频重启播放。
-  // 流式合成期间 getFragmentAudioData 是上一次合成的旧音频，与新音符不匹配
-  // （拖拽后立刻听到旧音频 → 与画布音符错位），且稍后合成完成时的兜底播放会
-  // 与这里重启的播放叠加成双路音频（杂音/重叠）。改为只停止当前播放并记录
-  // 新位置，合成完成后由 playFragment 的 _pendingSeekStartTime 分支从新位置
-  // 播放新音频。
+  // 用户刚拖动过播放头 = 一次明确的"人在这里"，视口应当跟上（不受 3s 门控）
+  resetPlayheadFollow({ reveal: true });
+
+  // 合成进行中的拖拽：不能用旧缓存音频重启播放（与新音符不匹配，且会与合成
+  // 完成后的兜底播放叠加成双路音频）。只停掉当前出声并记住新位置，合成完成后
+  // 由 playFragment 从该位置整段播放新音频。
+  const cur = getCurrentSession();
   if (getFragmentIsSynthesizing()) {
-    stopFragmentPlayback();
-    // stopFragmentPlayback 会置 _streamingUserStopped（拦截合成完成兜底），
-    // 但 seek 语义仍期望合成完成后从新位置自动播放，这里复位该标记。
-    _streamingUserStopped = false;
-    // 丢弃后续 chunk：合成完成后统一从新位置整段播放，不再续播流式队列
-    streamingFinished = true;
-    setFragmentPlayStartPosition(newStartTime);
-    setFragmentCurrentTime(newStartTime);
-    _pendingSeekStartTime = newStartTime;
-    render();
+    if (cur && !cur.disposed && cur.kind === 'stream') {
+      cur.requestSeekDuringSynthesis(newStartTime);
+    } else {
+      // 状态不变量已损坏：全局在合成但 owner session 丢失。此时绝不能回落
+      // 到可能过期的 fragmentAudioData 播放，否则会播旧版本并与迟到结果叠音。
+      setFragmentPlayStartPosition(newStartTime);
+      setFragmentCurrentTime(newStartTime);
+      cancelFragmentSynthesis();
+      render();
+    }
     return;
   }
-  // 停止当前播放（不重置 playStartPosition）
-  stopStreamingPlayback();
-  const source = getFragmentAudioSource();
-  if (source) {
-    try { source.onended = null; source.stop(); } catch (_e) {}
-    setFragmentAudioSource(null);
-  }
-  stopFragmentExclusivePlayback();
-  setFragmentIsPlaying(false);
-  const raf = getFragmentPlayheadRaf();
-  if (raf) {
-    cancelAnimationFrame(raf);
-    setFragmentPlayheadRaf(null);
-  }
 
-  // 设置新的起始位置
   setFragmentPlayStartPosition(newStartTime);
-
-  // 复用已缓存的 audioData 重启播放
   const audioData = getFragmentAudioData();
   if (!audioData || audioData.length === 0) {
-    // 无可播音频：不能静默返回 —— 播放状态已停但视觉未更新，用户会以为
-    // 点击无效。渲染一次让停止态立即生效。
+    // 无可播音频：不能静默返回 —— 播放状态已停但视觉未更新，用户会以为点击无效。
+    stopPlayback();
+    setFragmentCurrentTime(newStartTime);
     render();
     updateFragmentPlayButton();
     return;
   }
 
-  if (getFragmentUseExclusiveMode()) {
-    await playFragmentExclusive();
-  } else {
-    await playFragmentShared();
-  }
-}
-
-function stopFragmentExclusivePlayback() {
-  const raf = getFragmentExclusiveRaf();
-  if (raf) {
-    cancelAnimationFrame(raf);
-    setFragmentExclusiveRaf(null);
-  }
-  // 在此统一退订 onAudioEnded：所有停止/暂停/跳转路径都经过本函数，
-  // rAF 已被 cancel，不能再依赖 rAF 闭包退订。
-  _detachFragmentEndedListener();
-  window.electronAPI.audioStop().catch(() => {});
-}
-
-/**
- * Buffer underrun detection: when the playhead reaches the furthest received
- * audio position and inference is not yet complete, freeze the playhead.
- * Uses StreamingScheduler for AudioContext suspend/resume and state tracking.
- * Returns true when the wait state was entered (caller must stop its own loop).
- */
-function _checkFragmentStreamingUnderrun() {
-  if (!_streamingStarted || !_scheduler) return false;
-  if (!getFragmentIsPlaying()) return false;
-  const ctx = getFragmentAudioContext();
-  if (!ctx) return false;
-  // underrun 是"渲染域"事件（缓冲是否被吃空），必须与 watchdog 的 getElapsed
-  // 同基准用 ctx.currentTime；不要换成可听时间（见 audioOutputClock 使用边界）。
-  const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
-  const curTime = getFragmentPlaybackOffset() + elapsed;
-  return _scheduler.checkUnderrun(curTime, () => {
-    // Freeze playhead at buffer frontier (not at elapsed which has already
-    // advanced past the received audio into silence).
-    setFragmentCurrentTime(_scheduler.bufferEndSec);
-    const raf = getFragmentPlayheadRaf();
-    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-    render();
-  });
-}
-
-export function updateFragmentPlayhead() {
-  _ensureVisibilityHandler();
-  _sharedUpdateFn = updateFragmentPlayhead;
-  if (!getFragmentIsPlaying()) return;
-  const ctx = getFragmentAudioContext();
-  if (!ctx) return;
-
-  // 播放头取"耳朵听到的位置"：渲染时钟减去设备输出延迟（见 audioOutputClock）。
-  const elapsed = getAudibleElapsedSec(ctx, getFragmentPlaybackStartTime());
-  setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
-
-  // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
-  // 窗口最小化时 rAF 会被挂起，由 StreamingScheduler.watchdog 兜底检测。
-  if (_checkFragmentStreamingUnderrun()) return;
-
-  // 流式播放期间跳过 duration 检查：
-  // setFragmentAudioData 在 synthesizeFragmentSVS 返回后才更新，流式期间
-  // getFragmentAudioData 返回上一次合成的旧 audioData，旧 duration 可能短于
-  // 当前流式时长，导致 currentTime >= duration 误判并提前 stopFragmentPlayback。
-  // 流式结束由 source.onended 计数判定触发，不依赖此处的 duration 检查。
-  const audioData = getFragmentAudioData();
-  if (audioData && !_streamingStarted) {
-    const duration = audioData.length / getSampleRate();
-    if (getFragmentCurrentTime() >= duration) {
-      stopFragmentPlayback();
-      setFragmentCurrentTime(0);
-      setFragmentPlayStartPosition(0);
-    }
-  }
-
-  render();
-
-  setFragmentPlayheadRaf(requestAnimationFrame(updateFragmentPlayhead));
-}
-
-async function playFragmentShared() {
-  const ctx = await getFragmentAudioContextInternal();
-  const audioData = getFragmentAudioData();
-  const audioBuffer = ctx.createBuffer(1, audioData.length, getSampleRate());
-  audioBuffer.getChannelData(0).set(audioData);
-  stopFragmentPlayback();
-  const source = ctx.createBufferSource();
-  source.buffer = audioBuffer;
-
-  const envGainNode = ctx.createGain();
-  const fadeGainNode = ctx.createGain();
-  const panNode = ctx.createStereoPanner();
-
-  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
-  const audioDuration = audioData.length / getSampleRate();
-  const envelopes = getEnvelopes();
-  const volumeEnv = envelopes.volume;
-  const panEnv = envelopes.pan;
-
-  // 播放起始位置（秒），由用户拖拽 playhead 设置
-  const startOffset = Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01);
-
-  if (volumeEnv && volumeEnv.keyframes && volumeEnv.keyframes.length > 0) {
-    const now = ctx.currentTime;
-    const sortedKfs = [...volumeEnv.keyframes].sort((a, b) => a.time - b.time);
-    // 从 startOffset 处的包络值开始
-    const startVal = _interpolateEnvValue(sortedKfs, startOffset);
-    envGainNode.gain.setValueAtTime(startVal, now);
-    for (let i = 0; i < sortedKfs.length; i++) {
-      const kf = sortedKfs[i];
-      const timeSec = (kf.time / bpm) * 60;
-      if (timeSec > startOffset && timeSec <= audioDuration) {
-        envGainNode.gain.linearRampToValueAtTime(kf.value, now + (timeSec - startOffset));
-      }
-    }
-    const lastKf = sortedKfs[sortedKfs.length - 1];
-    const lastTimeSec = (lastKf.time / bpm) * 60;
-    if (lastTimeSec < audioDuration) {
-      envGainNode.gain.linearRampToValueAtTime(lastKf.value, now + (audioDuration - startOffset));
-    }
-  }
-
-  // Per-note 渐入/渐出（与导出时 wavEncoder.applyEnvelopesToAudio 一致）：
-  // fadeGainNode 接在 envGainNode 之后、panNode 之前，作为片段级音量包络之外的
-  // per-note amplitude 调制。仅当某 note 启用 fade 时才调度自动化，否则保持 1。
-  // _scheduleFadeAutomation 会在每个 fadeOut 后恢复增益为 1，防止后续音符静音。
-  const fades = _buildNoteFadesForRealtime(bpm);
-  if (fades.length > 0) {
-    _scheduleFadeAutomation(fadeGainNode, ctx, fades, startOffset);
-  }
-
-  if (panEnv && panEnv.keyframes && panEnv.keyframes.length > 0) {
-    const now = ctx.currentTime;
-    const sortedKfs = [...panEnv.keyframes].sort((a, b) => a.time - b.time);
-    const startVal = _interpolateEnvValue(sortedKfs, startOffset);
-    panNode.pan.setValueAtTime(startVal, now);
-    for (let i = 0; i < sortedKfs.length; i++) {
-      const kf = sortedKfs[i];
-      const timeSec = (kf.time / bpm) * 60;
-      if (timeSec > startOffset && timeSec <= audioDuration) {
-        panNode.pan.linearRampToValueAtTime(kf.value, now + (timeSec - startOffset));
-      }
-    }
-    const lastKf = sortedKfs[sortedKfs.length - 1];
-    const lastTimeSec = (lastKf.time / bpm) * 60;
-    if (lastTimeSec < audioDuration) {
-      panNode.pan.linearRampToValueAtTime(lastKf.value, now + (audioDuration - startOffset));
-    }
-  }
-
-  const gainNode = getFragmentGainNode();
-  source.connect(envGainNode).connect(fadeGainNode).connect(panNode).connect(gainNode);
-  source.onended = () => {
-    // 每次播放新建的中间节点在此断开，避免自然结束后 env/fade/pan 三个节点
-    // 仍挂在共享 gainNode 下随播放次数累积（stop() 路径会先置 onended=null，
-    // 节点随 source 一起释放）。
-    safeCleanup('fragmentAudio.panNode.disconnect', () => panNode.disconnect());
-    safeCleanup('fragmentAudio.fadeGainNode.disconnect', () => fadeGainNode.disconnect());
-    safeCleanup('fragmentAudio.envGainNode.disconnect', () => envGainNode.disconnect());
-    setFragmentIsPlaying(false);
-    const raf = getFragmentPlayheadRaf();
-    if (raf) {
-      cancelAnimationFrame(raf);
-      setFragmentPlayheadRaf(null);
-    }
-    setFragmentCurrentTime(0);
-    setFragmentPlayStartPosition(0);
-    updateFragmentPlayButton();
-    render();
-  };
-  // source.start(when, offset) — offset 是音频缓冲区内的时间偏移。
-  // 时间基准取 start 前的 currentTime 并用 start(when) 精确对齐：start(0) 只
-  // 保证"下一个渲染量子"（24 kHz 下 ≈5 ms），基准取 start 之后会让播放头略超前。
-  const startAt = ctx.currentTime;
-  source.start(startAt, Math.max(0, startOffset));
-  setFragmentAudioSource(source);
-  setFragmentIsPlaying(true);
-  setFragmentPlaybackStartTime(startAt);
-  setFragmentPlaybackOffset(startOffset);
-  setFragmentCurrentTime(startOffset);
-  updateFragmentPlayhead();
-  updateFragmentPlayButton();
-}
-
-/**
- * 线性插值计算 envelope 在指定时间的值（用于播放起始偏移处的包络初始化）。
- * sortedKfs 必须已按 time 升序排序。time 单位为秒。
- */
-function _interpolateEnvValue(sortedKfs, timeSec) {
-  if (!sortedKfs || sortedKfs.length === 0) return 1;
-  if (sortedKfs.length === 1) return sortedKfs[0].value;
-  if (timeSec <= sortedKfs[0].time) return sortedKfs[0].value;
-  if (timeSec >= sortedKfs[sortedKfs.length - 1].time) return sortedKfs[sortedKfs.length - 1].value;
-  for (let i = 0; i < sortedKfs.length - 1; i++) {
-    if (timeSec >= sortedKfs[i].time && timeSec <= sortedKfs[i + 1].time) {
-      const t = (timeSec - sortedKfs[i].time) / (sortedKfs[i + 1].time - sortedKfs[i].time);
-      return sortedKfs[i].value + t * (sortedKfs[i + 1].value - sortedKfs[i].value);
-    }
-  }
-  return sortedKfs[sortedKfs.length - 1].value;
-}
-
-async function playFragmentExclusive() {
-  stopFragmentPlayback();
-
-  try {
-    const settings = getFragmentAudioSettings();
-    const rawAudioData = getFragmentAudioData();
-    const audioDuration = rawAudioData.length / getSampleRate();
-    // 播放起始位置（秒），由用户拖拽 playhead 设置
-    const startOffset = Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01);
-    // 独占模式不经 WebAudio 图，无法用 gain 自动化应用 per-note fade。
-    // 在传入 audioPlay 前对音频数据预乘 fade gain（与导出路径逻辑一致）。
-    const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
-    const audioData = _applyFadesToMonoAudio(rawAudioData, bpm);
-    const options = {
-      deviceId: settings?.audioOutputDevice ?? -1,
-      sampleRate: settings?.audioSampleRate ?? getSampleRate(),
-      sourceSampleRate: getSampleRate(),
-      channels: 1,
-      bitDepth: settings?.audioBitDepth ?? 'float32',
-      bufferSize: settings?.audioBufferSize ?? 1024,
-      exclusiveMode: true,
-      volume: settings?.audioVolume ?? 1.0,
-      offset: Math.max(0, startOffset),
-    };
-
-    const result = await window.electronAPI.audioPlay(audioData, options);
-
-    if (!result.success) {
-      console.warn('[FragmentAudio] WASAPI 独占模式失败，回退到共享模式:', result.error);
-      setFragmentUseExclusiveMode(false);
-      await playFragmentShared();
-      return;
-    }
-
-    setFragmentIsPlaying(true);
-    setFragmentPlaybackStartTime(performance.now());
-    setFragmentPlaybackOffset(startOffset);
-    setFragmentCurrentTime(startOffset);
-
-    // 先退订上一轮可能泄漏的监听，再注册新监听并存入模块级持有。
-    _detachFragmentEndedListener();
-    _fragmentRemoveEndedListener = window.electronAPI.onAudioEnded(() => {
-      setFragmentIsPlaying(false);
-      const raf = getFragmentPlayheadRaf();
-      if (raf) {
-        cancelAnimationFrame(raf);
-        setFragmentPlayheadRaf(null);
-      }
-      setFragmentCurrentTime(0);
-      setFragmentPlayStartPosition(0);
-      updateFragmentPlayButton();
-      render();
-    });
-
-    updateFragmentExclusivePlayhead(_detachFragmentEndedListener);
-    updateFragmentPlayButton();
-  } catch (err) {
-    console.error('[FragmentAudio] 独占模式启动失败，回退到共享模式:', err);
-    setFragmentUseExclusiveMode(false);
-    await playFragmentShared();
-  }
-}
-
-function updateFragmentExclusivePlayhead(removeEndedListener) {
-  _ensureVisibilityHandler();
-  function update() {
-    _exclusiveUpdateFn = update;
-    if (!getFragmentIsPlaying()) {
-      if (removeEndedListener) removeEndedListener();
-      return;
-    }
-
-    const elapsed = (performance.now() - getFragmentPlaybackStartTime()) / 1000 + getFragmentPlaybackOffset();
-    const audioData = getFragmentAudioData();
-    const duration = audioData ? audioData.length / getSampleRate() : 0;
-
-    if (elapsed >= duration) {
-      setFragmentIsPlaying(false);
-      setFragmentCurrentTime(0);
-      setFragmentPlayStartPosition(0);
-      stopFragmentExclusivePlayback();
-      const raf = getFragmentPlayheadRaf();
-      if (raf) {
-        cancelAnimationFrame(raf);
-        setFragmentPlayheadRaf(null);
-      }
-      updateFragmentPlayButton();
-      render();
-      if (removeEndedListener) removeEndedListener();
-      return;
-    }
-
-    setFragmentCurrentTime(elapsed);
-    render();
-    setFragmentExclusiveRaf(requestAnimationFrame(update));
-  }
-
-  _exclusiveUpdateFn = update;
-  setFragmentExclusiveRaf(requestAnimationFrame(update));
+  const exclusive = getFragmentAudioSettings()?.audioOutputMode === 'exclusive';
+  const sess = createSession(exclusive ? 'exclusive' : 'full');
+  if (exclusive) await sess.playExclusive(audioData);
+  else await sess.playFullBuffer(audioData);
 }
 
 function padAudioToFragmentDuration(audioData) {
@@ -804,7 +178,7 @@ function padAudioToFragmentDuration(audioData) {
   // fragment 起点为参考，与 canvas 中 note.start 的 beat 坐标一致。
   const clippedNotes = getClippedNotes();
   const firstNoteOffsetSample = clippedNotes.length > 0
-    ? Math.floor((clippedNotes[0].start / bpm) * 60 * getSampleRate())
+    ? Math.floor((firstNoteStart(clippedNotes) / bpm) * 60 * getSampleRate())
     : 0;
   const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
   if (requiredLength <= audioData.length && firstNoteOffsetSample === 0) return audioData;
@@ -814,52 +188,33 @@ function padAudioToFragmentDuration(audioData) {
 }
 
 /**
- * 与服务端 AudioSegmentation.hashArray（src/inference/pipeline/audioSegmentation.js）
- * 语义一致的 FNV-1a 32-bit 哈希：短数组（≤2000 元素）全量、长数组 2000 采样 +
- * 尾部补偿 + 长度折叠，float64 字节展开保留小数编辑。
- *
- * ⚠️ 两端必须同步修改。旧 renderer 签名用多项式哈希 + 4000 采样 + 仅取
- * refAudioWavBuffer.byteLength —— 微调单点 pitch 落在采样盲区、或换同长度
- * 参考音频时签名不变 → 直接复用旧音频，服务端全量哈希没有纠正机会。
+ * 与服务端 AudioSegmentation.hashArray 语义一致的 FNV-1a 32-bit 哈希。
+ * 算法本体在 src/shared/hashSignature.js，三处消费方调同一个函数。
  */
 function _hashArrayFNV(arr) {
-  if (!arr) return 0;
-  let h = 0x811c9dc5;
-  const bytes = new Uint8Array(8);
-  const view = new DataView(bytes.buffer);
-  const hashValue = (value) => {
-    view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
-    for (let j = 0; j < bytes.length; j++) {
-      h ^= bytes[j];
-      h = Math.imul(h, 0x01000193);
-    }
-  };
-  const step = Math.max(1, Math.floor(arr.length / 2000));
-  let lastHashed = -1;
-  for (let i = 0; i < arr.length; i += step) {
-    hashValue(arr[i]);
-    lastHashed = i;
-  }
-  // 采样必须包含尾部：编辑器曲线的最后一个关键帧常落在尾部
-  if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
-  hashValue(arr.length);
-  return h | 0;
+  return hashNumberArray(arr);
+}
+
+/**
+ * 下发给管线的音高来源。
+ * score 时 pitchCurveF0 已经是 null，这里再带一个显式标记 —— 否则管线分不清
+ * "没有曲线"和"要 score"，会把 note.pitch 填成逐音符恒定的平直 F0。
+ */
+function currentPitchControl() {
+  return isScorePitchMode() ? 'score' : 'manual';
 }
 
 /**
  * 计算当前 fragment 合成输入的签名（notes + 选项）。
- * 与服务端 computeSynthCacheKey 覆盖的字段一致：notes 内容、bpm、pitchCurveF0、
- * refAudioWavBuffer 内容、autoShift、nSteps、cfg、cfgRescale、singerId。
- * 用于判断 fragmentAudioData 是否可复用，避免重复 IPC 合成调用。
+ * 与服务端 computeSynthCacheKey 覆盖的字段一致。
  * 注意：签名不包含 playStartPosition — 起始位置变化不影响音频内容。
  */
 export function computeFragmentAudioSignature() {
   const notes = getClippedNotes();
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const previewOpts = getFragmentPreviewInferenceOptions();
-  // 签名只需要"输入变了"的哈希：F0 后处理链的结果已由下方 ppHash（曲线序列化）
-  // 单独覆盖，这里跳过整条滤波（400ms 自动推理轮询会反复调用本函数，
-  // 长分片实测每次 7–15ms），真正的合成路径（playFragment 等）仍走完整后处理。
+  // 签名只需要"输入变了"的哈希：F0 后处理链的结果已由下方 ppHash 单独覆盖，
+  // 这里跳过整条滤波（400ms 自动推理轮询会反复调用本函数）。
   const pitchCurveF0 = buildPitchCurveF0Data({ postprocess: false });
   const refAudioWavBuffer = getWavFileBuffer();
   const autoShiftEl = document.getElementById('autoShiftCheck');
@@ -867,21 +222,19 @@ export function computeFragmentAudioSignature() {
   const singerId = getCurrentFragment()?.singerId || null;
 
   // notes hash — 与服务端 computeSynthCacheKey 保持一致的字段拼接
+  // （含 noteType：3=连音。MIDI 导入的连音音符只带 noteType、没有 isSlur 标志。）
   let notesHash = 0;
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i];
-    let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+    let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
     if (n.phonemeAdjustments) {
       for (const adj of n.phonemeAdjustments) {
         s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
         if (adj.volumePoints) {
-          for (const vp of adj.volumePoints) {
-            s += `:${vp.t}:${vp.v}`;
-          }
+          for (const vp of adj.volumePoints) s += `:${vp.t}:${vp.v}`;
         }
       }
     }
-    // 颤音字段进入签名：颤音改变 F0，必须重新合成
     if (n.vibrato && n.vibrato.enabled) {
       s += `|vib:${n.vibrato.enabled ? 1 : 0}:${n.vibrato.depth}:${n.vibrato.rate}:${n.vibrato.start}:${n.vibrato.length}:${n.vibrato.fadeIn}`;
     }
@@ -890,11 +243,9 @@ export function computeFragmentAudioSignature() {
     }
   }
 
-  // pitchCurveF0 hash — FNV-1a，与服务端 hashArray 一致（消除下采样盲区）
   const f0Hash = pitchCurveF0 ? _hashArrayFNV(pitchCurveF0) : 0;
 
-  // 音色 / 后处理曲线 hash：F0 平滑已体现在 f0Hash 里，但频谱后处理
-  // （mel 平滑 / 过渡插值）不改变 F0，必须单独进签名，否则改曲线后仍播旧音频。
+  // 音色 / 后处理曲线 hash：频谱后处理不改变 F0，必须单独进签名。
   let ppHash = 0;
   const ppSignature = serializePostprocessForSignature();
   for (let i = 0; i < ppSignature.length; i++) {
@@ -902,7 +253,6 @@ export function computeFragmentAudioSignature() {
   }
 
   // refAudioWavBuffer hash — FNV-1a 全量采样 + 长度折叠，与服务端一致。
-  // 旧实现仅用 byteLength：换同长度参考音频时签名不变，会直接播旧音频。
   let refHash = 0;
   if (refAudioWavBuffer) {
     const refBytes = refAudioWavBuffer instanceof ArrayBuffer
@@ -911,315 +261,216 @@ export function computeFragmentAudioSignature() {
     refHash = _hashArrayFNV(refBytes);
   }
 
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}`;
+  const singerAnn = getSingerAnnotation() || {};
+  const promptHash = hashString(computePromptCondSignature(
+    singerAnn.singerData,
+    singerAnn.midiNotes,
+    singerAnn.f0Data,
+    undefined
+  ));
+
+  // 音高来源也必须进签名：manual 空曲线与 score 都产出 pitchCurveF0=null。
+  const pitchControl = currentPitchControl();
+  // 与主进程 computeSynthCacheKey 的字段集保持一致：采样器 / Q-Drift / 精度 /
+  // CFG 曲线 / 动态阈值都会改变输出，漏进签名就会"改了设置却播旧音频"。
+  const schedSig = `${previewOpts.cfgScheduleMode || 'constant'}:${previewOpts.cfgStrengthStart ?? ''}:${JSON.stringify(previewOpts.cfgScheduleKeyframes || null)}`;
+  const dynSig = previewOpts.dynamicThresholdEnabled ? `1:${previewOpts.dynamicThresholdPercentile}` : '0';
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_p${promptHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}_${pitchControl}_sm${previewOpts.sampler || 'euler'}_qd${previewOpts.qdrift ? 1 : 0}_pm${previewOpts.modelPrecision || 'fp32'}_cs${schedSig}_dt${dynSig}`;
+}
+
+/** 合成 options 的公共部分（预览 / 后台推理共用，避免两处字段漂移）。 */
+function buildPreviewOptions(previewOpts, extra) {
+  return attachPluginBackend({
+    f0Envelope: null,
+    pitchCurveF0: buildPitchCurveF0Data() || null,
+    pitchControl: currentPitchControl(),
+    refAudioWavBuffer: getWavFileBuffer() || null,
+    refSingerData: (getSingerAnnotation() || {}).singerData || null,
+    refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+    refF0Data: (getSingerAnnotation() || {}).f0Data || null,
+    singerId: getCurrentFragment()?.singerId || null,
+    autoShift: document.getElementById('autoShiftCheck').checked,
+    nSteps: previewOpts.nSteps,
+    cfg: previewOpts.cfg,
+    cfgRescale: previewOpts.cfgRescale,
+    // 采样器 / Q-Drift / 精度：必须与主窗口同口径下发。它们既改变输出，
+    // 也进主进程缓存键 —— 漏传会让两条路径各推一份且缓存互不命中。
+    sampler: previewOpts.sampler,
+    qdrift: previewOpts.qdrift,
+    modelPrecision: previewOpts.modelPrecision,
+    diffStepChunk: previewOpts.diffStepChunk,
+    diffStepChunkFrames: previewOpts.diffStepChunkFrames,
+    diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
+    cfgScheduleMode: previewOpts.cfgScheduleMode,
+    cfgStrengthStart: previewOpts.cfgStrengthStart,
+    cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
+    dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
+    dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
+    melPostprocess: buildMelPostprocessPayload(
+      getClippedNotes(),
+      getCurrentProject() ? getCurrentProject().bpm : 120,
+      getSampleRate(),
+      480,
+    ),
+    ...extra,
+  });
+}
+
+/** 按当前输出设置整段播放（缓存命中 / 流式未启动的兜底 / seek 后续播）。 */
+async function playWholeBuffer(sess, audioData, opts = {}) {
+  // 交付缺口续播：从当前可听位置开始，避免把已经听过的部分重放一遍。
+  if (Number.isFinite(opts.startSec)) {
+    sess.startPositionSec = Math.max(0, opts.startSec);
+  }
+  const exclusive = getFragmentAudioSettings()?.audioOutputMode === 'exclusive';
+  if (exclusive) await sess.playExclusive(audioData);
+  else await sess.playFullBuffer(audioData);
 }
 
 export async function playFragment() {
   // 重入保护：防止连续调用导致前一次 finally 提前把 fragmentIsSynthesizing
-  // 置 false，使后续进度回调失效（进度百分比偶发不显示的根因之一）。
+  // 置 false，使后续进度回调失效。
   if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
-  setFragmentIsSynthesizing(true);
+  // 新一轮播放：清掉上一次会话残留的分页动画；若播放头在视口外，第一帧就回填。
+  resetPlayheadFollow({ reveal: true });
+
+  // 作废旧会话并开新一轮。会话号即身份：所有异步续体据此判断自己是否过期。
+  const sess = createSession('stream');
+  sess.streamId = nextFragmentStreamId();
+  sess.beginStreaming();
+  const startAudio = getFragmentAudioData();
+  console.log('[FragPlay] playFragment begin ' + JSON.stringify({
+    session: sess.id,
+    streamId: sess.streamId,
+    playFromSec: sess.startPositionSec,
+    hasCachedAudio: !!(startAudio && startAudio.length > 0),
+    cachedAudioLength: startAudio ? startAudio.length : 0,
+    hasCachedSignature: getFragmentAudioDataSignature() !== null,
+  }));
+  // 合成状态属于 token，不属于 session：session 被 seek/stop dispose 后，
+  // 这个 Promise 仍要在结束时释放自己设置的状态（token 不匹配的新任务除外）。
+  beginFragmentSynthesis(sess.streamId);
   updateFragmentPlayButton();
-  // 清理上一次流式播放状态
-  stopStreamingPlayback();
-  streamingFinished = false;
-  streamingSources = [];
-  streamingNextStart = 0;
-  _streamingStarted = false;
-  _streamingFirstChunkAudioOffset = 0;
-  _streamingUserStopped = false;
-  _pendingSeekStartTime = null;
-  _createFragmentScheduler();
 
   try {
-    if (!getPipelineInitialized()) {
-      await initPipeline();
-    }
-
+    if (!getPipelineInitialized()) await initPipeline();
     await loadFragmentAudioSettings();
+    if (!sess.isCurrent) return;
 
-    // 缓存优化：计算当前合成输入签名，若与上次相同且已有 fragmentAudioData，
-    // 直接复用缓存音频从 playStartPosition 开始播放，跳过 IPC 合成调用。
-    // 这样即使起始位置不同，只要 notes/options 未变就能秒播。
+    // 缓存优化：签名相同且已有音频 → 直接整段播放，跳过 IPC 合成。
     const currentSignature = computeFragmentAudioSignature();
     const cachedAudio = getFragmentAudioData();
-    const canReuseCache = cachedAudio && cachedAudio.length > 0 &&
-                         getFragmentAudioDataSignature() === currentSignature;
-
-    if (canReuseCache) {
-      // 复用缓存：无需注册 chunk 监听，直接整段播放
-      setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
-      if (getFragmentUseExclusiveMode()) {
-        await playFragmentExclusive();
-      } else {
-        await playFragmentShared();
-      }
+    if (cachedAudio && cachedAudio.length > 0 && getFragmentAudioDataSignature() === currentSignature) {
+      await playWholeBuffer(sess, cachedAudio);
       return;
     }
 
-    // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）。
-    // IPC 按发送顺序派发，但回调体内有 await（getFragmentAudioContextInternal /
-    // resumeFromWait 会让出事件循环）——若并发执行，chunk B 可能在 chunk A 更新
-    // streamingNextStart 之前基于同一个值调度 → 音频错序/重叠（underrun 恢复
-    // 瞬间的高危竞态）。用 promise 链串行化：每个 chunk 完整处理完才处理下一个。
-    const handleStreamingChunk = async (chunkInfo) => {
-      try {
-        if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
-        if (streamingFinished) return;
-        const ctx = await getFragmentAudioContextInternal();
-        if (streamingFinished) return; // re-check after async: may have been stopped
-
-        // 第一个 chunk 初始化播放：计算首音符偏移和播放起始位置
-        // chunk 音频从 filledNotes[0].start（首音符起点）开始，pipeline 已截掉前导休止符。
-        // 需要让播放头从 playStartPosition 开始移动，而非直接跳到 firstNoteStartSec。
-        if (!_streamingStarted) {
-          _streamingStarted = true;
-          const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
-          const clippedNotes = getClippedNotes();
-          const firstNoteStartSec = clippedNotes.length > 0
-            ? (clippedNotes[0].start / bpm) * 60
-            : 0;
-          const playStartPosition = getFragmentPlayStartPosition();
-
-          // chunk 音频从 firstNoteStartSec 开始，播放头从 playStartPosition 开始：
-          // - playStartPosition < firstNoteStartSec：延迟 chunk 播放，让播放头先走完
-          //   前导静音段，到达 firstNoteStartSec 时音频正好开始。
-          // - playStartPosition > firstNoteStartSec：跳过 chunk 内前导音频（下方处理）。
-          let chunkDelaySec = 0;
-          if (playStartPosition < firstNoteStartSec) {
-            chunkDelaySec = firstNoteStartSec - playStartPosition;
-          } else if (playStartPosition > firstNoteStartSec) {
-            _streamingFirstChunkAudioOffset = playStartPosition - firstNoteStartSec;
-          }
-          streamingNextStart = ctx.currentTime + 0.05 + chunkDelaySec;
-
-          // per-note fade：atSec 是相对 fragment 起点的绝对时间，
-          // startOffset 传 playStartPosition 使起播位置之前的 fade 事件被跳过。
-          const fades = _buildNoteFadesForRealtime(bpm);
-          if (fades.length > 0) {
-            streamingFadeGainNode = ctx.createGain();
-            const masterGain = getFragmentGainNode();
-            if (masterGain) streamingFadeGainNode.connect(masterGain);
-            else streamingFadeGainNode.connect(ctx.destination);
-            _scheduleFadeAutomation(streamingFadeGainNode, ctx, fades, playStartPosition);
-          }
-          setFragmentIsPlaying(true);
-          setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
-          setFragmentPlaybackOffset(playStartPosition);
-          setFragmentCurrentTime(playStartPosition);
-          updateFragmentPlayButton();
-          // 启动 playhead rAF 动画循环
-          updateFragmentPlayhead();
-          // 启动后台 watchdog：窗口最小化时 rAF 挂起，需用定时器兜底
-          // 检测 buffer underrun，保证等待推理在后台同样生效。
-          _scheduler.activate();
-        }
-
-        // 处理 playStartPosition > firstNoteStartSec：跳过 chunk 前导音频
-        let chunkAudio = chunkInfo.audio;
-        if (_streamingFirstChunkAudioOffset > 0) {
-          const skipSec = Math.min(_streamingFirstChunkAudioOffset, chunkAudio.length / getSampleRate());
-          const skipSamples = Math.floor(skipSec * getSampleRate());
-          if (skipSamples >= chunkAudio.length) {
-            // 整个 chunk 都在跳过范围内：不创建 source，减少剩余偏移后跳过此 chunk
-            _streamingFirstChunkAudioOffset -= chunkAudio.length / getSampleRate();
-            // 仍需处理 isLast 标记
-            if (chunkInfo.isLast && _scheduler) {
-              _scheduler.markLastReceived();
-            }
-            return;
-          }
-          chunkAudio = chunkAudio.subarray(skipSamples);
-          _streamingFirstChunkAudioOffset = 0;
-        }
-
-        const audioBuffer = ctx.createBuffer(1, chunkAudio.length, getSampleRate());
-        audioBuffer.getChannelData(0).set(chunkAudio);
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        const effectiveChunkDuration = chunkAudio.length / getSampleRate();
-
-        // Buffer underrun recovery（顺序调度 + 时间基准重置设计）：
-        // - 等待推理恢复：AudioContext 解冻，共享时钟（playbackStartTime）不变。
-        //   watchdogMarginSec=0.3 使冻结点落在前沿之前，chunk 的原始调度时间
-        //   仍在未来 → 直接按原位无缝衔接，无需任何调整。
-        // - 迟到 chunk：调度时间已过 → 钳到当前时刻，并把时间基准同步前移，
-        //   让播放头与音频一起回退 δ 秒。后续 chunk 排在本次之后
-        //   （streamingNextStart += dur），无重叠、无内容丢失。
-        if (_scheduler && _scheduler.isWaiting) {
-          await _scheduler.resumeFromWait();
-          // 等待进入时 rAF 已被 onWaitStateChange 取消，这里重启；
-          // 幂等守卫防止与残留循环叠加成双 rAF 链。
-          if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) {
-            updateFragmentPlayhead();
-          }
-        }
-        if (streamingNextStart < ctx.currentTime + 0.01) {
-          // Late chunk: clamp scheduling time to now, adjust time base.
-          const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
-          setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
-          streamingNextStart = ctx.currentTime + 0.05;
-        }
-
-        // Update buffer frontier (furthest audio end in playhead seconds)
-        const chunkEndSec = (getFragmentPlaybackOffset() + (streamingNextStart - getFragmentPlaybackStartTime())) + effectiveChunkDuration;
-        if (_scheduler) _scheduler.updateBufferFrontier(chunkEndSec);
-
-        // chunk source 经 streamingFadeGainNode（如有）连接到 master gain，
-        // 使流式播放也应用 per-note fade。无 fade 时直接连 master gain。
-        if (streamingFadeGainNode) {
-          source.connect(streamingFadeGainNode);
-        } else {
-          const gainNode = getFragmentGainNode();
-          if (gainNode) source.connect(gainNode);
-          else source.connect(ctx.destination);
-        }
-        source.start(streamingNextStart);
-        streamingNextStart += effectiveChunkDuration;
-
-        // Unified onended: decrement active source count and release reference.
-        // When isLast has been received AND all sources have ended, mark
-        // streaming complete. This is more robust than relying solely on the
-        // isLast chunk's onended — if a non-last chunk (longer audio) is still
-        // playing when the isLast chunk ends, we correctly wait for it.
-        if (_scheduler) _scheduler.addSource();
-        if (chunkInfo.isLast && _scheduler) {
-          _scheduler.markLastReceived();
-        }
-        const sourceIdx = streamingSources.length;
-        streamingSources.push(source);
-        source.onended = () => {
-          if (_scheduler) _scheduler.sourceEnded();
-          if (streamingSources[sourceIdx] === source) {
-            streamingSources[sourceIdx] = null;
-          }
-        };
-      } catch (e) {
-        console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
-      }
-    };
-    let chunkQueue = Promise.resolve();
-    streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
-      chunkQueue = chunkQueue
-        .then(() => handleStreamingChunk(chunkInfo))
-        .catch((e) => console.warn('[FragmentAudio] Streaming chunk queue error:', e && e.message));
+    // chunk 监听归会话所有：直到会话 dispose 才摘除。
+    // 旧实现在 invoke 回执后立刻摘监听，而 chunk 与回执走不同 IPC 通道，
+    // 仍在队列里的块被永久丢弃 → "前面有声音、后面整段静音"。
+    sess.chunkCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
+      sess.pushChunk(chunkInfo);
     });
-
-    const pitchCurveF0 = buildPitchCurveF0Data();
-    const pitchCurveF0Serializable = pitchCurveF0 || null;
+    // 结束屏障与 chunk 共用同一条串行队列：END 入队后，drain() 返回即证明
+    // lastSeq 之前的所有块都已处理完，才允许把 scheduler 置为 inferenceDone。
+    sess.endCleanup = window.electronAPI.onFragmentSVSStreamEnd?.((info) => {
+      sess.noteStreamEnd(info);
+    }) || null;
 
     const previewOpts = getFragmentPreviewInferenceOptions();
-
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: attachPluginBackend({
-        f0Envelope: null,
-        pitchCurveF0: pitchCurveF0Serializable,
-        refAudioWavBuffer: getWavFileBuffer() || null,
-        singerId: getCurrentFragment()?.singerId || null,
-        autoShift: document.getElementById('autoShiftCheck').checked,
-        nSteps: previewOpts.nSteps,
-        cfg: previewOpts.cfg,
-        cfgRescale: previewOpts.cfgRescale,
-        diffStepChunk: previewOpts.diffStepChunk,
-        diffStepChunkFrames: previewOpts.diffStepChunkFrames,
-        diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
-        cfgScheduleMode: previewOpts.cfgScheduleMode,
-        cfgStrengthStart: previewOpts.cfgStrengthStart,
-        cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
-        dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
-        dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
-        // 频谱后处理（时频平滑 / 过渡频谱插值）：逐帧参数在主进程 vocoder 之前应用。
-        // 未启用时 buildMelPostprocessPayload 返回 null，管线走零开销快路径。
-        melPostprocess: buildMelPostprocessPayload(
-          getClippedNotes(),
-          getCurrentProject() ? getCurrentProject().bpm : 120,
-          getSampleRate(),
-          480,
-        ),
-      }),
+      options: buildPreviewOptions(previewOpts, { streamId: sess.streamId }),
     });
-    setFragmentAudioData(padAudioToFragmentDuration(audioData));
-    // 合成成功后更新签名，后续播放可复用此缓存
-    setFragmentAudioDataSignature(currentSignature);
+    // 会话已被取消/取代（用户点了停止 / 又开了新一轮）：结果作废。
+    if (!sess.isCurrent) return;
 
-    // 合成期间用户拖拽了播放头（seekFragmentPlayback 的合成中分支）：
-    // 流式播放已停止、后续 chunk 已丢弃，这里直接从新位置开始播放新音频。
-    // 若拖拽后用户又点了停止（_streamingUserStopped），则不再自动播放。
-    if (_pendingSeekStartTime !== null && !_streamingUserStopped) {
-      const seekPos = _pendingSeekStartTime;
-      _pendingSeekStartTime = null;
-      if (_scheduler) await _scheduler.setInferenceDone();
-      if (streamingCleanup) {
-        safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
-        streamingCleanup = null;
-      }
-      setFragmentPlayStartPosition(seekPos);
-      setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
-      if (getFragmentUseExclusiveMode()) {
-        await playFragmentExclusive();
-      } else {
-        await playFragmentShared();
-      }
+    // 推理期间用户改了音符 / 音高曲线 / 音色：这份音频属于**旧输入**。
+    // 无条件写签名会把旧音频标成"当前内容"的缓存，之后每次播放都命中它。
+    if (computeFragmentAudioSignature() !== currentSignature) {
+      console.warn('[FragmentAudio] Inputs changed during synthesis — discarding result');
+      setFragmentAudioDataSignature(null);
+      // 不能只丢缓存：此时旧输入的 chunk 可能已经在播、甚至有 future source
+      // 已排程。必须先停掉本会话的旧音频，否则用户编辑后会继续听到旧音符。
+      sess.stopStreamAudio();
+      await sess.setInferenceDone();
       return;
     }
 
-    // 标记推理完成：后续不再触发 buffer underrun 等待
-    if (_scheduler) await _scheduler.setInferenceDone();
+    const padded = padAudioToFragmentDuration(audioData);
+    setFragmentAudioData(padded);
+    setFragmentAudioDataSignature(currentSignature);
+    console.log(`[FragPlay] INFERENCE RETURNED | session=${sess.id} streamingStarted=${sess.streamStarted} pendingSeek=${sess.pendingSeek !== null} t=${Date.now()}`);
 
-    // 仅当合成返回时正处于 underrun 冻结（最后一批 chunk 已收到但 playhead 仍冻结），
-    // 才重置时间基准使 playhead 从 buffer 前沿继续。
-    // 修复：旧逻辑无条件重置 playbackStartTime —— 当推理快于播放（buffer 前沿远超
-    // 播放头）时，会把播放头直接拉到前沿，造成播放头与声音脱节（声画错位）。
-    if (_streamingStarted && _scheduler && _scheduler.isWaiting) {
-      const ctx = getFragmentAudioContext();
-      if (ctx) {
-        setFragmentPlaybackStartTime(ctx.currentTime - _scheduler.bufferEndSec + getFragmentPlaybackOffset());
-        updateFragmentPlayhead();
-      }
+    // 结束屏障优先：END 在 invoke 回执之前由主进程发出，处理完它的队列项
+    // 才证明"最后一块已交付"。不支持 END 的路径（插件 / 老主进程 / 测试桩）
+    // 退化为原来的回执语义，但不再把它当作普遍正确的排序保证。
+    if (!sess.endSeen) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sess.markLegacyDelivery();
+    }
+    await sess.drain();
+    if (!sess.isCurrent) return;
+
+    // 只有确认交付完成后才标记推理完成：过早置位会让 checkUnderrun 直接
+    // 返回 false，尾段 chunk 未到时 source 播完 → 播放头冲进静音区、提前收尾。
+    await sess.setInferenceDone();
+    if (!sess.isCurrent) return;
+    // 交付确认到位后再给收尾判据一次机会（isLast 可能早于 END 到达）。
+    sess._maybeFinish();
+
+    // 合成期间用户拖拽了播放头：从新位置整段播放新音频。
+    if (sess.pendingSeek !== null) {
+      // 若合成恰好在拖拽过程中完成，先等最终位置落定，避免从 mousedown
+      // 的旧位置抢先起播（慢速拖动/长按时尤其明显）。
+      await waitForFragmentPlayheadDragEnd();
+      if (!sess.isCurrent) return;
+      const pos = sess.pendingSeek;
+      sess.pendingSeek = null;
+      sess.startPositionSec = pos;
+      setFragmentPlayStartPosition(pos);
+      await playWholeBuffer(sess, padded);
+      return;
     }
 
-    // 移除 chunk 监听（避免内存泄漏），但保留已调度的 source 继续播放。
-    // 注意：必须在 inferenceDone 设置之后移除，否则 underrun 检测
-    // 仍会等待（推理未完成标记）。
-    if (streamingCleanup) {
-      safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
-      streamingCleanup = null;
+    // 交付缺口（END 明确 failed / cancelled / seq 不连续）：绝不能把不完整
+    // 音频当成正常播完。gap 收尾时记录了可听位置，这里用整段 buffer 从该
+    // 位置继续，已播过的部分不重复。
+    if (sess.gapDetected && sess.isCurrent) {
+      const resumeSec = Number.isFinite(sess.gapResumeSec) ? sess.gapResumeSec : sess.startPositionSec;
+      console.warn(`[FragPlay] GAP FALLBACK | session=${sess.id} from=${resumeSec.toFixed(3)}s status=${sess.streamEndStatus || 'incomplete'} firstFailedSeq=${sess.firstFailedSeq ?? '-'}`);
+      await playWholeBuffer(sess, padded, { startSec: resumeSec });
+      return;
     }
 
-    // 如果流式播放从未启动（如缓存命中或单 chunk 未触发回调），回退到整段播放。
-    // 使用 _streamingStarted 而非 streamingSources.length 判断，避免异步竞态：
-    // chunk 回调可能还在 await getFragmentAudioContextInternal() 中尚未 push source，
-    // 但 _streamingStarted 已在第一个 chunk 到达时设置为 true。
-    // 修复：用户已主动停止（_streamingUserStopped）或当前仍在播放时不再兜底开播，
-    // 避免"点停止 → 合成完成 → 又自动开始播放"与双路音频叠加（杂音/错位）。
-    if (!_streamingStarted && !_streamingUserStopped && !getFragmentIsPlaying()) {
-      setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
-      if (getFragmentUseExclusiveMode()) {
-        await playFragmentExclusive();
-      } else {
-        await playFragmentShared();
-      }
+    // 流式从未启动（插件后端 / 单块未触发回调 / 全部块都在起播点之前）：整段兜底。
+    // 判据只看当前会话自己的状态 —— 全局 isPlaying 可能被别的播放模式/上一轮
+    // 残留占用，拿它当唯一条件会让整段兜底被跳过 → 完全静音。
+    if (!sess.streamStarted && sess.isCurrent && !sess.userStopped
+        && sess.pendingSeek === null && !sess.hasStartedSources()) {
+      await playWholeBuffer(sess, padded);
     }
   } catch (error) {
-    console.error(t('fragment.synthesisFailed') + ':', error);
-    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
-    showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
-    stopStreamingPlayback();
-    // stopStreamingPlayback 只清理流式资源，不重置播放状态。异常路径若不补这些
-    // 清理，会留下 isPlaying=true + audioData 为空的组合：后续 seek/点击走空
-    // 分支静默 return 且无渲染，播放头完全不动（"点击无响应"的根因之一）；
-    // rAF 残留也会持续空转。
-    setFragmentIsPlaying(false);
-    const raf = getFragmentPlayheadRaf();
-    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+    if (!sess.isCurrent) return;
+    const msg = String((error && error.message) || '');
+    // 协作式取消（SYNTHESIS_CANCELLED / 被新请求取代）不是错误。
+    if (/cancel|superseded|abort/i.test(msg)) {
+      console.log('[FragmentAudio] Synthesis cancelled');
+    } else {
+      console.error(t('fragment.synthesisFailed') + ':', error);
+      showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
+    }
+    stopPlayback();
+    setFragmentCurrentTime(0);
     updateFragmentPlayButton();
   } finally {
-    setFragmentIsSynthesizing(false);
-    // 合成流程结束（成功或失败）后清除待跳转标记，避免残留影响下一次播放
-    _pendingSeekStartTime = null;
-    updateFragmentPlayButton();
+    // 合成状态按任务 token 释放，而不是按 sess.isCurrent：
+    // seek 期间 session 可能被停音频/dispose，但本任务仍需释放自己设置的
+    // synthesizing 标志；若新任务已接管则 token 不匹配，不能误清。
+    if (finishFragmentSynthesis(sess.streamId)) {
+      updateFragmentPlayButton();
+    }
   }
 }
 
@@ -1227,30 +478,19 @@ export async function playFragment() {
  * 后台静默合成：只重算音频并写入 fragmentAudioData，不播放、不弹错误对话框。
  * 供"编辑后自动实时推理"（设置项 autoRealtimeInference）使用。
  *
- * 与已有分段缓存的协同（关键）：
- *   - 主进程 OnnxSVSPipeline 的多 segment 路径用 _computeSegmentCacheKey 为每个
- *     segment 计算缓存键（notes/bpm/f0/ref/singerId/步数/segStartBeat/segF0Shift），
- *     未改动的 segment 直接 _segCacheGet 命中、跳过 diffusion+vocoder。
- *   - 因此这里刻意不调用任何清缓存操作；每次自动推理实际只会重算被用户改动的那几个
- *     分段，其余分段零成本复用。
- *   - options.priorityTimeSec 传入播放进度条位置，告诉主进程优先从哪个 segment 开始
- *     推理（缺失时主进程退化为"第一个未命中缓存的分段"）。
+ * 与已有分段缓存的协同：主进程多 segment 路径按 segment 计算缓存键，未改动的
+ * segment 直接命中、跳过 diffusion+vocoder。因此这里刻意不清缓存。
  *
- * @param {{priorityTimeSec?: number}} [opts] priorityTimeSec：相对分片起点的秒数
- * @returns {Promise<'ok'|'skip'|'error'>} ok = 完成了一次推理；skip = 主动放弃（前台忙 /
- *          内容无变化 / 结果过期），可立即重试；error = 推理本身失败，需要冷却
+ * @param {{priorityTimeSec?: number}} [opts]
+ * @returns {Promise<'ok'|'skip'|'error'>}
  */
 export async function synthesizeFragmentInBackground(opts = {}) {
-  // 与手动合成/播放/导出互斥：前台正在做事时不插队。
   if (getFragmentIsPlaying() || getFragmentIsSynthesizing() || getFragmentIsExporting()) return 'skip';
-  // 已有后台任务在跑：本次改动会被它结束时再次检测到的新签名覆盖，直接跳过。
   if (getFragmentIsAutoInferring()) return 'skip';
 
   const notes = getClippedNotes();
   if (!notes || notes.length === 0) return 'skip';
-
-  // 只有已经合成过（存在旧预览音频）时"改动"才有意义。首次预览仍由用户手动点击播放
-  // 触发，避免刚打开分片什么都没做就后台跑一整次推理。
+  // 只有已经合成过（存在旧预览音频）时"改动"才有意义。
   if (getFragmentAudioDataSignature() === null) return 'skip';
 
   const currentSignature = computeFragmentAudioSignature();
@@ -1259,55 +499,23 @@ export async function synthesizeFragmentInBackground(opts = {}) {
   setFragmentIsAutoInferring(true);
   updateFragmentPlayButton();
   try {
-    if (!getPipelineInitialized()) {
-      await initPipeline();
-    }
+    if (!getPipelineInitialized()) await initPipeline();
     await loadFragmentAudioSettings();
 
-    // 异步间隙里状态可能已变（用户按下播放 / 又开始导出 / 内容被再次修改）：
-    // 一律放弃本次后台推理，让下一次检测重新决策。
     if (getFragmentIsPlaying() || getFragmentIsSynthesizing() || getFragmentIsExporting()) return 'skip';
     if (computeFragmentAudioSignature() !== currentSignature) return 'skip';
 
-    const pitchCurveF0 = buildPitchCurveF0Data();
     const previewOpts = getFragmentPreviewInferenceOptions();
-
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes,
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: attachPluginBackend({
-        // 后台推理：主进程不下发流式 chunk，避免无意义的分片间 IPC 拷贝
+      options: buildPreviewOptions(previewOpts, {
+        // 后台推理：主进程不下发流式 chunk，避免无意义的分片间 IPC 拷贝。
         background: true,
-        f0Envelope: null,
-        pitchCurveF0: pitchCurveF0 || null,
-        refAudioWavBuffer: getWavFileBuffer() || null,
-        singerId: getCurrentFragment()?.singerId || null,
-        autoShift: document.getElementById('autoShiftCheck').checked,
-        nSteps: previewOpts.nSteps,
-        cfg: previewOpts.cfg,
-        cfgRescale: previewOpts.cfgRescale,
-        diffStepChunk: previewOpts.diffStepChunk,
-        diffStepChunkFrames: previewOpts.diffStepChunkFrames,
-        diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
-        cfgScheduleMode: previewOpts.cfgScheduleMode,
-        cfgStrengthStart: previewOpts.cfgStrengthStart,
-        cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
-        dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
-        dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
-        melPostprocess: buildMelPostprocessPayload(
-          notes,
-          getCurrentProject() ? getCurrentProject().bpm : 120,
-          getSampleRate(),
-          480,
-        ),
-        // 优先推理：播放进度条所在分段（0 = 交给主进程按"第一个改动分段"决定）
         priorityTimeSec: Number.isFinite(opts.priorityTimeSec) ? opts.priorityTimeSec : 0,
       }),
     });
 
-    // 推理期间状态可能已变：
-    //   - 内容被再次改动 → 结果已过期，丢弃（稍后会再次触发）
-    //   - 用户手动播放已开始 → 交给 playFragment 自己写入，避免并发覆盖流式状态
     if (computeFragmentAudioSignature() !== currentSignature) return 'skip';
     if (getFragmentIsPlaying() || getFragmentIsSynthesizing()) return 'skip';
 
@@ -1316,17 +524,19 @@ export async function synthesizeFragmentInBackground(opts = {}) {
     console.log('[FragmentAudio] Background inference done (preview audio refreshed)');
     return 'ok';
   } catch (error) {
-    // 取消/被取代不算推理失败：SVS_SUPERSEDED（worker 端排队期间被更新请求
-    // 取代）与 SYNTHESIS_CANCELLED（协作式取消安全点抛出）都是主动放弃，
-    // 归为 'skip' —— 归为 'error' 会误触发 15 秒冷却，冷却期间用户的编辑
-    // 不再自动推理。error.code 可能经 IPC 序列化丢失，同时匹配消息文本兜底。
+    // 取消/被取代不算推理失败（归为 'error' 会误触发 15 秒冷却）。
     const code = (error && error.code) || '';
     const msg = (error && error.message) || '';
     const isCancelled = code === 'SVS_SUPERSEDED' || code === 'SYNTHESIS_CANCELLED'
       || /superseded|cancelled|canceled|abort/i.test(msg);
     if (isCancelled) return 'skip';
-    // 后台失败不打扰用户：失败可能是模型缺失、显存不足等，
-    // 下次手动播放会以正常路径报错提示。
+    // 远程 API 的失败必须显式提示：401/403、429、超时、网络不通都是用户能
+    // 立刻处理的问题，静默吞掉会让用户以为"合成还在跑"或"没声音"。
+    if (/\[API[ \]]/i.test(msg)) {
+      try {
+        showAlertDialog(t('fragment.synthesisFailedDetail', { detail: msg }));
+      } catch (_) { /* 弹窗失败也要保留下面的 warn 日志 */ }
+    }
     console.warn('[FragmentAudio] Background inference failed:', error && error.message);
     return 'error';
   } finally {
@@ -1336,7 +546,6 @@ export async function synthesizeFragmentInBackground(opts = {}) {
 }
 
 export async function exportFragment() {
-  // 重入保护：与 playFragment 互斥，避免合成/导出并发导致状态错乱
   if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
   const btnExportFragment = document.getElementById('btn-export-fragment');
   const originalText = btnExportFragment.textContent;
@@ -1344,29 +553,29 @@ export async function exportFragment() {
   setLabel(btnExportFragment, t('fragment.exporting'), { icon: 'download' });
   setFragmentIsExporting(true);
   try {
-    if (!getPipelineInitialized()) {
-      await initPipeline();
-    }
-
+    if (!getPipelineInitialized()) await initPipeline();
     await loadFragmentAudioSettings();
 
-    const pitchCurveF0 = buildPitchCurveF0Data();
-    const pitchCurveF0Serializable = pitchCurveF0 || null;
-
     const exportOpts = getFragmentExportInferenceOptions();
-
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
       options: attachPluginBackend({
         f0Envelope: null,
-        pitchCurveF0: pitchCurveF0Serializable,
+        pitchCurveF0: buildPitchCurveF0Data() || null,
+        pitchControl: currentPitchControl(),
         refAudioWavBuffer: getWavFileBuffer() || null,
+        refSingerData: (getSingerAnnotation() || {}).singerData || null,
+        refMidiNotes: (getSingerAnnotation() || {}).midiNotes || null,
+        refF0Data: (getSingerAnnotation() || {}).f0Data || null,
         singerId: getCurrentFragment()?.singerId || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
         nSteps: exportOpts.nSteps,
         cfg: exportOpts.cfg,
         cfgRescale: exportOpts.cfgRescale,
+        sampler: exportOpts.sampler,
+        qdrift: exportOpts.qdrift,
+        modelPrecision: exportOpts.modelPrecision,
         melPostprocess: buildMelPostprocessPayload(
           getClippedNotes(),
           getCurrentProject() ? getCurrentProject().bpm : 120,
@@ -1389,7 +598,6 @@ export async function exportFragment() {
     }
   } catch (error) {
     console.error(t('fragment.exportFailed') + ':', error);
-    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
     showAlertDialog(t('fragment.exportFailedDetail', { detail: error.message }));
   } finally {
     setFragmentIsExporting(false);

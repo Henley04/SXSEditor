@@ -18,6 +18,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const detectionCache = require('./winmlDetectionCache');
 
 const MIN_BUILD = 26100; // Windows 11 24H2 — downloadable EPs requirement
 
@@ -48,9 +49,30 @@ function getOsBuildNumber() {
     return 0;
 }
 
+/**
+ * 平台支持度分解：把「为什么不支持」拆成可读原因，供环境检测直接展示。
+ * 判定顺序与 isPlatformSupported 完全一致，行为等价。
+ * @returns {{supported:boolean, platform:string, arch:string, build:number, minBuild:number, reason:'ok'|'platform'|'arch'|'build'}}
+ */
+function getPlatformSupport() {
+    const platformOk = isWindows();
+    const archOk = isSupportedArch();
+    const build = getOsBuildNumber();
+    const buildOk = build >= MIN_BUILD;
+    const reason = !platformOk ? 'platform' : (!archOk ? 'arch' : (!buildOk ? 'build' : 'ok'));
+    return {
+        supported: platformOk && archOk && buildOk,
+        platform: process.platform,
+        arch: process.arch,
+        build,
+        minBuild: MIN_BUILD,
+        reason,
+    };
+}
+
 /** Feature gate: platform, arch and OS build checks only (no side effects). */
 function isPlatformSupported() {
-    return isWindows() && isSupportedArch() && getOsBuildNumber() >= MIN_BUILD;
+    return getPlatformSupport().supported;
 }
 
 /**
@@ -64,6 +86,23 @@ function locateBootstrapDll(explicitPath) {
     const candidates = [];
     if (explicitPath) candidates.push(explicitPath);
     if (process.env.WINAPPSDK_BOOTSTRAP_DLL_PATH) candidates.push(process.env.WINAPPSDK_BOOTSTRAP_DLL_PATH);
+    // 显式配置永远优先；命中后不再做目录遍历。
+    for (const c of candidates) {
+        try {
+            if (c && fs.existsSync(c)) {
+                _bootstrapDllPath = c;
+                detectionCache.setCachedBootstrapPath(c);
+                return c;
+            }
+        } catch (_) { /* ignore */ }
+    }
+    // 上一次启动找到的路径：文件还在就直接复用，跳过 Edge/WindowsApps 的深度遍历
+    // （这是 EP 探测里最慢的一步，WindowsApps 权限受限时还要等 PowerShell 超时）。
+    const cachedPath = detectionCache.getCachedBootstrapPath();
+    if (cachedPath) {
+        _bootstrapDllPath = cachedPath;
+        return cachedPath;
+    }
 
     const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
     const localAppData = process.env.LOCALAPPDATA || '';
@@ -86,6 +125,7 @@ function locateBootstrapDll(explicitPath) {
         try {
             if (c && fs.existsSync(c)) {
                 _bootstrapDllPath = c;
+                detectionCache.setCachedBootstrapPath(c);
                 return c;
             }
         } catch (_) { /* ignore */ }
@@ -194,10 +234,15 @@ async function listCompatibleProviderEntries() {
  */
 let _listAllLogged = false;
 async function listAllProviderEntries() {
-    const base = await listCompatibleProviderEntries();
-    // Merge filesystem scan for NvTensor 2.x that may not yet appear in catalog
-    // (no elevation required to read libraryPathHint; caller validates via ensureEntryReady/canLoadLibrary)
-    const extra = await _scanFilesystemHints();
+    // catalog 枚举（WinRT）与文件系统扫描（WindowsApps readdir / Get-AppxPackage）
+    // 互不依赖：并发跑取较慢的那个，而不是相加。WindowsApps ACL 受限的机器上
+    // Get-AppxPackage 约 0.8s，串行等于把它整段叠在探测链路上。
+    // 文件系统扫描补的是 catalog 还没索引到的包（如刚下载的 2.x MSIX），
+    // 读 libraryPathHint 不需要提权，真正可加载性由调用方的 canLoadLibrary 判定。
+    const [base, extra] = await Promise.all([
+        listCompatibleProviderEntries(),
+        _scanFilesystemHints(),
+    ]);
     if (extra.length && !_listAllLogged) { console.log(`[WinML] listAll: catalog=${base.length} + fsHints=${extra.length}`); _listAllLogged = true; }
     for (const h of extra) {
         // Only add if not already represented by a catalog instance with same path
@@ -216,6 +261,23 @@ let _fsHintsPromise = null;
  * WindowsApps ACL 返回 EPERM —— 此时返回 null（而非空数组），由调用方
  * 走 Get-AppxPackage 回填路径。
  */
+/**
+ * 该 DLL 是否是"可注册的 provider 本体"。
+ *
+ * `onnxruntime_providers_shared.dll` / `onnxruntime_providers_common.dll` 是
+ * provider 共用的辅助库，和 provider 放在同一目录、同样匹配
+ * `onnxruntime_providers*`：它们能被 LoadLibrary（所以能通过可加载性探测），
+ * 但 registerEp 注册它不会带来任何 EP device。必须在这一层排掉。
+ */
+function _isProviderDll(fileName) {
+    const f = String(fileName || '').toLowerCase();
+    if (!f.endsWith('.dll')) return false;
+    if (!f.includes('onnxruntime_providers')) return false;
+    const base = f.slice(0, -4);
+    if (base === 'onnxruntime_providers_shared' || base === 'onnxruntime_providers_common') return false;
+    return true;
+}
+
 function _scanFilesystemHintsSync() {
     const out = [];
     const patterns = {
@@ -239,7 +301,7 @@ function _scanFilesystemHintsSync() {
             let files;
             try { files = fs.readdirSync(epDir); } catch { continue; }
             for (const f of files) {
-                if (f.toLowerCase().endsWith('.dll') && f.toLowerCase().includes('onnxruntime_providers')) {
+                if (_isProviderDll(f)) {
                     out.push({ name: epName, libraryPathHint: path.join(epDir, f) });
                 }
             }
@@ -282,8 +344,7 @@ function _scanFilesystemHintsViaAppx() {
                     let files;
                     try { files = fs.readdirSync(epDir); } catch { continue; }
                     for (const f of files) {
-                        const fl = f.toLowerCase();
-                        if (fl.endsWith('.dll') && fl.includes('onnxruntime_providers')) {
+                        if (_isProviderDll(f)) {
                             out.push({ name: epName, libraryPathHint: path.join(epDir, f) });
                         }
                     }
@@ -332,18 +393,89 @@ const EP_PRIORITY = [
 ];
 
 /**
+ * 把 catalog 实例与文件系统扫描结果按 EP 名合并成一份名单。
+ *
+ * 同一台机器上同一个 EP 会以多条形式出现：catalog 一条、WindowsApps 里每个
+ * MSIX 版本各一条（甚至同目录下多个 provider DLL 各一条）。设置页只关心
+ * "这个 EP 能不能用"，不能把 1.8 / 2.x 两个包列成两个设备 —— 那会让用户
+ * 以为有两个不同的 EP。合并规则：
+ *   · 名字相同的全部收进一条；
+ *   · readyState 取最"就绪"的那个（有已安装的包就算就绪）；
+ *   · libraryPath 保留第一条非空的，仅用于展示/排查，真正的选库仍由
+ *     winmlProvider 按 MSIX 版本 + 可加载性决定。
+ * @param {Array<{name:string, readyState:number, inst?:object, libraryPathHint?:string}>} entries
+ */
+function _mergeProviderEntries(entries) {
+    const byName = new Map();
+    for (const e of entries || []) {
+        const name = String((e && e.name) || '');
+        if (!name) continue;
+        const path = e.inst ? (e.inst.libraryPath || '') : (e.libraryPathHint || '');
+        const readyState = Number(e.readyState) || 0;
+        const prev = byName.get(name);
+        if (!prev) {
+            byName.set(name, {
+                name,
+                readyState,
+                libraryPath: path || '',
+                source: e.inst ? 'catalog' : 'filesystem',
+            });
+            continue;
+        }
+        if (!prev.libraryPath && path) prev.libraryPath = path;
+        if (readyState < prev.readyState) prev.readyState = readyState;
+        if (e.inst && prev.source !== 'catalog') prev.source = 'catalog';
+    }
+    return [...byName.values()];
+}
+
+/**
  * List EPs compatible with this hardware, ordered so that higher-priority EPs
  * (e.g. NvTensorRTRTX above OpenVINO) appear first in the device dropdown.
- * @returns {Promise<Array<{name:string, readyState:number}>>}
+ *
+ * 数据源是 catalog + 文件系统扫描的并集：某些机器上 ExecutionProviderCatalog
+ * 起不来（initWinappsdk 失败），但 EP 包其实已经装好了 —— 只读 catalog 会让
+ * 设置页显示"没有可用的 Windows ML 设备"，而管线侧照样在用这些 EP。
+ * @param {{forceRefresh?:boolean}} [options]
+ * @returns {Promise<Array<{name:string, readyState:number, libraryPath:string, source:string}>>}
  */
-async function listCompatibleProviders() {
-    const entries = await listCompatibleProviderEntries();
-    const mapped = entries.map(({ name, readyState }) => ({ name, readyState }));
+async function listCompatibleProviders(options = {}) {
+    const cached = detectionCache.getCachedProviders();
+    if (cached && options.forceRefresh !== true) {
+        // 过期 / 后台有更新的 EP 包时先返回可用列表，避免设置页被 WinRT 初始化卡住；
+        // 刷新在后台完成，下次打开或以 forceRefresh 调用时拿到新结果。
+        if (!cached.fresh) {
+            void _refreshCompatibleProviders().catch(() => {});
+        }
+        return cached.list;
+    }
+    return _refreshCompatibleProviders();
+}
+
+let _providersRefreshPromise = null;
+
+function _sortProviders(list) {
     const rank = (name) => {
         const idx = EP_PRIORITY.indexOf(name);
         return idx === -1 ? EP_PRIORITY.length : idx;
     };
-    return mapped.sort((a, b) => rank(a.name) - rank(b.name));
+    return list.sort((a, b) => rank(a.name) - rank(b.name));
+}
+
+async function _refreshCompatibleProviders() {
+    if (_providersRefreshPromise) return _providersRefreshPromise;
+    _providersRefreshPromise = (async () => {
+        // listAllProviderEntries 自带"catalog 枚举 ∥ 文件系统扫描"，这里再按
+        // EP 名折叠，保证设置页每个 EP 只出现一次。
+        const merged = _sortProviders(_mergeProviderEntries(await listAllProviderEntries()));
+        // 空列表可能是"硬件枚举尚未就绪"的瞬时结果，不能落盘，否则 12 小时内
+        // 设置页都会误报"没有可用 EP"。落盘的只有名字 + 状态（设备列表每次现算）。
+        if (merged.length > 0) {
+            detectionCache.setCachedProviders(merged.map(({ name, readyState }) => ({ name, readyState })));
+        }
+        return merged;
+    })().finally(() => { _providersRefreshPromise = null; });
+    return _providersRefreshPromise;
 }
 
 /** Ensure a specific provider wrapper instance is ready (downloads if needed). */
@@ -431,7 +563,9 @@ async function ensureProviderReady(providerName, onProgress) {
 }
 
 module.exports = {
+    MIN_BUILD,
     isPlatformSupported,
+    getPlatformSupport,
     locateBootstrapDll,
     ensureCatalog,
     listCompatibleProviders,
@@ -439,4 +573,6 @@ module.exports = {
     listAllProviderEntries,
     ensureEntryReady,
     ensureProviderReady,
+    // 供单测直接验证"同名 EP 只出现一次"与 provider DLL 过滤规则。
+    __test: { _mergeProviderEntries, _isProviderDll },
 };

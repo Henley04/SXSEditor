@@ -4,10 +4,15 @@ import { showAlertDialog } from '../alertDialog.js';
 import { history } from './history.js';
 import {
   getCurrentParamMode, setCurrentParamMode,
+  // 自然度自检需要 BPM（缺这个 import 会让自检面板静默不工作）
+  getCurrentProject,
   getPitchCurve,
+  getPitchMode, setPitchMode,
   getFragmentIsSynthesizing,
+  getFragmentSynthesisProgress,
   getFragmentIsPlaying,
   getFragmentIsAutoInferring,
+  getFragmentAudioData,
   getAutoSaveTimer, setAutoSaveTimer,
   getNotes, setNotes,
   getSelectedNoteIds, setSelectedNoteIds,
@@ -32,13 +37,27 @@ import {
 import { getTimbreDefault, getTimbreKeyframes } from './postprocessAccess.js';
 import { attachHoverTip, hideHoverTip, installHoverTipGlobalDismiss } from './paramTooltip.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
-import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
+import { AUTO_PITCH_DEFAULTS, paramsForPreset, resolvePitchRanges } from '../shared/autoPitchCurve.js';
+import { analyzeNaturalness } from '../shared/naturalness.js';
+import {
+  render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState,
+  applyPitchCurveSnapshot, genNoteId,
+  // 自然度自检要采样**实际**曲线（含自动层/手动覆盖/颤音）
+  getPitchAtTime, getClippedNotes,
+  isScorePitchMode,
+} from './canvasRenderer.js';
+import { playFragment, stopFragmentPlayback, cancelFragmentSynthesis, exportFragment } from './audioPlayback.js';
 import { exportFragmentMidi } from './midiExport.js';
 
 
 export function updateParamModeButtons() {
   const modes = ['MIDI', 'Pitch'];
+  // score 模式下曲线不参与条件，Pitch 视图既画不出东西也不该能编辑：
+  // 强行留在 Pitch 会让人以为手绘的线还有效，实际全被丢掉。
+  const scoreMode = isScorePitchMode();
+  if (scoreMode && getCurrentParamMode() === 'Pitch') {
+    setCurrentParamMode('MIDI');
+  }
   const currentParamMode = getCurrentParamMode();
   modes.forEach(mode => {
     const btn = document.getElementById(`btn-param-${mode}`);
@@ -52,22 +71,47 @@ export function updateParamModeButtons() {
     }
   });
 
-  const pitchTools = document.getElementById('pitch-tools');
-  const pitchDivider = document.getElementById('pitch-tools-divider');
+  const pitchBtn = document.getElementById('btn-param-Pitch');
+  if (pitchBtn) {
+    pitchBtn.disabled = scoreMode;
+    pitchBtn.classList.toggle('disabled-mode', scoreMode);
+    pitchBtn.setAttribute('aria-disabled', scoreMode ? 'true' : 'false');
+    pitchBtn.title = scoreMode ? t('fragment.pitchLockedInScore') : '2';
+  }
+
+  // 音高工具原先挂在工具栏上，Pitch 模式一开就把工具栏挤爆；现在整组挪进
+  // inspector 的独立分区，这里是它的显隐开关（hidden 属性比 inline display 干净）。
+  const pitchSection = document.getElementById('pitch-curve-section');
   const pitchCurve = getPitchCurve();
-  if (currentParamMode === 'Pitch') {
+  if (currentParamMode === 'Pitch' && !scoreMode) {
     if (!pitchCurve.enabled) {
       pitchCurve.enabled = true;
       scheduleAutoSave();
     }
-    if (pitchTools) pitchTools.style.display = 'flex';
-    if (pitchDivider) pitchDivider.style.display = '';
-  } else {
-    if (pitchTools) pitchTools.style.display = 'none';
-    if (pitchDivider) pitchDivider.style.display = 'none';
   }
+  if (pitchSection) pitchSection.hidden = currentParamMode !== 'Pitch' || scoreMode;
 
   updatePitchToolButtons();
+  updatePitchModeButtons();
+}
+
+/**
+ * 刷新 Manual / Score 切换按钮的高亮。
+ *
+ * 高亮的是**生效**模式，而不是 pitchMode 字段：字段为 auto 时按曲线内容判定，
+ * 所以"新建分片没画过任何东西"显示的是 Score，这与实际下发给管线的一致。
+ */
+export function updatePitchModeButtons() {
+  const effective = isScorePitchMode() ? 'score' : 'manual';
+  for (const mode of ['manual', 'score']) {
+    const btn = document.getElementById(`btn-pitch-mode-${mode}`);
+    if (!btn) continue;
+    const active = mode === effective;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+  const group = document.getElementById('pitch-mode-group');
+  if (group) group.dataset.mode = effective;
 }
 
 export function updateParamPanelState() {
@@ -110,11 +154,22 @@ function updatePitchToolButtons() {
 
 export function updateFragmentPlayButton() {
   const btnPlayFragment = document.getElementById('btn-play-fragment');
-  if (getFragmentIsSynthesizing()) {
-    setLabel(btnPlayFragment, t('fragment.synthesizing'), { icon: 'play' });
-    btnPlayFragment.disabled = true;
-  } else if (getFragmentIsPlaying()) {
+  if (!btnPlayFragment) return;
+  // 顺序很重要：流式播放期间 isSynthesizing 仍为 true（合成还没结束、还要继续
+  // 收 chunk），但声音已经在放了。必须先按"播放中"呈现（可点 = 停止），否则
+  // 按钮在整个合成期间都显示"合成中"且禁用 —— 用户既停不下来、也切不了位置，
+  // 只能等整段推理跑完（"按播放没反应"的直接原因）。
+  if (getFragmentIsPlaying()) {
     setLabel(btnPlayFragment, t('fragment.stop'), { icon: 'stop' });
+    btnPlayFragment.disabled = false;
+  } else if (getFragmentIsSynthesizing()) {
+    // 推理中（首个 chunk 尚未到达 / 非流式整段合成）：按钮语义与主页面一致 ——
+    // 可点即"取消推理"。进度从状态派生，避免 IPC 直接写 DOM 遗留陈旧 100%。
+    const progress = getFragmentSynthesisProgress();
+    const label = Number.isFinite(progress)
+      ? t('fragment.cancelSynthesisProgress', { progress })
+      : t('fragment.cancelSynthesis');
+    setLabel(btnPlayFragment, label, { icon: 'stop' });
     btnPlayFragment.disabled = false;
   } else if (getFragmentIsAutoInferring()) {
     // 后台自动推理进行中：仅提示，不禁用按钮——用户仍可随时手动播放或编辑。
@@ -143,6 +198,9 @@ export function setupUiControls() {
     const btn = document.getElementById(`btn-param-${mode}`);
     if (btn) {
       btn.addEventListener('click', () => {
+        // score 模式下 Pitch 是禁用的：曲线不参与条件，切过去只会显示一条
+        // 不生效的线。按钮 disabled 已挡住鼠标，这里兜住键盘与脚本触发。
+        if (mode === 'Pitch' && isScorePitchMode()) return;
         setCurrentParamMode(mode);
         updateParamModeButtons();
         updateParamPanelState();
@@ -150,6 +208,22 @@ export function setupUiControls() {
       });
     }
   });
+
+  // Pitch 来源切换：Manual（跟随曲线）/ Score（交给模型生成）
+  ['manual', 'score'].forEach(mode => {
+    const btn = document.getElementById(`btn-pitch-mode-${mode}`);
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (getPitchMode() === mode) return;
+      setPitchMode(mode);
+      scheduleAutoSave();
+      updateParamModeButtons();
+      updateParamPanelState();
+      resizeCanvases();
+      render();
+    });
+  });
+  updatePitchModeButtons();
 
   // Param panel toggle button
   const btnToggle = document.getElementById('btn-param-toggle');
@@ -180,19 +254,27 @@ export function setupUiControls() {
     });
   }
 
-  document.getElementById('btn-pitch-reset').addEventListener('click', () => {
-    const oldSnapshot = clonePitchCurveState();
-    getPitchCurve().anchorPoints = [];
-    getPitchCurve().brushSegments = [];
-    invalidatePitchCurveCache();
-    const newSnapshot = clonePitchCurveState();
-    history.push({
-      undo() { applyPitchCurveSnapshot(oldSnapshot); },
-      redo() { applyPitchCurveSnapshot(newSnapshot); }
+  setupAutoPitchUi();
+  setupNaturalnessUi();
+
+  const btnPitchReset = document.getElementById('btn-pitch-reset');
+  if (btnPitchReset) {
+    btnPitchReset.addEventListener('click', () => {
+      const oldSnapshot = clonePitchCurveState();
+      getPitchCurve().anchorPoints = [];
+      getPitchCurve().brushSegments = [];
+      // 派生段也是手动资产：Reset 语义是"清除所有手动内容，回到自动层"
+      getPitchCurve().bakedSegments = [];
+      invalidatePitchCurveCache();
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(oldSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      render();
+      scheduleAutoSave();
     });
-    render();
-    scheduleAutoSave();
-  });
+  }
 
   const brushSmoothingSlider = document.getElementById('brush-smoothing');
   const brushSmoothingLabel = document.getElementById('brush-smoothing-label');
@@ -209,16 +291,20 @@ export function setupUiControls() {
   // 编辑后自动同步到主页面并触发主页面 autoSaveProject()，无需手动保存。
   // Ctrl+S 快捷键仍保留为"立即保存"（取消防抖立即推送），见 eventHandlers.js。
 
-  document.getElementById('btn-close').addEventListener('click', () => {
-    stopFragmentPlayback();
-    const autoSaveTimer = getAutoSaveTimer();
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      setAutoSaveTimer(null);
-    }
-    saveFragmentData();
-    window.close();
-  });
+  const btnClose = document.getElementById('btn-close');
+  if (btnClose) {
+    btnClose.addEventListener('click', () => {
+      // 关窗也要取消在途推理：否则窗口没了，主进程仍会把整段跑完（白占 GPU）
+      if (!cancelFragmentSynthesis()) stopFragmentPlayback();
+      const autoSaveTimer = getAutoSaveTimer();
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer);
+        setAutoSaveTimer(null);
+      }
+      saveFragmentData();
+      window.close();
+    });
+  }
 
   const shortcutsOverlay = document.getElementById('shortcuts-overlay');
   const btnShortcuts = document.getElementById('btn-shortcuts');
@@ -236,42 +322,61 @@ export function setupUiControls() {
   const btnExportFragment = document.getElementById('btn-export-fragment');
   const btnExportFragmentMidi = document.getElementById('btn-export-fragment-midi');
 
-  btnPlayFragment.addEventListener('click', async () => {
-    if (getNotes().length === 0) {
-      showAlertDialog(t('fragment.noNotesToPlay'));
-      return;
-    }
-    if (getFragmentIsSynthesizing()) return;
-    if (getFragmentIsPlaying()) {
-      stopFragmentPlayback();
-      setFragmentCurrentTime(0);
-      // 停止时重置播放起始位置，下次点击播放从头开始。
-      // 用户可再次拖拽 playhead 设置新的起始位置。
-      setFragmentPlayStartPosition(0);
-      render();
-      return;
-    }
-    await playFragment();
-  });
+  if (btnPlayFragment) {
+    btnPlayFragment.addEventListener('click', async () => {
+      if (getNotes().length === 0) {
+        showAlertDialog(t('fragment.noNotesToPlay'));
+        return;
+      }
+      // 诊断：记录每次点击实际走哪条分支（播放中停止 / 合成中取消 / 新建播放）。
+      const cachedAudio = getFragmentAudioData();
+      console.log('[FragPlay] play button ' + JSON.stringify({
+        isPlaying: getFragmentIsPlaying(),
+        isSynthesizing: getFragmentIsSynthesizing(),
+        isAutoInferring: getFragmentIsAutoInferring(),
+        audioLength: cachedAudio ? cachedAudio.length : 0,
+        action: (getFragmentIsPlaying() || getFragmentIsSynthesizing()) ? 'stop-or-cancel' : 'play',
+      }));
+      // 播放中 / 推理中一律按"停止"处理：
+      //   · 流式播放期间合成仍在进行（isSynthesizing=true），按钮此刻是"停止"；
+      //   · 推理刚开始、首个 chunk 还没到时同样要能取消 —— 旧实现直接 return，
+      //     用户只能干等整段推理跑完（与主页面的 Play→取消 行为不一致）。
+      if (getFragmentIsPlaying() || getFragmentIsSynthesizing()) {
+        // 推理中：取消主进程的推理（内部会一并停掉本地音频）；
+        // 只是播放缓存音频（无推理）：走普通停止。
+        if (!cancelFragmentSynthesis()) stopFragmentPlayback();
+        setFragmentCurrentTime(0);
+        // 停止时重置播放起始位置，下次点击播放从头开始。
+        // 用户可再次拖拽 playhead 设置新的起始位置。
+        setFragmentPlayStartPosition(0);
+        render();
+        return;
+      }
+      await playFragment();
+    });
+  }
 
-  btnExportFragment.addEventListener('click', async () => {
-    if (getNotes().length === 0) {
-      showAlertDialog(t('fragment.noNotesToExport'));
-      return;
-    }
-    await exportFragment();
-  });
+  if (btnExportFragment) {
+    btnExportFragment.addEventListener('click', async () => {
+      if (getNotes().length === 0) {
+        showAlertDialog(t('fragment.noNotesToExport'));
+        return;
+      }
+      await exportFragment();
+    });
+  }
 
   if (btnExportFragmentMidi) {
     btnExportFragmentMidi.addEventListener('click', exportFragmentMidi);
   }
 
-  document.getElementById('btn-import-midi').addEventListener('click', async () => {
+  const btnImportMidi = document.getElementById('btn-import-midi');
+  if (btnImportMidi) btnImportMidi.addEventListener('click', async () => {
     try {
       const result = await window.electronAPI.importMidi();
       if (!result.success) {
         if (!result.canceled) {
-          showAlertDialog(t('fragment.midiImportFailed') + ': ' + (result.error || '未知错误'));
+          showAlertDialog(t('fragment.midiImportFailed') + ': ' + (result.error || t('fragment.unknownError')));
         }
         return;
       }
@@ -536,6 +641,14 @@ export function setupPostprocessUi() {
       opt.textContent = t(preset.labelKey);
       presetSelect.appendChild(opt);
     }
+    // 「自定义」不是一个可套用的预设，只是"当前取值不属于任何预设"时的显示状态
+    // （此前不匹配时下拉保持上一次的高亮，面板显示"标准"但实际值已被改过）。
+    // disabled 使其不可被主动选中，change 处理器里的 find() 也会因此拿不到它而 return。
+    const customOpt = document.createElement('option');
+    customOpt.value = 'custom';
+    customOpt.textContent = t('fragment.ppPresetCustom');
+    customOpt.disabled = true;
+    presetSelect.appendChild(customOpt);
     presetSelect.value = 'off';
     attachHoverTip(presetSelect, () => ({
       title: t('fragment.ppPreset'),
@@ -637,13 +750,14 @@ export function syncPostprocessUi() {
 
   _syncModeTag(activeParam);
 
-  // 预设下拉：默认值恰好等于某个预设时高亮它
+  // 预设下拉：默认值恰好等于某个预设时高亮它，否则回落到「自定义」——
+  // 不回落的话选了预设再动任一滑块，下拉仍高亮该预设，面板与实际取值不符。
   const presetSelect = document.getElementById('pp-preset-select');
   if (presetSelect && document.activeElement !== presetSelect) {
     const defaults = getPostprocessDefaults();
     const match = POSTPROCESS_PRESETS.find(preset =>
       Object.entries(preset.values).every(([id, v]) => Math.abs((defaults[id] ?? 0) - v) < 1e-6));
-    if (match) presetSelect.value = match.id;
+    presetSelect.value = match ? match.id : 'custom';
   }
 }
 
@@ -661,4 +775,192 @@ export function syncTimbreParamValue(paramId) {
   if (slider && document.activeElement !== slider) slider.value = String(value);
   _syncValueLabel(paramId, value);
   if (paramId === getActiveTimbreParam()) _syncModeTag(paramId);
+}
+
+/**
+ * 自动音高曲线的开关 / 预设 / 高级参数面板。
+ *
+ * 设计约束（设计方案 §3 契约 C1–C8）：
+ *   · 不做任何"拦截式"交互：改参数只影响自动层，手动资产原样保留；
+ *   · 每一次改动都进撤销栈（快照含 auto + bakedSegments）；
+ *   · 参数面板里没有任何只读/联动锁死的项，改任何一项都会自动切到 "custom"。
+ */
+export function setupAutoPitchUi() {
+  const enabledEl = document.getElementById('auto-pitch-enabled');
+  const presetEl = document.getElementById('auto-pitch-preset');
+  const btnParams = document.getElementById('btn-auto-pitch-params');
+  const panel = document.getElementById('auto-pitch-panel');
+  const btnClose = document.getElementById('btn-auto-pitch-close');
+  const glideOwnEl = document.getElementById('auto-glide-ownership');
+  const releaseScopeEl = document.getElementById('auto-release-scope');
+  const inputs = Array.from(document.querySelectorAll('[data-auto-param]'));
+  if (!enabledEl || !presetEl || !panel) return null;
+
+  const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
+  const setPath = (obj, path, val) => {
+    const ks = path.split('.');
+    let o = obj;
+    for (let i = 0; i < ks.length - 1; i++) {
+      if (!o[ks[i]] || typeof o[ks[i]] !== 'object') o[ks[i]] = {};
+      o = o[ks[i]];
+    }
+    o[ks[ks.length - 1]] = val;
+  };
+
+  function ensureAuto() {
+    const pc = getPitchCurve();
+    // 一律走 paramsForPreset 的深拷贝：浅拷贝会让 autoVibrato 与全局默认值
+    // 共享同一个对象，UI 改一项就把 AUTO_PITCH_DEFAULTS 改了。
+    if (!pc.auto) {
+      pc.auto = { enabled: false, preset: 'natural', version: 1, params: paramsForPreset('natural') };
+    } else if (!pc.auto.params) {
+      pc.auto.params = paramsForPreset('natural');
+    }
+    if (!pc.auto.params.autoVibrato) {
+      pc.auto.params.autoVibrato = { ...AUTO_PITCH_DEFAULTS.autoVibrato };
+    }
+    return pc.auto;
+  }
+
+  function sync() {
+    const auto = getPitchCurve().auto;
+    enabledEl.checked = !!(auto && auto.enabled);
+    presetEl.value = auto && auto.preset ? auto.preset : 'natural';
+    const params = (auto && auto.params) || AUTO_PITCH_DEFAULTS;
+    for (const inp of inputs) {
+      const v = getPath(params, inp.dataset.autoParam);
+      if (typeof v === 'number') inp.value = String(Number(v.toFixed(3)));
+    }
+    if (glideOwnEl) glideOwnEl.value = params.glideOwnership || 'auto';
+    if (releaseScopeEl) releaseScopeEl.value = params.releaseScope || 'phrase';
+  }
+
+  function commit(mutator) {
+    const before = clonePitchCurveState();
+    const auto = ensureAuto();
+    mutator(auto);
+    auto.version = (auto.version || 0) + 1;
+    invalidatePitchCurveCache();
+    const after = clonePitchCurveState();
+    history.push({
+      undo() { applyPitchCurveSnapshot(before); sync(); render(); },
+      redo() { applyPitchCurveSnapshot(after); sync(); render(); },
+    });
+    render();
+    scheduleAutoSave();
+    sync();
+  }
+
+  enabledEl.addEventListener('change', () => {
+    commit((a) => { a.enabled = enabledEl.checked; });
+  });
+
+  presetEl.addEventListener('change', () => {
+    commit((a) => {
+      const id = presetEl.value;
+      a.preset = id;
+      a.enabled = id !== 'off';
+      a.params = paramsForPreset(id);
+    });
+  });
+
+  if (btnParams) btnParams.addEventListener('click', () => { panel.hidden = !panel.hidden; sync(); });
+  if (btnClose) btnClose.addEventListener('click', () => { panel.hidden = true; });
+
+  for (const inp of inputs) {
+    inp.addEventListener('change', () => {
+      const num = Number(inp.value);
+      if (!Number.isFinite(num)) { sync(); return; }
+      const path = inp.dataset.autoParam;
+      commit((a) => {
+        setPath(a.params, path, num);
+        // 改任一参数即离开预设，避免"选了预设又偷偷改了一项"的语义混乱
+        a.preset = 'custom';
+      });
+    });
+  }
+
+  if (glideOwnEl) {
+    glideOwnEl.addEventListener('change', () => {
+      commit((a) => { a.params.glideOwnership = glideOwnEl.value; });
+    });
+  }
+
+  if (releaseScopeEl) {
+    releaseScopeEl.addEventListener('change', () => {
+      commit((a) => { a.params.releaseScope = releaseScopeEl.value; });
+    });
+  }
+
+  // 分片数据载入后刷新控件（ipcHandlers 载入完成时派发）
+  document.addEventListener('sxse:fragment-loaded', sync);
+  sync();
+  return { sync };
+}
+
+/**
+ * 自然度自检面板。
+ *
+ * 与"参数面板"的分工：参数面板控制**生成规则**（改了立刻听得到），自检面板
+ * 测量**实际输出**（改完再测）。两者都读同一份曲线，所以自检结果自动包含
+ * 手动覆盖与颤音 —— 它评的是"最终听到的东西"，不是"参数好不好看"。
+ *
+ * 只在用户点击时运行：单个音符采样 200 点，300 音符 ≈ 6 万次求值，
+ * 放渲染循环里会拖慢拖拽。
+ */
+export function setupNaturalnessUi() {
+  const btn = document.getElementById('btn-nat-run');
+  const rows = document.getElementById('nat-rows');
+  const scoreTag = document.getElementById('nat-score-tag');
+  if (!btn || !rows) return null;
+
+  const render = () => {
+    const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+    const notes = getClippedNotes();
+    if (notes.length === 0) {
+      rows.innerHTML = `<div class="nat-row"><span class="nat-label">${t('fragment.natNoNotes')}</span></div>`;
+      if (scoreTag) scoreTag.textContent = '--';
+      return;
+    }
+    const ranges = resolvePitchRanges(notes);
+    const result = analyzeNaturalness({
+      pitchAt: (beat) => getPitchAtTime(beat),
+      notes,
+      bpm,
+      ranges,
+    });
+
+    if (scoreTag) {
+      scoreTag.textContent = String(result.score);
+      scoreTag.style.color = result.score >= 80 ? '#4ade80'
+        : result.score >= 50 ? '#facc15' : '#f87171';
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const item of result.items) {
+      const row = document.createElement('div');
+      row.className = `nat-row ${item.status}`;
+      const label = document.createElement('span');
+      label.className = 'nat-label';
+      label.textContent = t('fragment.' + item.label);
+      const value = document.createElement('span');
+      value.className = 'nat-value';
+      value.textContent = item.value === null
+        ? '—'
+        : `${typeof item.value === 'number' ? item.value.toFixed(1) : item.value} ${item.unit}`;
+      const target = document.createElement('span');
+      target.className = 'nat-target';
+      target.textContent = item.target;
+      row.append(label, value, target);
+      frag.appendChild(row);
+    }
+    rows.innerHTML = '';
+    rows.appendChild(frag);
+  };
+
+  btn.addEventListener('click', render);
+  // 打开分片后先算一次，避免用户看到空面板以为坏了
+  document.addEventListener('sxse:fragment-loaded', render);
+  render();
+  return { render };
 }

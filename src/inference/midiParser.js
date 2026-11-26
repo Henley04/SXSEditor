@@ -158,7 +158,7 @@ function _extractRawLyrics(buffer) {
  * Output note shape:
  *   { pitch, start (beats), duration (beats), lyric, noteType }
  */
-function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, secondsToTicks) {
+function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds) {
   if (rawNotes.length === 0) return [];
 
   for (const n of rawNotes) {
@@ -226,6 +226,20 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, seco
   const result = [];
   let prevEndS = 0.0;
 
+  /**
+   * 连音音符要演唱的歌词 = 前面最近的、真正的歌词。
+   * 往前跳过空歌词与连续的 '-'（连续的连音不能互相继承，否则第一个 '-' 的
+   * 字面值会在链条里一路传下去）。找不到则返回 ''。
+   */
+  function _previousLyric(notes, idx) {
+    for (let k = idx - 1; k >= 0; k--) {
+      const prev = (notes[k] && notes[k].lyric) || '';
+      const t = prev.trim();
+      if (t && t !== '-') return prev;
+    }
+    return '';
+  }
+
   for (let idx = 0; idx < trimmed.length; idx++) {
     const n = trimmed[idx];
     let startS = ticksToSeconds(n.startTicks);
@@ -247,7 +261,12 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, seco
       text = '<SP>';
     } else if (lyric === '-') {
       noteType = 3;
-      text = idx > 0 ? (trimmed[idx - 1].lyric || '-') : '-';
+      // 连音标记本身不是歌词：能继承前一个音符的歌词就继承（上游行为），
+      // 否则留空。历史上的 `|| '-'` 兜底会把字面 '-' 当歌词存进工程 ——
+      // 第一个音符就是 '-'、或前一个音符没有歌词时就会这样 —— 之后管线把
+      // 它当音素查表，报 `Unknown phoneme: "-"` 并落到 <UNK>。
+      // 空歌词 + noteType=3 仍然是一个合法的"连音/不重新起音"音符。
+      text = _previousLyric(trimmed, idx);
     } else {
       noteType = 2;
       text = lyric;
@@ -289,14 +308,13 @@ function parseMidiFile(buffer) {
   const ticksPerBeat = midi.header.ppq;
 
   const rawNotes = [];
-  for (const [trackIndex, track] of midi.tracks.entries()) {
+  for (const [_trackIndex, track] of midi.tracks.entries()) {
     if (track.instrument.percussion) continue;
     for (const note of track.notes) {
       rawNotes.push({
         midi: note.midi,
         startTicks: note.ticks,
         durationTicks: note.durationTicks,
-        velocity: Math.round(note.velocity * 127),
         lyric: '',
       });
     }
@@ -324,9 +342,8 @@ function parseMidiFile(buffer) {
   const lyrics = [...rawLyrics, ...headerLyrics];
 
   const ticksToSeconds = (t) => midi.header.ticksToSeconds(t);
-  const secondsToTicks = (s) => midi.header.secondsToTicks(s);
 
-  return _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, secondsToTicks);
+  return _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds);
 }
 
 /**
@@ -348,7 +365,6 @@ function parseMidiFileMultiTrack(buffer) {
   const midi = new Midi(buffer);
   const ticksPerBeat = midi.header.ppq;
   const ticksToSeconds = (t) => midi.header.ticksToSeconds(t);
-  const secondsToTicks = (s) => midi.header.secondsToTicks(s);
 
   // @tonejs/midi drops track-level lyric meta events. Extract them from the
   // raw bytes and bucket by channel so each virtual track can recover its
@@ -374,7 +390,6 @@ function parseMidiFileMultiTrack(buffer) {
       midi: note.midi,
       startTicks: note.ticks,
       durationTicks: note.durationTicks,
-      velocity: Math.round(note.velocity * 127),
       lyric: '',
     }));
 
@@ -393,7 +408,6 @@ function parseMidiFileMultiTrack(buffer) {
       trackLyrics,
       ticksPerBeat,
       ticksToSeconds,
-      secondsToTicks,
     );
 
     if (notes.length === 0) continue;

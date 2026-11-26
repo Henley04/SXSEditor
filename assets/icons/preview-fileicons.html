@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SXSEditor 文件图标 · 工程 / 歌手</title>
+<style>
+  :root{
+    --bg:#eef1f7; --card:#fff; --fg:#141a2e; --muted:#68728c;
+    --line:rgba(20,26,46,.10); --accent:#E8952F;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0 auto; padding:52px 40px 88px; max-width:1060px;
+    font:14.5px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+    background:var(--bg); color:var(--fg); -webkit-font-smoothing:antialiased;
+  }
+  .eyebrow{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); font-weight:700}
+  h1{font-size:29px; line-height:1.25; margin:10px 0 10px; letter-spacing:-.01em}
+  .lede{color:var(--muted); max-width:72ch; margin:0; font-size:15px}
+  h2{font-size:12px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--muted);
+     margin:50px 0 16px; display:flex; align-items:center; gap:12px}
+  h2::after{content:""; flex:1; height:1px; background:var(--line)}
+
+  .pair{display:grid; grid-template-columns:1fr 1fr; gap:22px}
+  @media (max-width:780px){ .pair{grid-template-columns:1fr} }
+  .type{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px;
+        display:flex; gap:24px; align-items:center}
+  .type img{width:132px; height:132px; flex:none}
+  .type h3{margin:0 0 4px; font-size:16px}
+  .type .ext{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px;
+             color:var(--accent); background:rgba(232,149,47,.10); padding:1px 7px; border-radius:5px}
+  .type p{margin:8px 0 0; font-size:13px; color:var(--muted)}
+
+  .ladder{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:10px 26px 16px}
+  .ladder .row{display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:18px; padding:16px 0;
+               border-bottom:1px dashed var(--line)}
+  .ladder .row:last-child{border-bottom:none}
+  .ladder .tag{width:76px; flex:none; font-size:12px; color:var(--muted); letter-spacing:.06em}
+  .ladder img{flex:none; display:block}
+
+  .explorer{background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden;
+            box-shadow:0 12px 30px -18px rgba(20,26,46,.4)}
+  .explorer .bar{display:flex; align-items:center; gap:8px; padding:8px 12px; background:#f7f8fb;
+                 border-bottom:1px solid rgba(0,0,0,.07); font-size:12.5px; color:#3a4358}
+  .explorer .bar .path{margin-left:8px; color:#6b7488}
+  .grid-view{display:grid; grid-template-columns:repeat(auto-fill,minmax(104px,1fr)); gap:6px; padding:18px 16px}
+  .grid-view .item{display:flex; flex-direction:column; align-items:center; gap:7px; padding:8px 4px; border-radius:6px}
+  .grid-view .item:hover{background:#eaf2fd}
+  .grid-view .item img{width:48px; height:48px}
+  .grid-view .item span{font-size:11.5px; color:#2c3446; text-align:center; line-height:1.35}
+  .list-view{margin:0 12px 12px; border:1px solid #e6e9f0; border-radius:6px; overflow:hidden}
+  .list-view .head,.list-view .row2{display:grid; grid-template-columns:1fr 140px 120px; align-items:center;
+                                    font-size:12px; white-space:nowrap}
+  .list-view .head{background:#f4f6fa; color:#5c667c; border-bottom:1px solid #e6e9f0}
+  .list-view .head span,.list-view .row2 span{padding:5px 10px}
+  .list-view .row2{color:#2c3446; border-bottom:1px solid #f0f2f7}
+  .list-view .row2:last-child{border-bottom:none}
+  .list-view .row2 .name{display:flex; align-items:center; gap:7px}
+  .list-view .row2 img{width:16px; height:16px}
+  .caption{font-size:11.5px; color:var(--muted); margin-top:8px}
+
+  .note{background:#fff; border:1px solid var(--line); border-left:3px solid var(--accent);
+        border-radius:12px; padding:16px 20px; margin-top:22px; font-size:13.5px}
+  .note b{font-weight:600}
+  code{background:rgba(20,26,46,.06); padding:1px 6px; border-radius:5px; font-size:12.5px}
+  table{width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
+        border-radius:12px; overflow:hidden; font-size:13px}
+  th,td{padding:10px 14px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+  td:first-child,th:first-child{width:20%}
+  td:nth-child(2),th:nth-child(2){width:44%}
+  th{background:#f7f8fb; font-weight:600; font-size:12px; letter-spacing:.04em; color:#4a5468}
+  tr:last-child td{border-bottom:none}
+  footer{margin-top:52px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="eyebrow">File icons</div>
+<h1>两种文件，两张脸</h1>
+<p class="lede">
+  工程文件是橙色声波卡片，歌手文件是同色系的人声卡片——都是文件形状，靠里面的内容区分：
+  工程里是钢琴卷帘、波形、推子和音符；歌手里是一个戴耳机的侧脸、五线谱和一截人声波形。
+  歌手那张原图是白底，抠掉之后卡片右上角的折角仍是白的，所以抠图时只清除了"与画布边缘连通"的白色。
+</p>
+
+<h2>两张图标</h2>
+<div class="pair">
+  <div class="type">
+    <img src="../fileicons/project.png" alt="工程文件图标">
+    <div>
+      <h3>工程文件</h3>
+      <span class="ext">.sxsproj</span>
+      <p>双击直接打开，恢复整首工程：分片、音高曲线、歌手指派都在里面。</p>
+    </div>
+  </div>
+  <div class="type">
+    <img src="../fileicons/singer.png" alt="歌手文件图标">
+    <div>
+      <h3>歌手文件</h3>
+      <span class="ext">.sxssinger</span>
+      <p>双击直接进「歌手编辑」——预处理窗口带着音高、MIDI 和声线数据打开，保存写回原文件。</p>
+    </div>
+  </div>
+</div>
+
+<h2>真实尺寸</h2>
+<div class="ladder">
+  <div class="row">
+    <div class="tag">工程</div>
+    <img src="../fileicons/project-16.png" width="16" height="16" alt="16">
+    <img src="../fileicons/project-20.png" width="20" height="20" alt="20">
+    <img src="../fileicons/project-24.png" width="24" height="24" alt="24">
+    <img src="../fileicons/project-32.png" width="32" height="32" alt="32">
+    <img src="../fileicons/project-40.png" width="40" height="40" alt="40">
+    <img src="../fileicons/project-48.png" width="48" height="48" alt="48">
+    <img src="../fileicons/project-64.png" width="64" height="64" alt="64">
+    <img src="../fileicons/project-96.png" width="96" height="96" alt="96">
+  </div>
+  <div class="row">
+    <div class="tag">歌手</div>
+    <img src="../fileicons/singer-16.png" width="16" height="16" alt="16">
+    <img src="../fileicons/singer-20.png" width="20" height="20" alt="20">
+    <img src="../fileicons/singer-24.png" width="24" height="24" alt="24">
+    <img src="../fileicons/singer-32.png" width="32" height="32" alt="32">
+    <img src="../fileicons/singer-40.png" width="40" height="40" alt="40">
+    <img src="../fileicons/singer-48.png" width="48" height="48" alt="48">
+    <img src="../fileicons/singer-64.png" width="64" height="64" alt="64">
+    <img src="../fileicons/singer-96.png" width="96" height="96" alt="96">
+  </div>
+  <div class="caption" style="text-align:right">把浏览器缩放放回 100%，这一行才是屏幕上的真实大小；16px 是列表视图，48px 是"大图标"</div>
+</div>
+
+<h2>在资源管理器里</h2>
+<div class="explorer">
+  <div class="bar"><span>▤</span><span class="path">此电脑 › 文档 › SXSEditor › Demo</span></div>
+  <div class="grid-view">
+    <div class="item"><img src="../fileicons/project.png" alt=""><span>夏夜未完成.sxsproj<br>1.2 MB</span></div>
+    <div class="item"><img src="../fileicons/singer.png" alt=""><span>Mika_v2.sxssinger<br>48 MB</span></div>
+    <div class="item"><img src="../fileicons/project.png" alt=""><span>副歌改调.sxsproj<br>804 KB</span></div>
+    <div class="item"><img src="../fileicons/singer.png" alt=""><span>Yuki_soft.sxssinger<br>52 MB</span></div>
+  </div>
+  <div class="list-view">
+    <div class="head"><span>名称</span><span>类型</span><span>修改日期</span></div>
+    <div class="row2"><span class="name"><img src="../fileicons/project.png" alt="">夏夜未完成.sxsproj</span><span>SXSEditor 工程</span><span>2026/10/30 22:14</span></div>
+    <div class="row2"><span class="name"><img src="../fileicons/singer.png" alt="">Mika_v2.sxssinger</span><span>SXSEditor 歌手</span><span>2026/10/29 18:03</span></div>
+    <div class="row2"><span class="name"><img src="../fileicons/project.png" alt="">副歌改调.sxsproj</span><span>SXSEditor 工程</span><span>2026/10/28 09:41</span></div>
+  </div>
+</div>
+
+<h2>双击之后发生什么</h2>
+<table>
+  <tr><th>场景</th><th>系统怎么把文件交过来</th><th>应用的反应</th></tr>
+  <tr><td>应用没开，双击 .sxsproj</td><td>路径在启动参数 argv 里</td><td>主窗口起来后加载该工程</td></tr>
+  <tr><td>应用没开，双击 .sxssinger</td><td>同上</td><td>主窗口起来后直接进歌手编辑</td></tr>
+  <tr><td>应用已开，再双击一个文件</td><td>Windows 起第二个进程，单实例锁把它交给已运行的实例（second-instance 带 argv）；macOS 走 <code>open-file</code> 事件</td><td>主窗口置前，然后打开该文件</td></tr>
+  <tr><td>连着点两个文件</td><td>两次投递</td><td>后一个覆盖前一个（以最后的意图为准）</td></tr>
+</table>
+
+<div class="note">
+  <b>关联是"装一次、之后一直在"。</b>Windows 上三条路都会写：安装器（Inno 的 <code>[Registry]</code>）、
+  应用启动后的补注册（写 <code>HKCU\Software\Classes</code>，绿色版也能用）、以及系统"打开方式 → 始终使用"。
+  补注册只在键不存在、或本来就指向本程序时才写 —— 用户手动指定过别的程序，我们不去抢。
+  macOS 靠 <code>Info.plist</code> 的 <code>CFBundleDocumentTypes</code>，图标取 <code>fileicons/*.icns</code>。
+</div>
+
+<footer>SXSEditor · 生成脚本 assets/icons/make-file-icons.py</footer>
+
+</body>
+</html>

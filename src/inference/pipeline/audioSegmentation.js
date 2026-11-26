@@ -1,4 +1,8 @@
 const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
+// 哈希算法与渲染层签名共用一份（src/shared/hashSignature.js）。
+// 这里保留 hashArray 方法名：调用点遍布本文件与 index.js，改名没有收益。
+const { hashNumberArray } = require('../../shared/hashSignature.js');
+const { computePromptCondSignature } = require('../../shared/promptCondSignature.js');
 
 // Only rests >= 1.5 seconds are excluded from inference; 150 ms of rest
 // context is kept on both sides of the split so consonant releases and the
@@ -6,6 +10,42 @@ const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVER
 // buildVocalSegments() and splitLongRestRegions().
 const LONG_REST_SEC = 1.5;
 const REST_CONTEXT_SEC = 0.15;
+
+/**
+ * 唯一休止判据（rest = 不参与演唱内容的音符）。
+ *
+ * 供 AudioSegmentation、Preprocessing 与 index.js 的静音处理共用，避免三处
+ * 判据分叉导致"切分排除了它、静音阶段又保留它"的不一致。
+ *
+ * - pitch <= 0 的音符（fillNoteGaps 合成、MIDI 导入的 0 号音）**始终**是休止，
+ *   即使带有 slur/continuation 标记——旧 AudioSegmentation 的判据就是 pitch 优先，
+ *   否则 MIDI 导入把 lyric '-' 记为 noteType=3 时会漏掉这类静音段；
+ * - slur/continuation（noteType 3 / isSlur / isContinuation）在 pitch>0 时即使
+ *   歌词为空也不是休止；
+ * - <AP> 是可听见的吸气 token，不是休止；
+ * - 显式空歌词（字段存在且为 ''）是休止；缺少 lyric 字段本身不构成休止。
+ *
+ * @param {Object} note
+ * @returns {boolean}
+ */
+function isRestNote(note) {
+    if (!note) return false;
+    const lyric = String(note.lyric || '').trim();
+    // <AP> 是可听见的吸气 token（phone_set.json），必须优先于 pitch 判定：
+    // 它常与 pitch<=0 一起出现，但仍要作为演唱帧送进模型。
+    if (lyric === '<AP>') return false;
+    // 无音高优先判休止（保留旧 AudioSegmentation 的优先序，含延音音符）。
+    const pitchNum = Number(note.pitch);
+    if (Number.isFinite(pitchNum) && pitchNum <= 0) return true;
+    const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
+    if (continuation) return false;
+    const explicitEmpty = note.lyric !== undefined
+        && note.lyric !== null
+        && lyric.length === 0;
+    return note.noteType === 1
+        || lyric === '<SP>'
+        || explicitEmpty;
+}
 
 /**
  * Long audio segmentation and stitching logic
@@ -46,18 +86,11 @@ class AudioSegmentation {
     }
 
     /**
-     * Shared rest-note predicate (rest = excluded from vocal content).
-     * slur/continuation notes (noteType 3) are NOT rests even when their
-     * lyric is empty.
+     * Shared rest-note predicate — delegates to the module-level isRestNote()
+     * so every caller (segmentation / preprocessing / index.js) agrees.
      */
     _isRestNote(note) {
-        const lyric = String(note.lyric || '').trim();
-        const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
-        // <AP> is an audible aspiration token in phone_set.json, not a rest.
-        if (lyric === '<AP>') return false;
-        return note.pitch <= 0 || note.noteType === 1
-            || lyric === '<SP>'
-            || (lyric === '' && !continuation);
+        return isRestNote(note);
     }
 
     /**
@@ -307,32 +340,12 @@ class AudioSegmentation {
      * 采用 FNV-1a 32-bit 变种，对短数组（≤2000 元素）全量哈希避免下采样盲区；
      * 长数组仍按 2000 个采样点哈希以控制开销，但 FNV-1a 的雪崩效应优于原多项式哈希，
      * 显著降低微调单点改动落在步长盲区内导致缓存误命中的概率。
+     *
+     * 实现已收敛到 src/shared/hashSignature.js —— 渲染层播放签名与分片编辑器
+     * 预览签名调的是同一个函数，不再是"两份靠注释维系的副本"。
      */
     hashArray(arr) {
-        if (!arr) return 0;
-        let h = 0x811c9dc5;
-        const bytes = new Uint8Array(8);
-        const view = new DataView(bytes.buffer);
-        const hashValue = (value) => {
-            // Preserve fractional edits. The old bitwise coercion collapsed every
-            // value in (-1, 1) to zero, causing stale synthesis-cache hits for F0 curves.
-            view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
-            for (let j = 0; j < bytes.length; j++) {
-                h ^= bytes[j];
-                h = Math.imul(h, 0x01000193);
-            }
-        };
-
-        const step = Math.max(1, Math.floor(arr.length / 2000));
-        let lastHashed = -1;
-        for (let i = 0; i < arr.length; i += step) {
-            hashValue(arr[i]);
-            lastHashed = i;
-        }
-        // Sampling must include the tail, where editor curves commonly receive a final keyframe.
-        if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
-        hashValue(arr.length);
-        return h | 0;
+        return hashNumberArray(arr);
     }
 
     /**
@@ -366,31 +379,26 @@ class AudioSegmentation {
      * computeSynthCacheKey = 本键 + `_mp${melPostprocessHash}`，两者字段构成
      * 必须保持一致（新增影响 mel 的选项时两处同步）。
      */
-    computeMelCacheKey(notes, bpm, options, _interpolateEnvelope) {
-        const f0Envelope = options.f0Envelope || null;
-        const pitchCurveF0 = options.pitchCurveF0 || null;
-        const refAudioWavBuffer = options.refAudioWavBuffer || null;
-        const totalSteps = options.nSteps || 32;
-        const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
-        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.7;
-        const autoShift = options.autoShift || false;
-        const pitchShift = options.pitchShift || 0;
-        const language = options.language || null;
-        // diffStep 分块推理参数影响合成结果，必须纳入缓存键
-        const diffStepChunk = options.diffStepChunk === true ? 1 : 0;
-        const diffStepChunkFrames = options.diffStepChunkFrames || 0;
-        const diffStepOverlapFrames = options.diffStepOverlapFrames !== undefined ? options.diffStepOverlapFrames : 0;
-        // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
-        // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
-        const singerId = options.singerId || null;
-
+    /**
+     * 只算缓存键里「随音符变化」的那一段（前导整数）。
+     *
+     * 拆分的动机（性能）：参考音频 / F0 曲线 / prompt cond 的哈希很贵，
+     * 但它们只取决于 bpm + options，与具体音符无关。长音频分成 N 个 segment
+     * 时，旧实现为每个 segment 各算两遍这段昂贵哈希（synth 键一遍 + mel 键一遍），
+     * 共 2N 次，全部发生在首个 chunk 发射之前 —— 这正是「分片启动延迟」的来源。
+     * 拆出本方法后，调用方每段只算一次 notesHash，选项段复用一份。
+     */
+    computeNotesHash(notes) {
         let notesHash = 0;
+        if (!notes) return 0;
         for (let i = 0; i < notes.length; i++) {
             const n = notes[i];
             // phonemeAdjustments 影响合成结果（durationRatios 决定 mel2token 帧分配，
             // volumePoints 决定音量包络），必须纳入缓存键，否则编辑音素边界/音量后
             // 会命中旧缓存返回过期音频。
-            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+            // noteType 同样影响合成结果：3=连音（不重新起音）。MIDI 导入的连音音符
+            // 只有 noteType、没有 isSlur 标志，漏掉它会命中"重新起音"的旧缓存。
+            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}|t${n.noteType || 0}`;
             if (n.phonemeAdjustments) {
                 for (const adj of n.phonemeAdjustments) {
                     s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
@@ -405,6 +413,45 @@ class AudioSegmentation {
                 notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
             }
         }
+        return notesHash;
+    }
+
+    /**
+     * 只算缓存键里「随 bpm + options 变化」的那一段（含前导下划线）。
+     *
+     * 与 computeNotesHash() 拼接即得完整 mel 键：
+     *   computeMelCacheKey(notes,bpm,options) === notesHash + computeOptionKeyPart(bpm,options)
+     * 该恒等式由 test/cacheKeyFactorization.test.js 用黄金值守护，改动任一段都要同步。
+     */
+    computeOptionKeyPart(bpm, options) {
+        const f0Envelope = options.f0Envelope || null;
+        const pitchCurveF0 = options.pitchCurveF0 || null;
+        const refAudioWavBuffer = options.refAudioWavBuffer || null;
+        const refSingerData = options.refSingerData || null;
+        const totalSteps = options.nSteps || 32;
+        const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.75;
+        const autoShift = options.autoShift || false;
+        const pitchShift = options.pitchShift || 0;
+        const language = options.language || null;
+        // diffStep 分块推理参数影响合成结果，必须纳入缓存键
+        const diffStepChunk = options.diffStepChunk === true ? 1 : 0;
+        const diffStepChunkFrames = options.diffStepChunkFrames || 0;
+        const diffStepOverlapFrames = options.diffStepOverlapFrames !== undefined ? options.diffStepOverlapFrames : 0;
+        // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
+        // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
+        const singerId = options.singerId || null;
+        // 模型精度必须纳入缓存键：切换 fp32/fp16/int8 后推理用的是另一套权重，
+        // 同一个分片的输入完全相同，但输出音频的量化误差不同。不纳入键的话，
+        // 切精度后会直接命中上一精度的 mel，听感上"换了精度却没有任何变化"，
+        // 而用户会误判成新精度的效果。后端（DML / WinML / 插件）同理。
+        const modelPrecision = options.modelPrecision || 'base';
+        const inferBackend = options.backend && options.backend.type
+            ? `${options.backend.type}:${options.backend.pluginId || ''}:${options.backend.kindId || ''}`
+            : 'builtin';
+        // 用户主动「重新合成」时渲染层注入的一次性 nonce。只用来让缓存失配，
+        // 不参与任何推理参数；缺省时不追加后缀，保持默认可命中。
+        const retakeSuffix = options.retakeNonce ? `_rt${options.retakeNonce}` : '';
 
         const f0EnvHash = f0Envelope ? this.hashArray(
             f0Envelope.keyframes ? f0Envelope.keyframes.flatMap(kf => [kf.time, kf.value * 1000]) : []
@@ -437,7 +484,40 @@ class AudioSegmentation {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}`;
+        // prompt cond 由 refSingerData + refMidiNotes + refF0Data 三者共同决定；
+        // 三者任一变化都必须让缓存失效（统一口径见 shared/promptCondSignature.js）。
+        const promptSignature = computePromptCondSignature(
+            refSingerData,
+            options.refMidiNotes || null,
+            options.refF0Data || null,
+            options.maxPromptFrames
+        );
+
+        // 音高来源：score 时 pitchCurveF0 为 null、f0Hash 也是 0，与"manual 空曲线"
+        // 无法区分 —— 不纳入键的话切模式会直接命中上一模式的 mel。
+        const pitchControl = options.pitchControl === 'score' ? 'score' : 'manual';
+
+        // 日语歌词走 en_ 音素合成，音素序列由「假名 → 英语 ARPAbet」映射表决定，
+        // 而映射表不属于 notes/bpm 等任何已入键字段。改动映射（例如 い段去 Y、
+        // ら行 R→L、お段 OW1→AO1、ん 部位同化）后歌词一个字符都没变，缓存键完全
+        // 相同，会直接命中旧音频，听感上"改了代码却一点没变"。因此用一个手动版本
+        // 号占位：**每次改动 JP→EN 映射或 _applyMoraContext 的判定规则都要递增**。
+        const jpMapVersion = 4;
+
+        // 两个来源必须同时进键：
+        //   · p<promptSignature> —— prompt 条件（singerData / midiNotes / f0Data），
+        //     见 shared/promptCondSignature.js；
+        //   · _pm/_be —— 权重集合（fp32/fp16/int8）与推理后端，同一输入换权重
+        //     输出音频不同；_rt<n> 是「重新合成」注入的一次性 nonce。
+        return `_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_p${promptSignature}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_pc${pitchControl}_pm${modelPrecision}_be${inferBackend}_jpm${jpMapVersion}${retakeSuffix}`;
+    }
+
+    /**
+     * Compute mel cache key = notesHash + optionKeyPart.
+     * 数值恒等式：与拆分前的逐字段拼接逐字节一致（黄金值见 cacheKeyFactorization 测试）。
+     */
+    computeMelCacheKey(notes, bpm, options, _interpolateEnvelope) {
+        return `${this.computeNotesHash(notes)}${this.computeOptionKeyPart(bpm, options)}`;
     }
 
     /**
@@ -451,6 +531,24 @@ class AudioSegmentation {
     computeSynthCacheKey(notes, bpm, options, _interpolateEnvelope) {
         const base = this.computeMelCacheKey(notes, bpm, options, _interpolateEnvelope);
         return `${base}_mp${this.computeMelPostprocessHash(options)}`;
+    }
+
+    /**
+     * 一次算出 mel 键与音频键，共享同一份 optionKeyPart / mp 哈希。
+     *
+     * 缓存命中检查需要 synth 键（`_synthCacheGet`）与 mel 键（MISS 后的
+     * `_melCacheGet`）两个键；旧实现调用 computeSynthCacheKey + computeMelCacheKey，
+     * 把昂贵的 reference/F0/prompt 哈希重复算了两遍。本方法只算一遍 optionKeyPart，
+     * 返回两条互不相同的键，供调用方直接使用。
+     *
+     * @returns {{ melKey: string, synthKey: string, optionPart: string, mpHash: string }}
+     */
+    computeCacheKeyParts(notes, bpm, options) {
+        const notesHash = this.computeNotesHash(notes);
+        const optionPart = this.computeOptionKeyPart(bpm, options);
+        const mpHash = this.computeMelPostprocessHash(options);
+        const melKey = `${notesHash}${optionPart}`;
+        return { melKey, synthKey: `${melKey}_mp${mpHash}`, optionPart, mpHash };
     }
 
     /**
@@ -498,4 +596,4 @@ class AudioSegmentation {
     }
 }
 
-module.exports = { AudioSegmentation };
+module.exports = { AudioSegmentation, isRestNote };

@@ -553,6 +553,9 @@ class BasicPitchDetector {
     this.initialized = false;
   }
 
+  // 注意：extractF0AndNotes 用的是模块级 resampleAudio（utils/resampleAudio 的
+  // Kaiser 版，见文件顶部 require）。这个方法只被 test/basicPitch.test.js 覆盖，
+  // 生产路径不再调用；保留是为了不破坏既有单测。
   resampleAudio(audioData, fromSampleRate, toSampleRate) {
     const ratio = fromSampleRate / toSampleRate;
     const newLength = Math.floor(audioData.length / ratio);
@@ -604,55 +607,69 @@ class BasicPitchDetector {
 
     const batchSize = reshapedInput.shape[0];
 
+    // P7: 逐窗 execute(batch=1) 的固定开销（每次 run 的调度/拷贝）远大于单窗
+    // 计算量，日志也是每窗一行。这里按 WINDOW_BATCH_SIZE 累积窗口后一次 execute
+    // ——模型输入的 batch 维是可变的（原来就是从整段里 slice 出 [1,...]），
+    // unwrapOutput 的 reshape 对 batch>1 同样成立，输出再按窗切回。
+    // 内存上限：8 窗输入(~1.4MB float32)+输出(~1.4MB)，不会随音频时长增长。
+    const WINDOW_BATCH_SIZE = 8;
+
     try {
-      for (let i = 0; i < batchSize; ++i) {
-        console.log(`[BasicPitchDetector] processing frame: ${i + 1}/${batchSize}`);
+      for (let startWindow = 0; startWindow < batchSize; startWindow += WINDOW_BATCH_SIZE) {
+        if (calculatedFrames >= nOutputFramesOriginal) break;
+        const nWindows = Math.min(WINDOW_BATCH_SIZE, batchSize - startWindow);
+        console.log(`[BasicPitchDetector] processing frames: ${startWindow + 1}-${startWindow + nWindows}/${batchSize}`);
 
-        const singleBatch = tf.slice(reshapedInput, [i, 0, 0], [1, -1, -1]);
+        const batchInput = tf.slice(reshapedInput, [startWindow, 0, 0], [nWindows, -1, -1]);
         const model = await this.model;
-        const results = model.execute(singleBatch, ['Identity_1', 'Identity_2', 'Identity']);
+        const results = model.execute(batchInput, ['Identity_1', 'Identity_2', 'Identity']);
 
-        let unwrappedResultingFrames = this.unwrapOutput(results[0]);
-        let unwrappedResultingOnsets = this.unwrapOutput(results[1]);
-        let unwrappedResultingContours = this.unwrapOutput(results[2]);
+        let unwrappedResultingFrames = null;
+        let unwrappedResultingOnsets = null;
+        let unwrappedResultingContours = null;
+        try {
+          unwrappedResultingFrames = this.unwrapOutput(results[0]);
+          unwrappedResultingOnsets = this.unwrapOutput(results[1]);
+          unwrappedResultingContours = this.unwrapOutput(results[2]);
 
-        const calculatedFramesTmp = unwrappedResultingFrames.shape[0];
+          const frameRows = tensorTo2DRows(unwrappedResultingFrames, N_FREQ_BINS_CONTOURS);
+          const onsetRows = tensorTo2DRows(unwrappedResultingOnsets, N_FREQ_BINS_CONTOURS);
+          const contourRows = tensorTo2DRows(unwrappedResultingContours, N_FREQ_BINS_CONTOURS);
 
-        if (calculatedFrames >= nOutputFramesOriginal) {
-          singleBatch.dispose();
+          // 每窗在各自 rows 里占的行数（batch 内各窗相同）。注意 contour 的列宽
+          // 与 frames/onsets 不同（模型输出 264 列，而 tensorTo2DRows 统一按
+          // N_FREQ_BINS_CONTOURS=88 切），所以它每窗占的行数是 frames 的整数倍，
+          // 必须分别换算，不能共用一个 rowsPerWindow。
+          const frameRowsPerWindow = Math.floor(frameRows.length / nWindows);
+          const onsetRowsPerWindow = Math.floor(onsetRows.length / nWindows);
+          const contourRowsPerWindow = Math.floor(contourRows.length / nWindows);
+          const contourRowsPerFrameRow = frameRowsPerWindow > 0
+            ? Math.round(contourRowsPerWindow / frameRowsPerWindow)
+            : 1;
+
+          for (let w = 0; w < nWindows; w++) {
+            if (calculatedFrames >= nOutputFramesOriginal) break;
+            // 末窗按目标总帧数截断（与原逐窗 slice 行为一致）
+            const framesToOutput = Math.min(frameRowsPerWindow, nOutputFramesOriginal - calculatedFrames);
+            allFrames.push(frameRows.slice(
+              w * frameRowsPerWindow, w * frameRowsPerWindow + framesToOutput,
+            ));
+            allOnsets.push(onsetRows.slice(
+              w * onsetRowsPerWindow, w * onsetRowsPerWindow + framesToOutput,
+            ));
+            const contourFrom = w * contourRowsPerWindow;
+            allContours.push(contourRows.slice(
+              contourFrom, contourFrom + framesToOutput * contourRowsPerFrameRow,
+            ));
+            calculatedFrames += framesToOutput;
+          }
+        } finally {
+          batchInput.dispose();
           results.forEach(t => t.dispose());
-          unwrappedResultingFrames.dispose();
-          unwrappedResultingOnsets.dispose();
-          unwrappedResultingContours.dispose();
-          continue;
+          if (unwrappedResultingFrames) unwrappedResultingFrames.dispose();
+          if (unwrappedResultingOnsets) unwrappedResultingOnsets.dispose();
+          if (unwrappedResultingContours) unwrappedResultingContours.dispose();
         }
-
-        if (calculatedFramesTmp + calculatedFrames >= nOutputFramesOriginal) {
-          const framesToOutput = nOutputFramesOriginal - calculatedFrames;
-          const slicedFrames = unwrappedResultingFrames.slice([0, 0], [framesToOutput, -1]);
-          const slicedOnsets = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
-          const slicedContours = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
-
-          allFrames.push(tensorTo2DRows(slicedFrames, N_FREQ_BINS_CONTOURS));
-          allOnsets.push(tensorTo2DRows(slicedOnsets, N_FREQ_BINS_CONTOURS));
-          allContours.push(tensorTo2DRows(slicedContours, N_FREQ_BINS_CONTOURS));
-
-          slicedFrames.dispose();
-          slicedOnsets.dispose();
-          slicedContours.dispose();
-        } else {
-          allFrames.push(tensorTo2DRows(unwrappedResultingFrames, N_FREQ_BINS_CONTOURS));
-          allOnsets.push(tensorTo2DRows(unwrappedResultingOnsets, N_FREQ_BINS_CONTOURS));
-          allContours.push(tensorTo2DRows(unwrappedResultingContours, N_FREQ_BINS_CONTOURS));
-        }
-
-        calculatedFrames += calculatedFramesTmp;
-
-        singleBatch.dispose();
-        results.forEach(t => t.dispose());
-        unwrappedResultingFrames.dispose();
-        unwrappedResultingOnsets.dispose();
-        unwrappedResultingContours.dispose();
       }
     } finally {
       reshapedInput.dispose();
@@ -663,8 +680,16 @@ class BasicPitchDetector {
     const onsets = allOnsets.flat();
     const contours = allContours.flat();
 
-    const noteArray = outputToNotesPoly(frames, onsets, CONTOUR_BINS_PER_SEMITONE);
+    // C6: 第 3 个参数是 onsetThresh（默认 0.5），不是 CONTOUR_BINS_PER_SEMITONE。
+    // 之前误把常量 1 传进去：onsets 经 sigmoid 后恒 <1，onset 分支永不触发，
+    // 只剩下 melodiaTrick 补的音符。
+    const noteArray = outputToNotesPoly(frames, onsets, 0.5);
     const timeNoteArray = noteFramesToTime(noteArray);
+    // 注：contours 的实际列数是 264（模型 signature [B,T,264] = 88 半音 × 3 sub-bin），
+    // 而历史代码用 N_FREQ_BINS_CONTOURS=88 切列，导致每帧被切成 3 行、行号与帧号
+    // 存在 3 倍错位。此处沿用历史的窄容差（CONTOUR_BINS_PER_SEMITONE=1），把错位
+    // 的影响压到最小；若改用默认 25 会放大错位、产生可闻的 pitch bend 偏差。
+    // 彻底修复需按 264 列切分并把该常量改为 3（独立 DSP 变更，需真实音频对比）。
     const noteEventsTime = addPitchBendsToNoteEvents(contours, timeNoteArray, CONTOUR_BINS_PER_SEMITONE);
 
     const adjustedNotes = noteEventsTime.map(note => ({

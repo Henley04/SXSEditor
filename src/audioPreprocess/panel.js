@@ -3,6 +3,7 @@ import { getOptions, saveOptions, applyPreset, resolveOptions } from './extracti
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { toggleSynth } from './synthPreview.js';
+import { drawWaveformWithPlayhead, invalidateWaveformCache, invalidateWaveformCanvasRect } from './canvasRenderer.js';
 
 /** 根据 MIDI 提取工具显示/隐藏 FCPE 参数面板 */
 export async function updateFcpePanelVisibility() {
@@ -11,6 +12,9 @@ export async function updateFcpePanelVisibility() {
   const tool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'fcpe';
   const isFcpe = tool === 'fcpe';
   dom.extractPanelBody.style.display = isFcpe ? '' : 'none';
+  // 面板 body 显隐会改变 #extract-panel 的高度，从而移动下方 waveform canvas
+  // 的 top（画布尺寸不变，canvas 的 ResizeObserver 不触发）。
+  invalidateWaveformCanvasRect();
   if (dom.fcpeParamsNotice) {
     if (!isFcpe) {
       const toolName = tool === 'rmvpe' ? 'RMVPE' : 'Basic Pitch';
@@ -41,6 +45,24 @@ export function collectOptions() {
   };
 }
 
+/**
+ * 把面板里的 BPM 同步到卷帘。
+ *
+ * 波形、播放头、F0 曲线、音量包络的 beat↔秒换算全部读 `pianoRoll.bpm`；只改输入框
+ * 而不回写，就会出现"面板显示 96、网格还是 120"的错位——这是用户反馈的
+ * "时间对齐不稳定"来源之一。
+ */
+function applyBpmToPianoRoll() {
+  const bpm = Number(dom.bpmInput.value);
+  const pr = state.pianoRoll;
+  if (!pr || !(bpm > 0) || pr.bpm === bpm) return;
+  pr.bpm = bpm;
+  pr._staticCacheDirty = true;
+  pr.render();
+  invalidateWaveformCache();
+  drawWaveformWithPlayhead(pr.getCurrentTime());
+}
+
 function bindControls() {
   const persist = () => saveOptions(collectOptions());
 
@@ -63,7 +85,10 @@ function bindControls() {
   dom.f0Max.addEventListener('change', persist);
   dom.minNote.addEventListener('change', persist);
   dom.bpmAuto.addEventListener('change', persist);
-  dom.bpmInput.addEventListener('change', persist);
+  dom.bpmInput.addEventListener('change', () => {
+    persist();
+    applyBpmToPianoRoll();
+  });
   dom.normalizeCheck.addEventListener('change', persist);
 
   dom.btnAudition.addEventListener('click', toggleSynth);
@@ -71,7 +96,31 @@ function bindControls() {
   dom.btnTogglePanel.addEventListener('click', () => {
     const collapsed = dom.extractPanel.classList.toggle('collapsed');
     setLabel(dom.btnTogglePanel, t(collapsed ? 'preprocess.expandPanel' : 'preprocess.collapsePanel'), { icon: collapsed ? 'chevron-down' : 'chevron-up' });
+    // 面板收/放只改变布局高度，不会触发 window 'resize'。画布后备缓冲仍是旧尺寸，
+    // 下方会留下一条没有内容/没被重绘的空白区；这里主动按新尺寸重建并重绘。
+    refreshViewportAfterPanelToggle();
   });
+}
+
+/**
+ * 提取参数面板折叠后同步下层画布。
+ *
+ * 收起按钮只切换 `#extract-panel.collapsed`（display:none），主内容区高度随之
+ * 变化，但浏览器不会为子元素尺寸变化派发 window resize —— 钢琴卷帘的
+ * canvas.width/height 与波形 canvas 都保持旧值，视觉上就是"下方空缺一块"。
+ * 这里直接复用两个视图各自的 resize/redraw 入口，语义与用户手动拖窗口一致。
+ */
+export function refreshViewportAfterPanelToggle() {
+  const pr = state.pianoRoll;
+  // 面板高度变化会平移 waveform canvas（尺寸不变），必须显式失效 rect 缓存，
+  // 否则 hover/点击仍按旧 top 判定 header 热区。
+  invalidateWaveformCanvasRect();
+  if (pr) {
+    // _resize() 会按父容器新尺寸重设画布、clamp 滚动位置并重绘（含滚动条）。
+    pr._resize();
+  }
+  invalidateWaveformCache();
+  drawWaveformWithPlayhead(pr ? pr.getCurrentTime() : 0, { isPaused: !state.isPlaying });
 }
 
 /** 初始化参数面板：载入已保存选项 */

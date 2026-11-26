@@ -32,12 +32,41 @@ body {
 }
 
 .sidebar-category {
-    padding: 16px 18px 5px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--fg-muted);
+    /* 原先 11px 大写 + 0.8px 字距，与下方 sentence case 的条目只差 1px，
+       层级全靠"全大写"这个排版 trick 撑。改成 Title Case + 12.5px/650：
+       分组看起来是标题，条目不抢戏，也不再跟其它窗口的写法不一致。 */
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 16px 18px 6px;
+    font-size: 12.5px;
+    font-weight: 650;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+/* 可折叠指示：一个小三角，折叠时转 -90°。 */
+.sidebar-category::after {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    opacity: 0.55;
+    transform: rotate(90deg);
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.sidebar-group.is-collapsed .sidebar-category::after {
+    transform: rotate(0deg);
+}
+
+.sidebar-group.is-collapsed .sidebar-item {
+    display: none;
 }
 
 .sidebar-item {
@@ -58,7 +87,7 @@ body {
 
 .sidebar-item.active {
     background: var(--accent-softer);
-    color: var(--accent);
+    color: var(--accent-fg);
     border-left-color: var(--accent);
     font-weight: 600;
 }
@@ -215,16 +244,19 @@ body {
 
 .hint {
     font-size: var(--font-sm);
-    color: var(--fg-disabled);
+    /* 原来是 --fg-disabled：12px 正文用"禁用色"，在浅色主题下对比度不足 4.5:1。
+       hint 是要读的内容，不是不可用的控件。 */
+    color: var(--fg-muted);
     margin-top: var(--space-2);
-    line-height: 1.5;
+    /* 12px 配 1.6：折行后的中文不再像一坨，长 hint 折成 3 行也可读 */
+    line-height: 1.6;
     padding-left: var(--space-2);
     border-left: 2px solid var(--ink-soft);
 }
 
 /* 警告类提示：用于"开启后可能大幅影响性能/增加发热"等高代价选项 */
 .hint-warning {
-    color: var(--warning);
+    color: var(--warning-fg);
     border-left-color: var(--warning);
 }
 
@@ -282,7 +314,117 @@ body {
     border-radius: var(--radius-xl);
     font-size: var(--font-base);
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-fg);
+}
+
+/* 数值徽章可点击改成精确值：不必为了 0.68 去拖一根 1px 精度的滑杆。 */
+.volume-display--editable {
+    cursor: text;
+}
+
+.volume-display--editable:hover {
+    outline: 1px solid var(--accent);
+}
+
+.volume-display-input {
+    width: 4.2em;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+    outline: none;
+    /* 去掉 number 的上下箭头：徽章只有 20px 高，箭头会盖住数字 */
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.volume-display-input::-webkit-inner-spin-button,
+.volume-display-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* 滑杆端点值：紧贴轨道下方，只在需要精确值时提供参考 */
+.range-scale {
+    display: flex;
+    justify-content: space-between;
+    margin-top: -2px;
+    padding: 0 2px;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+}
+
+/* 长说明折叠：用 <details>，收起时只留两行。 */
+.hint-fold {
+    margin-top: var(--space-2);
+}
+
+.hint-fold > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    list-style: none;
+    font-size: var(--font-sm);
+    color: var(--accent-fg);
+    user-select: none;
+    padding: 2px 0;
+}
+
+.hint-fold > summary::-webkit-details-marker,
+.hint-fold > summary::marker {
+    display: none;
+}
+
+.hint-fold > summary::before {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3.5px solid transparent;
+    border-bottom: 3.5px solid transparent;
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.hint-fold[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.hint-fold > .hint {
+    margin-top: var(--space-1);
+}
+
+/* 收起时压到两行；文本仍在 DOM 里，Ctrl+F 与读屏软件都还能读到。 */
+.hint-fold:not([open]) > .hint {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* "仅导出"标签：贴在分区说明末尾，替代一句容易被忽略的小字。 */
+.section-desc--callout {
+    padding: var(--space-3) var(--space-4);
+    background: var(--accent-softer);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-md);
+    color: var(--fg-secondary);
+}
+
+.export-only-tag {
+    display: inline-block;
+    margin-left: var(--space-3);
+    padding: 1px 7px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    color: var(--fg-secondary);
+    vertical-align: 1px;
 }
 
 /* ==================== Info Boxes ==================== */
@@ -317,6 +459,54 @@ body {
 .precision-info-box strong {
     color: var(--accent-fg);
     font-weight: 600;
+}
+
+/* 首屏结论：两条，加粗数字而不是加粗整句 */
+.precision-info-summary {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-7);
+}
+
+/* 分区内的 disclosure（精度说明 / VRAM 对照表）。
+   统一外观：一行标题 + 三角，展开后显示正文；不引入卡片阴影/发光。 */
+.settings-disclosure {
+    margin-top: var(--space-2);
+}
+
+.settings-disclosure > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    list-style: none;
+    font-size: var(--font-sm);
+    color: var(--accent-fg);
+    user-select: none;
+    padding: 3px 0;
+}
+
+.settings-disclosure > summary::-webkit-details-marker,
+.settings-disclosure > summary::marker {
+    display: none;
+}
+
+.settings-disclosure > summary::before {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3.5px solid transparent;
+    border-bottom: 3.5px solid transparent;
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.settings-disclosure[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+/* 展开后的表格不要再顶出一大段空白 */
+.settings-disclosure > .vram-table-wrapper {
+    margin-top: var(--space-2);
 }
 
 .precision-info-box ul {
@@ -467,24 +657,24 @@ body {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--fg-disabled);
+    background: var(--status-idle, var(--fg-muted));
 }
 
+/* 与 modelDownload.css 的 .overview-dot 同一套状态语义，不加光晕 */
 .model-overview-dot.installed {
-    background: var(--success);
-    box-shadow: 0 0 6px var(--success);
+    background: var(--status-ready);
 }
 
 .model-overview-dot.missing {
-    background: var(--fg-muted);
+    background: var(--status-idle);
 }
 
 .model-overview-dot.warning {
-    background: var(--warning, #f0ad4e);
+    background: var(--status-attention);
 }
 
 .model-overview-dot.checking {
-    background: var(--accent);
+    background: var(--status-busy);
     animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
@@ -521,20 +711,21 @@ body {
     color: var(--fg-secondary);
 }
 
+/* 圆点旁边的状态文字与圆点同一套映射，避免"点是绿的、字是灰的" */
 .model-overview-status.installed {
-    color: var(--success);
+    color: var(--status-ready);
 }
 
 .model-overview-status.missing {
-    color: var(--fg-muted);
+    color: var(--status-idle);
 }
 
 .model-overview-status.warning {
-    color: var(--warning, #f0ad4e);
+    color: var(--status-attention);
 }
 
 .model-overview-status.checking {
-    color: var(--accent);
+    color: var(--status-busy);
 }
 
 .model-overview-version {
@@ -586,7 +777,28 @@ body {
 }
 
 .model-status-info {
+    flex: 1;
+    min-width: 0;
     color: var(--fg-muted);
+}
+
+/* 行内下载入口：缺口 + 体积之后紧跟一个次要按钮。不做发光/渐变，
+   与页面其余次要按钮同级。 */
+.model-status-download {
+    flex-shrink: 0;
+    appearance: none;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    border-radius: var(--radius-sm);
+    padding: 2px 10px;
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.model-status-download:hover {
+    border-color: var(--accent);
+    color: var(--accent-fg);
 }
 
 /* ==================== Hardware Info ==================== */
@@ -604,9 +816,14 @@ body {
 }
 
 .device-mode-radio {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
+    /* 原来是 flex：input / label / desc 三个并排项，desc 会跑到 label 右边、
+       贴着卡片边缘，看起来像"标题居中、说明靠右"。改成两列网格后 label 与
+       desc 同起点、上下排列，读起来才像一条选项。 */
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+    align-items: start;
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
@@ -640,12 +857,23 @@ body {
 }
 
 .device-mode-radio input[type="radio"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
     margin-top: 3px;
     cursor: pointer;
     flex-shrink: 0;
 }
 
+.device-mode-radio input[type="checkbox"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
 .device-mode-radio .radio-label {
+    grid-column: 2;
+    grid-row: 1;
     font-size: var(--font-md);
     font-weight: 600;
     color: var(--fg-primary);
@@ -653,10 +881,13 @@ body {
 }
 
 .device-mode-radio .radio-desc {
+    grid-column: 2;
+    grid-row: 2;
     font-size: var(--font-sm);
     color: var(--fg-muted);
     display: block;
-    margin-top: var(--space-1);
+    margin-top: 0;
+    line-height: 1.55;
 }
 
 /* ==================== WebNN/NPU Status Bar ==================== */
@@ -687,17 +918,41 @@ body {
     transition: color var(--motion-base);
 }
 
+/* 检测失败后的就地重试 */
+.hardware-retry-btn {
+    margin-left: auto;
+    appearance: none;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    border-radius: var(--radius-sm);
+    padding: 2px 10px;
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.hardware-retry-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent-fg);
+}
+
+/* 状态文字同样走 --status-* 语义：检测中=蓝、可用=绿、不可用=灰，
+ * 与模型卡片的圆点保持同一套映射，不再出现"这里黄那里蓝" */
 .webnn-status-value.status-available {
-    color: var(--success);
+    color: var(--status-ready);
 }
 
 .webnn-status-value.status-unavailable {
-    color: var(--fg-muted);
+    color: var(--status-idle);
 }
 
 .webnn-status-value.status-checking {
-    color: var(--warning);
+    color: var(--status-busy);
     animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+.webnn-status-value.status-failed {
+    color: var(--status-error);
 }
 
 @keyframes pulse-text {
@@ -776,7 +1031,7 @@ body {
     border: 1px solid var(--accent);
     border-radius: var(--radius-lg);
     background: var(--accent-softer);
-    color: var(--accent);
+    color: var(--accent-fg);
     cursor: pointer;
     transition: background var(--motion-base) var(--ease-standard),
                 border-color var(--motion-base) var(--ease-standard),
@@ -850,13 +1105,13 @@ body {
 
 .btn-theme-action.btn-theme-danger {
     border-color: var(--danger-soft);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 .btn-theme-action.btn-theme-danger:hover {
     background: var(--danger-soft);
     border-color: var(--danger-glow);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 /* ==================== Utility ==================== */
@@ -964,6 +1219,25 @@ body {
     transition-timing-function: var(--ease-standard);
 }
 
+/* 禁用态不能只是"浅一档灰"：撤销/重做栈空时此前与可点状态几乎无差别。
+   这里同时降不透明度、去描边、锁光标，并且不响应 hover 位移。 */
+.btn-theme-editor:disabled {
+    opacity: 0.42;
+    background: transparent;
+    border-color: var(--border-subtle);
+    color: var(--fg-muted);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-theme-editor:disabled:hover {
+    background: transparent;
+    border-color: var(--border-subtle);
+    color: var(--fg-muted);
+    transform: none;
+}
+
 .btn-theme-editor.btn-theme-editor-primary {
     background: var(--bg-button-primary);
     color: var(--fg-on-accent);
@@ -1003,7 +1277,7 @@ body {
     margin: 0 0 var(--space-4) 0;
     font-size: var(--font-md);
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-fg);
     border-bottom: 1px solid var(--border-subtle);
     padding-bottom: var(--space-3);
 }
@@ -1110,7 +1384,7 @@ body {
 
 .theme-token-reset:hover {
     background: var(--accent-softer);
-    color: var(--accent);
+    color: var(--accent-fg);
     border-color: var(--accent-glow);
     transform: scale(1.08);
 }
@@ -1149,7 +1423,7 @@ body {
 }
 
 #themeSaveAsIdError {
-    color: var(--danger);
+    color: var(--danger-fg);
     border-left: 2px solid var(--danger);
     padding-left: var(--space-3);
     font-size: var(--font-sm);
@@ -1181,12 +1455,12 @@ body {
 
 .theme-toast-success {
     border-color: var(--success);
-    color: var(--success);
+    color: var(--success-fg);
 }
 
 .theme-toast-error {
     border-color: var(--danger);
-    color: var(--danger);
+    color: var(--danger-fg);
 }
 
 .theme-toast-info {
@@ -1266,7 +1540,7 @@ body {
     font-weight: 600;
     border-radius: var(--radius-sm);
     background: var(--danger-soft, rgba(220, 50, 47, 0.15));
-    color: var(--danger);
+    color: var(--danger-fg);
     border: 1px solid var(--danger);
     margin-right: var(--space-4);
     text-transform: uppercase;
@@ -1447,10 +1721,10 @@ body {
 .about-app-meta { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-sm); }
 .about-links { margin-top: 8px; font-size: var(--font-sm); }
 
-#section-about a { color: var(--accent); text-decoration: none; }
+#section-about a { color: var(--accent-fg); text-decoration: none; }
 #section-about a:hover { text-decoration: underline; }
 
-details > summary { cursor: pointer; color: var(--accent); font-size: var(--font-sm); user-select: none; }
+details > summary { cursor: pointer; color: var(--accent-fg); font-size: var(--font-sm); user-select: none; }
 .about-license-text {
     margin-top: 10px;
     padding: 12px 14px;
@@ -1492,7 +1766,7 @@ details > summary { cursor: pointer; color: var(--accent); font-size: var(--font
 .about-table tr.about-group-row td {
     padding-top: 12px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-fg);
     border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -1514,3 +1788,386 @@ details > summary { cursor: pointer; color: var(--accent); font-size: var(--font
 }
 
 .about-special-thanks { border-left: 3px solid var(--accent); }
+
+/* ==================== Long-form option cards ====================
+ * 后处理 / 修复 / 诊断这类开关的说明有两个以上分句，平铺的
+ * [checkbox][label][desc] 会把 label 挤成三四行、desc 也只剩一条窄柱。
+ * 改成两行网格：标题一行，说明在下面占满可用宽度。 */
+.setting-group > .device-mode-radio {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: 2px;
+    align-items: start;
+}
+
+.setting-group > .device-mode-radio input[type="radio"],
+.setting-group > .device-mode-radio input[type="checkbox"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    margin-top: 4px;
+}
+
+.setting-group > .device-mode-radio .radio-label {
+    grid-column: 2;
+    line-height: 1.45;
+}
+
+.setting-group > .device-mode-radio .radio-desc {
+    grid-column: 2;
+    margin-top: 0;
+    line-height: 1.6;
+}
+
+/* ==================== 模型端点 / 访问控制 ==================== */
+/* 通用按钮：设置页此前只有零散的自定义按钮类，这里是第一处需要成组出现的按钮。 */
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-button);
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+
+.btn-primary {
+    background: var(--bg-button-primary);
+    border-color: var(--bg-button-primary);
+    color: var(--fg-on-accent);
+}
+
+.btn-danger {
+    background: var(--bg-button-danger);
+    border-color: var(--bg-button-danger);
+    color: var(--fg-on-accent);
+}
+
+.btn-secondary:hover { background: var(--bg-button-hover); }
+.btn-primary:hover { background: var(--bg-button-active); }
+.btn-danger:hover { background: var(--bg-button-danger-hover); }
+
+.btn-sm {
+    padding: 3px 10px;
+    font-size: var(--font-xs);
+}
+
+.model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+.model-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-input);
+}
+
+.model-row-main { min-width: 0; flex: 1; }
+
+.model-row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-sm);
+    color: var(--fg-primary);
+}
+
+.model-row-sub {
+    margin-top: 2px;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    word-break: break-all;
+}
+
+/* 地址比描述弱一档：它是核对用的，不是读的主线。 */
+.model-row-url {
+    margin-top: 1px;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    opacity: 0.75;
+    word-break: break-all;
+}
+
+.model-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.model-tag {
+    padding: 0 6px;
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    font-size: var(--font-xs);
+    color: var(--fg-secondary);
+    line-height: 18px;
+}
+
+.model-tag-warn {
+    border-color: var(--bg-button-danger);
+    color: var(--bg-button-danger);
+}
+
+.model-empty {
+    padding: 10px 2px;
+    font-size: var(--font-sm);
+    color: var(--fg-muted);
+}
+
+/* 警示与上面那行端点卡片拉开一点，否则读起来像这张卡片自己的错误。 */
+.model-warn-text {
+    color: var(--bg-button-danger);
+    margin-top: var(--space-3);
+}
+
+.model-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.model-status {
+    font-size: var(--font-xs);
+    color: var(--fg-secondary);
+}
+
+.model-form { margin-top: 14px; }
+
+.model-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+}
+
+.model-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: var(--font-sm);
+    color: var(--fg-secondary);
+}
+
+.model-field input,
+.model-field select {
+    padding: 5px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--bg-input);
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+}
+
+.model-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.model-bind-group {
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-input);
+}
+
+.model-bind-title {
+    font-size: var(--font-sm);
+    color: var(--fg-primary);
+    margin-bottom: 4px;
+}
+
+.model-bind-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: var(--font-sm);
+}
+
+/* 名称 + ★ 自成一组并吃掉剩余宽度：星标必须紧跟在它标注的端点名后面，
+   被 flex:1 推到行尾就变成"这一行有个星"，看不出在标谁。 */
+.model-bind-label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.model-bind-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.model-bind-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.model-bind-add select {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--bg-input);
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+}
+
+.model-star {
+    color: var(--fg-bpm);
+    font-size: var(--font-xs);
+    cursor: help;
+}
+
+.model-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--font-sm);
+    color: var(--fg-primary);
+}
+
+/* 勾选框和它自己的文字必须挨着。`.setting-group label` 是 space-between，
+   特异性 (0,1,1) 高过 `.model-check` (0,1,0)，只能把选择器写实。 */
+.setting-group label.model-check,
+label.model-check {
+    justify-content: flex-start;
+}
+
+.model-audit { gap: 2px; }
+
+.model-audit-row {
+    display: grid;
+    grid-template-columns: 84px 120px minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    padding: 4px 2px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--font-xs);
+    color: var(--fg-secondary);
+}
+
+.model-audit-time { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.model-audit-subject,
+.model-audit-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==================== API Provider（远程推理） ==================== */
+
+.api-provider-group {
+    border-left: 3px solid var(--accent-soft);
+    padding-left: 14px;
+}
+
+/* API 模式下本机硬件选项全部不适用：用 section 级 class 统一隐藏，
+   切回本机推理时只需移除 class，无需逐个还原（避免与 deviceMode UI 状态打架）。 */
+#section-inference.api-mode .hardware-info,
+#section-inference.api-mode #nativeBackendGroup,
+#section-inference.api-mode #deviceModeGroup,
+#section-inference.api-mode #deviceSelectGroup,
+#section-inference.api-mode #webnnStatusGroup,
+#section-inference.api-mode #advancedSettingsGroup {
+    display: none;
+}
+
+.api-provider-bar {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+    margin-bottom: var(--space-3);
+}
+
+.api-provider-bar select { flex: 1 1 auto; min-width: 0; }
+
+/* password 输入框沿用 text 的视觉（原样式只覆盖 text/number） */
+.setting-group input[type="password"] {
+    width: 100%;
+    padding: var(--space-4) var(--space-5);
+    font-size: var(--font-md);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    color: var(--fg-primary);
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color var(--motion-base), box-shadow var(--motion-base);
+}
+.setting-group input[type="password"]:hover { border-color: var(--button-secondary-border); }
+.setting-group input[type="password"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.api-provider-form > label { margin-top: 10px; }
+
+.api-provider-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.api-btn {
+    flex: 0 1 auto;
+    padding: 8px 14px;
+    font-size: var(--font-sm);
+    font-weight: 500;
+    border: 1px solid var(--button-secondary-border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--fg-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
+}
+.api-btn:hover { border-color: var(--accent-glow-strong); background: var(--accent-softer); color: var(--accent-fg); }
+.api-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.api-btn-primary { border-color: var(--accent-line); background: var(--bg-button-primary); color: var(--fg-primary); }
+.api-btn-danger { color: var(--danger-fg); border-color: var(--danger-soft); }
+.api-btn-danger:hover { background: var(--danger-soft); border-color: var(--danger-glow); color: var(--danger-fg); }
+
+/* 状态区：成功/失败都显示在这里，绝不用 console 静默吞掉 */
+.api-provider-status {
+    margin-top: 12px;
+    min-height: 0;
+    font-size: var(--font-sm);
+    line-height: 1.6;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+.api-provider-status:empty { display: none; }
+.api-provider-status.is-info {
+    padding: 9px 12px;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-softer);
+    color: var(--fg-secondary);
+    border-radius: var(--radius-sm);
+}
+.api-provider-status.is-ok {
+    padding: 9px 12px;
+    border-left: 3px solid var(--success-fg, #4ade80);
+    background: var(--bg-elevated);
+    color: var(--fg-primary);
+    border-radius: var(--radius-sm);
+}
+.api-provider-status.is-error {
+    padding: 9px 12px;
+    border-left: 3px solid var(--danger-fg);
+    background: var(--danger-soft);
+    color: var(--danger-fg);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+}
+.api-provider-group a { color: var(--accent-fg); text-decoration: underline; }

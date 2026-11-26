@@ -19,11 +19,26 @@ export const state = {
   // Project
   project: { bpm: 120, timeSignature: [4, 4] },
   currentProjectFilePath: null,
+  // 由插件格式导入时记录来源（{ pluginId, path }）。仅用于界面提示与"重新导入"。
+  projectImportSource: null,
+  // 插件扩展域：声明（schema）与文档级数据（root）。
+  //
+  // 刻意与 projectImportSource 分开：一份 .sxsproj 也可能带着从 .demo 继承来的
+  // 扩展数据，它没有"来源插件"，但这些数据仍然必须跟着工程走 —— 否则
+  // `demo → 存成 sxsproj → 再导出 demo` 这一趟就会把用户的元数据抹掉。
+  projectExt: { schema: null, root: null },
+  // 最近一次插件格式保存时插件报的"没能完整写回"的条目。
+  // 自动保存为了不打断编辑不弹窗，但警告不能凭空消失 —— 存在这里，
+  // 手动保存 / 自动化导出时仍会弹给用户看。
+  projectSaveWarnings: [],
   isDirty: false,
 
   // Audio
   audioContext: null,
   currentAudioSource: null,
+  // 共享播放的人声分片 source（一轨一 source）：停止/暂停时统一清理。
+  // 伴奏 source 由 audioPlayback 的 _accSources 单独管理，不在这里。
+  trackSources: [],
   currentAudioBuffer: null,
   playbackStartTime: 0,
   playbackPauseOffset: 0,
@@ -32,6 +47,16 @@ export const state = {
   synthesisCancelled: false,
   playheadRaf: null,
   currentAudioData: null,
+  // 分轨音频片段（见计划 3.1 / 4.3 / 4.4）：稀疏的 { trackId, startSample, audio } 列表。
+  // 共享播放用它做"一轨一 source"，M/S 实时改对应轨的增益；流式路径最终以主进程
+  // 返回的 segments 为权威数据。currentAudioData 仍是完整混音，兼容时长/MCP/导出。
+  trackSegments: [],
+  trackSegmentsReady: false,
+  // 上面这份音频对应的输入签名（见 renderer/audioSignature.js）。
+  // 只在**人声**合成完成时写入；纯伴奏路径不写（它的音频时长取决于伴奏
+  // 轨道，跟人声签名不是一回事，留 null 让下一次 Play 重新走 playAll）。
+  // 为 null 时的语义是「不可直接续播」，不是「没播过」。
+  currentAudioSignature: null,
   currentAudioChannels: null,
   gainNode: null,
   useExclusiveMode: false,
@@ -61,6 +86,12 @@ export const dom = {
   btnPlay: document.getElementById('btn-play'),
   btnPause: document.getElementById('btn-pause'),
   btnStop: document.getElementById('btn-stop'),
+  btnRetake: document.getElementById('btn-retake'),
+  // 传输控件右侧的进度区（推理 / 模型加载共用）
+  transportStatus: document.getElementById('transport-status'),
+  transportStatusText: document.getElementById('transport-status-text'),
+  transportProgress: document.getElementById('transport-progress'),
+  transportProgressFill: document.getElementById('transport-progress-fill'),
   timeDisplay: document.getElementById('time-display'),
   bpmInput: document.getElementById('bpm-input'),
   timeSigNum: document.getElementById('time-sig-num'),
@@ -69,8 +100,7 @@ export const dom = {
   btnLoad: document.getElementById('btn-load'),
   btnExport: document.getElementById('btn-export'),
   btnExportLrc: document.getElementById('btn-export-lrc'),
-  btnAudioToMidi: document.getElementById('btn-audio-to-midi'),
-  btnImportMidi: document.getElementById('btn-import-midi'),
+  // 「导入 MIDI」「音频转 MIDI」已上移到原生「文件」菜单，主窗口不再持有按钮DOM。
   btnAddSinger: document.getElementById('btn-add-singer'),
   btnImportAccompaniment: document.getElementById('btn-import-accompaniment'),
   btnOpenSingerMarket: document.getElementById('btn-open-singer-market'),
@@ -81,3 +111,19 @@ export const dom = {
   bpmDisplayBadge: document.getElementById('bpm-display-badge'),
   versionDisplay: document.getElementById('version-display'),
 };
+
+/**
+ * 写播放时间码 —— 时间显示位的唯一写入口。
+ *
+ * 为什么不让调用方直接 `dom.timeDisplay.textContent = …`：这个节点是**可选**
+ * 展示位，一旦 DOM 里没有（历史上工具栏改版就漏删过一次），直接写就是
+ * "Cannot set properties of null"。而其中最要命的调用点是播放头的 rAF
+ * 循环（updatePlayhead）：每帧抛一次，playhead 停住、错误弹窗刷屏，
+ * 播放本身其实还在跑。这里统一兜成 no-op —— 时间码看不见不影响出声。
+ *
+ * @param {string} text 已格式化的文本（formatTime / 本地化串）
+ */
+export function setTimeDisplay(text) {
+  if (!dom.timeDisplay) return;
+  dom.timeDisplay.textContent = text;
+}

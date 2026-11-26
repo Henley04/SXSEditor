@@ -58,10 +58,10 @@ function detectEnglishNotes(notes) {
  * 仍使用 base 多语言模型，不需要切换 JP LoRA。
  *
  * @param {Array<{lyric?: string}>} notes
- * @param {string} [japaneseVocalization='hybrid'] - 'hybrid' | 'en-phonemes' | 'jp-lora'
+ * @param {string} [japaneseVocalization='en-phonemes'] - 'hybrid' | 'en-phonemes' | 'jp-lora'
  * @returns {string|null} 'ja' 或 null
  */
-function resolveLanguage(notes, japaneseVocalization = 'hybrid') {
+function resolveLanguage(notes, japaneseVocalization = 'en-phonemes') {
   // hybrid / en-phonemes 模式：日文歌词用英语音素在 base 模型上合成，不切换 JP LoRA
   // hybrid 仅改进映射表（L 替代 R、AO 替代 OW），模型路径与 en-phonemes 一致
   if (japaneseVocalization === 'en-phonemes' || japaneseVocalization === 'hybrid') return null;

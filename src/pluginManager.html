@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="plugins.windowTitle">插件</title>
+  <!-- 与其它窗口一致：首帧前把主题变量写好，避免亮/暗色闪一下 -->
+  <script src="./themes/themeBootstrap.js"></script>
+</head>
+<body>
+  <header class="pm-header">
+    <div class="pm-titlebar">
+      <h1 data-i18n="plugins.heading">插件</h1>
+      <span class="pm-count" id="pmCount"></span>
+    </div>
+    <div class="pm-actions">
+      <button type="button" class="pm-btn pm-btn-primary" id="pmInstall" data-i18n="plugins.install">安装插件…</button>
+      <button type="button" class="pm-btn" id="pmReload" data-i18n="plugins.reloadAll">重新加载全部</button>
+      <button type="button" class="pm-btn" id="pmOpenFolder" data-i18n="plugins.openFolder">打开插件目录</button>
+    </div>
+  </header>
+
+  <!-- tablist 的键盘语义是"一组单选"，不是"几个按钮"：
+       · 只有当前项在 Tab 序列里（roving tabindex），Tab 键进出整组一次；
+       · 组内用 ←/→ 切换，Home/End 跳到首尾（见 index.js 的 onTabKeydown）；
+       · aria-controls / aria-labelledby 把 tab 与面板双向绑上，
+         读屏软件才知道"这个面板属于哪个标签"。 -->
+  <nav class="pm-tabs" role="tablist" aria-label="插件页面">
+    <button type="button" class="pm-tab is-active" role="tab" id="pmTabInstalled" aria-controls="pmPaneInstalled" aria-selected="true" tabindex="0" data-tab="installed" data-i18n="plugins.tabInstalled">已安装</button>
+    <button type="button" class="pm-tab" role="tab" id="pmTabSecurity" aria-controls="pmPaneSecurity" aria-selected="false" tabindex="-1" data-tab="security" data-i18n="plugins.tabSecurity">签名与信任</button>
+    <button type="button" class="pm-tab" role="tab" id="pmTabLog" aria-controls="pmPaneLog" aria-selected="false" tabindex="-1" data-tab="log" data-i18n="plugins.tabLog">活动日志</button>
+  </nav>
+
+  <!-- 安装了一个"签名有效但密钥不在此机器上"的包时出现。
+       不自动信任：信任一把密钥等于放行一类安装包，必须由用户看着指纹决定。 -->
+  <div class="pm-trust-banner" id="pmTrustBanner"
+       role="alert" aria-labelledby="pmTrustBannerTitle" aria-describedby="pmTrustBannerSub"
+       tabindex="-1" hidden>
+    <div class="pm-trust-banner-text">
+      <p class="pm-trust-banner-title" id="pmTrustBannerTitle"></p>
+      <p class="pm-trust-banner-sub" id="pmTrustBannerSub"></p>
+    </div>
+    <div class="pm-actions">
+      <button type="button" class="pm-btn pm-btn-primary" id="pmTrustAccept" data-i18n="plugins.trustAndInstall">信任并安装</button>
+      <button type="button" class="pm-btn" id="pmTrustCancel" data-i18n="common.cancel">取消</button>
+    </div>
+  </div>
+
+  <main class="pm-body">
+    <section class="pm-pane" id="pmPaneInstalled" role="tabpanel" aria-labelledby="pmTabInstalled" tabindex="0">
+      <div class="pm-empty" id="pmEmpty">
+        <p class="pm-empty-title" data-i18n="plugins.empty">还没有安装任何插件</p>
+        <p class="pm-empty-hint" data-i18n="plugins.emptyHint">插件包以 .sxsp 结尾。安装后会在菜单栏「插件」下出现入口。</p>
+      </div>
+      <ul class="pm-list" id="pmList"></ul>
+    </section>
+
+    <section class="pm-pane pm-pane-hidden" id="pmPaneSecurity" role="tabpanel" aria-labelledby="pmTabSecurity" tabindex="0">
+      <div class="pm-security">
+        <label class="pm-toggle">
+          <input type="checkbox" id="pmRequireSignature">
+          <span data-i18n="plugins.requireSignature">只允许安装已签名的插件</span>
+        </label>
+        <p class="pm-note" data-i18n="plugins.requireSignatureNote">开启后，没有签名的包会在安装时被拒绝；签名无效的包无论开关如何都会被拒绝。已安装的插件不受影响。</p>
+
+        <h2 class="pm-section-title" data-i18n="plugins.trustedKeys">信任的签名密钥</h2>
+        <ul class="pm-key-list" id="pmKeyList"></ul>
+        <p class="pm-note" data-i18n="plugins.trustedKeysNote">信任的是密钥指纹，不是包里自称的发布者名字。移除一把密钥只影响以后的安装，不会卸载已装的插件。</p>
+      </div>
+    </section>
+
+    <section class="pm-pane pm-pane-hidden" id="pmPaneLog" role="tabpanel" aria-labelledby="pmTabLog" tabindex="0">
+      <div class="pm-log-toolbar">
+        <span class="pm-log-hint" id="pmLogCount"></span>
+        <button type="button" class="pm-btn pm-btn-small" id="pmLogRefresh" data-i18n="plugins.logRefresh">刷新</button>
+      </div>
+      <div class="pm-empty" id="pmLogEmpty" data-i18n="plugins.logEmpty">暂无活动记录</div>
+      <div class="pm-log-wrap">
+        <table class="pm-log" id="pmLogTable">
+          <thead>
+            <tr>
+              <th data-i18n="plugins.logTime">时间</th>
+              <th data-i18n="plugins.logEvent">事件</th>
+              <th data-i18n="plugins.logPlugin">插件</th>
+              <th data-i18n="plugins.logDetail">详情</th>
+            </tr>
+          </thead>
+          <tbody id="pmLogBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- aria-live：安装失败、校验失败这类结果只在 toast 里出现，
+       读屏用户必须能听到。polite 是因为它不是打断性告警；
+       内容由 index.js 填，节点常驻、只切 hidden。 -->
+  <div class="pm-toast" id="pmToast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>

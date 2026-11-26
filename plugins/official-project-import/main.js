@@ -1,0 +1,338 @@
+'use strict';
+/**
+ * 官方工程导入插件（VOCALOID .vsqx/.vpr、Synthesizer V .svp）。
+ *
+ * 数据面约定：宿主读文件并把字节交进来，或把校验过的工程文档交进来，
+ * 插件只做解析与映射，返回宿主工程文档或目标格式字节；不碰文件系统、不联网。
+ * 三种格式共用 lib/score.js 的映射管线（轨道→歌手、分片、音符清洗、音高
+ * 曲线采样及其逆变换），各自只实现"怎么读"与"怎么写"。
+ *
+ * 写回是有损的：VOCALOID 的歌手/风格，SV 的组级颤音强度包络、颤音起始相位
+ * 与渐出、音素属性，以及变速变拍号等在宿主里没有等价字段。音符颤音的主参数
+ * 可以双向转换；能精简保存的元数据经 document.ext 带回并合并进生成的文件，
+ * 其余部分逐条告警。需要完整保留编辑结果时应另存为宿主原生格式，插件不会把
+ * 有损写回伪装成无损。
+ *
+ * VPR 的伴奏是「能打开就能存回去」的：音频字节与源音频轨结构随伴奏轨的 ext
+ * 携带，codec.write 重建 `type: 1` 音频轨并把 WAV 写进 `Project/Audio/`。
+ * VSQX / SVP 没有内嵌音频容器，宿主里新建的伴奏轨无法写回，仍逐条告警。
+ */
+
+const {
+  buildDocument, documentToScore, readSourceMeta, PLUGIN_ID,
+} = require('./lib/score.js');
+const { parseSvp, encodeSvp } = require('./lib/svp.js');
+const { parseVsqx, parseVpr, encodeVsqx, encodeVpr } = require('./lib/vocaloid.js');
+
+const stats = { read: 0, write: 0, lastFile: '', lastFormat: '' };
+
+/** 各格式的读取器、写入器与人类可读名称。 */
+const FORMATS = {
+  '.vsqx': { id: 'vsqx', parse: parseVsqx, encode: encodeVsqx, label: 'VOCALOID3/4' },
+  '.vpr': { id: 'vpr', parse: parseVpr, encode: encodeVpr, label: 'VOCALOID5/6' },
+  '.svp': { id: 'svp', parse: parseSvp, encode: encodeSvp, label: 'Synthesizer V' },
+};
+
+function localeOf(ctx) {
+  return String((ctx && ctx.plugin && ctx.plugin.locale) || 'zh-CN').toLowerCase();
+}
+
+function msg(ctx, zh, en) {
+  return localeOf(ctx).startsWith('zh') ? zh : en;
+}
+
+function failure(ctx, message) {
+  return Object.assign(new Error(message), { code: 'INVALID_REQUEST' });
+}
+
+function summarizeWarnings(ctx, warnings) {
+  if (!warnings.length) return '';
+  const head = warnings.slice(0, 3).join('\n');
+  const rest = warnings.length > 3
+    ? msg(ctx, `\n…另有 ${warnings.length - 3} 条告警，详见插件日志`, `\n…and ${warnings.length - 3} more warning(s), see the plugin log`)
+    : '';
+  return head + rest;
+}
+
+function statusText(ctx, verb, name) {
+  return msg(ctx, `${verb}工程：${name}`, `${verb === '导入' ? 'Imported' : 'Saved'}: ${name}`);
+}
+
+/** 写回必然丢失的字段：按格式列出，作为显式告警返回给宿主。 */
+function saveWarnings(ctx, formatId) {
+  const w = [];
+  w.push(msg(ctx,
+    '写回外部工程格式是有损的：歌手库、音色与风格设置、音素属性、颤音的组级强度包络、起始相位与渐出在宿主里没有可编辑等价物，不会作为宿主数据导入；音符颤音的深度、频率、起点与渐入按宿主设置写回，其余专有参数按原结构保真回写（降级为 SV1 时另行列出的除外）。',
+    'Saving back to an external project format is lossy: voice libraries, singer styles, phoneme attributes, and vibrato depth envelopes, start phase and fade-out have no editable equivalent in the host and are not imported as host data. Note vibrato depth, rate, start and fade-in are written back from the host settings; other project-specific parameters are preserved structurally (except those listed when downgrading to SV1).',
+  ));
+  if (formatId === 'svp') {
+    w.push(msg(ctx,
+      '变速与拍号变化已折叠为全局 BPM 与单一拍号；音符的呼吸标记按宿主吸气音素写回。',
+      'Tempo and meter changes are folded into one global BPM and meter; breath notes are written back as the host aspiration token.',
+    ));
+  } else {
+    w.push(msg(ctx,
+      '变速与拍号变化、前导小节、PBS 灵敏度曲线已折叠为全局 BPM、单一拍号与默认灵敏度。',
+      'Tempo and meter changes, the pre-measure offset and the pitch-bend sensitivity curve are folded into one global BPM, meter and default sensitivity.',
+    ));
+  }
+  w.push(msg(ctx,
+    '需要完整保留编辑结果时，请另存为宿主原生工程格式。',
+    'To keep every edit without loss, save as the host native project format instead.',
+  ));
+  return w;
+}
+
+/**
+ * 生成 codec.read：解析字节 → 中间谱面 → 宿主工程文档。
+ * 解析出的源工程元数据随文档扩展域一并返回，供后续写回合并。
+ */
+function makeRead(format) {
+  return async function read(ctx, { name, bytes, files }) {
+    const translatable = (zh, en) => msg(ctx, zh, en);
+    if (!bytes || !bytes.length) {
+      throw failure(ctx, msg(ctx, '文件是空的', 'The file is empty'));
+    }
+
+    let score;
+    try {
+      // files 是宿主按 manifest.companionExts 读入的同目录伴生文件；只有 SVP 的
+      // 解析器用到（instrumental track 的相对路径引用），其余格式忽略第三个参数。
+      score = format.parse(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), translatable, files);
+    } catch (err) {
+      if (!err || !err.code) {
+        if (err) err.code = 'INVALID_REQUEST';
+      }
+      throw err;
+    }
+    const document = buildDocument(score);
+    const accompanimentCount = document.singers.filter((s) => s && s.type === 'accompaniment').length;
+
+    // 只有伴奏没有音符也是合法工程（源工程可能只有一条音频轨），不能当成空工程拒掉。
+    if (!document.fragments.length && !accompanimentCount) {
+      throw failure(ctx, msg(
+        ctx,
+        '工程里没有可导入的音符（可能只有音频轨，或音符为空）',
+        'The project has no importable notes (audio-only track or empty notes)',
+      ));
+    }
+
+    stats.read += 1;
+    stats.lastFile = name;
+    stats.lastFormat = format.id;
+
+    await ctx.ui.status('state', statusText(ctx, '导入', name));
+    const vibratoNote = Number(score.vibratoImported) > 0
+      ? `，其中 ${score.vibratoImported} 个音符带颤音参数`
+      : '';
+    ctx.log.info(
+      `导入 ${format.id} ${name}：${document.singers.length - accompanimentCount} 轨 / ${document.fragments.length} 段 / `
+      + `${document.fragments.reduce((sum, f) => sum + f.notes.length, 0)} 个音符`
+      + `${accompanimentCount ? ` / ${accompanimentCount} 条伴奏` : ''}`
+      + `${vibratoNote}，${score.warnings.length} 条告警`,
+    );
+
+    const warningText = summarizeWarnings(ctx, score.warnings);
+    if (warningText) {
+      ctx.log.warn(warningText);
+      try {
+        await ctx.ui.notify(warningText, 'warn');
+      } catch (_) {
+        // 通知失败不影响导入结果
+      }
+    }
+
+    return { document, warnings: score.warnings };
+  };
+}
+
+/**
+ * 生成 codec.write：校验过的宿主文档 → 中间谱面 → 目标格式字节。
+ * 元数据只在格式一致时沿用；跨格式另存按全新工程生成并告警。
+ */
+function makeWrite(format) {
+  return async function write(ctx, { name, document, svpVersion }) {
+    if (!document || typeof document !== 'object' || !Array.isArray(document.fragments)) {
+      throw failure(ctx, msg(ctx, '没有可保存的工程文档', 'No project document to save'));
+    }
+
+    let score;
+    try {
+      score = documentToScore(document);
+    } catch (err) {
+      throw failure(ctx, msg(ctx, `工程文档无法转换：${err.message}`, `Cannot convert the project document: ${err.message}`));
+    }
+
+    const meta = readSourceMeta(document, format.id);
+    const warnings = saveWarnings(ctx, format.id);
+    if (!meta) {
+      warnings.push(msg(ctx,
+        '源工程元数据未沿用（目标格式与源文件不同，或该工程不是由本插件导入），将按全新工程生成。',
+        'Source project metadata was not reused (target format differs, or the project was not imported by this plugin); a fresh project is generated.',
+      ));
+    }
+    if (score.orphanCount > 0) {
+      warnings.push(msg(ctx,
+        `${score.orphanCount} 个分片没有对应的歌手轨道，已归入一条 Untitled 轨道。`,
+        `${score.orphanCount} fragment(s) have no singer track and were placed on an Untitled track.`,
+      ));
+    }
+    let encoded;
+    try {
+      // 只有 .svp 存在世代/版本行为分派。显式分流，避免 svpVersion 悄悄流进
+      // VOCALOID 编码器；插件侧 resolveWriteTarget 还会按白名单再归一一次。
+      encoded = format.id === 'svp'
+        ? format.encode(score, meta, svpVersion)
+        : format.encode(score, meta);
+    } catch (err) {
+      throw failure(ctx, msg(ctx, `生成 ${format.label} 文件失败：${err.message}`, `Failed to build the ${format.label} file: ${err.message}`));
+    }
+    // 编码器可以只返回字节（VSQX / VPR 把音频内嵌进容器），也可以返回
+    // { bytes, files }（SVP 用相对路径引用同目录素材，WAV 走宿主旁挂写出）。
+    const isBytes = Buffer.isBuffer(encoded) || encoded instanceof Uint8Array;
+    const bytes = isBytes ? encoded : encoded && encoded.bytes;
+    const sidecarFiles = !isBytes && Array.isArray(encoded && encoded.files) ? encoded.files : [];
+    if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) {
+      throw failure(ctx, msg(ctx, '编码器没有产出有效字节', 'The encoder produced no valid bytes'));
+    }
+
+    const writeTarget = !isBytes && encoded && encoded.writeTarget;
+
+    // SVP 版本行为说明：沿用源版本 / 切档目标值 / 跨世代升降级逐类列损失。
+    // 关键告警 unshift 到最前，保证 summarizeWarnings 取的前 3 条里用户能看到
+    // 「降级丢了什么」；版本值这类信息性说明放末尾，不挤掉通用有损提醒。
+    if (format.id === 'svp' && writeTarget) {
+      const wt = writeTarget;
+      const critical = [];
+      if (wt.isUpgrade) {
+        critical.push(msg(ctx,
+          '源工程是 SV1，升级为 SV2 时只补出 SV2 schema 所需的 UUID 等结构性字段，不会凭空造出源工程里没有的 vocal modes / retakes / 音素时序等专有参数。',
+          'The source is SV1; upgrading to SV2 only adds structural fields such as UUIDs required by the SV2 schema. SV2-only data (vocal modes, retakes, phoneme timing) is not fabricated.',
+        ));
+      }
+      if (wt.isDowngrade) {
+        if (wt.losses.length) {
+          critical.push(msg(ctx,
+            `降级为 SV1 兼容版本，以下 SV2 专有参数不会写入：\n${wt.losses.map((l, i) => `  ${i + 1}. ${l.zh}`).join('\n')}`,
+            `Downgrading to SV1-compatible; these SV2-only parameters are dropped:\n${wt.losses.map((l, i) => `  ${i + 1}. ${l.en}`).join('\n')}`,
+          ));
+        } else {
+          critical.push(msg(ctx,
+            '降级为 SV1 兼容版本：源工程未检出 SV2 专有参数，按 SV1 schema 写出。',
+            'Downgrading to SV1-compatible: no SV2-only parameters were detected; written with the SV1 schema.',
+          ));
+        }
+      }
+      if (meta && meta.snapshotTruncated) {
+        critical.push(msg(ctx,
+          '源工程结构快照超出有界克隆上限，部分嵌套内容未能保真回写；建议另存为宿主原生 .sxsproj 以完整保留。',
+          'The source structure snapshot exceeded the bounded clone limit; some nested content could not be preserved. Save as a native .sxsproj to keep everything.',
+        ));
+      }
+      warnings.unshift(...critical);
+
+      if (wt.requested === 'keep') {
+        warnings.push(msg(ctx,
+          `按源工程版本行为保存：${wt.sourceGeneration === 'sv2' ? 'SV2' : 'SV1'}，version 原值 ${wt.version} 原样写回。`,
+          `Saved with the source project's version behaviour: ${wt.sourceGeneration === 'sv2' ? 'SV2' : 'SV1'}, version ${wt.version} written back unchanged.`,
+        ));
+      } else {
+        warnings.push(msg(ctx,
+          `按${wt.generation === 'sv2' ? ' SV2（≥2.0）' : ' SV1 兼容（1.10.0–1.11.2）'}行为另存，version 写为 ${wt.version}：这是开源实现约定的兼容目标值，不是本机安装的真实版号。`,
+          `Saved as ${wt.generation === 'sv2' ? 'SV2 (>=2.0)' : 'SV1-compatible (1.10.0-1.11.2)'}; version ${wt.version} is an interoperability target from open-source implementations, not the installed editor's version.`,
+        ));
+      }
+    }
+
+    // 伴奏写回结果放在编码之后生成：有没有真的写进去由 encoder 的统计说了算，
+    // 不能凭文档里有没有伴奏轨猜。VPR 内嵌音频轨，SVP 用相对路径旁挂 WAV，
+    // VSQX（VOCALOID3/4 的 XML）两者都没有，只能如实告警。
+    const accCount = Number(score.accompanimentCount) || 0;
+    if (accCount > 0) {
+      if (format.id === 'vpr') {
+        const st = score.vprWriteStats || { written: 0, dropped: 0, trimmed: 0, created: 0 };
+        if (st.written > 0 && st.created > 0) {
+          warnings.push(msg(ctx,
+            `${st.created} 条伴奏按新建 VPR 音频轨写回（无源工程结构快照）：文件名、位置、音量与静音状态按宿主当前设置生成。`,
+            `${st.created} accompaniment track(s) were written back as fresh VPR audio tracks (no source-structure snapshot); names, positions, volume and mute state come from the current host settings.`,
+          ));
+        }
+        if (st.dropped > 0) {
+          warnings.push(msg(ctx,
+            `${st.dropped} 条伴奏没有可写入的音频数据（伴奏文件缺失或未能解码），无法写回 VPR：工程里只会保留人声轨。请重新载入伴奏音频，或另存为 .sxsproj。`,
+            `${st.dropped} accompaniment track(s) have no writable audio data (missing or undecodable file) and were not written back to VPR: only vocal tracks are kept. Reload the accompaniment audio, or save as .sxsproj.`,
+          ));
+        }
+        if (st.trimmed > 0) {
+          warnings.push(msg(ctx,
+            `${st.trimmed} 条伴奏在源工程里带 region 裁剪，导入时已把裁剪烘焙进音频；写回按全长重建 region，避免再次平移。原始入点偏移不作为宿主可编辑数据保留。`,
+            `${st.trimmed} accompaniment track(s) had a source region trim that was baked into the audio on import; the region is rebuilt as full length on write-back to avoid a second offset. The original in-point is not kept as host-editable data.`,
+          ));
+        }
+      } else if (format.id === 'svp') {
+        const st = score.svpWriteStats || { written: 0, dropped: 0, created: 0 };
+        if (st.written > 0) {
+          warnings.push(msg(ctx,
+            `${st.written} 条伴奏已写回为 SVP instrumental track，音频以相对路径引用同目录的 WAV 文件：移动 .svp 时请把这些 WAV 一起带上，否则外部软件会找不到伴奏。`,
+            `${st.written} accompaniment track(s) were written back as SVP instrumental tracks whose audio is referenced by relative path to WAV files beside the .svp: keep those WAV files together when moving the project, or the audio will be missing.`,
+          ));
+        }
+        if (st.created > 0) {
+          warnings.push(msg(ctx,
+            `${st.created} 条伴奏按新建 instrumental track 写回（无源工程结构快照）：文件名、位置、音量与静音状态按宿主当前设置生成。`,
+            `${st.created} accompaniment track(s) were written back as fresh instrumental tracks (no source-structure snapshot); names, positions, volume and mute state come from the current host settings.`,
+          ));
+        }
+        if (st.dropped > 0) {
+          warnings.push(msg(ctx,
+            `${st.dropped} 条伴奏没有可写入的音频数据（伴奏文件缺失或未能解码），无法写回 SVP：工程里只会保留人声轨。请重新载入伴奏音频，或另存为 .sxsproj。`,
+            `${st.dropped} accompaniment track(s) have no writable audio data (missing or undecodable file) and were not written back to SVP: only vocal tracks are kept. Reload the accompaniment audio, or save as .sxsproj.`,
+          ));
+        }
+      } else {
+        warnings.push(msg(ctx,
+          `伴奏轨（${accCount} 条）不会写回 ${format.label}：该格式的工程里没有宿主伴奏轨的等价表示，音频不会被写入。需要保留伴奏请另存为 .sxsproj。`,
+          `${accCount} accompaniment track(s) are not written back to ${format.label}: the format has no equivalent for a host accompaniment track, so the audio is not written. Save as .sxsproj to keep it.`,
+        ));
+      }
+    }
+
+    stats.write += 1;
+    stats.lastFile = name;
+    stats.lastFormat = format.id;
+
+    await ctx.ui.status('state', statusText(ctx, '保存', name));
+    const writtenAudio = (score.vprWriteStats || score.svpWriteStats || {}).written || 0;
+    ctx.log.info(
+      `保存 ${format.id} ${name}：${score.tracks.length} 轨 / ${document.fragments.length} 段`
+      + `${writtenAudio ? ` / ${writtenAudio} 条伴奏` : ''}`
+      + `${sidecarFiles.length ? ` / ${sidecarFiles.length} 个旁挂音频` : ''}，${warnings.length} 条告警`,
+    );
+    const warningText = summarizeWarnings(ctx, warnings);
+    if (warningText) {
+      ctx.log.warn(warningText);
+      try {
+        await ctx.ui.notify(warningText, 'warn');
+      } catch (_) {
+        // 通知失败不影响保存结果
+      }
+    }
+
+    // 宿主把 bytes 原子写盘；files 里的旁挂素材由宿主写到主文件同目录。
+    // 插件不接触路径，也不回写宿主插件标识以外的东西。
+    void PLUGIN_ID;
+    return sidecarFiles.length ? { bytes, warnings, files: sidecarFiles } : { bytes, warnings };
+  };
+}
+
+const codecs = {};
+for (const [ext, format] of Object.entries(FORMATS)) {
+  codecs[ext] = { read: makeRead(format), write: makeWrite(format) };
+}
+
+module.exports = {
+  initialize(ctx) {
+    ctx.log.info('official-project-import 已就绪：.vsqx / .vpr / .svp 会路由到这里（打开与保存）');
+  },
+  codecs,
+};

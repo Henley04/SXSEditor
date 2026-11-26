@@ -1,21 +1,21 @@
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
-import { initPipeline } from './pipeline.js';
+import { initPipeline as _initPipeline } from './pipeline.js';
 import {
   BEAT_WIDTH, NOTE_HEIGHT, HEADER_HEIGHT, PARAM_CURVE_HEIGHT, PARAM_MODES,
 } from './constants.js';
 import {
-  getNotes, setNotes,
+  getNotes, setNotes as _setNotes,
   getSnapGrid,
   getSelectedNoteIds, setSelectedNoteIds,
-  getSelectedAnchorIndices, setSelectedAnchorIndices,
+  getSelectedAnchorIndices, setSelectedAnchorIndices as _setSelectedAnchorIndices,
   getDragMode, setDragMode,
   getDragStartX, setDragStartX,
   getDragStartY, setDragStartY,
   getDragStartMouseTime, setDragStartMouseTime,
   getDragStartMousePitch, setDragStartMousePitch,
   getDragNoteStart, setDragNoteStart,
-  getDragNoteStarts, setDragNoteStarts,
+  getDragNoteStarts, setDragNoteStarts as _setDragNoteStarts,
   getScrollX, setScrollX,
   getScrollY, setScrollY,
   getZoomX, setZoomX,
@@ -25,7 +25,7 @@ import {
   getPitchDragAnchorIdx, setPitchDragAnchorIdx,
   getPitchDragStartValue, setPitchDragStartValue,
   getPitchDragStartTime, setPitchDragStartTime,
-  getPitchDragAnchorStarts, setPitchDragAnchorStarts,
+  getPitchDragAnchorStarts, setPitchDragAnchorStarts as _setPitchDragAnchorStarts,
   getPitchSmoothDragAnchorStarts, setPitchSmoothDragAnchorStarts,
   getPitchSmoothDragMoved, setPitchSmoothDragMoved,
   getPitchSmoothDragRightClickPos, setPitchSmoothDragRightClickPos,
@@ -38,7 +38,7 @@ import {
   getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
   getPhonemeDragState, setPhonemeDragState,
   getSelectedPhonemeNoteId, setSelectedPhonemeNoteId,
-  getSelectedPhonemeIndex, setSelectedPhonemeIndex,
+  getSelectedPhonemeIndex as _getSelectedPhonemeIndex, setSelectedPhonemeIndex,
   getHoveredNoteId, setHoveredNoteId,
   setActiveNoteId,
   setActiveAnchorIdx,
@@ -46,14 +46,16 @@ import {
   bumpNotesVersion,
   getParamEnvelopeDrag, setParamEnvelopeDrag,
   getActiveInlineInput, setActiveInlineInput,
-  getActiveInlineEditNote, setActiveInlineEditNote,
+  getActiveInlineEditNote as _getActiveInlineEditNote, setActiveInlineEditNote,
   getLyricEditOldValue, setLyricEditOldValue,
   getLyricEditNoteId, setLyricEditNoteId,
   getCurrentParamMode, setCurrentParamMode,
   getPitchCurve,
   getCurrentProject,
   getFragmentIsPlaying,
-  getFragmentCurrentTime,
+  getFragmentIsSynthesizing,
+  setFragmentPlayheadDragging,
+  getFragmentCurrentTime as _getFragmentCurrentTime,
   getFragmentPlayStartPosition, setFragmentPlayStartPosition,
   getCurrentFragment,
   invalidatePitchCurveCache,
@@ -61,7 +63,7 @@ import {
   getEnvelopes,
   getParamPanelCollapsed, setParamPanelCollapsed,
   getParamPanelMode, setParamPanelMode,
-  getKanjiGroups, setKanjiGroups,
+  getKanjiGroups, setKanjiGroups as _setKanjiGroups,
   getPostprocessCurves, invalidateTimbreCache,
   getActiveTimbreParam,
   getSelectedTimbreAnchors, setSelectedTimbreAnchors,
@@ -73,9 +75,9 @@ import {
   setAnchorDragHud,
 } from './state.js';
 import {
-  canvas, ctx,
+  canvas, ctx as _ctx,
   timeToX, xToTime, pitchToY, yToPitch, yToPitchContinuous,
-  snapBeats, findNoteAt, findKanjiGroupAt, findPlayheadAt, getPlayheadX,
+  snapBeats, findNoteAt, findKanjiGroupAt, findPlayheadAt, getPlayheadX as _getPlayheadX,
   _getParamCurveAreaTop, _getParamCurveAreaBottom, _getParamCurveYRange,
   _valueToParamY, _paramYToValue,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
@@ -85,22 +87,36 @@ import {
   findAnchorPointAt,
   convertBrushStrokeToAnchorPoints,
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
+  getPhonemeBarLayout,
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
   getParentHeightCached,
   _getCanvasRendererNotesIndex,
-  ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
+  _markNotesIndexDirty,
+  ensureVibrato, DEFAULT_VIBRATO as _DEFAULT_VIBRATO, computeVibratoOffset as _computeVibratoOffset,
+  transposePitchCurve, quantizePitchCurve, simplifyPitchCurve, smoothPitchCurve,
+  getResolvedAuto, getClippedNotes,
+  // 拖动自动曲线 → 派生副本（上一轮漏了这两个 import：点到自动曲线会抛
+  // ReferenceError 而不是派生，功能等于不可用。eslint no-undef 抓到了）
+  hitAutoCurveAt, createBakedSegmentAt,
+  isScorePitchMode,
+  markPlayheadFollowActivity, markPlayheadFollowViewportGesture,
+  setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown,
 } from './canvasRenderer.js';
-import { computeMultiDragResult, findAdjacentBoundary } from './notesIndex.js';
+import { computeMultiDragResult, findAdjacentBoundary, notesInRange } from './notesIndex.js';
 import {
-  autoDetectKanjiGroups, cleanupKanjiGroups,
+  autoDetectKanjiGroups, cleanupKanjiGroups as _cleanupKanjiGroups,
   findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
-  isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
+  isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds as _getAllGroupedNoteIds,
+  invalidateKanjiGroupIndex,
 } from './kanjiGroupUtils.js';
-import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback } from './audioPlayback.js';
+import { stopFragmentPlayback, playFragment as _playFragment, exportFragment as _exportFragment, seekFragmentPlayback, getCurrentSession } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
+import { updateFragmentPlayButton as _updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
 import { snapshotAnchors, clampStrength, clampSmoothness } from './automationCurve.js';
+import {
+  isManualVibrato, resolveAutoVibratoForNote, saltFromKey,
+} from '../shared/autoPitchCurve.js';
 import { getTimbreKeyframes } from './postprocessAccess.js';
 import { POSTPROCESS_PARAMS, quantizeParamValue, formatParamValue } from './postprocessParams.js';
 
@@ -201,6 +217,9 @@ function applyNoteDrag(pos) {
         p.note.start = newStart;
         p.note.pitch = p.newPitch;
       }
+      // 就地改了 start/pitch：标记 notes 索引失效（不必 bump notesVersion，
+      // 避免每帧连带失效 inactive/oob 缓存）。
+      _markNotesIndexDirty();
     }
     render();
     return true;
@@ -229,6 +248,7 @@ function applyNoteDrag(pos) {
     if (isGroupedKana) {
       note.start = newStart;
       note.pitch = newPitch;
+      _markNotesIndexDirty();
     } else {
       // Magnetic boundary snap: if newStart is within 4px of an adjacent
       // note's start or end at this pitch, snap to that boundary. Lets the
@@ -246,6 +266,7 @@ function applyNoteDrag(pos) {
       if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
         note.start = newStart;
         note.pitch = newPitch;
+        _markNotesIndexDirty();
       }
     }
   } else if (dragMode === 'resize') {
@@ -272,33 +293,45 @@ function applyNoteDrag(pos) {
         }
       }
       note.duration = newDuration;
+      _markNotesIndexDirty();
     }
   }
   render();
   return true;
 }
 
-function applyPitchAnchorDrag(pos) {
+/**
+ * @param {{x:number,y:number}} pos
+ * @param {{shiftKey?:boolean}} [mods] 按住 Shift = 半音吸附（F16）
+ */
+function applyPitchAnchorDrag(pos, mods) {
   if (getDragMode() !== 'pitch-anchor' || getPitchDragAnchorIdx() < 0) return false;
 
+  const snapSemitone = !!(mods && mods.shiftKey);
   const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
   const dyPitch = yToPitchContinuous(pos.y) - getDragStartMousePitch();
   const selectedAnchorIndices = getSelectedAnchorIndices();
   const pitchCurve = getPitchCurve();
+  // 吸附在**绝对音高**上做（四舍五入到整半音），而不是在位移量上做：
+  // 用户想要的是"这个点落在准音上"，不是"这次拖了整数个半音"。
+  const clampPitch = (v) => {
+    const p = Math.max(0, Math.min(127, v));
+    return snapSemitone ? Math.round(p) : p;
+  };
   if (selectedAnchorIndices.size > 1 && getPitchDragAnchorStarts().size > 0) {
     for (const idx of selectedAnchorIndices) {
       const ap = pitchCurve.anchorPoints[idx];
       const start = getPitchDragAnchorStarts().get(idx);
       if (ap && start) {
         ap.time = Math.max(0, start.time + dxBeats);
-        ap.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+        ap.pitch = clampPitch(start.pitch + dyPitch);
       }
     }
   } else {
     const ap = pitchCurve.anchorPoints[getPitchDragAnchorIdx()];
     if (ap) {
       ap.time = Math.max(0, getPitchDragStartTime() + dxBeats);
-      ap.pitch = Math.max(0, Math.min(127, getPitchDragStartValue() + dyPitch));
+      ap.pitch = clampPitch(getPitchDragStartValue() + dyPitch);
     }
   }
   invalidatePitchCurveCache();
@@ -417,6 +450,24 @@ function _finalizePitchSmoothnessDrag(commitHistory) {
 }
 
 // ==================== Pitch Anchor Context Menu ====================
+/**
+ * 同步右键菜单的音高输入框：绝对半音值 + 相对最近半音的音分偏差。
+ * 输入语义是"半音数，小数部分 = 音分"（60.25 = 60 半音 + 25 音分），
+ * 与锚点的内部单位（pitch，半音）一致，不需要换算。
+ */
+function _syncPitchCtxPitchInput(ap) {
+  const input = document.getElementById('pitch-ctx-pitch-input');
+  const cents = document.getElementById('pitch-ctx-pitch-cents');
+  if (!ap) return;
+  if (input && document.activeElement !== input) {
+    input.value = Number(ap.pitch).toFixed(2);
+  }
+  if (cents) {
+    const off = Math.round((ap.pitch - Math.round(ap.pitch)) * 100);
+    cents.textContent = (off >= 0 ? '+' : '') + off + '¢';
+  }
+}
+
 function showPitchContextMenu(clientX, clientY, anchorIdx) {
   const menu = document.getElementById('pitch-anchor-context-menu');
   if (!menu) return;
@@ -443,6 +494,9 @@ function showPitchContextMenu(clientX, clientY, anchorIdx) {
   if (strengthSlider) strengthSlider.value = String(strength);
   if (strengthLabel) strengthLabel.textContent = String(strength);
   _updateStrengthPresetActiveState(strength);
+
+  // 音高数值输入（F16）：右键菜单里能精确填数，不必靠拖
+  _syncPitchCtxPitchInput(ap);
 
   // 计算菜单位置，避免溢出窗口
   const vw = window.innerWidth;
@@ -625,6 +679,39 @@ function _setupPitchContextMenuListeners() {
     });
   });
 
+  const pitchInput = document.getElementById('pitch-ctx-pitch-input');
+  const pitchApply = document.getElementById('pitch-ctx-pitch-apply');
+  const applyPitchInput = () => {
+    const anchorIdx = getContextMenuAnchorIdx();
+    if (anchorIdx < 0 || !pitchInput) return;
+    const ap = getPitchCurve().anchorPoints[anchorIdx];
+    if (!ap) return;
+    const raw = Number(pitchInput.value);
+    if (!Number.isFinite(raw)) { _syncPitchCtxPitchInput(ap); return; }
+    const next = Math.max(0, Math.min(127, raw));
+    if (Math.abs(next - ap.pitch) < 1e-9) return;
+    const oldSnapshot = clonePitchCurveState();
+    ap.pitch = next;
+    invalidatePitchCurveCache();
+    const newSnapshot = clonePitchCurveState();
+    history.push({
+      undo() { applyPitchCurveSnapshot(oldSnapshot); render(); },
+      redo() { applyPitchCurveSnapshot(newSnapshot); render(); },
+    });
+    _syncPitchCtxPitchInput(ap);
+    render();
+    scheduleAutoSave();
+  };
+  if (pitchApply) pitchApply.addEventListener('click', applyPitchInput);
+  if (pitchInput) {
+    // Enter 提交、Esc 放弃（与"改完就走"的肌肉记忆一致）
+    pitchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); applyPitchInput(); }
+      else if (e.key === 'Escape') { e.preventDefault(); hidePitchContextMenu(); }
+    });
+    pitchInput.addEventListener('change', applyPitchInput);
+  }
+
   const deleteBtn = document.getElementById('pitch-ctx-delete');
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
@@ -730,43 +817,60 @@ function _applySetKanjiChinese(groupId, rightClickedNoteId) {
   const result = mergeKanaGroupToKanji(group, notes, rightClickedNoteId, genNoteId);
   if (!result) return;
 
-  // Capture old state for undo
-  const oldNotes = deepClone(notes);
-  const oldGroups = deepClone(groups);
-
-  // Remove kana notes
+  // 只快照本次真正被改动的对象（被合并掉的假名音符 + 新建的汉字音符 +
+  // 被移除的分组），不再深拷整条 notes / kanjiGroups。
   const idsToRemove = new Set(result.kanaNoteIds);
+  const removedNotes = [];
   for (let i = notes.length - 1; i >= 0; i--) {
-    if (idsToRemove.has(notes[i].id)) notes.splice(i, 1);
+    if (idsToRemove.has(notes[i].id)) {
+      removedNotes.push({ index: i, note: { ...notes[i] } });
+    }
+  }
+  removedNotes.sort((a, b) => a.index - b.index);
+  for (let i = removedNotes.length - 1; i >= 0; i--) {
+    notes.splice(removedNotes[i].index, 1);
   }
   // Add the new kanji note at the correct position (sorted by start time)
   const insertIdx = notes.findIndex(n => n.start > result.newNote.start);
-  if (insertIdx === -1) {
-    notes.push(result.newNote);
-  } else {
-    notes.splice(insertIdx, 0, result.newNote);
-  }
+  const newNoteIndex = insertIdx === -1 ? notes.length : insertIdx;
+  notes.splice(newNoteIndex, 0, result.newNote);
   // Remove the group
   const groupIdx = groups.findIndex(g => g.id === groupId);
   if (groupIdx !== -1) groups.splice(groupIdx, 1);
+  invalidateKanjiGroupIndex();
+
+  const newNoteSnapshot = { ...result.newNote };
+  const groupSnapshot = group;
+  const kanaNoteIds = result.kanaNoteIds.slice();
 
   history.push({
     undo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(oldNotes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(oldGroups));
+      const ni = curNotes.findIndex(n => n.id === newNoteSnapshot.id);
+      if (ni !== -1) curNotes.splice(ni, 1);
+      for (const r of removedNotes) {
+        curNotes.splice(Math.max(0, Math.min(r.index, curNotes.length)), 0, { ...r.note });
+      }
+      if (!curGroups.some(g => g.id === groupSnapshot.id)) {
+        curGroups.splice(Math.max(0, Math.min(groupIdx, curGroups.length)), 0, deepClone(groupSnapshot));
+      }
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     },
     redo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(notes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(groups));
+      for (const id of kanaNoteIds) {
+        const idx = curNotes.findIndex(n => n.id === id);
+        if (idx !== -1) curNotes.splice(idx, 1);
+      }
+      curNotes.splice(Math.max(0, Math.min(newNoteIndex, curNotes.length)), 0, { ...newNoteSnapshot });
+      const gi = curGroups.findIndex(g => g.id === groupSnapshot.id);
+      if (gi !== -1) curGroups.splice(gi, 1);
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     }
   });
@@ -790,36 +894,49 @@ function _applySetKanjiJapanese(noteId) {
     return;
   }
 
-  // Capture old state for undo
-  const oldNotes = deepClone(notes);
-  const oldGroups = deepClone(groups);
+  const noteIdx = notes.findIndex(n => n.id === noteId);
+  if (noteIdx === -1) return;
+
+  // 只快照被替换的汉字音符与新增的分组，不深拷整条 notes / kanjiGroups。
+  const oldNote = { ...note };
+  const kanaNotes = result.kanaNotes;
+  const kanaIds = kanaNotes.map(n => n.id);
+  const kanaSnapshots = kanaNotes.map(n => ({ ...n }));
+  const groupSnapshot = result.group;
 
   // Replace the kanji note with kana notes
-  const noteIdx = notes.findIndex(n => n.id === noteId);
-  if (noteIdx !== -1) {
-    notes.splice(noteIdx, 1, ...result.kanaNotes);
-  }
+  notes.splice(noteIdx, 1, ...kanaNotes);
   // Clear kanjiForceChinese flag if set (it's now Japanese)
   // (the old note is gone, new kana notes don't have the flag)
   groups.push(result.group);
+  invalidateKanjiGroupIndex();
 
   history.push({
     undo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(oldNotes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(oldGroups));
+      for (const id of kanaIds) {
+        const idx = curNotes.findIndex(n => n.id === id);
+        if (idx !== -1) curNotes.splice(idx, 1);
+      }
+      curNotes.splice(Math.min(noteIdx, curNotes.length), 0, { ...oldNote });
+      const gi = curGroups.findIndex(g => g.id === groupSnapshot.id);
+      if (gi !== -1) curGroups.splice(gi, 1);
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     },
     redo() {
       const curNotes = getNotes();
       const curGroups = getKanjiGroups();
-      curNotes.length = 0;
-      curNotes.push(...deepClone(notes));
-      curGroups.length = 0;
-      curGroups.push(...deepClone(groups));
+      const ni = curNotes.findIndex(n => n.id === oldNote.id);
+      if (ni !== -1) curNotes.splice(ni, 1);
+      curNotes.splice(Math.min(noteIdx, curNotes.length), 0, ...kanaSnapshots.map(n => ({ ...n })));
+      if (!curGroups.some(g => g.id === groupSnapshot.id)) {
+        curGroups.push(deepClone(groupSnapshot));
+      }
+      invalidateKanjiGroupIndex();
+      bumpNotesVersion();
       render();
     }
   });
@@ -932,17 +1049,85 @@ function _firstCtxNote() {
   return getNoteById(ids[0]) || null;
 }
 
+/**
+ * 自动颤音在当前音符上的"影子参数"。
+ *
+ * 用户没有手动设过颤音、但自动层会给这个音符颤音时，菜单里显示的应该是
+ * **实际听到的那组值**，而不是 DEFAULT_VIBRATO（80¢ 直上直下）—— 否则
+ * 用户看到 80¢、听到 22¢，会以为参数不生效。
+ */
+function _autoVibratoForNote(note) {
+  const auto = getResolvedAuto();
+  if (!auto || !auto.enabled) return null;
+  const frag = getCurrentFragment();
+  return resolveAutoVibratoForNote({
+    auto,
+    sortedNotes: getClippedNotes(),
+    bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
+    seedSalt: saltFromKey(frag ? (frag.id !== undefined ? frag.id : frag.singerId) : 0),
+  }, note);
+}
+
+/**
+ * 把颤音切到"手动"来源，并把自动派生值**先抄过来**再改。
+ * 不抄的话，用户拖一下灵敏度会从 22¢ 跳到 DEFAULT_VIBRATO 的 80¢。
+ */
+function _pinManualVibrato(note) {
+  let v = note.vibrato;
+  if (v && v.source === 'manual') return v;
+  const derived = isManualVibrato(note) ? null : _autoVibratoForNote(note);
+  v = ensureVibrato(note);
+  if (derived && derived.enabled) {
+    v.enabled = true;
+    v.depth = derived.depth;
+    v.rate = derived.rate;
+    v.start = derived.start;
+    v.length = derived.length;
+    v.fadeIn = derived.fadeIn;
+  }
+  v.source = 'manual';
+  return v;
+}
+
 function _syncNoteCtxMenuFromNotes() {
   const note = _firstCtxNote();
   if (!note) return;
 
   // Vibrato params
   ensureVibrato(note);
-  const v = note.vibrato;
+  const manualVib = isManualVibrato(note);
+  const derived = manualVib ? null : _autoVibratoForNote(note);
+  const showingAuto = !!(derived && derived.enabled);
+  const v = showingAuto ? derived : note.vibrato;
   const toggle = document.getElementById('note-ctx-vibrato-toggle');
   const params = document.getElementById('note-ctx-vibrato-params');
   if (toggle) toggle.checked = !!v.enabled;
   if (params) params.hidden = !v.enabled;
+
+  const src = document.getElementById('note-ctx-vibrato-src');
+  if (src) {
+    if (showingAuto) {
+      src.hidden = false;
+      src.className = 'note-ctx-src';
+      src.textContent = t('fragment.vibSrcAuto');
+      src.title = t('fragment.vibSrcAutoHint');
+    } else if (manualVib) {
+      // 手动打开 / 手动关掉都要有徽标：关掉同样是用户意图，显示"手动"会让
+      // 人以为它还在颤，所以分成两档文案。
+      src.hidden = false;
+      src.className = 'note-ctx-src manual';
+      src.textContent = note.vibrato.enabled ? t('fragment.vibSrcManual') : t('fragment.vibSrcManualOff');
+      src.title = note.vibrato.enabled ? t('fragment.vibSrcManualHint') : t('fragment.vibSrcManualOffHint');
+    } else if (derived && !derived.enabled) {
+      src.hidden = false;
+      src.className = 'note-ctx-src';
+      src.textContent = t('fragment.vibSrcAutoOff');
+      src.title = t('fragment.vibSrcAutoOffHint');
+    } else {
+      src.hidden = true;
+      src.textContent = '';
+    }
+  }
 
   const setSlider = (id, valueId, value, formatter) => {
     const s = document.getElementById(id);
@@ -965,8 +1150,8 @@ function _syncNoteCtxMenuFromNotes() {
   if (info) {
     const count = _getCtxNoteIds().length;
     info.textContent = count === 1
-      ? (window.i18n?.t?.('fragment.noteCtxTargetSingle') ?? '1 note selected')
-      : (window.i18n?.t?.('fragment.noteCtxTargetMulti', { count }) ?? `${count} notes selected`);
+      ? t('fragment.noteCtxTargetSingle')
+      : t('fragment.noteCtxTargetMulti', { count });
   }
 }
 
@@ -1096,8 +1281,9 @@ function _setupNoteContextMenuListeners() {
     toggle.addEventListener('change', () => {
       const enabled = toggle.checked;
       _applyToCtxNotes((n) => {
-        ensureVibrato(n);
-        n.vibrato.enabled = enabled;
+        // 关掉也是一次显式决定：钉成手动，否则自动层下一帧又会把它打开
+        const v = _pinManualVibrato(n);
+        v.enabled = enabled;
       }, true);
     });
   }
@@ -1129,8 +1315,8 @@ function _setupNoteContextMenuListeners() {
       if (lbl) lbl.textContent = spec.format(x);
       _ensureCtxSnapshot();
       _applyToCtxNotes((n) => {
-        ensureVibrato(n);
-        spec.set(n.vibrato, x);
+        const v = _pinManualVibrato(n);
+        spec.set(v, x);
       }, false);
     });
     slider.addEventListener('change', () => {
@@ -1170,8 +1356,9 @@ function _setupNoteContextMenuListeners() {
       const preset = VIBRATO_PRESETS[key];
       if (!preset) return;
       _applyToCtxNotes((n) => {
-        ensureVibrato(n);
-        Object.assign(n.vibrato, deepClone(preset));
+        const v = _pinManualVibrato(n);
+        Object.assign(v, deepClone(preset));
+        v.source = 'manual';
       }, true);
     });
   });
@@ -1197,6 +1384,9 @@ function _setupNoteContextMenuListeners() {
       _applyToCtxNotes((n) => {
         ensureVibrato(n);
         n.vibrato.enabled = false;
+        // 清除 = 回到自动层（若 auto 开着，这个音重新由自动曲线决定颤音）；
+        // 想彻底不颤请用上面的开关关掉 —— 那会钉成手动。
+        delete n.vibrato.source;
         n.fadeIn = 0;
         n.fadeOut = 0;
       }, true);
@@ -1292,6 +1482,21 @@ function finalizeDragOperation() {
             }
             getSelectedNoteIds().clear();
           }
+        });
+      }
+      break;
+    }
+    case 'pitchBakedCreate':
+    case 'pitchBakedMove': {
+      // 派生段是手动资产，拖动/创建都要能撤销。只有真的发生位移才入栈
+      // （单纯点一下自动曲线 = 无变化，不该占用一次撤销）。
+      const snapshotBefore = getPitchCurveSnapshotBeforeDrag();
+      if (snapshotBefore && dragOperation && dragOperation.moved) {
+        const oldSnapshot = snapshotBefore;
+        const newSnapshot = clonePitchCurveState();
+        history.push({
+          undo() { applyPitchCurveSnapshot(oldSnapshot); },
+          redo() { applyPitchCurveSnapshot(newSnapshot); },
         });
       }
       break;
@@ -1506,6 +1711,34 @@ function handlePitchMouseDown(e, pos) {
       setDragMode('pitch-anchor');
       setDragOperation({ type: selectedAnchorIndices.size > 1 ? 'pitchAnchorsMove' : 'pitchAnchorMove' });
     } else {
+      // ---- 拖动自动曲线 = 派生一份手动副本（设计方案 §3.3）----
+      // 只在命中自动曲线、且该时刻不在手动作用域内时触发；
+      // Ctrl/Cmd+点击 强制走"新建锚点"，给不想派生的情况留出口。
+      const autoHit = (e.ctrlKey || e.metaKey) ? null : hitAutoCurveAt(pos.x, pos.y);
+      if (autoHit) {
+        const seg = createBakedSegmentAt(autoHit.time);
+        if (seg) {
+          if (!Array.isArray(pitchCurve.bakedSegments)) pitchCurve.bakedSegments = [];
+          pitchCurve.bakedSegments.push(seg);
+          invalidatePitchCurveCache();
+          selectedAnchorIndices.clear();
+          setDragMode('pitch-baked');
+          setDragOperation({
+            type: 'pitchBakedCreate',
+            segmentId: seg.id,
+            startPitch: autoHit.pitch,
+            basePitches: seg.points.map((p) => p.pitch),
+            moved: false,
+          });
+          setDragStartX(pos.x);
+          setDragStartY(pos.y);
+          setDragStartMouseTime(xToTime(pos.x));
+          setDragStartMousePitch(yToPitchContinuous(pos.y));
+          scheduleAutoSave();
+          render();
+          return;
+        }
+      }
       selectedAnchorIndices.clear();
       const time = xToTime(pos.x);
       const pitch = yToPitchContinuous(pos.y);
@@ -1536,10 +1769,9 @@ function handlePitchMouseDown(e, pos) {
 function handlePhonemeMouseDown(e, pos) {
   const areaTop = _getParamCurveAreaTop();
   const areaBottom = _getParamCurveAreaBottom();
-  const barPadding = 6;
-  const labelH = 16;
-  const barTop = areaTop + labelH;
-  const barBottom = areaBottom - barPadding;
+  // 布局由渲染层给出：面板里宿主音素条与外部音素带各占一段，
+  // 点在外部带上（pos.y > barBottom）不进入任何编辑路径 —— 那块是只读的。
+  const { barTop, barBottom } = getPhonemeBarLayout(areaTop, areaBottom);
   const barHeight = barBottom - barTop;
   const notes = getNotes();
 
@@ -1646,8 +1878,12 @@ function handlePhonemeMouseDown(e, pos) {
       x = boundaryX;
     }
   }
+  // 点到面板空白（含只读的外部音素带）＝取消音素选中。清除后必须重绘：
+  // 原先只改状态不刷新，高亮要等到下一次偶然重绘才消失，看起来像"点不掉"。
+  const hadSelection = getSelectedPhonemeNoteId() !== null;
   setSelectedPhonemeNoteId(null);
   setSelectedPhonemeIndex(-1);
+  if (hadSelection) render();
 }
 
 function handlePhonemeMouseMove(pos) {
@@ -1674,10 +1910,7 @@ function handlePhonemeMouseMove(pos) {
     const pts = adj.volumePoints;
     const pi = phonemeDragState.pointIndex;
     const areaTop = _getParamCurveAreaTop();
-    const labelH = 16;
-    const barPadding = 6;
-    const barTop = areaTop + labelH;
-    const barBottom = _getParamCurveAreaBottom() - barPadding;
+    const { barTop, barBottom } = getPhonemeBarLayout(areaTop, _getParamCurveAreaBottom());
     const barHeight = barBottom - barTop;
     const newV = Math.max(0, Math.min(1, 1 - (pos.y - barTop) / barHeight));
     pts[pi].v = newV;
@@ -1692,10 +1925,7 @@ function handlePhonemeMouseMove(pos) {
     const adj = adjustments[phonemeDragState.phonemeIndex];
     const dy = phonemeDragState.startY - pos.y;
     const areaTop = _getParamCurveAreaTop();
-    const labelH = 16;
-    const barPadding = 6;
-    const barTop = areaTop + labelH;
-    const barBottom = _getParamCurveAreaBottom() - barPadding;
+    const { barTop, barBottom } = getPhonemeBarLayout(areaTop, _getParamCurveAreaBottom());
     const barHeight = barBottom - barTop;
     const dVol = dy / barHeight;
     for (let p = 0; p < adj.volumePoints.length; p++) {
@@ -1784,6 +2014,15 @@ function _applyTimbreSnapshot(paramId, snapshot) {
   // 撤销/重做改的是曲线本身：检查器读数必须跟着回到新状态，
   // 否则滑块还停在旧的锚点值上（"面板和曲线对不上"）。
   syncTimbreParamValue(paramId);
+  // 必须自己重绘。此前依赖调用方（keydown 的 Ctrl+Z/Ctrl+Y）在 finally 里补
+  // render()，一旦新增撤销按钮 / 右键菜单入口就会画面与实际数据不同步。
+  // 与 _applyPostprocessSnapshot 保持一致。
+  //
+  // 注意：这里**不要**顺手收敛 getSelectedTimbreAnchors()。撤销会把曲线清空，
+  // 若此时把选中索引一并删掉，随后重做就恢复不回选中态，检查器读数会停在
+  // 默认值上（undo → redo 不再是可逆往返）。选中集合里的越界索引由
+  // _selectedTimbreAnchorIndex 的 anchors[idx] 存在性判断兜底，不会崩。
+  render();
 }
 
 function _deleteTimbreAnchor(anchorIdx) {
@@ -2091,6 +2330,7 @@ function startInlineEdit(note, hit) {
               curNotes.push(...deepClone(beforeNotes));
               curGroups.length = 0;
               curGroups.push(...deepClone(beforeGroups));
+              invalidateKanjiGroupIndex();
               render();
             },
             redo() {
@@ -2100,6 +2340,7 @@ function startInlineEdit(note, hit) {
               curNotes.push(...deepClone(notes));
               curGroups.length = 0;
               curGroups.push(...deepClone(kanjiGroups));
+              invalidateKanjiGroupIndex();
               render();
             }
           });
@@ -2171,11 +2412,19 @@ export function setupEventListeners() {
         // stop/restart 音频源（爆音/卡顿）。现对齐主页面时间轴交互：
         // mousedown 暂停并记住状态，拖拽期间只更新视觉，mouseup 一次性 seek。
         setDragMode('playhead');
-        if (getFragmentIsPlaying()) {
-          _wasPlayingBeforePlayheadDrag = true;
-          stopFragmentPlayback();
-        } else {
-          _wasPlayingBeforePlayheadDrag = false;
+        setFragmentPlayheadDragging(true);
+        const wasPlaying = getFragmentIsPlaying();
+        _wasPlayingBeforePlayheadDrag = wasPlaying;
+        if (wasPlaying) {
+          const cur = getCurrentSession();
+          if (getFragmentIsSynthesizing() && cur && !cur.disposed && cur.kind === 'stream') {
+            // 合成尚未结束：只停音频、保留合成 session 并记录 seek 位置。
+            // 不能调用 stopFragmentPlayback()，它会 dispose 合成 session，
+            // 导致 pendingSeek 丢失、finally 跳过清 synthesizing 而卡在 100%。
+            cur.requestSeekDuringSynthesis(newStartTime);
+          } else {
+            stopFragmentPlayback();
+          }
         }
         render();
         return;
@@ -2367,7 +2616,8 @@ export function setupEventListeners() {
       const beats = snapBeats(xToTime(pos.x));
       const pitch = yToPitch(pos.y);
       const clampedPitch = Math.max(0, Math.min(127, pitch));
-      const newDuration = 1 / 4;
+      // 新建音符默认 1/4 拍，但不得小于当前吸附网格（网格更粗时以网格为准）。
+      const newDuration = Math.max(getSnapGrid(), 1 / 4);
       if (hasNoteOverlap(null, clampedPitch, beats, beats + newDuration)) {
         render();
         return;
@@ -2422,6 +2672,13 @@ export function setupEventListeners() {
       const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
       const newStartTime = Math.max(0, (beats / bpm) * 60);
       setFragmentPlayStartPosition(newStartTime);
+      // 合成中拖拽：持续把最终位置写回 owner session，避免合成恰好在拖拽
+      // 期间完成时使用 mousedown 的旧位置起播。
+      const cur = getCurrentSession();
+      if (getFragmentIsSynthesizing() && cur && !cur.disposed && cur.kind === 'stream') {
+        cur.pendingSeek = newStartTime;
+        cur.startPositionSec = newStartTime;
+      }
       render();
       return;
     }
@@ -2432,7 +2689,47 @@ export function setupEventListeners() {
     }
 
     if (dragMode === 'pitch-anchor' && getPitchDragAnchorIdx() >= 0) {
-      applyPitchAnchorDrag(pos);
+      applyPitchAnchorDrag(pos, e);
+      return;
+    }
+
+    // 拖动派生段：默认整体平移；按住 Alt = 以按下点为圆心的局部高斯变形
+    if (dragMode === 'pitch-baked') {
+      const op = getDragOperation();
+      if (op && op.type === 'pitchBakedCreate') {
+        const seg = (getPitchCurve().bakedSegments || []).find((s) => s.id === op.segmentId);
+        if (seg && Array.isArray(op.basePitches)) {
+          const dy = yToPitchContinuous(pos.y) - op.startPitch;
+          const shift = Math.max(-36, Math.min(36, dy));
+          if (e.altKey) {
+            // Alt：局部高斯变形 —— 光标附近改得多、远处几乎不动。
+            // 用途是"这一句我只想把中间那个音挑起来"，而不是整段升降。
+            // σ 取段长的 15%（约 ±1σ 覆盖 68% 长度），下限 0.05 拍避免段极短时
+            // 退化成单点尖刺。
+            const center = getDragStartMouseTime();
+            const span = Math.max(1e-6, seg.end - seg.start);
+            const sigma = Math.max(0.05, span * 0.15);
+            const inv2s2 = 1 / (2 * sigma * sigma);
+            for (let i = 0; i < seg.points.length; i++) {
+              const pt = seg.points[i];
+              const base = op.basePitches[i] ?? pt.pitch;
+              const w = Math.exp(-((pt.time - center) ** 2) * inv2s2);
+              pt.pitch = Math.max(0, Math.min(127, base + shift * w));
+            }
+            op.moved = Math.abs(shift) > 0.01;
+            op.bendMode = 'gauss';
+          } else {
+            for (let i = 0; i < seg.points.length; i++) {
+              const base = op.basePitches[i] ?? seg.points[i].pitch;
+              seg.points[i].pitch = Math.max(0, Math.min(127, base + shift));
+            }
+            op.moved = Math.abs(shift) > 0.01;
+            op.bendMode = 'shift';
+          }
+          invalidatePitchCurveCache();
+        }
+      }
+      render();
       return;
     }
 
@@ -2505,9 +2802,19 @@ export function setupEventListeners() {
         const areaTop = _getParamCurveAreaTop();
         const areaBottom = _getParamCurveAreaBottom();
         if (pos.y >= areaTop && pos.y <= areaBottom) {
+          const { barTop, barBottom } = getPhonemeBarLayout(areaTop, areaBottom);
+          // 外部音素带不接受任何指针交互：光标保持默认，不显示拖拽/十字。
+          if (pos.y < barTop || pos.y > barBottom) {
+            canvas.style.cursor = 'default';
+            return;
+          }
           const BOUNDARY_ZONE = 10;
-          const notes = getNotes();
-          for (const note of notes) {
+          // 先用 notesIndex 按 x 视口裁剪候选（原实现每次 mousemove 线性遍历
+          // 全部音符），只对落在 ±BOUNDARY_ZONE 内的音符查音素边界。
+          const hoverStart = xToTime(pos.x - BOUNDARY_ZONE);
+          const hoverEnd = xToTime(pos.x + BOUNDARY_ZONE);
+          const candidates = notesInRange(_getCanvasRendererNotesIndex(), hoverStart, hoverEnd);
+          for (const note of candidates) {
             const noteStartX = timeToX(note.start);
             const noteEndX = timeToX(note.start + note.duration);
             if (pos.x < noteStartX - BOUNDARY_ZONE || pos.x > noteEndX + BOUNDARY_ZONE) continue;
@@ -2578,6 +2885,7 @@ export function setupEventListeners() {
     // 合成完成后从新位置自动播放。
     if (getDragMode() === 'playhead') {
       setDragMode(null);
+      setFragmentPlayheadDragging(false);
       if (_wasPlayingBeforePlayheadDrag) {
         _wasPlayingBeforePlayheadDrag = false;
         seekFragmentPlayback(getFragmentPlayStartPosition());
@@ -2708,28 +3016,37 @@ export function setupEventListeners() {
     // 否则音频停在暂停态且无提示（拖拽被 mouseleave 中断）。
     if (getDragMode() === 'playhead') {
       setDragMode(null);
+      setFragmentPlayheadDragging(false);
       if (_wasPlayingBeforePlayheadDrag) {
         _wasPlayingBeforePlayheadDrag = false;
         seekFragmentPlayback(getFragmentPlayStartPosition());
       }
     }
+    // 下面各分支只改状态，最后统一重绘一次（避免同一帧内重复 render）。
+    let needsRender = false;
+
     if (getDragMode() === 'pitch-brush' && getIsBrushDrawing() && getCurrentBrushStroke()) {
       if (getCurrentBrushStroke().points.length >= 2) {
         convertBrushStrokeToAnchorPoints(getCurrentBrushStroke());
       }
       setCurrentBrushStroke(null);
       setIsBrushDrawing(false);
-      render();
+      needsRender = true;
     }
     // 右键 smoothness 拖拽期间鼠标离开 canvas → 提交当前修改并清理状态
     if (getDragMode() === 'pitch-smoothness') {
       const startSnapshot = getPitchCurveSnapshotBeforeDrag();
       const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
       _finalizePitchSmoothnessDrag(!!hadChange);
+      needsRender = true;
     }
     // 音色 lane 拖拽中离开 canvas → 同样提交并清理（含 HUD）
     if (getDragMode() === 'timbre-anchor' || getDragMode() === 'timbre-strength') {
       _finalizeTimbreCurveDrag(true);
+      // 必须无条件重绘：_finalizeTimbreCurveDrag 只清掉了 HUD 的**数据**，
+      // 不重绘的话强度/平滑浮层会一直残留在画布上，直到下一次无关的重绘。
+      // （此前只有 hoveredNote 非空时才 render，鼠标移出画布时通常为空 → 不刷。）
+      needsRender = true;
     }
     finalizeDragOperation();
     setDragMode(null);
@@ -2739,8 +3056,9 @@ export function setupEventListeners() {
     getDragNoteStarts().clear();
     if (getHoveredNoteId() !== null) {
       setHoveredNoteId(null);
-      render();
+      needsRender = true;
     }
+    if (needsRender) render();
   });
 
   canvas.addEventListener('contextmenu', (e) => {
@@ -2778,6 +3096,7 @@ export function setupEventListeners() {
           console.error('[FragmentEditor] Undo failed:', err && err.message ? err.message : err);
         } finally {
           bumpNotesVersion(); // undo 就地改了 notes，失效 inactive/oob 缓存
+          _markNotesIndexDirty(); // 双保险：即使版本机制失效，也强制下次查询重排
           render();
           scheduleAutoSave();
         }
@@ -2795,6 +3114,7 @@ export function setupEventListeners() {
           console.error('[FragmentEditor] Redo failed:', err && err.message ? err.message : err);
         } finally {
           bumpNotesVersion(); // redo 就地改了 notes，失效 inactive/oob 缓存
+          _markNotesIndexDirty(); // 双保险：即使版本机制失效，也强制下次查询重排
           render();
           scheduleAutoSave();
         }
@@ -2847,10 +3167,19 @@ export function setupEventListeners() {
           }
         }
         for (const oldNote of oldNotes) {
+          // 复制到原音符末尾；若目标区间已被占用，顺延一个网格，仍冲突则跳过该音符。
+          const grid = getSnapGrid();
+          let targetStart = oldNote.start + oldNote.duration;
+          if (hasNoteOverlap(null, oldNote.pitch, targetStart, targetStart + oldNote.duration)) {
+            targetStart += grid;
+            if (hasNoteOverlap(null, oldNote.pitch, targetStart, targetStart + oldNote.duration)) {
+              continue;
+            }
+          }
           const newNote = {
             ...oldNote,
             id: genNoteId(),
-            start: oldNote.start + oldNote.duration,
+            start: targetStart,
           };
           notes.push(newNote);
           newIds.add(newNote.id);
@@ -2886,6 +3215,43 @@ export function setupEventListeners() {
         hideShortcutsPanel();
         return;
       }
+      // 取消进行中的曲线拖拽：回滚到拖拽前快照，且**不写入历史**。
+      // 此前 Esc 只清选中，dragMode 与 beforeDrag 快照都原样留着，松手后
+      // _finalizeXxxDrag(true) 照常把拖拽结果提交进历史 —— "拖拽中途按 Esc
+      // 取消"实际不可用。回滚后直接 return，不落到下面的"取消选中"分支。
+      const escDragMode = getDragMode();
+
+      if (escDragMode === 'timbre-anchor' || escDragMode === 'timbre-strength') {
+        const startSnapshot = getTimbreEnvelopeSnapshotBeforeDrag();
+        _finalizeTimbreCurveDrag(false); // 清 dragMode / HUD / 选中，不提交历史
+        if (startSnapshot) _applyTimbreSnapshot(getActiveTimbreParam(), startSnapshot); // 内含 render()
+        else render();
+        return;
+      }
+
+      if (escDragMode === 'pitch-smoothness' || escDragMode === 'pitch-anchor') {
+        const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+        if (escDragMode === 'pitch-smoothness') {
+          _finalizePitchSmoothnessDrag(false);
+        } else {
+          // pitch-anchor 没有独立的 finalize：手动清掉拖拽状态，
+          // 不走 mouseup 里的历史提交路径。
+          setDragMode(null);
+          setDragOperation(null);
+          getPitchDragAnchorStarts().clear();
+          // 与正常结束（mouseup/mouseleave）路径一致：同时复位正在拖动的
+          // 锚点下标与选中集合，否则 Esc 后锚点仍显示为拖拽/选中态。
+          setPitchDragAnchorIdx(-1);
+          setActiveAnchorIdx(-1);
+          getSelectedAnchorIndices().clear();
+          setAnchorDragHud(null);
+          setPitchCurveSnapshotBeforeDrag(null);
+        }
+        if (startSnapshot) applyPitchCurveSnapshot(startSnapshot);
+        render();
+        return;
+      }
+
       getSelectedNoteIds().clear();
       getSelectedAnchorIndices().clear();
       getSelectedTimbreAnchors().clear();
@@ -2922,6 +3288,8 @@ export function setupEventListeners() {
       return;
     }
     if (e.key === '2') {
+      // score 模式下 Pitch 视图无意义（曲线不参与条件），快捷键同样不让切
+      if (isScorePitchMode()) return;
       setCurrentParamMode('Pitch');
       setParamPanelCollapsed(true);
       updateParamModeButtons();
@@ -3045,6 +3413,7 @@ export function setupEventListeners() {
             return g ? { group: deepClone(g), index: idx } : null;
           })
           .filter(Boolean);
+        invalidateKanjiGroupIndex();
         const oldSelectedIds = new Set(selectedNoteIds);
         selectedNoteIds.clear();
         const undoOrder = deletedIndices
@@ -3063,6 +3432,7 @@ export function setupEventListeners() {
                 kanjiGroups.push(deepClone(dg.group));
               }
             }
+            invalidateKanjiGroupIndex();
             setSelectedNoteIds(new Set(oldSelectedIds));
             render();
           },
@@ -3075,6 +3445,7 @@ export function setupEventListeners() {
               const idx = kanjiGroups.findIndex(g => g.id === dg.group.id);
               if (idx !== -1) kanjiGroups.splice(idx, 1);
             }
+            invalidateKanjiGroupIndex();
             selectedNoteIds.clear();
             render();
           }
@@ -3150,6 +3521,8 @@ export function setupEventListeners() {
             p.note.pitch = p.newPitch;
             moveData.push({ noteId: p.note.id, oldStart: p.oldStart, oldPitch: p.oldPitch, newStart: p.newStart, newPitch: p.newPitch });
           }
+          // 就地改了 start/pitch，且此处不 bump notesVersion：手动失效索引。
+          _markNotesIndexDirty();
         }
         history.push({
           undo() {
@@ -3245,4 +3618,133 @@ export function setupEventListeners() {
   _setupPitchContextMenuListeners();
   _setupKanjiContextMenuListeners();
   _setupNoteContextMenuListeners();
+  _setupPlayheadFollowActivityTracking();
+}
+
+/**
+ * 播放头分页跟随的用户活动门控（与主窗口 eventHandlers 同一套语义）。
+ *
+ * 跟随的规则是"用户前 3s 内无操作才许动视口"，所以必须能回答：
+ *   1) 最后一次操作是什么时候；2) 指针是否正按着（拖音符 >3s 也不能被拽走）。
+ *
+ * window 捕获阶段监听：捕获先于元素自己的 handler，事件被 stopPropagation 也不漏；
+ * 这里只观察，不改事件流。
+ */
+function _setupPlayheadFollowActivityTracking() {
+  const isViewportTarget = (target) => {
+    if (!target) return false;
+    if (target === canvas) return true;
+    const parent = canvas.parentElement;
+    return !!(parent && parent.contains(target));
+  };
+
+  window.addEventListener('pointerdown', (e) => {
+    markPlayheadFollowActivity();
+    setPlayheadFollowPointerDown(true);
+    // 在画布上按下（新建音符/拖音符/拖播放头）会立刻改变视口内容，动画必须让位
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+  }, true);
+
+  const release = () => setPlayheadFollowPointerDown(false);
+  window.addEventListener('pointerup', release, true);
+  window.addEventListener('pointercancel', release, true);
+  // 焦点被原生窗口/对话框抢走时 pointerup 可能永远不到：失焦即视为松手
+  window.addEventListener('blur', () => clearPlayheadFollowPointerDown());
+
+  // 自愈：左键已不在按下状态却收到移动（pointerup 丢失）。不能走
+  // setPointerFollowPointerDown(false) —— 那会把"光标在窗口里晃"记成用户操作。
+  window.addEventListener('mousemove', (e) => {
+    if (e.buttons === 0) clearPlayheadFollowPointerDown();
+  }, true);
+
+  window.addEventListener('wheel', (e) => {
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+    else markPlayheadFollowActivity();
+  }, { capture: true, passive: true });
+
+  window.addEventListener('keydown', () => markPlayheadFollowActivity(), true);
+}
+
+/**
+ * 批量操作音高曲线（工具栏下拉 / Alt+↑↓ 快捷键共用）。
+ *
+ * 统一在这里做三件事：**快照 → 执行 → 提交一次 history**。逐个操作各自
+ * 入栈会让"整体移调 12 次"变成 12 个撤销步骤，用户按 Ctrl+Z 要按 12 下。
+ *
+ * 目标集：有选中锚点时只作用于选中项（派生段不动），否则锚点 + 派生段全动。
+ *
+ * @param {'up'|'down'|'quantize'|'simplify'|'smooth'} action
+ * @returns {boolean} 是否真的改变了数据（false = 无事可做，不入栈）
+ */
+export function runPitchBatchAction(action) {
+  const pitchCurve = getPitchCurve();
+  if (!pitchCurve.enabled) return false;
+  const hasManual = pitchCurve.anchorPoints.length > 0
+    || (pitchCurve.bakedSegments || []).length > 0;
+  if (!hasManual) return false;
+
+  const selection = [...getSelectedAnchorIndices()];
+  const selectionIsUseful = selection.length > 0;
+
+  const before = clonePitchCurveState();
+  let changed = false;
+  switch (action) {
+    case 'up':
+      changed = transposePitchCurve(1, selectionIsUseful ? selection : undefined) > 0;
+      break;
+    case 'down':
+      changed = transposePitchCurve(-1, selectionIsUseful ? selection : undefined) > 0;
+      break;
+    case 'quantize':
+      changed = quantizePitchCurve(1) > 0;
+      break;
+    case 'simplify':
+      changed = simplifyPitchCurve(8).removed > 0;
+      break;
+    case 'smooth':
+      // 选区平滑：选中就只平滑选中（至少 3 个才有邻域意义），否则全部
+      changed = smoothPitchCurve(50, selectionIsUseful && selection.length >= 3 ? selection : undefined) > 0;
+      break;
+    default:
+      return false;
+  }
+  if (!changed) return false;
+
+  const after = clonePitchCurveState();
+  history.push({
+    undo() { applyPitchCurveSnapshot(before); render(); scheduleAutoSave(); },
+    redo() { applyPitchCurveSnapshot(after); render(); scheduleAutoSave(); },
+  });
+  render();
+  scheduleAutoSave();
+  return true;
+}
+
+/**
+ * 绑定批量下拉与快捷键。与 setupEventListeners 分开，方便单测/截图脚本单独调用。
+ */
+export function setupPitchBatchTools() {
+  const select = document.getElementById('pitch-batch-action');
+  if (select && !select.dataset.bound) {
+    select.dataset.bound = '1';
+    select.addEventListener('change', () => {
+      const action = select.value;
+      select.value = ''; // 立即复位：同一个动作可以连续执行（例如连按两次 +1）
+      if (action) runPitchBatchAction(action);
+    });
+  }
+
+  if (!window.__sxsePitchBatchKeys) {
+    window.__sxsePitchBatchKeys = true;
+    document.addEventListener('keydown', (e) => {
+      const tag = e.target && e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (getCurrentParamMode() !== 'Pitch') return;
+      // Alt+↑ / Alt+↓ = 整体移调 1 个半音（选中则只动选中）
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        runPitchBatchAction(e.key === 'ArrowUp' ? 'up' : 'down');
+      }
+    });
+  }
 }

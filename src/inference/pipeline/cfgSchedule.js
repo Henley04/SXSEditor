@@ -11,15 +11,16 @@
  * 默认值规则：
  *   - cfgStrengthStart 为 null/undefined 时回退到 cfgStrength * 0.5
  *   - cfgStrengthEnd   为 null/undefined 时回退到 cfgStrength
- *   即默认 linear/cosine 从 0.5×cfg 线性/余弦上升到 cfg（早期低 CFG 稳定结构，
+ *   即 linear/cosine 从 0.5×cfg 线性/余弦上升到 cfg（早期低 CFG 稳定结构，
  *   后期高 CFG 锐化细节）。
  *
- * constant 模式直接返回 cfgStrength，确保与 Task 11 改造前的固定 CFG 行为
- * 字节级一致（resolveCfgAtStep 不引入任何浮点误差）。
+ * 官方 flow_matching 全程恒定 CFG、无调度，因此缺省/非法 mode 回退到
+ * constant（直接返回 cfgStrength，与 Task 11 改造前的固定 CFG 行为字节级一致，
+ * resolveCfgAtStep 不引入任何浮点误差）。linear / cosine / custom 仍可显式选择。
  */
 
 const VALID_MODES = ['constant', 'linear', 'cosine', 'custom'];
-const DEFAULT_MODE = 'linear';
+const DEFAULT_MODE = 'constant';
 
 /**
  * 解析 CFG 调度模式。非法/缺失时回退到 DEFAULT_MODE。
@@ -35,7 +36,7 @@ function resolveScheduleMode(mode) {
  * 按 step 解析有效 CFG 强度。
  *
  * @param {Object} params
- * @param {string} [params.mode='linear'] - 调度模式 constant|linear|cosine|custom
+ * @param {string} [params.mode='constant'] - 调度模式 constant|linear|cosine|custom
  * @param {number} params.cfgStrength - 基准 CFG 强度（constant 模式直接返回此值；
  *   其他模式作为 end 的默认值与 start 的 0.5× 基准）
  * @param {number|null} [params.cfgStrengthStart=null] - 起始 CFG 强度，null 时回退到 cfgStrength*0.5

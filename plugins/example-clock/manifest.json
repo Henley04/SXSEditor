@@ -1,0 +1,69 @@
+{
+  "apiVersion": 2,
+  "id": "example-clock",
+  "name": "Example: Clock Service",
+  "version": "1.0.0",
+  "description": "服务提供方示例：注册 example.clock 服务端点，并提供一个可进度回报、可取消的长任务命令。",
+  "author": "SXSEditor Dev",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {
+    "services": [
+      "provide"
+    ],
+    "ui": [
+      "menu"
+    ],
+    "automation": [
+      "expose"
+    ]
+  },
+  "contributes": {
+    "services": {
+      "provides": [
+        {
+          "id": "example.clock",
+          "version": "1.0.0",
+          "methods": [
+            "now",
+            "offsetMs"
+          ],
+          "description": "把本进程的启动时刻与当前时间暴露给其它插件（演示跨插件调用）。"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "id": "countdown",
+        "long": true,
+        "title": {
+          "en": "Countdown (long task)",
+          "zh-CN": "倒计时（长任务）"
+        },
+        "description": "按 100ms 步进倒计时，期间回报进度；收到取消信号立即停止。用于演示 MCP job 的进度与取消。"
+      },
+      {
+        "id": "info",
+        "title": {
+          "en": "Clock service info",
+          "zh-CN": "时钟服务信息"
+        },
+        "description": "返回本进程的启动时刻。"
+      }
+    ],
+    "menus": [
+      {
+        "path": "plugins/example",
+        "command": "info"
+      }
+    ],
+    "automation": {
+      "methods": [
+        "countdown",
+        "info"
+      ]
+    }
+  }
+}

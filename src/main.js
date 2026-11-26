@@ -2,6 +2,42 @@ const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { IPC_CHANNELS } = require('./shared/ipcChannels');
+const {
+  extractOpenPath,
+  classify,
+  setPendingTarget,
+  takePendingTarget,
+  ensureWindowsFileAssociations,
+} = require('./main/fileAssociation');
+
+/**
+ * 通知渲染层"有文件待取"。只发通知、不带路径 —— 路径留在 pending 槽里，
+ * 渲染层就绪后自己来取，避免"通知先到、监听还没挂上"把文件弄丢。
+ */
+function notifyRendererOfPendingFile() {
+  try {
+    const { getMainWindow } = require('./main/windowManager');
+    const win = getMainWindow();
+    if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
+    win.webContents.send(IPC_CHANNELS.APP_FILE_REQUESTED);
+  } catch (_) {
+    /* 窗口还没建好：渲染层启动时会主动 take，不需要这条通知 */
+  }
+}
+
+// 冷启动时双击文件：路径在 argv 里。先存起来，等渲染层来取。
+const launchTarget = classify(extractOpenPath(process.argv));
+if (launchTarget) setPendingTarget(launchTarget);
+
+// macOS 的"双击文件"不走 argv，走 open-file；且可能在 ready 之前就触发，
+// 所以这个监听必须挂在模块顶层，不能等 whenReady。
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  const target = classify(filePath);
+  if (!target) return;
+  setPendingTarget(target);
+  notifyRendererOfPendingFile();
+});
 
 // Fix Windows console encoding for Chinese log output.
 //
@@ -185,7 +221,7 @@ let resetBasicPitch = () => {};
 let resetRosvot = () => {};
 let resetAudioManagers = () => {};
 
-app.on('second-instance', () => {
+app.on('second-instance', (event, argv) => {
   // Lazy require: getMainWindow is in windowManager which is loaded in
   // STEP 1.5 inside app.whenReady(). By the time a second instance can
   // fire this event, STEP 1.5 has completed, but using lazy require keeps
@@ -198,6 +234,13 @@ app.on('second-instance', () => {
     }
     mainWindow.focus();
   }
+
+  // 双击第二个文件时，系统起的是同一个 exe，新路径在 second-instance 的 argv 里
+  const target = classify(extractOpenPath(argv));
+  if (target) {
+    setPendingTarget(target);
+    notifyRendererOfPendingFile();
+  }
 });
 
 // 注册自定义 protocol scheme，必须在 app.whenReady() 之前调用
@@ -209,6 +252,17 @@ protocol.registerSchemesAsPrivileged([
       bypassCSP: true,
       stream: true,
       supportFetchAPI: true,
+    },
+  },
+  // plugin:// —— 插件面板的静态资源来源。standard + secure 才能给出稳定 origin，
+  // 让 iframe 的 sandbox 真正把它们隔离成一个独立源（没有 host 的 DOM 与存储）。
+  {
+    scheme: 'plugin',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
     },
   },
 ]);
@@ -300,7 +354,13 @@ app.whenReady().then(() => {
   registerSingerIpc();
   registerSingerMarketIpc();
   registerWebnnIpc();
-  const { registerMcpReplyIpc, startMcpBridge } = require('./main/mcpBridge');
+
+  // 系统投递进来的文件（双击 / 打开方式）。取走即清空，天然幂等。
+  ipcMain.handle(IPC_CHANNELS.APP_TAKE_PENDING_FILE, () => takePendingTarget());
+  // 欢迎页「最近的工程」：只读写 userData 下一份小配置文件，无重型依赖，
+  // 因此和上面的 pending 槽放在同一批注册（首屏渲染就要拉这份列表）。
+  require('./main/recentsIpc').registerRecentsIpc();
+  const { registerMcpReplyIpc, startMcpBridge: _startMcpBridge } = require('./main/mcpBridge');
   registerMcpReplyIpc(ipcMain);
 
   // Register app:getVersion early — the renderer calls it immediately at
@@ -312,6 +372,25 @@ app.whenReady().then(() => {
   // deps, so registering it here eliminates the 200-500ms "v-" flicker
   // in the version badge that was introduced by the STEP 4 deferral.
   ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, async () => app.getVersion());
+
+  // 同样的理由适用于 get-locale：渲染进程首启（localStorage 里还没有值）会在
+  // initI18n() 里立即询问主进程语言设置（src/i18n/index.js:170）。该 handler 原本
+  // 住在 registerSettingsIpc()（STEP 4，因 settingsIpc 会传递到 onnxruntime-node
+  // 而被延后），于是首启经常打在"handler 尚未注册"上 —— invoke 被拒绝，异常又被
+  // i18n/index.js 的 catch(_){} 静默吞掉，界面退化成按 navigator.language 猜，
+  // 与用户实际选择不一致。这里直接读 STEP 2 已经载入的 loadMainLocale() 结果，
+  // 零重型依赖，适合提前注册。
+  ipcMain.handle(IPC_CHANNELS.GET_LOCALE, async () => require('./main/locale').getLocale());
+
+  // 帮助 → MCP 连接：按当前安装探测 MCP 服务器 / skill 的真实绝对路径。
+  // 零重型依赖，与 get-locale 一起提前注册，避免用户点菜单时 handler 尚未挂载。
+  ipcMain.handle(IPC_CHANNELS.MCP_SETUP_GET_INFO, () => require('./main/mcpSetupInfo').getMcpSetupInfo());
+
+  // 帮助 → 环境检测：只读系统信息 + 运行期探测。与 MCP 连接同样提前注册；
+  // envCheckInfo 顶层只依赖 node:os，gpuInfo / winmlProvider 都是惰性 require，
+  // 不会把 onnxruntime 之类的重依赖拖进启动关键路径。
+  require('./main/envCheckIpc').registerEnvCheckIpc();
+
   let resolveHeavyIpcReady;
   const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
   ipcMain.handle(IPC_CHANNELS.APP_WAIT_FOR_HEAVY_IPC, () => heavyIpcReady);
@@ -326,7 +405,7 @@ app.whenReady().then(() => {
   const cspConnectSrc = isDev
     ? "'self' https://modelscope.cn ws://0.0.0.0:3000 ws://localhost:3000"
     : "'self' https://modelscope.cn";
-  const contentSecurityPolicy = `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ${cspConnectSrc}; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;`;
+  const contentSecurityPolicy = `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ${cspConnectSrc}; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' plugin:;`;
 
   // Content Security Policy: restrict resource loading to self-origin
   //
@@ -378,6 +457,22 @@ app.whenReady().then(() => {
   // calls buildAppMenu(), which uses t() for menu labels.
   loadMainLocale();
 
+  // 启动期 VC++ 运行库探测（旧机器静默失败的可操作提示）。
+  // 只写日志、不弹窗、不阻断启动 —— 缺运行库时推理会在加载原生模块时失败，
+  // 但应用本身仍应能打开（帮助→环境检测会显式显示 "Missing"）。三枚 fs.existsSync
+  // 开销可忽略，且非 Windows 直接返回 supported:false，不触碰文件系统。
+  try {
+    const { probeVcRuntime } = require('./shared/vcRuntime.js');
+    const vc = probeVcRuntime();
+    if (vc.supported && !vc.ok) {
+      console.warn(
+        `[vc-runtime] Missing Visual C++ runtime DLLs: ${vc.missing.join(', ')}. `
+        + 'Native inference (ONNX Runtime / ort_bridge.node) may fail to load. '
+        + `Install Microsoft Visual C++ 2015-2022 Redistributable (x64): ${vc.redistUrl}`
+      );
+    }
+  } catch (_) { /* 探测失败不影响启动 */ }
+
   // ========================================================================
   // STEP 3: Create the main window (hidden) so its renderer starts loading
   // IN PARALLEL with the heavy requires in STEP 4. The renderer runs in a
@@ -385,15 +480,16 @@ app.whenReady().then(() => {
   // is blocked by synchronous require() calls below.
   // ========================================================================
   const mainWindow = createWindow({ show: false });
-  startMcpBridge().catch(err => console.error('[MCP] start failed:', err));
+  // MCP bridge 的启动包含 http.createServer + 同步的 writeFileSync/renameSync
+  // （写端口文件），放在这里会直接压在首帧绘制之前。挪到 reveal 之后。
+  // registerMcpReplyIpc 已在 STEP 1.5 注册，渲染进程侧的 reply 通道不受影响。
 
   // Helper: reveal the main window (and close the splash if any). In
   // dev mode this runs immediately after did-finish-load; in packaged
   // mode it waits for the splash's minimum visible duration.
   let _revealed = false;
-  const revealMainWindow = () => {
-    if (_revealed) return;
-    _revealed = true;
+  /** 真正的 show()：关掉 splash、显示并聚焦主窗口，然后启动重型任务。 */
+  const doReveal = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show();
       mainWindow.focus();
@@ -401,7 +497,90 @@ app.whenReady().then(() => {
     if (showSplash) {
       closeSplashWindow();
     }
+    // 关键：重型模块加载必须在窗口**已经 show() 之后**才开始。
+    // 放在这里意味着用户此刻已经看到界面，后面的同步 require 只影响"多久能
+    // 点第一个按钮"，不再影响"多久能看到窗口"。
+    scheduleHeavyStartup();
+    // MCP bridge 同理（同步文件写入 + listen），与重型模块一起延后。
+    const { startMcpBridge } = require('./main/mcpBridge');
+    startMcpBridge().catch(err => console.error('[MCP] start failed:', err));
+    // 应用菜单：30+ 项的 buildFromTemplate + setApplicationMenu，同样移到显示之后
+    const { buildAppMenuDeferred } = require('./main/windowManager');
+    buildAppMenuDeferred();
+    // 文件关联：要 spawn 若干次 reg.exe，合计几十毫秒。界面已经显示出来了，
+    // 再缓 3 秒，避开首帧渲染与模型加载的 I/O 高峰。
+    setTimeout(() => {
+      ensureWindowsFileAssociations().catch(() => {});
+    }, 3000);
   };
+
+  /**
+   * 统一的主窗口显示入口（ready-to-show 与 did-finish-load 都走这里）。
+   *
+   * 打包模式下先确保 splash 真的绘制过，再从绘制完成时刻起补足
+   * MIN_SPLASH_MS 的最短可见时长，避免 splash 只闪一帧。
+   */
+  const revealMainWindow = () => {
+    if (_revealed) return;
+    _revealed = true;
+    if (!showSplash) {
+      doReveal();
+      return;
+    }
+    (async () => {
+      try {
+        await waitForSplashReady();
+        const readyAt = getSplashReadyAt();
+        const referenceTime = readyAt || Date.now();
+        const elapsed = Date.now() - referenceTime;
+        const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
+        if (wait > 0) {
+          setTimeout(doReveal, wait);
+        } else {
+          doReveal();
+        }
+      } catch (err) {
+        console.warn('[Main] Splash reveal failed:', err.message);
+        doReveal();
+      }
+    })();
+  };
+
+  // 重型启动任务（原 STEP 4）只在 reveal 之后跑一次。
+  // 此前它包在 setImmediate() 里，意图是"让 did-finish-load 先投递"，但
+  // setImmediate 只在下一个事件循环 tick 执行，而渲染进程从 spawn 到
+  // did-finish-load 通常要 300–600ms —— 这个同步块必然跑在 reveal 之前。
+  // 更糟的是它阻塞主线程期间，did-finish-load / ready-to-show 这两个 IPC 事件
+  // 根本无法投递（要主线程空闲），于是 reveal 被它完整阻塞。
+  let _heavyScheduled = false;
+  function scheduleHeavyStartup() {
+    if (_heavyScheduled) return;
+    _heavyScheduled = true;
+    // setTimeout 而非 setImmediate：让 show() 触发的绘制与事件循环先跑一轮，
+    // 确保窗口真的已经呈现出来，再开始几百毫秒的同步加载。
+    setTimeout(runHeavyStartup, 0);
+  }
+
+  // 兜底（必需）：重型 IPC 的注册现在挂在"窗口已显示"这个事件之后，如果窗口
+  // 因为任何原因没有显示（渲染进程崩溃、加载卡住、splash 逻辑异常），
+  // runHeavyStartup 就永远不会跑 —— 而 preload 的 invokeHeavy 会一直 await
+  // APP_WAIT_FOR_HEAVY_IPC，表现为所有合成/设置类操作无声挂起。
+  // 此前用 setImmediate 时不存在这个风险（不管窗口如何都会执行），所以这条
+  // 兜底是本轮改动必须配套的。
+  // 5s 足以覆盖正常启动（正常路径下 reveal 远早于此，标志位会让兜底变成空操作）。
+  const HEAVY_STARTUP_FALLBACK_MS = 5000;
+  const heavyFallbackTimer = setTimeout(() => {
+    if (!_revealed) {
+      console.warn('[Main] Main window not revealed within timeout, forcing reveal');
+      revealMainWindow();
+    }
+    if (!_heavyScheduled) {
+      console.warn('[Main] Heavy IPC startup fallback triggered');
+      scheduleHeavyStartup();
+    }
+  }, HEAVY_STARTUP_FALLBACK_MS);
+  // 不要因为这个兜底定时器拖住进程退出（正常路径下它到点就是空操作）
+  if (typeof heavyFallbackTimer.unref === 'function') heavyFallbackTimer.unref();
 
   // 主窗口渲染进程就绪后：先显示窗口，再后台完成硬件检测和设备校验
   // （此前此处 await detectAllHardware() 会阻塞主窗口显示，因为完整
@@ -418,42 +597,32 @@ app.whenReady().then(() => {
   // are assigned by Step 4's heavy require() calls.
   // ready-to-show 表示首帧已经绘制完成，通常不晚于 did-finish-load。
   // 两个信号谁先到就先用谁，避免为了等 load 事件多空转一帧。
+  //
+  // 重要：此前这里直接 `revealMainWindow()` 无条件立即显示，而 did-finish-load
+  // 分支才走 splash 等待逻辑。由于 ready-to-show 几乎总是先到，MIN_SPLASH_MS /
+  // waitForSplashReady() / getSplashReadyAt() 这一整套 splash 保护实际上从未生效
+  // （死代码）。现在两条路径都走同一个 revealMainWindow()（内部统一处理 splash）。
   mainWindow.once('ready-to-show', () => { revealMainWindow(); });
 
   mainWindow.webContents.once('did-finish-load', () => {
-    // 1. 立即显示主窗口（不等待 GPU/NPU 检测）
-    // In dev mode: reveal the main window immediately.
-    // In packaged mode: first guarantee the splash has actually
-    // painted (so it is visible before the main window appears),
-    // then enforce the splash's minimum visible duration measured
-    // from when the splash's SVG painted. With MIN_SPLASH_MS = 0
-    // the main window is revealed the moment the splash is visible.
-    if (!showSplash) {
-      revealMainWindow();
-    } else {
-      (async () => {
-        try {
-          await waitForSplashReady();
-          const readyAt = getSplashReadyAt();
-          const referenceTime = readyAt || Date.now();
-          const elapsed = Date.now() - referenceTime;
-          const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
-          if (wait > 0) {
-            setTimeout(revealMainWindow, wait);
-          } else {
-            revealMainWindow();
-          }
-        } catch (err) {
-          console.warn('[Main] Splash reveal failed:', err.message);
-          revealMainWindow();
-        }
-      })();
-    }
+    // 1. 显示主窗口（不等待 GPU/NPU 检测）
+    // revealMainWindow() 内部统一处理两种模式：
+    //   dev（无 splash）：立即显示；
+    //   packaged：先确保 splash 真的画出来了（保证用户先看到 splash 再看到主窗口），
+    //             再从 splash 绘制完成时刻起算 MIN_SPLASH_MS 的最短可见时长。
+    //             MIN_SPLASH_MS = 0 时，splash 一可见就切主窗口。
+    revealMainWindow();
 
     // 2. Auto update check (once per 24h, packaged only).
-    //    Independent of Step 4 modules — only uses updateChecker (light)
-    //    and windowManager (loaded in STEP 1.5).
-    (async () => {
+    //
+    //    注意：updateChecker.js 顶层 require 了 modelManager（82KB / 2334 行），
+    //    这个 require 是**同步**的。此前它紧跟在 revealMainWindow() 之后，而打包
+    //    模式下 reveal 走的是 `await waitForSplashReady()` 的 async 分支 —— 即
+    //    show() 被推入微任务，同步的 require 反而先跑，于是首帧绘制又被这 82KB
+    //    的解析阻塞了一次，把 STEP 4 对 modelManager 的延迟完全抵消。
+    //    这里整体推到下一个宏任务，确保窗口先出来。
+    setTimeout(() => {
+      (async () => {
       try {
         const { shouldAutoCheck, checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./main/updateChecker');
         const { openUpdateNotificationWindow } = require('./main/windowManager');
@@ -475,7 +644,8 @@ app.whenReady().then(() => {
       } catch (err) {
         console.warn('[Main] Auto update check failed:', err.message);
       }
-    })();
+      })();
+    }, 0);
   });
 
   // ========================================================================
@@ -484,20 +654,22 @@ app.whenReady().then(() => {
   // These require() calls load onnxruntime-node (a native addon) and its
   // transitive dependencies, which can take hundreds of milliseconds.
   //
-  // Wrapped in setImmediate so the did-finish-load event (which is queued
-  // when the renderer finishes loading) can be delivered to the listener
-  // above BEFORE this heavy synchronous block runs. Otherwise the heavy
-  // require() chain would block the event loop and delay did-finish-load
-  // delivery —推迟主窗口 show() 直到 Step 4 完成，浪费数百毫秒。
+  // 现在由 revealMainWindow() → scheduleHeavyStartup() 在**主窗口显示之后**
+  // 触发（见上方说明）。此前这里是 setImmediate()，注释声称"让 did-finish-load
+  // 先投递"，实际做不到：setImmediate 下一个 tick 就跑，而渲染进程加载要
+  // 300–600ms，期间主线程被这段同步代码占满，did-finish-load 的回调根本无法
+  // 投递，reveal 于是被整段阻塞。
   //
   // Safety: the renderer does not invoke any heavy IPC (svs:init,
   // settings:getDMLDevices, etc.) immediately after did-finish-load —
   // those calls are triggered by user interaction, which happens far
-  // later than this setImmediate. Verified in src/renderer/index.js:
-  // post-did-finish-load work is just getAppVersion + initWindowTheme +
-  // hydrateIcons + updateProjectSettings + refreshAll (all light IPC).
+  // later than this. Additionally, preload exposes APP_WAIT_FOR_HEAVY_IPC so
+  // any renderer call that does need a heavy handler awaits it explicitly.
+  // Verified in src/renderer/index.js: post-did-finish-load work is just
+  // getAppVersion + initWindowTheme + hydrateIcons + updateProjectSettings +
+  // refreshAll (all light IPC).
   // ========================================================================
-  setImmediate(() => {
+  function runHeavyStartup() {
     ({ enumerateDMLDevices } = require('./inference/pipeline'));
     ({
       registerSvsIpc,
@@ -529,12 +701,149 @@ app.whenReady().then(() => {
     // These must be registered before the renderer invokes them (which
     // happens on user interaction, far after this setImmediate runs).
     registerSettingsIpc();
+    require('./main/apiIpc').registerApiIpc();
     registerSvsIpc();
     registerPitchMidiIpc();
     registerResourceManagerIpc();
     registerAudioIpc();
     registerModelDownloadIpc();
     registerUpdateIpc();
+
+    // 插件系统 v2：只扫描目录 + 注册贡献（不 spawn 任何进程），冷启动代价是几次
+    // readdir + JSON.parse。运行时按需启动，见 PluginService._ensureRuntime()。
+    try {
+      const { getPluginService } = require('./main/plugins/PluginService');
+      const { registerHandler } = require('./main/plugins/PluginProtocol');
+      const { getLocale } = require('./main/locale');
+
+      // 模型调用面：端点 / 绑定 / 网关 / 授权（设计方案 §12）。初始化失败不能拖垮
+      // 主程序——插件调 models.* 会得到"未启用"，其余功能照常。
+      let modelService = null;
+      try {
+        const nodePath = require('node:path');
+        const { ModelService } = require('./main/models/ModelService');
+        const { createSafeStorageSecrets } = require('./main/models/safeSecrets');
+        const modelDir = nodePath.join(app.getPath('userData'), 'models');
+        modelService = new ModelService({
+          dir: modelDir,
+          secrets: createSafeStorageSecrets({
+            file: nodePath.join(modelDir, 'secrets.enc'),
+            safeStorage: require('electron').safeStorage,
+          }),
+          logger: console,
+          eventSink: (subject, evt) => {
+            // subject 决定事件往哪推。放在这里而不是内核里，是为了让 ModelService
+            // 能脱离 Electron 单测。
+            try {
+              if (subject.startsWith('plugin:')) {
+                getPluginService().runtimes.sendEvent(subject.slice(7), 'models.event', evt);
+              }
+            } catch (err) {
+              console.warn('[models] Event routing failed:', err && err.message);
+            }
+          },
+        });
+        app.on('will-quit', () => {
+          try { modelService.dispose(); } catch (_) { /* 退出路径不抛 */ }
+        });
+        // MCP 的 model.* 工具要用它；bridge 可能已经启动，setter 随时可调。
+        try { require('./main/mcpBridge').setModelService(modelService); } catch (_) { /* 可选依赖 */ }
+        // 设置页与确认窗的通道
+        try {
+          const { registerModelIpc } = require('./main/models/ModelIpc');
+          registerModelIpc(modelService, {
+            // 确认框固定投递主窗口：设置页/下载页都没有监听器，投过去等于没弹。
+            getWindow: () => mainWindow,
+            // "人在不在"另判：任一窗口可见且聚焦就算在，否则按拒绝处理。
+            isAttended: () => require('electron').BrowserWindow.getAllWindows()
+              .some((w) => !w.isDestroyed() && w.isVisible() && w.isFocused()),
+          });
+        } catch (err) {
+          console.error('[models] IPC registration failed:', err && err.message);
+        }
+
+        // 契约 v1 的歌声后端 → builtin:singing.* 端点。插件什么时候加载完成不确定
+        // （可能是这条语句之前，也可能之后），所以既挂回调、也立即试一次；
+        // syncSynthesisEndpoints 是幂等的，多跑一次只是多查一遍表。
+        try {
+          const { syncSynthesisEndpoints } = require('./main/models/synthesisBackend');
+          const { getPluginHost } = require('./main/pluginHost');
+          const syncLocalSinging = () => {
+            try {
+              const r = syncSynthesisEndpoints({ service: modelService, host: getPluginHost(), logger: console });
+              if (r.added || r.removed) console.log('[models] Singing endpoint sync:', r);
+            } catch (err) {
+              console.warn('[models] Singing endpoint sync failed:', err && err.message);
+            }
+          };
+          require('./main/pluginIpc').setAfterPluginsLoaded(syncLocalSinging);
+          syncLocalSinging();
+        } catch (err) {
+          console.warn('[models] Singing backend wiring failed:', err && err.message);
+        }
+      } catch (err) {
+        console.error('[models] Initialization failed:', err && err.message);
+      }
+
+      // 随包分发的内置插件（official-project-import：VOCALOID / Synthesizer V 工程）
+      // 必须在 init() 之前落盘：init 只扫描 userData/plugins，装在它之后的话本次启动
+      // 扫描不到，外部工程格式要等到下一次启动才可用。启动入口按内置清单逐个安装，
+      // 单个失败不拖挂其它插件，也不阻断启动，细节由该函数自行记录。
+      require('./main/plugins/builtinPlugins.js').installBuiltinOnStartup(app.getVersion());
+      const pluginService = getPluginService();
+      pluginService.init({
+        getMainWindow: () => {
+          try {
+            return require('./main/windowManager').getMainWindow();
+          } catch (_) {
+            return null;
+          }
+        },
+        locale: getLocale(),
+        models: modelService,
+      });
+      pluginService.setMenuDirtyHandler(() => {
+        try {
+          require('./main/windowManager').rebuildAppMenu();
+        } catch (err) {
+          console.warn('[plugins] Menu rebuild failed:', err && err.message);
+        }
+      });
+      // 菜单在 buildAppMenuDeferred()（见本文件上方）就建好了，那时插件服务还是
+      // 未初始化状态，buildAppMenu 里的 `if (pluginService.initialized)` 直接跳过了
+      // 插件片段。init 只读写注册表、不触发 onDidChange，于是"已安装的插件冷启动后
+      // 不在菜单里"——要等用户装/停用一次才冒出来。这里补一次重建。
+      //
+      // 无条件重建：即使一个插件都没有，Plugins 菜单本身也是"安装插件"的唯一入口，
+      // 省掉它等于新用户没有任何办法装第一个插件。
+      require('./main/windowManager').rebuildAppMenu();
+      registerHandler({ resolvePluginDir: (id) => pluginService.resolvePluginDir(id) });
+      // 把 pipeline hook 执行器接进推理管线。管线是纯计算模块，只有这里知道
+      // 插件服务的存在；两者不互相 require，避免把 Electron 依赖带进管线单测。
+      try {
+        const { setPipelineHookRunner } = require('./main/plugins/PipelineHooks');
+        setPipelineHookRunner((stage, audio, meta) => pluginService.pipelineHooks.run(stage, audio, meta));
+      } catch (err) {
+        console.warn('[plugins] Pipeline hook wiring failed:', err && err.message);
+      }
+      // 插件贡献的自动化方法进 MCP 方法表。注入的是**函数**而不是快照：
+      // 插件随时可装卸，桥接层每次请求现取，才不会有"装完插件还要重启"的空窗。
+      try {
+        require('./main/mcpBridge').setPluginAutomation({
+          list: () => pluginService.listAutomationMethods(),
+          // options 里带 job 的 signal / onProgress：长任务的取消与进度从桥接层
+          // 一路传到插件进程，中间不换形状。
+          run: (name, params, options) => pluginService.runAutomationMethod(name, params, options),
+        });
+      } catch (err) {
+        console.warn('[plugins] Automation method wiring failed:', err && err.message);
+      }
+      console.log(`[plugins] loaded: ${JSON.stringify(pluginService.registry.stats())}`);
+    } catch (err) {
+      // 插件系统坏了不能拖垮主程序
+      console.error('[plugins] Initialization failed:', err && err.stack ? err.stack : err);
+    }
+
     resolveHeavyIpcReady({ success: true });
 
     // 后台执行一次性硬件检测和设备校验（原位于 did-finish-load 回调，
@@ -558,7 +867,9 @@ app.whenReady().then(() => {
         // compiler 版本），版本错配时创建 OpenVINO NPU 会话会让编译器空指针崩溃
         // （minidump: openvino_intel_npu_compiler.dll 0xC0000005 读 0x0）。
         // 默认关闭，避免检测修复后反而触发崩溃；待版本匹配后再放开。
-        globalThis.__SXS_OPENVINO_NPU_SAFE__ = false;
+        // 自担风险想在自己的机器上试 NPU：启动前设 SXS_OPENVINO_NPU_SAFE=1
+        // （设置页里 NPU 选项会从"暂不可用"变成可选）。
+        globalThis.__SXS_OPENVINO_NPU_SAFE__ = process.env.SXS_OPENVINO_NPU_SAFE === '1';
 
         // DML 设备枚举（一次性，结果缓存复用，运行时不再重复探测）
         const controllers = await ensureGPUInfo();
@@ -649,18 +960,19 @@ app.whenReady().then(() => {
     // By the time the app launches again, the previous install flow has
     // finished (success or cancel), so the temp installer is no longer needed.
     // Using 'all' here reclaims disk immediately instead of waiting 7 days.
-    try {
-      cleanupInstallerTempFiles('all');
-    } catch (err) {
-      console.warn('[Main] Installer temp cleanup failed:', err.message);
-    }
+    // P13: 异步清理，fire-and-forget，不阻塞启动路径（错误只记日志）。
+    Promise.resolve()
+      .then(() => cleanupInstallerTempFiles('all'))
+      .catch((err) => {
+        console.warn('[Main] Installer temp cleanup failed:', err.message);
+      });
 
     // GPU 硬件探测已合并到上方 setImmediate 内（应用完全启动后一次性执行并缓存复用）。
     // Model检查延后执行，不阻塞窗口显示
     checkAndDownloadModels().catch(err => {
       console.warn('[Main] Model check failed:', err.message);
     });
-  });
+  }
   } // end of initMainSteps()
 
   app.on('activate', () => {
@@ -693,12 +1005,30 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   const cleanup = async () => {
     try {
+      // 推理层持久化缓存同步落盘。写入默认 400ms debounce 且 timer 调了
+      // unref()，快速退出会丢掉刚完成的 dummy 校验 / EP 探测结果，下次启动
+      // 又要重跑（TRT 场景是数十秒）。放在最前面，保证后续清理卡住也不丢。
+      try {
+        require('./inference/pipeline/sessionValidationCache').flushSync();
+        require('./inference/winml/winmlDetectionCache').flushSync();
+      } catch (err) {
+        console.warn('[Main] Failed to persist inference cache:', err && err.message);
+      }
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
       resetAudioManagers();
       require('./main/mcpBridge').stopMcpBridge();
+      // 插件：先停 runtime（dispose → kill），再让 IPC handler 一起下线。
+      // 这一步不能省：utilityProcess 里的插件会持有 ORT session 与文件句柄，
+      // 直接 app.exit() 只会让内核回收，日志里看不到"是谁没退干净"。
+      try {
+        const { getPluginService } = require('./main/plugins/PluginService');
+        await getPluginService().disposeAll();
+      } catch (err) {
+        console.warn('[Main] Plugin cleanup failed:', err && err.message);
+      }
       const { getFragmentWindows } = require('./main/windowManager');
       const fragmentWindows = getFragmentWindows();
       for (const id in fragmentWindows) {

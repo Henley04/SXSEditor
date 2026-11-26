@@ -10,6 +10,12 @@ let fragmentAudioSource = null;
 let fragmentAudioData = null;
 let fragmentIsPlaying = false;
 let fragmentIsSynthesizing = false;
+// 合成任务 token：fragmentIsSynthesizing 的所有者。播放 session 被 seek/stop
+// dispose 后，该任务仍可能在跑；只有 token 匹配的任务才有权清合成状态。
+let fragmentSynthesisId = null;
+let fragmentSynthesisProgress = null;
+const _playheadDragWaiters = new Set();
+let fragmentPlayheadDragging = false;
 // 后台自动推理进行中（编辑后自动实时推理）。与 fragmentIsSynthesizing 互斥概念：
 // 它不代表用户主动等待的结果，因此不会禁用播放按钮，也不参与 playFragment 的重入保护。
 let fragmentIsAutoInferring = false;
@@ -30,14 +36,25 @@ let fragmentExclusiveRaf = null;
 let fragmentAudioSettings = null;
 
 let wavFileBuffer = null;
+// 当前歌手的 .sxssinger 标注（singerData / midiNotes / f0Data）。分片编辑器
+// 用它构建 prompt cond；没有标注时保持旧的 prompt cond=0 行为。
+let singerAnnotation = null;
 
 let currentFragment = null;
 let currentProject = null;
+// 当前工程文档的 extSchema（插件对"这份文档里有哪些扩展字段"的声明）。
+// 分片编辑器不解释它，只拿它反查"这条 note 的音素该不该画、画成什么样"。
+// 与 currentProject 分开：project 是可写回的工程对象，extSchema 是只读的呈现依据，
+// 混在一起会让"保存工程"这条路径无意间把声明也写回插件格式里。
+let projectExtSchema = null;
 // 当前分片所属轨道的后端 {type:'sxs'} 或 {type:'plugin', pluginId, kindId, ...}。
 // 由 handleFragmentData() 从 loadFragment payload 的 backend 字段写入；
 // 为 null 表示分片数据还没到（此时一律按内置轨道处理）。
 let trackBackend = null;
 let currentParamMode = PARAM_MODES.MIDI;
+// 音高来源：'auto'（未选择，按曲线内容判定）/ 'manual' / 'score'。
+// 与 fragment.pitchMode 同步；'auto' 时不写回工程（保持字段缺省的语义）。
+let pitchMode = 'auto';
 let notes = [];
 // Snap grid for the fragmentEditor piano roll, in beats per grid cell.
 // 1/4 = quarter note, 1/8 = eighth, 1/16 = sixteenth, 1/32 = thirty-second.
@@ -53,6 +70,8 @@ let pitchCurve = {
   enabled: true,
   anchorPoints: [],
   brushSegments: [],
+  // 派生段（拖动自动曲线 / F0 导入产生）；auto 配置由 normalizePitchCurve 注入
+  bakedSegments: [],
 };
 
 let autoSaveTimer = null;
@@ -180,6 +199,38 @@ export function setFragmentIsPlaying(v) { fragmentIsPlaying = v; }
 export function getFragmentIsSynthesizing() { return fragmentIsSynthesizing; }
 export function setFragmentIsSynthesizing(v) { fragmentIsSynthesizing = v; }
 
+/** 开始/结束合成任务：id 必须是唯一 token（当前直接用 streamId）。 */
+export function beginFragmentSynthesis(id) {
+  fragmentSynthesisId = id;
+  fragmentIsSynthesizing = true;
+  fragmentSynthesisProgress = null;
+}
+export function finishFragmentSynthesis(id) {
+  if (fragmentSynthesisId !== id) return false;
+  fragmentSynthesisId = null;
+  fragmentIsSynthesizing = false;
+  fragmentSynthesisProgress = null;
+  return true;
+}
+export function getFragmentSynthesisId() { return fragmentSynthesisId; }
+export function setFragmentSynthesisProgress(v) { fragmentSynthesisProgress = v; }
+export function getFragmentSynthesisProgress() { return fragmentSynthesisProgress; }
+
+/** 播放头拖拽状态：合成完成时若仍在拖拽，先等最终位置落定再起播。 */
+export function setFragmentPlayheadDragging(v) {
+  if (fragmentPlayheadDragging === v) return;
+  fragmentPlayheadDragging = v;
+  if (!v) {
+    for (const resolve of _playheadDragWaiters) resolve();
+    _playheadDragWaiters.clear();
+  }
+}
+export function isFragmentPlayheadDragging() { return fragmentPlayheadDragging; }
+export function waitForFragmentPlayheadDragEnd() {
+  if (!fragmentPlayheadDragging) return Promise.resolve();
+  return new Promise((resolve) => _playheadDragWaiters.add(resolve));
+}
+
 export function getFragmentIsAutoInferring() { return fragmentIsAutoInferring; }
 export function setFragmentIsAutoInferring(v) { fragmentIsAutoInferring = v; }
 
@@ -218,12 +269,19 @@ export function setFragmentAudioSettings(v) { fragmentAudioSettings = v; }
 
 export function getWavFileBuffer() { return wavFileBuffer; }
 export function setWavFileBuffer(v) { wavFileBuffer = v; }
+export function getSingerAnnotation() { return singerAnnotation; }
+export function setSingerAnnotation(v) { singerAnnotation = v; }
 
 export function getCurrentFragment() { return currentFragment; }
 export function setCurrentFragment(v) { currentFragment = v; }
 
 export function getCurrentProject() { return currentProject; }
 export function setCurrentProject(v) { currentProject = v; }
+
+export function getProjectExtSchema() { return projectExtSchema; }
+export function setProjectExtSchema(v) {
+  projectExtSchema = (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+}
 
 export function getTrackBackend() { return trackBackend; }
 export function setTrackBackend(v) { trackBackend = v; }
@@ -251,6 +309,11 @@ export function setEnvelopes(v) { envelopes = v; }
 
 export function getPitchCurve() { return pitchCurve; }
 export function setPitchCurve(v) { pitchCurve = v; }
+
+export function getPitchMode() { return pitchMode; }
+export function setPitchMode(v) {
+    pitchMode = (v === 'manual' || v === 'score') ? v : 'auto';
+}
 
 export function getAutoSaveTimer() { return autoSaveTimer; }
 export function setAutoSaveTimer(v) { autoSaveTimer = v; }

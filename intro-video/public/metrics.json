@@ -1,0 +1,37 @@
+{
+  "generatedAt": "2026-10-22T22:40:34.712Z",
+  "modelRepo": "syxppp/SoulX-Singer-onnx-directml (fp32)",
+  "executionProvider": "CPU (ONNX Runtime, Linux)",
+  "pipeline": {
+    "modelsLoaded": 9,
+    "initMs": 6341,
+    "synthMs": 88576,
+    "diffusionSteps": 32,
+    "seed": 20250923,
+    "sampler": "stork2"
+  },
+  "song": {
+    "title": "月光落在窗前",
+    "bpm": 96,
+    "noteCount": 7,
+    "lyrics": "月光落在窗前了",
+    "pitches": [
+      60,
+      62,
+      64,
+      62,
+      67,
+      64,
+      60
+    ]
+  },
+  "audio": {
+    "sampleRate": 24000,
+    "samples": 89760,
+    "durationSec": 3.74,
+    "peak": 0.88234,
+    "rms": 0.15683,
+    "bytes": 359084
+  },
+  "realtimeFactor": 23.68
+}

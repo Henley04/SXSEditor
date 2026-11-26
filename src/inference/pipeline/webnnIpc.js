@@ -46,6 +46,11 @@ function requestWebNNOnce({
             `svs-webnn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         let settled = false;
+        // response 与 chunk 走不同 channel：响应到达不代表最后一个 chunk 已到。
+        // 渲染侧在 onChunkComplete 结束后发一条 {final:true,lastSeq} 屏障。
+        let responseReceived = false;
+        let responsePayload = null;
+        let chunkEndSeen = false;
         const responseChannel = `${responsePrefix}:${requestId}`;
         const progressChannel = `${responsePrefix}:progress:${requestId}`;
         const chunkChannel = `${responsePrefix}:chunk:${requestId}`;
@@ -59,17 +64,31 @@ function requestWebNNOnce({
             }
         };
 
-        const responseHandler = (_event, result) => {
-            if (settled) return;
+        const finalize = () => {
+            if (settled || !responseReceived) return;
+            if (onChunkAudio && !chunkEndSeen) return;
             settled = true;
             cleanup();
-            if (onResponse) {
-                const r = onResponse(result);
-                if (r.ok) resolve(r.value);
-                else reject(r.error instanceof Error ? r.error : new Error(String(r.error)));
-            } else {
-                resolve(result);
+            try {
+                if (onResponse) {
+                    const r = onResponse(responsePayload);
+                    if (r && r.ok) resolve(r.value);
+                    else reject(r && r.error instanceof Error ? r.error : new Error(String(r && r.error)));
+                } else {
+                    resolve(responsePayload);
+                }
+            } catch (err) {
+                // 转换异常必须 reject；旧实现在这里抛异常会把 Promise 永久挂起。
+                settled = true;
+                reject(err);
             }
+        };
+
+        const responseHandler = (_event, result) => {
+            if (settled) return;
+            responseReceived = true;
+            responsePayload = result;
+            finalize();
         };
 
         const progressHandler = (_event, data) => {
@@ -82,10 +101,16 @@ function requestWebNNOnce({
 
         // chunk 流式音频回调：渲染进程 vocoder 每完成一个 chunk 即推送
         const chunkHandler = (_event, data) => {
+            if (!onChunkAudio || !data) return;
+            if (data.final) {
+                chunkEndSeen = true;
+                finalize();
+                return;
+            }
             try {
-                if (onChunkAudio && data && data.audio) {
-                    onChunkAudio(data);
-                }
+                if (data.audio) onChunkAudio(data);
+                // 兼容老渲染侧：isLast 也视为流结束。
+                if (data.isLast) { chunkEndSeen = true; finalize(); }
             } catch (_) { /* chunk 回调失败不应影响主流程 */ }
         };
 
@@ -101,8 +126,9 @@ function requestWebNNOnce({
             reject(new Error('WebNN IPC unavailable (ipcMain not available in this context)'));
             return;
         }
-        // handleOnce 只触发一次；超时后若响应到达，cleanup 已移除监听器，无副作用
-        ipcMain.handleOnce(responseChannel, responseHandler);
+        // renderer 用 ipcRenderer.send 回复，必须注册 EventEmitter listener；
+        // handleOnce 属于 invoke 注册表，send 的响应永远到不了这里。
+        ipcMain.once(responseChannel, responseHandler);
         if (onProgress) ipcMain.on(progressChannel, progressHandler);
         if (onChunkAudio) ipcMain.on(chunkChannel, chunkHandler);
 

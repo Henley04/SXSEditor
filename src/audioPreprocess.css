@@ -155,6 +155,7 @@ html, body {
 }
 
 #waveform-container {
+  position: relative;
   flex: 1;
   overflow: hidden;
 }
@@ -166,6 +167,7 @@ html, body {
 }
 
 #midi-container {
+  position: relative;
   flex: 1;
   overflow: hidden;
   min-width: 0;
@@ -351,17 +353,59 @@ html, body {
   font-size: 13px;
 }
 
-.extract-row {
+.extract-subgroup {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.extract-subgroup + .extract-subgroup {
+  margin-top: var(--space-4);
+}
+
+.extract-subgroup-title {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+}
+
+.extract-row {
+  /* 等宽网格：原来 flex + 内容宽度，七个字段宽 106/193/112 不等，标签互相贴。
+     现在每列同宽，控件撑满单元格。 */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   gap: var(--space-3) var(--space-4);
+  align-items: start;
 }
 
 .extract-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 120px;
+  min-width: 0;
+}
+
+/* 占位空态：覆盖在画布上，不拦截鼠标（否则画布上没法拖音符）。 */
+.panel-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+.panel-empty[hidden] {
+  display: none;
 }
 
 .extract-field label {
@@ -388,6 +432,9 @@ html, body {
   padding: var(--space-1) 8px;
   font-size: var(--font-sm);
   min-height: 26px;
+  /* 网格单元格等宽：控件必须撑满，否则同一行里宽度依旧参差 */
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .extract-field select:focus,
@@ -402,4 +449,50 @@ html, body {
   width: 14px;
   height: 14px;
   cursor: pointer;
+}
+
+/* F0 曲线折叠开关（MIDI 编辑器标题栏右侧） */
+.midi-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.f0-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  letter-spacing: 0.3px;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, opacity .15s;
+}
+
+.f0-toggle:hover {
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+
+.f0-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* aria-pressed=false → F0 曲线已收起 */
+.f0-toggle[aria-pressed="false"] {
+  opacity: .55;
+}
+
+.f0-toggle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }

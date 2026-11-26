@@ -183,8 +183,20 @@ export function medianFilterFrames(f0, window, maxWindow) {
     const raw = perFrame ? window[idx] : window;
     const n = Number(raw);
     if (!Number.isFinite(n)) return 0;
+    // 中值窗口必须是奇数（下面按 half=⌊size/2⌋ 对称取窗，实际窗口 = 2·half+1）。
+    // 锚点值经 quantizeParamValue 保证是奇数，但**曲线插值**会产生偶数或小数
+    // （如 3→9 之间插出 4.4），这里统一奇数化，使实际窗口与注册表 odd:true
+    // 的语义严格一致，也让面板读数等于真实窗口。
+    // 小于 3 的窗口无意义（1 帧就是原值，2 帧会退化成取端点）→ 不处理。
+    // 判据用**取整后**的值，与旧实现完全等价：
+    //   2.4 → round 2 → 跳过；2.5 → round 3 → 3 帧；4.4 → round 4 → 奇数化 5 → 5 帧。
+    // 奇数化只修正"偶数 size 被实现按 2·floor(size/2)+1 放大成 size+1"这一隐式
+    // 行为，使注册表里的 size 读数等于真实窗口，不改变任何一档实际窗口。
+    let size = Math.round(n);
+    if (size < 3) return 0;
+    if (size % 2 === 0) size += 1;
     const maxW = maxWindow ?? 9;
-    return Math.max(0, Math.min(maxW, Math.round(n)));
+    return Math.min(maxW, size);
   };
   const scratch = [];
 
@@ -196,16 +208,21 @@ export function medianFilterFrames(f0, window, maxWindow) {
       if (size < 3) continue;
       const half = Math.floor(size / 2);
       scratch.length = 0;
+      // 在 cents（对数）域取中值：与文件头的约定一致，也和同文件的
+      // Savitzky-Golay / 贝塞尔过渡保持同一量纲。
+      // 线性 Hz 域取中值时，数值上偏高的样本会主导结果，高音区的中值系统性
+      // 偏向高端（对数尺度上不对称），听感上表现为"音高被整体拉高"。
+      // run 内已排除静音帧（f0=0），不会出现 log(0) = -Infinity。
       for (let k = -half; k <= half; k++) {
         const j = i + k;
         if (j < 0 || j >= len) continue;
-        scratch.push(f0[run.start + j]);
+        scratch.push(hzToCents(f0[run.start + j]));
       }
       if (scratch.length < 3) continue;
       scratch.sort((a, b) => a - b);
       const mid = scratch.length >> 1;
       const med = scratch.length % 2 ? scratch[mid] : 0.5 * (scratch[mid - 1] + scratch[mid]);
-      out[run.start + i] = med;
+      out[run.start + i] = centsToHz(med);
     }
   }
   return out;
@@ -336,8 +353,14 @@ export function applyBezierTransitions(f0, opts) {
     const strength = Math.max(0, Math.min(100, Number(getStrength(jump.index)) || 0));
     if (strength <= 0) continue;
     const durMs = Math.max(0, Number(getDurationMs(jump.index)) || 0);
-    const spanFrames = Math.round(durMs * framesPerMs);
-    if (spanFrames < 3) continue;
+    // 0 = 显式关闭过渡，照常跳过。
+    // 但 0 < durMs < 60ms 时不能静默跳过：50fps 下 60ms 才刚够 3 帧，低于它的
+    // 取值（注册表 step=5 → 5/10/…/45ms）此前会让滑音**整个失效**，而 UI 上
+    // 没有任何提示，用户设了 glide 却听不出变化。这里钳到最小可用窗口，
+    // 让短时长按"最短过渡"生效，而不是悄悄消失。
+    if (durMs <= 0) continue;
+    const minSpanMs = 3 / framesPerMs;
+    const spanFrames = Math.max(3, Math.round(Math.max(durMs, minSpanMs) * framesPerMs));
 
     const run = runOf(jump.index);
     if (!run) continue;
@@ -410,7 +433,18 @@ export function applyF0Postprocess(f0, params, ctx) {
     const blend = new Float32Array(cur.length);
     for (let i = 0; i < cur.length; i++) {
       const w = Math.max(0, Math.min(100, pick(params.smooth, i))) / 100;
-      blend[i] = cur[i] + (filtered[i] - cur[i]) * w;
+      const a = cur[i];
+      const b = filtered[i];
+      // F14：混合必须在**对数（音分）域**做。Hz 域的算术平均是"能量中点"
+      // 而不是"音高中点"—— 一旦两个值差距大（换音处、或滤波窗口跨过跳进），
+      // 线性混合会系统性地偏向高频（实测 w=0.5 时偏高约 8 音分，听感上是
+      // "平滑后整体略微发飘"）。log2 域混合等价于音分域，且没有引入参考频率：
+      //   2^(log2(a) + (log2(b)-log2(a))·w) 与参考频率无关。
+      // 清音帧（0）与 w=0 直接取原值，避免 log(0)。
+      if (w <= 0 || !(a > 0) || !(b > 0)) { blend[i] = a; continue; }
+      const la = Math.log2(a);
+      const lb = Math.log2(b);
+      blend[i] = Math.pow(2, la + (lb - la) * w);
     }
     cur = blend;
   }

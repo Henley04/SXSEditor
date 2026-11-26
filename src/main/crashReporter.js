@@ -96,9 +96,14 @@ function rotateDumps() {
 }
 
 function writeLog(level, msg) {
-  if (!currentLogStream || !currentLogFileName) return;
   const ts = new Date().toISOString();
   const line = `[${ts}] [${level}] ${msg}\n`;
+  // 流不可用（FATAL 收尾窗口、重开失败）时回退到同步追加，避免日志静默丢失。
+  if (!currentLogStream || !currentLogFileName) {
+    if (!currentLogFileName) return;
+    try { fs.appendFileSync(path.join(LOG_DIR, currentLogFileName), line); } catch (_) {}
+    return;
+  }
   try { currentLogStream.write(line); } catch (_) {}
 }
 
@@ -133,6 +138,21 @@ function patchConsole() {
   }
 }
 
+// 打开（或重开）当前会话日志流：追加模式、同一文件。
+// FATAL 后 currentLogStream 会被 end()，进程又按产品策略继续运行，
+// 必须重新打开，否则之后所有异步日志都会丢失。
+function openLogStream() {
+  if (!currentLogFileName) return;
+  try {
+    currentLogStream = fs.createWriteStream(path.join(LOG_DIR, currentLogFileName), { flags: 'a' });
+    // 避免流 error 事件无监听者升级成 uncaughtException，进而在 handleFatal 里递归。
+    currentLogStream.on('error', () => { currentLogStream = null; });
+  } catch (e) {
+    currentLogStream = null;
+    try { process.stderr.write(`[crashReporter] Failed to open log: ${e.message}\n`); } catch (_) {}
+  }
+}
+
 function handleFatal(err, kind) {
   try {
     writeLogSync('FATAL', `[${kind}] ${err && err.stack || err}`);
@@ -141,6 +161,8 @@ function handleFatal(err, kind) {
       try { currentLogStream.end(); } catch (_) {}
       currentLogStream = null;
     }
+    // 进程不退出（既有产品策略），立刻重开同一日志文件，保证后续日志不丢。
+    openLogStream();
     // Log latest dump info so it shows up adjacent to the fatal entry.
     const dumps = listDumps();
     if (dumps.length > 0) {
@@ -207,16 +229,35 @@ function attachRendererErrorHandler(webContents) {
     });
   } catch (_) {}
   try {
-    webContents.on('console-message', (_event, details) => {
-      const { level, message, lineNumber, sourceId } = details;
-      // Electron console-message levels: 0=verbose, 1=info, 2=warning, 3=error.
-      // Only persist warnings and errors to keep log size manageable.
-      if (level >= 2) {
-        const levels = ['LOG', 'INFO', 'WARN', 'ERROR'];
-        const lv = levels[level] || 'LOG';
-        const label = getRendererLabel(webContents);
-        writeLog(lv, `[Renderer:${label}] ${message} (${sourceId}:${lineNumber})`);
+    webContents.on('console-message', (event, ...legacy) => {
+      // Electron 45 实际回调 (event, level:number, message, line, sourceId)，
+      // 新版文档描述的是 event.params = { level:'info'|'warning'|'error'|'debug', ... }。
+      // 两种都要兼容：旧写法把第二个参数当对象解构，level=undefined，
+      // 导致渲染进程日志一条都落不了盘。
+      let level;
+      let message;
+      let lineNumber;
+      let sourceId;
+      const params = event && event.params;
+      if (params && typeof params === 'object') {
+        ({ level, message, lineNumber, sourceId } = params);
+      } else {
+        [level, message, lineNumber, sourceId] = legacy;
       }
+      // debug/verbose=0, info=1, warning=2, error=3（字符串形式同理）。
+      // 全部落盘：渲染进程的调试输出（含 [FragPlay] / 播放诊断）都在这里。
+      let lv;
+      if (typeof level === 'string') {
+        if (level === 'debug') lv = 'DEBUG';
+        else if (level === 'info') lv = 'INFO';
+        else if (level === 'warning') lv = 'WARN';
+        else if (level === 'error') lv = 'ERROR';
+        else lv = 'INFO';
+      } else {
+        lv = ['DEBUG', 'INFO', 'WARN', 'ERROR'][level] || 'INFO';
+      }
+      const label = getRendererLabel(webContents);
+      writeLog(lv, `[Renderer:${label}] ${message} (${sourceId}:${lineNumber})`);
     });
   } catch (_) {}
 }
@@ -340,11 +381,7 @@ function initDeferred() {
 
   // Open log file for this session (append mode; one file per launch).
   currentLogFileName = `sxseditor-${timestamp()}-${process.pid}.log`;
-  try {
-    currentLogStream = fs.createWriteStream(path.join(LOG_DIR, currentLogFileName), { flags: 'a' });
-  } catch (e) {
-    try { process.stderr.write(`[crashReporter] Failed to open log: ${e.message}\n`); } catch (_) {}
-  }
+  openLogStream();
 
   logBootBanner();
 

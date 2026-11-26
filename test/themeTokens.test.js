@@ -110,8 +110,11 @@ describe('themeTokens - 内置主题完整性', () => {
             expect(theme.tokens['--fg-primary']).to.equal('#e0e0f0');
         });
 
-        it('--accent 应为 #5b8def（蓝紫主色）', () => {
-            expect(theme.tokens['--accent']).to.equal('#5b8def');
+        it('--accent 应为 #3a68cc（蓝紫主色，可承载白字）', () => {
+            // 原来是 #5b8def：白字压在上面只有 3.23:1（见 --vram-current-badge
+            // 这类"强调底 + fg-on-accent 文字"的组件）。填充色必须能承载它自己的
+            // 前景色，所以压深到 5.21:1；亮色版本留在 --accent-fg 里给文字用。
+            expect(theme.tokens['--accent']).to.equal('#3a68cc');
         });
 
         it('--color-ink-900 应为 #14141f', () => {

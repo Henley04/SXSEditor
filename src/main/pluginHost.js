@@ -150,7 +150,7 @@ const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
 /**
  * 默认日志出口：统一 `[plugins]` 前缀，便于 crashReporter 的会话日志检索。
  * @param {string} level
- * @param {string} scope 形如 `example-concat`
+ * @param {string} scope 插件 id
  * @param {string} message
  */
 function defaultLogSink(level, scope, message) {
@@ -165,7 +165,7 @@ function defaultLogSink(level, scope, message) {
  * 只在调用方未注入 pluginsDir 时才 require('electron')，保证纯 Node 可用。
  */
 function defaultPluginsDir() {
-  // eslint-disable-next-line global-require
+   
   const { app } = require('electron');
   return path.join(app.getPath('userData'), 'plugins');
 }
@@ -173,7 +173,7 @@ function defaultPluginsDir() {
 /** 宿主版本（传给插件 ctx.hostVersion）。 */
 function defaultHostVersion() {
   try {
-    // eslint-disable-next-line global-require
+     
     const { app } = require('electron');
     const v = app.getVersion();
     return typeof v === 'string' && v ? v : '0.0.0';
@@ -185,7 +185,7 @@ function defaultHostVersion() {
 /** ctx.getSetting() 的默认实现：读主进程设置（失败返回 undefined）。 */
 function defaultGetSetting(key) {
   try {
-    // eslint-disable-next-line global-require
+     
     const { loadSettings } = require('./settings');
     const settings = loadSettings();
     return settings ? settings[key] : undefined;
@@ -228,10 +228,12 @@ function toPluginError(err, code) {
  * @param {string} label
  * @returns {Promise<T>}
  */
-function withTimeout(promise, ms, label) {
+function withTimeout(promise, ms, label, onTimeout) {
   let timer = null;
   const guard = new Promise((_resolve, reject) => {
     timer = setTimeout(() => {
+      // 超时只是放弃等待，插件 Promise 可能还在跑；必须同时给协作式取消信号。
+      if (typeof onTimeout === 'function') onTimeout();
       reject(new Error(`插件调用超时：${label} 超过 ${ms}ms 未返回`));
     }, ms);
   });
@@ -265,10 +267,6 @@ function isInside(base, child) {
 }
 
 /**
- * 读取并解析 manifest.json。
- * @param {string} manifestPath
- */
-/**
  * A1：插件 worker 的资源上限。
  *
  * worker_threads 与宿主共享进程地址空间（每个线程有独立 isolate，但共享进程
@@ -283,6 +281,10 @@ const PLUGIN_WORKER_RESOURCE_LIMITS = Object.freeze({
   stackSizeMb: 4,
 });
 
+/**
+ * 读取并解析 manifest.json。
+ * @param {string} manifestPath
+ */
 function readManifest(manifestPath) {
   const raw = fs.readFileSync(manifestPath, 'utf8');
   try {
@@ -400,11 +402,11 @@ function validateModule(mod, manifestValue) {
   // getVoices 缺失只降级不拒绝：插件仍可作为合成后端使用，UI 不显示音色列表即可。
   if (capabilities.voices && typeof mod.getVoices !== 'function') {
     capabilities.voices = false;
-    console.warn(`[plugins] [${manifestValue.id}] capabilities.voices=true 但没有 getVoices()，已降级为 false`);
+    console.warn(`[plugins] [${manifestValue.id}] capabilities.voices=true but no getVoices() found, downgraded to false`);
   }
   if (!capabilities.synthesize && typeof mod.synthesize !== 'function') {
     // 纯音色/纯面板插件：允许存在，只是不能当合成后端。
-    console.warn(`[plugins] [${manifestValue.id}] 未声明 synthesize 能力，将不会作为合成后端`);
+    console.warn(`[plugins] [${manifestValue.id}] synthesize capability not declared, will not be used as a synthesis backend`);
   }
   if (mod.initialize !== undefined && typeof mod.initialize !== 'function') {
     return { ok: false, error: 'initialize 必须是函数' };
@@ -500,7 +502,7 @@ function findNonFiniteIndex(arr, maxScan) {
   const limit = Math.min(arr.length, Number.isFinite(maxScan) ? maxScan : arr.length);
   for (let i = 0; i < limit; i++) {
     const v = arr[i];
-    // eslint-disable-next-line no-self-compare
+     
     if (v !== v || v === Infinity || v === -Infinity) return i;
   }
   return -1;
@@ -1153,7 +1155,7 @@ function createPluginHost(options) {
    * @returns {Promise<object>} 插件元数据（name/version/capabilities/trackKinds/has）
    */
   async function spawnWorker(record) {
-    // eslint-disable-next-line global-require
+     
     const { Worker } = require('node:worker_threads');
     const entry = resolveWorkerEntry();
     if (!entry) {
@@ -1294,6 +1296,8 @@ function createPluginHost(options) {
         record.pending.delete(callId);
         record.consecutiveTimeouts = (record.consecutiveTimeouts || 0) + 1;
         const exhausted = record.consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS;
+        // 让插件侧通过 abortSignal / host.isCancelled() 感知调用已结束。
+        if (typeof opts.onTimeout === 'function') opts.onTimeout();
         // ★ 真正的抢占：中止另一个线程里的那段正在执行的插件代码
         void terminateWorker(record);
         if (exhausted) {
@@ -1451,7 +1455,7 @@ function createPluginHost(options) {
       }
 
       // ---- in-process：插件代码直载进主进程（见文件头的"无法抢占"说明）----
-      // eslint-disable-next-line global-require
+       
       const mod = require(entry);
       const checkedModule = validateModule(mod, checkedManifest.value);
       if (!checkedModule.ok) {
@@ -1786,18 +1790,20 @@ function createPluginHost(options) {
         // 在调用开始前一次性把配额内的 id 分配好下发。
         const ticketPool = [];
         for (let i = 0; i < MAX_TICKETS_PER_CALL; i++) ticketPool.push(`pt-${++ticketSeq}`);
-        raw = await callInWorker(record, 'synthesize', [pluginRequest, wire.hostSlot()], {
-          timeoutMs,
-          call,
-          ticketPool,
-        });
+      raw = await callInWorker(record, 'synthesize', [pluginRequest, wire.hostSlot()], {
+        timeoutMs,
+        call,
+        ticketPool,
+        onTimeout: () => controller.abort(),
+      });
       } else {
         // ⚠️ in-process：这个 withTimeout 只能拦住"插件异步不返回"，拦不住同步忙等
-        raw = await withTimeout(
-          record.module.synthesize(pluginRequest, host),
-          timeoutMs,
-          `${pluginId}.synthesize`,
-        );
+      raw = await withTimeout(
+        record.module.synthesize(pluginRequest, host),
+        timeoutMs,
+        `${pluginId}.synthesize`,
+        () => controller.abort(),
+      );
       }
       const normalized = normalizeSynthResult(raw, sampleRate);
       return {

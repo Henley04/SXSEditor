@@ -1282,7 +1282,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
 
     it('should use mel2token mapping for notePitchSeq when available', () => {
       // Simple mel2token: frame 0 → token 1 (skip token 0 = PAD), frame 1 → token 2, etc.
-      const numFrames = 4;
+      const _numFrames = 4;
       const mel2token = new Int32Array([1, 2, 3, 0]);
       const sequences = {
         f0Hz: new Float32Array([440, 440, 440, 440]),

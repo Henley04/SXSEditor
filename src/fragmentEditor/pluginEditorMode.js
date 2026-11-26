@@ -37,14 +37,15 @@ export const READONLY_CLASS = 'plugin-readonly';
 export const PANEL_NODES = Object.freeze({
   // 钢琴卷帘：左键拖动/框选/双击改歌词全在这块画布上
   pianoRoll: ['#left-sidebar', '#right-content', '#btn-param-MIDI'],
-  // 音高曲线：工具栏的 Pitch 切页 + Pitch 专属工具条
-  pitch: ['#btn-param-Pitch', '#pitch-tools', '#pitch-tools-divider'],
-  // 音素 / 歌词（inspector 分区）
-  phoneme: ['#phoneme-section'],
+  // 音高曲线：工具栏的 Pitch 切页 + inspector 里的音高曲线分区
+  pitch: ['#btn-param-Pitch', '#pitch-curve-section'],
+  // 音素 / 歌词：原先的占位分区（#phoneme-section）从未接线，已移除。
+  // 契约里的面板名保留，选择器留空 —— 插件照旧可以声明，只是没有对应 DOM 可关。
+  phoneme: [],
   // 音量 / 声像包络（底部 lane 区）
   envelope: ['#param-panel'],
-  // 侧边参数面板（inspector 里的音符属性）
-  params: ['#note-props-section'],
+  // 侧边参数面板：原 #note-props-section（音符音高/起始/时长/歌词）同样是死占位，已移除。
+  params: [],
 });
 
 /** 等后端字段到位的最大时间（毫秒）。分片数据没到就保持默认形态。 */
@@ -269,10 +270,18 @@ function truncateExternalText(text, max) {
  * 内置后端在这条路上第一行就 return，除一次 60ms 的轮询外零开销，
  * 也不会阻塞窗口首帧（全程 await，不占渲染）。
  */
+/**
+ * 等待分片数据里的 backend 到达，供形态裁剪与推理管线初始化共用同一次等待语义。
+ * 返回 null 表示超时未拿到，调用方应按"内置轨道"保守处理，避免误伤内置工程。
+ */
+export async function waitForTrackBackend() {
+  const { getTrackBackend } = await import('./state.js');
+  return waitForBackend(getTrackBackend);
+}
+
 export async function applyPluginEditorLayout() {
   try {
-    const { getTrackBackend } = await import('./state.js');
-    const backend = await waitForBackend(getTrackBackend);
+    const backend = await waitForTrackBackend();
     if (isBuiltinBackend(backend?.type)) return; // 内置轨道：保持原样
 
     const { ensurePluginCatalog, findTrackKind } = await import('../renderer/pluginBackend.js');
@@ -286,7 +295,7 @@ export async function applyPluginEditorLayout() {
     await applyEditorLayout(layout, { kind, backend });
   } catch (err) {
     // 形态裁剪是"锦上添花"，失败绝对不能让分片编辑器打不开
-    console.warn('[plugins] 应用插件编辑器形态失败，已回退到默认形态：', err && err.message ? err.message : err);
+    console.warn('[plugins] Failed to apply plugin editor layout, reverted to default:', err && err.message ? err.message : err);
   }
 }
 

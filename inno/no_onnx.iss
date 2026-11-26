@@ -56,6 +56,13 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#MyAppRoot}\out\SXSEditor-win32-x64\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyAppRoot}\out\SXSEditor-win32-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
+; VC++ 2015-2022 Redistributable (x64). CI downloads vc_redist.x64.exe into
+; inno\ before compiling ISCC. skipifsourcedoesntexist keeps local/source builds
+; (without the downloaded binary) compiling fine — only release installers
+; bundle it. It is installed only when a required CRT DLL is missing (see the
+; NeedVcRedist Check below), and removed from {tmp} automatically after setup.
+; Redistribution license: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Registry]
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}\OpenWithProgids"; ValueType: string; ValueName: "{#MyAppAssocKey}"; ValueData: ""; Flags: uninsdeletevalue
@@ -67,6 +74,25 @@ Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\shell\open\command"; Value
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+[Code]
+// 仅当 VC++ 2015-2022 运行库缺 DLL 且 redist 已随包下载时才静默安装。
+// 用 {sys}（64 位安装模式下即 System32）探测，和 app 内 vcRuntime.js 同一组
+// 三枚 DLL。已安装且版本足够时 vc_redist 自身也会快速返回，不强制重启。
+function NeedVcRedist(): Boolean;
+var
+  RedistPath: String;
+begin
+  RedistPath := ExpandConstant('{tmp}\vc_redist.x64.exe');
+  Result := FileExists(RedistPath) and (
+    (not FileExists(ExpandConstant('{sys}\vcruntime140.dll'))) or
+    (not FileExists(ExpandConstant('{sys}\vcruntime140_1.dll'))) or
+    (not FileExists(ExpandConstant('{sys}\msvcp140.dll')))
+  );
+end;
+
 [Run]
+; 关键：VC++ 运行库必须在启动应用之前装好，否则首个原生模块加载仍会失败。
+; /quiet /norestart 静默安装；skipifdoesntexist 兼容无 redist 的本地构建。
+Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ 2015-2022 Runtime (x64)..."; Check: NeedVcRedist; Flags: waituntilterminated skipifdoesntexist
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 

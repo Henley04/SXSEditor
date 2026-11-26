@@ -10,8 +10,10 @@
         <!-- ==================== Sidebar ==================== -->
         <nav class="settings-sidebar">
             <div class="settings-search-wrap">
-                    <input id="settingsSearch" type="search" placeholder="搜索设置" aria-label="搜索设置">
-                    <div id="settingsSearchEmpty" class="settings-search-empty hidden">没有匹配的设置</div>
+                    <input id="settingsSearch" type="search" placeholder="搜索设置" aria-label="搜索设置"
+                           data-i18n-placeholder="settings.searchPlaceholder"
+                           data-i18n-aria-label="settings.searchPlaceholder">
+                    <div id="settingsSearchEmpty" class="settings-search-empty hidden" data-i18n="settings.searchEmpty">没有匹配的设置</div>
                 </div>
                 <div class="sidebar-nav">
                 <div class="sidebar-category" data-i18n="settings.catGeneral">通用</div>
@@ -20,6 +22,9 @@
                 </div>
                 <div class="sidebar-item" data-target="section-theme">
                     <span data-i18n="settings.theme.title">主题</span>
+                </div>
+                <div class="sidebar-item" data-target="section-system">
+                    <span data-i18n="settings.systemIntegration">系统集成</span>
                 </div>
 
                 <div class="sidebar-category" data-i18n="settings.catInference">推理</div>
@@ -54,6 +59,12 @@
                 <div class="sidebar-item" data-target="section-model">
                     <span data-i18n="settings.modelManagement">模型管理</span>
                 </div>
+                <div class="sidebar-item" data-target="section-model-endpoints">
+                    <span data-i18n="models.navEndpoints">模型端点</span>
+                </div>
+                <div class="sidebar-item" data-target="section-model-access">
+                    <span data-i18n="models.navAccess">访问控制</span>
+                </div>
 
                 <div class="sidebar-category" data-i18n="update.section">更新</div>
                 <div class="sidebar-item" data-target="section-update">
@@ -72,13 +83,100 @@
 
         <!-- ==================== Content ==================== -->
         <main class="settings-content">
+            <!-- 模型端点：网络位置 + 任务绑定。密钥只写不读。 -->
+            <div class="settings-section hidden" id="section-model-endpoints">
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.endpointsTitle">模型端点</div>
+                    <p class="setting-hint" data-i18n="models.endpointsHint">端点是一个网络位置加一把钥匙。密钥只进不出，写入后不会回显。</p>
+                    <div id="modelEndpointList" class="model-list"></div>
+                    <div class="model-toolbar">
+                        <button type="button" id="modelEndpointAdd" class="btn-secondary" data-i18n="models.addEndpoint">添加端点</button>
+                        <span id="modelEndpointStatus" class="model-status" role="status"></span>
+                    </div>
+                </div>
+
+                <form id="modelEndpointForm" class="setting-group model-form hidden" autocomplete="off">
+                    <div class="setting-group-title" data-i18n="models.formTitle">端点详情</div>
+                    <div class="model-form-grid">
+                        <label class="model-field">
+                            <span data-i18n="models.fTitle">名称</span>
+                            <input id="mf-title" type="text" maxlength="64" required>
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fAdapter">协议</span>
+                            <select id="mf-adapter">
+                                <option value="openai-compatible" data-i18n="settings.opt.protocolOpenai">OpenAI 兼容</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="local-process" data-i18n="settings.opt.protocolLocal">本地进程</option>
+                            </select>
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fProvider">服务商</span>
+                            <input id="mf-provider" type="text" maxlength="32" placeholder="openai / ollama / custom">
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fBaseUrl">Base URL</span>
+                            <input id="mf-baseurl" type="url" placeholder="https://api.example.com/v1">
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fSecret">密钥</span>
+                            <input id="mf-secret" type="password" autocomplete="new-password" data-i18n-placeholder="models.fSecretPlaceholder" placeholder="留空则保持不变">
+                        </label>
+                        <label class="model-field">
+                            <span data-i18n="models.fLocality">网络位置</span>
+                            <select id="mf-locality">
+                                <option value="" data-i18n="models.localityAuto">自动判断</option>
+                                <option value="device" data-i18n="models.localityDevice">本机（免确认）</option>
+                                <option value="lan" data-i18n="models.localityLan">局域网（视为云端）</option>
+                                <option value="cloud" data-i18n="models.localityCloud">云端</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="model-form-actions">
+                        <button type="submit" class="btn-primary" data-i18n="models.save">保存</button>
+                        <button type="button" id="modelEndpointCancel" class="btn-secondary" data-i18n="models.cancel">取消</button>
+                    </div>
+                </form>
+
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.bindingsTitle">任务绑定</div>
+                    <p class="setting-hint" data-i18n="models.bindingsHint">每个任务选一个默认端点。调用方只说要什么，不指定用哪个。</p>
+                    <div id="modelBindingList" class="model-list"></div>
+                </div>
+            </div>
+
+            <!-- 访问控制：谁能用哪个端点 -->
+            <div class="settings-section hidden" id="section-model-access">
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.accessTitle">访问控制</div>
+                    <label class="model-check">
+                        <input type="checkbox" id="modelLocalFree">
+                        <span data-i18n="models.localFreeLabel">本地端点免确认</span>
+                    </label>
+                    <p class="setting-hint" data-i18n="models.localFreeHint">只对判定为「本机」的端点生效。局域网服务器默认仍要确认——那台机器可能计费。</p>
+                </div>
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.aclTitle">已授权的调用方</div>
+                    <div id="modelAclList" class="model-list"></div>
+                </div>
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.tokensTitle">MCP 客户端</div>
+                    <p class="setting-hint" data-i18n="models.tokensHint">「跳过所有确认」只对该 token 生效，不影响插件。打开后该 token 可调用任意端点，不再询问。</p>
+                    <div id="modelTokenList" class="model-list"></div>
+                </div>
+                <div class="setting-group">
+                    <div class="setting-group-title" data-i18n="models.auditTitle">最近调用</div>
+                    <div id="modelAuditList" class="model-list model-audit"></div>
+                </div>
+            </div>
+
 
             <!-- Language -->
             <div class="settings-section" id="section-language">
                 <div class="setting-group">
                     <label for="languageSelect" data-i18n="settings.language">语言</label>
                     <select id="languageSelect">
-                        <option value="zh-CN">中文 (简体)</option>
+                        <option value="zh-CN" data-i18n="settings.opt.langZh">中文 (简体)</option>
                         <option value="en">English</option>
                     </select>
                     <p class="hint" data-i18n="settings.languageHint">界面显示语言，更改后需重启应用生效。</p>
@@ -101,6 +199,18 @@
                 </div>
             </div>
 
+            <!-- System integration: OS-level file associations for plugin formats -->
+            <div class="settings-section hidden" id="section-system">
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="pluginFileAssociations">
+                        <span class="radio-label" data-i18n="settings.pluginFileAssociations">插件文件格式的系统关联</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.pluginFileAssociationsHint">开启后，插件声明的扩展名（例如 .demo）会写进系统注册表：应用未启动时双击这类文件也能拉起 SXSEditor。仅在安装版（打包后）的 Windows 上生效。</p>
+                    <p class="hint" data-i18n="settings.pluginFileAssociationsNote">关闭时会移除应用写过的全部插件关联。已被其它程序占用的默认关联不会被强行改写。</p>
+                </div>
+            </div>
+
             <!-- Inference Hardware -->
             <div class="settings-section hidden" id="section-inference">
                 <div class="setting-group">
@@ -108,15 +218,48 @@
                     <select id="inferenceProvider">
                         <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">本机推理</option>
                         <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">WebNN（已弃用）</option>
+                        <option value="api" data-i18n="settings.inferenceProviderApi">API（远程服务）</option>
                     </select>
                     <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用本机推理运行时。推荐 Windows ML，若不可用则回退 DirectML/CPU。</p>
                 </div>
+
+                <!-- API Provider 管理：仅当「推理系统 = API」时显示 -->
+                <div class="setting-group hidden api-provider-group" id="apiProviderGroup">
+                    <label data-i18n="settings.apiProviderSection">API 服务</label>
+                    <div class="api-provider-bar">
+                        <select id="apiProviderSelect" aria-label="API Provider"></select>
+                        <button type="button" id="apiProviderNewBtn" class="api-btn" data-i18n="settings.apiProviderNew">新建 API Provider</button>
+                    </div>
+                    <p class="hint" id="apiProviderModeHint"></p>
+                    <p class="hint" id="apiProviderFreeHint" data-i18n="settings.apiProviderFreeHint">Free API By SXSEditor 连接到 ModelScope 创空间公开入口，完全免费、无需任何密钥或 Token，开箱即用。仅受速率限制（每分钟 20 次、每天 500 次，按 IP）；触发限流或鉴权错误时会明确提示。</p>
+                    <div class="api-provider-form">
+                        <label for="apiProviderName"><span data-i18n="settings.apiProviderName">名称</span></label>
+                        <input type="text" id="apiProviderName" maxlength="64" autocomplete="off" placeholder="My API">
+                        <label for="apiProviderUrl"><span data-i18n="settings.apiProviderUrl">API 网址</span></label>
+                        <input type="text" id="apiProviderUrl" maxlength="512" autocomplete="off" spellcheck="false" data-i18n-placeholder="settings.apiProviderUrlPlaceholder" placeholder="https://your-api.example.com">
+                        <label for="apiProviderKey"><span data-i18n="settings.apiProviderKey">密钥（可选）</span></label>
+                        <input type="password" id="apiProviderKey" maxlength="512" autocomplete="new-password" data-i18n-placeholder="settings.apiProviderKeyPlaceholderEmpty" placeholder="可留空；服务端要求鉴权时再填写">
+                        <div class="api-provider-actions">
+                            <button type="button" id="apiProviderSaveBtn" class="api-btn api-btn-primary" data-i18n="settings.apiProviderSave">保存</button>
+                            <button type="button" id="apiProviderUseBtn" class="api-btn" data-i18n="settings.apiProviderUse">设为当前</button>
+                            <button type="button" id="apiProviderTestBtn" class="api-btn" data-i18n="settings.apiProviderTest">测试连接</button>
+                            <button type="button" id="apiProviderResetBtn" class="api-btn" data-i18n="settings.apiProviderResetBuiltin">恢复内置默认</button>
+                            <button type="button" id="apiProviderDeleteBtn" class="api-btn api-btn-danger" data-i18n="settings.apiProviderDelete">删除</button>
+                        </div>
+                        <!-- 所有结果（含 429 限流 / 401 鉴权 / 网络错误）都在此显式显示 -->
+                        <div id="apiProviderStatus" class="api-provider-status" role="alert" aria-live="polite"></div>
+                        <p class="hint hint-warning hidden" id="apiProviderSecretsWarning" data-i18n="settings.apiProviderSecretsWarning">本机未启用系统密钥环，密钥将以明文存储于本机配置文件。</p>
+                        <p class="hint"><a id="apiProviderDocsLink" href="https://henley04.github.io/SXSEditor/api-standard.html" target="_blank" rel="noopener" data-i18n="settings.apiProviderDocs">API 标准（端点 / 参数 / 错误码）</a></p>
+                    </div>
+                </div>
+
                 <div class="setting-group" id="nativeBackendGroup">
                     <label for="nativeInferenceBackend" data-i18n="settings.nativeInferenceBackend">本机执行后端</label>
                     <select id="nativeInferenceBackend">
                         <option value="auto" data-i18n="settings.nativeBackendAuto">自动（Windows ML 优先）</option>
                         <option value="winml" data-i18n="settings.nativeBackendWinml">Windows ML</option>
                         <option value="dml" data-i18n="settings.nativeBackendDml">DirectML</option>
+                        <option value="cpu" data-i18n="settings.nativeBackendCpu">CPU（全部模型）</option>
                     </select>
                     <p class="hint" id="nativeBackendHint" data-i18n="settings.nativeBackendAutoHint">优先使用 Windows ML 可用 EP，失败时自动回退到 DirectML。</p>
                 </div>
@@ -126,7 +269,7 @@
                         <span id="currentHardwareText" data-i18n="settings.notInitialized">未初始化</span>
                     </div>
                 </div>
-                <div class="setting-group">
+                <div class="setting-group" id="deviceModeGroup">
                     <label data-i18n="settings.deviceMode">设备模式</label>
                     <div class="device-mode-radios">
                         <label class="device-mode-radio">
@@ -151,7 +294,7 @@
                     <select id="inferenceDevice" disabled>
                         <option value="auto" data-i18n="settings.autoSelect">自动选择</option>
                     </select>
-                    <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于推理的硬件设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。NPU 设备通过 WebNN 后端推理。</p>
+                    <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于推理的硬件设备。Windows ML 下按「执行提供者 EP + 硬件」分别列出（如 OpenVINO 的 GPU / CPU / NPU），自动模式优先 NVIDIA TensorRT-RTX；DirectML 下为显卡适配器，自动模式优先独显。</p>
                 </div>
                 <div class="setting-group" id="webnnStatusGroup">
                     <div class="webnn-status-bar">
@@ -190,9 +333,9 @@
                 <div class="settings-subgroup">
                     <p class="subgroup-label" data-i18n="settings.subgroupBasic">基础参数</p>
                     <div class="setting-group">
-                        <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">16</span></label>
-                        <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
-                        <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
+                        <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">32</span></label>
+                        <input type="range" id="previewDiffSteps" min="4" max="64" value="32" step="4">
+                        <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。默认 32 步，与导出一致。</p>
                     </div>
                     <div class="setting-group">
                         <label for="previewSampler"><span data-i18n="settings.sampler">求解器</span></label>
@@ -210,8 +353,8 @@
                         <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
                     </div>
                     <div class="setting-group">
-                        <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.70</span></label>
-                        <input type="range" id="previewCfgRescale" min="0" max="1" value="0.70" step="0.05">
+                        <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
+                        <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
                         <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
                     </div>
                 </div>
@@ -227,9 +370,10 @@
                         </select>
                         <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。</p>
                     </div>
-                    <div class="setting-group" id="previewCfgStrengthStartGroup">
+                    <div class="setting-group hidden" id="previewCfgStrengthStartGroup">
                         <label for="previewCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
-                        <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
+                        <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动"
+                               data-i18n-placeholder="settings.autoPlaceholder">
                         <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。</p>
                     </div>
                     <div class="setting-group hidden" id="previewCfgScheduleKeyframesGroup">
@@ -254,7 +398,7 @@
                     </div>
                     <div class="setting-group">
                         <label class="device-mode-radio">
-                            <input type="checkbox" id="previewDiffStepChunkEnabled">
+                            <input type="checkbox" id="previewDiffStepChunkEnabled" checked>
                             <span class="radio-label" data-i18n="settings.previewDiffStepChunkEnabled">预览时启用 diffStep 分块推理</span>
                             <span class="radio-desc" data-i18n="settings.previewDiffStepChunkEnabledDesc">将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。</span>
                         </label>
@@ -269,7 +413,7 @@
                         <p class="hint hint-warning" data-i18n="settings.autoRealtimeInferenceWarn">⚠ 警告：开启后每次改动都会在后台自动触发推理，可能大幅影响性能、显著增加功耗与发热（笔记本掉电加快、风扇转速升高、机身发烫），并可能与前台播放争抢显存导致播放卡顿。低显存、移动端或被动散热设备不建议开启。</p>
                         <p class="hint" data-i18n="settings.autoRealtimeInferenceHint">仅作用于分片编辑器，且需要先手动播放一次建立基准音频；之后每次停止编辑约 1 秒触发一次后台推理。推理结果与手动预览完全一致（命中同一份缓存）。</p>
                     </div>
-                    <div class="setting-group hidden" id="previewDiffStepChunkGroup">
+                    <div class="setting-group" id="previewDiffStepChunkGroup">
                         <div class="setting-group">
                             <label for="previewDiffStepChunkFrames"><span data-i18n="settings.previewDiffStepChunkFrames">分块大小（帧）</span> <span id="previewDiffStepChunkFramesValue" class="volume-display">500</span></label>
                             <input type="range" id="previewDiffStepChunkFrames" min="100" max="2000" value="500" step="50">
@@ -288,7 +432,7 @@
                         <label class="device-mode-radio">
                             <input type="checkbox" id="previewEnableQDrift">
                             <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
-                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，切换模型精度时会自动跟随。INT8（W8A32）实测校正量为 1e-5 量级，开与不开的 mel 数值完全一致（余弦 0.99989 / SNR 37.5 dB 前后不变），因此 INT8 默认关闭。</span>
                         </label>
                         <p class="hint hidden" id="previewQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>
@@ -297,7 +441,9 @@
 
             <!-- Export Inference Params -->
             <div class="settings-section hidden" id="section-export-params">
-                <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
+                <p class="section-desc section-desc--callout" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。
+                    <span class="export-only-tag" data-i18n="settings.exportOnly">仅导出</span>
+                </p>
                 <div class="settings-subgroup">
                     <p class="subgroup-label" data-i18n="settings.subgroupBasic">基础参数</p>
                     <div class="setting-group">
@@ -321,8 +467,8 @@
                         <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。导出时建议保持较高值以确保音质。</p>
                     </div>
                     <div class="setting-group">
-                        <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.70</span></label>
-                        <input type="range" id="exportCfgRescale" min="0" max="1" value="0.70" step="0.05">
+                        <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
+                        <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
                         <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
                     </div>
                 </div>
@@ -338,9 +484,10 @@
                         </select>
                         <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。</p>
                     </div>
-                    <div class="setting-group" id="exportCfgStrengthStartGroup">
+                    <div class="setting-group hidden" id="exportCfgStrengthStartGroup">
                         <label for="exportCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
-                        <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
+                        <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动"
+                               data-i18n-placeholder="settings.autoPlaceholder">
                         <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。</p>
                     </div>
                     <div class="setting-group hidden" id="exportCfgScheduleKeyframesGroup">
@@ -370,7 +517,7 @@
                         <label class="device-mode-radio">
                             <input type="checkbox" id="exportEnableQDrift">
                             <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
-                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，切换模型精度时会自动跟随。INT8（W8A32）实测校正量为 1e-5 量级，开与不开的 mel 数值完全一致（余弦 0.99989 / SNR 37.5 dB 前后不变），因此 INT8 默认关闭。</span>
                         </label>
                         <p class="hint hidden" id="exportQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>
@@ -379,7 +526,9 @@
 
             <!-- Post-Processing -->
             <div class="settings-section hidden" id="section-post-processing">
-                <p class="section-desc" data-i18n="settings.postProcessingDesc">导出时对合成音频的后处理。预览不应用这些设置。</p>
+                <p class="section-desc section-desc--callout" data-i18n="settings.postProcessingDesc">导出时对合成音频的后处理，预览不应用这些设置。
+                    <span class="export-only-tag" data-i18n="settings.exportOnly">仅导出</span>
+                </p>
                 <div class="settings-subgroup">
                     <p class="subgroup-label" data-i18n="settings.subgroupVocoder">Vocoder 拼接</p>
                     <div class="setting-group">
@@ -453,23 +602,28 @@
                     </div>
                 </div>
                 <div class="setting-group" id="vocoderChunkTableGroup">
-                    <label data-i18n="settings.vocoderChunkTableTitle">不同显存对照表</label>
-                    <p class="hint" data-i18n="settings.vocoderChunkTableHint">以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。</p>
-                    <div class="vram-table-wrapper">
-                        <table class="vram-table" id="vocoderChunkTable">
-                            <thead>
-                                <tr>
-                                    <th data-i18n="settings.vocoderChunkTableVram">显存</th>
-                                    <th data-i18n="settings.vocoderChunkTableBudget">可用预算</th>
-                                    <th data-i18n="settings.vocoderChunkTableFrames">推荐分片</th>
-                                    <th data-i18n="settings.vocoderChunkTableDuration">约时长</th>
-                                </tr>
-                            </thead>
-                            <tbody id="vocoderChunkTableBody">
-                                <tr><td colspan="4" data-i18n="settings.vocoderChunkTableLoading">加载中...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
+                    <!-- 表格与上方的"智能分配结果"信息重复，默认占掉约 340px，
+                         把下面的设置项挤出首屏。改成默认收起的 disclosure：
+                         结果条给结论，想看"为什么是这个值"再展开。 -->
+                    <details class="settings-disclosure" id="vocoderChunkTableDetails">
+                        <summary data-i18n="settings.vocoderChunkTableTitle">不同显存对照表</summary>
+                        <p class="hint" data-i18n="settings.vocoderChunkTableHint">以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。</p>
+                        <div class="vram-table-wrapper">
+                            <table class="vram-table" id="vocoderChunkTable">
+                                <thead>
+                                    <tr>
+                                        <th data-i18n="settings.vocoderChunkTableVram">显存</th>
+                                        <th data-i18n="settings.vocoderChunkTableBudget">可用预算</th>
+                                        <th data-i18n="settings.vocoderChunkTableFrames">推荐分片</th>
+                                        <th data-i18n="settings.vocoderChunkTableDuration">约时长</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="vocoderChunkTableBody">
+                                    <tr><td colspan="4" data-i18n="settings.vocoderChunkTableLoading">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
                 </div>
             </div>
 
@@ -567,6 +721,12 @@
                         </div>
                     </div>
                 </details>
+
+                <div class="setting-group">
+                    <label data-i18n="settings.clearInferenceCacheTitle">推理缓存</label>
+                    <p class="hint" data-i18n="settings.clearInferenceCacheHint">模型首次加载时会跑一次 dummy 推理校验 EP 是否可用，结果缓存到应用数据目录，下次启动直接复用。若更换显卡/驱动、升级 TRT 运行时后仍出现推理异常（静音、全零、报错），或想强制重新探测 EP，可清空缓存后重启应用。清理会同时删除 TensorRT engine 缓存，下次加载会重新编译，耗时更长。</p>
+                    <button type="button" id="clearInferenceCacheBtn" class="btn-secondary" data-i18n="settings.clearInferenceCacheBtn">清除推理缓存</button>
+                </div>
             </div>
 
             <!-- Audio Output -->
@@ -590,34 +750,34 @@
                     <label for="audioSampleRate" data-i18n="settings.sampleRate">采样率</label>
                     <select id="audioSampleRate">
                         <option value="22050">22050 Hz</option>
-                        <option value="24000">24000 Hz (模型原生)</option>
-                        <option value="44100">44100 Hz (CD 品质)</option>
-                        <option value="48000">48000 Hz (标准)</option>
-                        <option value="96000">96000 Hz (高品质)</option>
-                        <option value="192000">192000 Hz (录音棚)</option>
+                        <option value="24000" data-i18n="settings.opt.rate24000">24000 Hz (模型原生)</option>
+                        <option value="44100" data-i18n="settings.opt.rate44100">44100 Hz (CD 品质)</option>
+                        <option value="48000" data-i18n="settings.opt.rate48000">48000 Hz (标准)</option>
+                        <option value="96000" data-i18n="settings.opt.rate96000">96000 Hz (高品质)</option>
+                        <option value="192000" data-i18n="settings.opt.rate192000">192000 Hz (录音棚)</option>
                     </select>
                     <p class="hint" data-i18n="settings.sampleRateHint">原生播放设备格式。24kHz 模型音频会在播放前重采样；更高数值不会增加模型带宽。</p>
                 </div>
                 <div class="setting-group">
                     <label for="audioBitDepth" data-i18n="settings.bitDepth">位深度</label>
                     <select id="audioBitDepth">
-                        <option value="float32">32-bit Float (推荐)</option>
-                        <option value="int32">32-bit Integer</option>
-                        <option value="int24">24-bit Integer</option>
-                        <option value="int16">16-bit Integer (CD 品质)</option>
+                        <option value="float32" data-i18n="settings.opt.depthFloat32">32-bit Float (推荐)</option>
+                        <option value="int32" data-i18n="settings.opt.depthInt32">32-bit integer</option>
+                        <option value="int24" data-i18n="settings.opt.depthInt24">24-bit integer</option>
+                        <option value="int16" data-i18n="settings.opt.depthInt16">16-bit Integer (CD 品质)</option>
                     </select>
                     <p class="hint" data-i18n="settings.bitDepthHint">原生播放格式。当前后端支持 float32/int16，int24/int32 会降级为 float32。</p>
                 </div>
                 <div class="setting-group">
                     <label for="audioBufferSize" data-i18n="settings.bufferSize">缓冲区大小</label>
                     <select id="audioBufferSize">
-                        <option value="64">64 采样 (~1.3ms)</option>
-                        <option value="128">128 采样 (~2.7ms)</option>
-                        <option value="256">256 采样 (~5.3ms)</option>
-                        <option value="512">512 采样 (~10.7ms)</option>
-                        <option value="1024" selected>1024 采样 (~21.3ms)</option>
-                        <option value="2048">2048 采样 (~42.7ms)</option>
-                        <option value="4096">4096 采样 (~85.3ms)</option>
+                        <option value="64" data-i18n="settings.opt.buf64">64 采样 (~1.3ms)</option>
+                        <option value="128" data-i18n="settings.opt.buf128">128 采样 (~2.7ms)</option>
+                        <option value="256" data-i18n="settings.opt.buf256">256 采样 (~5.3ms)</option>
+                        <option value="512" data-i18n="settings.opt.buf512">512 采样 (~10.7ms)</option>
+                        <option value="1024" selected data-i18n="settings.opt.buf1024">1024 采样 (~21.3ms)</option>
+                        <option value="2048" data-i18n="settings.opt.buf2048">2048 采样 (~42.7ms)</option>
+                        <option value="4096" data-i18n="settings.opt.buf4096">4096 采样 (~85.3ms)</option>
                     </select>
                     <p class="hint" data-i18n="settings.bufferSizeHint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。</p>
                 </div>
@@ -658,7 +818,7 @@
                     </div>
                     <div class="setting-row">
                         <div class="setting-field">
-                            <label for="fcpeThreshold" data-i18n="preprocess.thresholdLabel" title="静音阈值：按帧 RMS 判断该帧是否为静音，低于阈值的帧 F0 会被清零。低=0.003（保留更多弱信号），中=0.006，高=0.01（过滤更多噪声）。">静音阈值</label>
+                            <label for="fcpeThreshold" data-i18n="preprocess.thresholdLabel" data-i18n-title="preprocess.tip.threshold">静音阈值</label>
                             <select id="fcpeThreshold">
                                 <option value="low" data-i18n="preprocess.thresholdLow">低 (0.003)</option>
                                 <option value="mid" data-i18n="preprocess.thresholdMid">中 (0.006)</option>
@@ -666,7 +826,7 @@
                             </select>
                         </div>
                         <div class="setting-field">
-                            <label for="fcpeSmoothing" data-i18n="preprocess.smoothingLabel" title="F0 平滑度：对提取的 F0 曲线进行中值滤波，消除跳变噪音。低=窗口3（保留更多细节），中=窗口5，高=窗口7（更平滑但可能丢失颤音）。">平滑度</label>
+                            <label for="fcpeSmoothing" data-i18n="preprocess.smoothingLabel" data-i18n-title="preprocess.tip.smoothing">平滑度</label>
                             <select id="fcpeSmoothing">
                                 <option value="low" data-i18n="preprocess.smoothingLow">低</option>
                                 <option value="medium" data-i18n="preprocess.smoothingMedium">中</option>
@@ -674,7 +834,7 @@
                             </select>
                         </div>
                         <div class="setting-field">
-                            <label for="fcpeQuantization" data-i18n="preprocess.quantizationLabel" title="音高量化：严格量化将 F0 直接转为最接近的 MIDI 音符；保留滑音会额外输出 Pitch Bend 信息，适合戏曲、民乐等滑音多的场景。">音高量化</label>
+                            <label for="fcpeQuantization" data-i18n="preprocess.quantizationLabel" data-i18n-title="preprocess.tip.quantization">音高量化</label>
                             <select id="fcpeQuantization">
                                 <option value="strict" data-i18n="preprocess.quantizationStrict">严格量化</option>
                                 <option value="pitchbend" data-i18n="preprocess.quantizationPitchbend">保留滑音 (Pitch Bend)</option>
@@ -685,19 +845,19 @@
                         <div class="setting-field">
                             <label class="inline-label">
                                 <input type="checkbox" id="fcpeF0RangeAuto" />
-                                <span data-i18n="preprocess.autoRange" title="自动适配音域：扫描 F0 分位数自动确定 F0 上下限，无需手动设置。取消勾选可手动指定音域范围。">自动适配音域</span>
+                                <span data-i18n="preprocess.autoRange" data-i18n-title="preprocess.tip.autoRange">自动适配音域</span>
                             </label>
                         </div>
                         <div class="setting-field">
-                            <label for="fcpeF0Min" data-i18n="preprocess.f0MinLabel" title="F0 下限：仅保留高于此频率的 F0（Hz）。男声典型 80Hz，女声典型 196Hz。设过低会保留低频噪声。">F0 下限 (Hz)</label>
+                            <label for="fcpeF0Min" data-i18n="preprocess.f0MinLabel" data-i18n-title="preprocess.tip.f0Min">F0 下限 (Hz)</label>
                             <input type="number" id="fcpeF0Min" min="20" max="2000" step="1" />
                         </div>
                         <div class="setting-field">
-                            <label for="fcpeF0Max" data-i18n="preprocess.f0MaxLabel" title="F0 上限：仅保留低于此频率的 F0（Hz）。设过高可能保留高频泛音。典型值 880Hz（A5）。">F0 上限 (Hz)</label>
+                            <label for="fcpeF0Max" data-i18n="preprocess.f0MaxLabel" data-i18n-title="preprocess.tip.f0Max">F0 上限 (Hz)</label>
                             <input type="number" id="fcpeF0Max" min="20" max="2000" step="1" />
                         </div>
                         <div class="setting-field">
-                            <label for="fcpeMinNoteDuration" data-i18n="preprocess.minNoteLabel" title="最短音符时长（秒）：短于此值的音符将被丢弃，用于过滤噪声产生的碎片音符。典型值 0.05 秒。">最短音符 (秒)</label>
+                            <label for="fcpeMinNoteDuration" data-i18n="preprocess.minNoteLabel" data-i18n-title="preprocess.tip.minNote">最短音符 (秒)</label>
                             <input type="number" id="fcpeMinNoteDuration" min="0.01" max="1" step="0.01" />
                         </div>
                     </div>
@@ -705,7 +865,7 @@
                         <div class="setting-field">
                             <label class="inline-label">
                                 <input type="checkbox" id="fcpeNormalize" />
-                                <span data-i18n="preprocess.normalizeLabel" title="响度归一化：将音频电平归一化到 -4.5 dBFS，避免弱信号导致 FCPE 漏判音高。建议保持开启。">响度归一化</span>
+                                <span data-i18n="preprocess.normalizeLabel" data-i18n-title="preprocess.tip.normalize">响度归一化</span>
                             </label>
                         </div>
                     </div>
@@ -770,13 +930,22 @@
                     <div class="model-status-list" id="modelStatusList"></div>
                     <div class="precision-info-box" id="precisionInfoBox">
                         <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
-                        <ul>
-                            <li data-i18n="settings.precisionInfoFp32"></li>
-                            <li data-i18n="settings.precisionInfoFp16"></li>
-                            <li data-i18n="settings.precisionInfoInt8"></li>
-                            <li data-i18n="settings.precisionInfoInt8Npu"></li>
-                            <li data-i18n="settings.precisionInfoRecommend"></li>
+                        <!-- 首屏只回答"我该选哪个"，5 条机制细节折进 Details。
+                             之前 900 字连排，用户要读完才能做决定。 -->
+                        <ul class="precision-info-summary">
+                            <li data-i18n="settings.precisionInfoSummaryFp32">FP32：音质最好、显存占用最高。8GB 以上独显优先选它。</li>
+                            <li data-i18n="settings.precisionInfoSummaryFast">FP16 约省一半显存、快一倍；INT8 再省 40–50%，但音质损失更明显。</li>
                         </ul>
+                        <details class="settings-disclosure">
+                            <summary data-i18n="settings.detailsLabel">详情</summary>
+                            <ul>
+                                <li data-i18n="settings.precisionInfoFp32"></li>
+                                <li data-i18n="settings.precisionInfoFp16"></li>
+                                <li data-i18n="settings.precisionInfoInt8"></li>
+                                <li data-i18n="settings.precisionInfoInt8Npu"></li>
+                                <li data-i18n="settings.precisionInfoRecommend"></li>
+                            </ul>
+                        </details>
                     </div>
                 </div>
                 <div class="setting-group">
@@ -799,12 +968,12 @@
                     <label data-i18n="settings.japaneseVocalization">日语发声方式</label>
                     <div class="radio-group" id="japaneseVocalizationGroup">
                         <label class="device-mode-radio">
-                            <input type="radio" name="japaneseVocalization" value="en-phonemes">
-                            <span class="radio-label" data-i18n="settings.japaneseVocalizationEnPhonemes">英语音素迁移</span>
+                            <input type="radio" name="japaneseVocalization" value="en-phonemes" checked>
+                            <span class="radio-label" data-i18n="settings.japaneseVocalizationEnPhonemes">英语音素迁移（默认）</span>
                         </label>
                         <label class="device-mode-radio">
-                            <input type="radio" name="japaneseVocalization" value="hybrid" checked>
-                            <span class="radio-label" data-i18n="settings.japaneseVocalizationHybrid">混合音素（ARPAbet+粤语，默认）</span>
+                            <input type="radio" name="japaneseVocalization" value="hybrid">
+                            <span class="radio-label" data-i18n="settings.japaneseVocalizationHybrid">混合音素（ARPAbet+粤语）</span>
                         </label>
                         <label class="device-mode-radio">
                             <input type="radio" name="japaneseVocalization" value="jp-lora" disabled>

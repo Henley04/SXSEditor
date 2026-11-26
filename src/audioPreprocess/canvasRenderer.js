@@ -1,10 +1,43 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, BPM, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, BPM, HEADER_HEIGHT, getF0AreaHeight } from './constants.js';
 import { getCanvasColors } from '../themes/canvasTheme.js';
+
+/**
+ * 当前生效的 BPM。
+ *
+ * 波形层过去直接用常量 BPM（120）。而音符、F0 曲线、试听都按 `pianoRoll.bpm`
+ * 换算，提取面板的 BPM 输入又只写进 `state.extractOptions`——三者一旦不一致，
+ * BPM ≠ 120 时波形与音符就会横向错开，播放头也不在音频的真实位置上（用户反馈的
+ * "时间对齐不稳定"就是这个）。这里统一取"卷帘 > 面板 > 默认"。
+ */
+function currentBpm() {
+  const pr = state.pianoRoll;
+  if (pr && Number.isFinite(pr.bpm) && pr.bpm > 0) return pr.bpm;
+  const opt = state.extractOptions;
+  if (opt && Number.isFinite(opt.bpm) && opt.bpm > 0) return opt.bpm;
+  return BPM;
+}
 
 // Offscreen canvas cache for waveform (static layer, no playhead)
 let _waveformCacheCanvas = null;
 let _waveformCacheKey = '';
+
+// waveform canvas 的 getBoundingClientRect 缓存。hover / wheel / 拖拽是高频路径，
+// 每次都读 rect 会强制同步 layout。注意：面板收起/展开会改变画布的 top，
+// 但画布尺寸不变（#waveform-section 是固定百分比高度），ResizeObserver 观察
+// canvas 本身不会触发 —— 因此调用方必须观察 #extract-panel，或在重排时显式失效。
+let _waveformCanvasRectCache = null;
+
+export function getWaveformCanvasRect() {
+  if (!_waveformCanvasRectCache && dom.waveformCanvas) {
+    _waveformCanvasRectCache = dom.waveformCanvas.getBoundingClientRect();
+  }
+  return _waveformCanvasRectCache;
+}
+
+export function invalidateWaveformCanvasRect() {
+  _waveformCanvasRectCache = null;
+}
 
 export function drawWaveformWithPlayhead(currentTime, options = {}) {
   if (!state.wavAudioBuffer) return;
@@ -40,7 +73,7 @@ export function drawWaveformWithPlayhead(currentTime, options = {}) {
   const audioData = state.wavAudioBuffer.getChannelData(0);
 
   // Build cache key: changes only when waveform appearance would change
-  const cacheKey = `${audioData.length}|${state.wavDuration}|${width}|${height}|${dpr}|${zoomX}|${scrollX}|${BEAT_WIDTH}|${PIANO_KEY_WIDTH}|${c.bgPanel}|${c.bgElevated}|${c.accent}|${c.fgDisabled}`;
+  const cacheKey = `${audioData.length}|${state.wavDuration}|${currentBpm()}|${width}|${height}|${dpr}|${zoomX}|${scrollX}|${BEAT_WIDTH}|${PIANO_KEY_WIDTH}|${c.bgPanel}|${c.bgElevated}|${c.accent}|${c.fgDisabled}`;
 
   if (_waveformCacheKey !== cacheKey) {
     // Redraw static waveform layer to offscreen canvas
@@ -69,10 +102,10 @@ export function drawWaveformWithPlayhead(currentTime, options = {}) {
     const dataAreaWidth = width - PIANO_KEY_WIDTH;
     if (dataAreaWidth > 0) {
       const totalSamples = audioData.length;
-      const secondsPerBeat = 60 / BPM;
+      const secondsPerBeat = 60 / currentBpm();
       const mid = height / 2;
 
-      const audioEndBeat = (state.wavDuration / 60) * BPM;
+      const audioEndBeat = (state.wavDuration / 60) * currentBpm();
       const audioEndX = PIANO_KEY_WIDTH + audioEndBeat * BEAT_WIDTH * zoomX - scrollX;
       const drawEndX = Math.min(Math.floor(audioEndX), width);
       const drawStartX = PIANO_KEY_WIDTH;
@@ -120,7 +153,7 @@ export function drawWaveformWithPlayhead(currentTime, options = {}) {
 
   // Draw playhead on top (dynamic)
   if (currentTime >= 0 && currentTime <= state.wavDuration) {
-    const currentBeat = (currentTime / 60) * BPM;
+    const currentBeat = (currentTime / 60) * currentBpm();
     const playheadX = PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
 
     if (playheadX >= PIANO_KEY_WIDTH && playheadX <= width) {
@@ -159,7 +192,7 @@ export function getPlayheadXForTime(seconds) {
   if (!state.wavAudioBuffer) return -1;
   const zoomX = state.pianoRoll ? state.pianoRoll.zoomX : state.waveformZoomX;
   const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
-  const currentBeat = (seconds / 60) * BPM;
+  const currentBeat = (seconds / 60) * currentBpm();
   return PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
 }
 
@@ -172,7 +205,7 @@ export function xToWaveformTime(x) {
   const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
   if (x < PIANO_KEY_WIDTH) return 0;
   const beat = (x + scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * zoomX);
-  const secondsPerBeat = 60 / BPM;
+  const secondsPerBeat = 60 / currentBpm();
   return Math.max(0, beat * secondsPerBeat);
 }
 
@@ -207,7 +240,7 @@ export function getMaxScrollX() {
   if (!pr.width) return 0;
   const viewportWidth = pr.width - PIANO_KEY_WIDTH;
   if (viewportWidth <= 0) return 0;
-  const audioEndBeat = state.wavDuration > 0 ? (state.wavDuration / 60) * BPM : 0;
+  const audioEndBeat = state.wavDuration > 0 ? (state.wavDuration / 60) * currentBpm() : 0;
   let lastNoteEnd = 0;
   if (pr.notes && pr.notes.length > 0) {
     for (const n of pr.notes) {
@@ -227,7 +260,7 @@ export function getMaxScrollY() {
   if (!state.pianoRoll) return 0;
   const pr = state.pianoRoll;
   if (!pr.height) return 0;
-  const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+  const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
   const viewportHeight = pr.height - pianoAreaTop;
   if (viewportHeight <= 0) return 0;
   const totalContentHeight = 128 * NOTE_HEIGHT * pr.zoomY;
@@ -251,7 +284,7 @@ export function updateScrollbars() {
   // 水平滚动条
   if (dom.hscroll && dom.hscrollThumb) {
     const viewportWidth = pr.width - PIANO_KEY_WIDTH;
-    const audioEndBeat = state.wavDuration > 0 ? (state.wavDuration / 60) * BPM : 0;
+    const audioEndBeat = state.wavDuration > 0 ? (state.wavDuration / 60) * currentBpm() : 0;
     let lastNoteEnd = 0;
     if (pr.notes && pr.notes.length > 0) {
       for (const n of pr.notes) {
@@ -279,7 +312,7 @@ export function updateScrollbars() {
 
   // 垂直滚动条
   if (dom.vscroll && dom.vscrollThumb) {
-    const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+    const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
     const viewportHeight = pr.height - pianoAreaTop;
     const totalContentHeight = 128 * NOTE_HEIGHT * pr.zoomY;
     const maxScrollY = Math.max(0, totalContentHeight - viewportHeight);

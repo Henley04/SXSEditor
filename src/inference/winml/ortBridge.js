@@ -15,6 +15,12 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const {
+  classifyNativeLoadError,
+  describeLoadError,
+  probeVcRuntime,
+  VC_REDIST_HINT,
+} = require('../../shared/vcRuntime.js');
 
 const TYPED_ARRAY_BY_TYPE = {
     float32: Float32Array,
@@ -28,7 +34,7 @@ const TYPED_ARRAY_BY_TYPE = {
 
 function _loadOrt() {
     try {
-        return require('onnxruntime-node');
+        return require('../ortRuntime.js').getOrt();
     } catch (_e) {
         return null; // tests may stub tensor creation
     }
@@ -211,12 +217,20 @@ function _sourceLabel(p) {
     return 'other';
 }
 
+/** 保留多行完整错误，但压掉 Node 的堆栈缩进行，避免把整份 stack 拼进提示。 */
+function _singleLineError(err) {
+    const full = String((err && err.message) || err || '');
+    return full.split('\n').map((s) => s.trim()).filter(Boolean)
+        .filter((s) => !/^\s*at\s/.test(s)).join(' | ').slice(0, 500);
+}
+
 function loadAddon() {
     // 测试注入口：单测通过 globalThis 注入 fake addon，避免触碰原生二进制
     if (globalThis.__SXS_ORT_BRIDGE_MOCK__) {
         return { addon: globalThis.__SXS_ORT_BRIDGE_MOCK__, path: 'mock' };
     }
     const errors = [];
+    let firstLoadErr = null; // 第一个"文件存在但加载失败"的错误，用于归类根因
     for (const raw of candidatePaths()) {
         try {
             let p = _asarUnpackedVariant(raw);
@@ -224,42 +238,56 @@ function loadAddon() {
             try {
                 return { addon: require(p), path: p };
             } catch (requireErr) {
-                // 二次尝试：process.dlopen 绕过 Module 包装层，暴露真实 OS 错误
+                // 二次尝试：process.dlopen 绕过 Module 包装层，暴露真实 OS 错误。
+                // 保留完整 require 错误（不再 split('\n')[0]），缺 DLL 的根因
+                // 常在第二行（"was loaded ... The specified module could not be found"）。
+                const requireText = _singleLineError(requireErr);
                 const mod = { exports: {} };
                 try {
                     process.dlopen(mod, p);
                     return { addon: mod.exports, path: p };
                 } catch (dlopenErr) {
-                    errors.push(`${raw}: dlopen -> ${dlopenErr.message.split('\n')[0]}`);
+                    const dlopenText = _singleLineError(dlopenErr);
+                    if (!firstLoadErr) firstLoadErr = requireErr.message && dlopenText
+                        ? `${requireText} | dlopen: ${dlopenText}` : requireErr;
+                    errors.push(`${raw}: require -> ${requireText}`);
+                    errors.push(`${raw}: dlopen -> ${dlopenText}`);
                     continue;
                 }
             }
         } catch (e) {
-            errors.push(`${raw}: ${e.message.split('\n')[0]}`);
+            errors.push(`${raw}: ${_singleLineError(e)}`);
         }
     }
+    // 归类根因：缺 VC++ 运行库时给出可操作提示，而不是笼统的 "module not found"。
+    // 没有任何候选文件存在时 firstLoadErr 为 null，也用聚合错误归类（至少能
+    // 命中 not-found），避免完全不产生提示。
+    let hint = '';
+    const errorToClassify = firstLoadErr || errors.join('\n');
+    if (errorToClassify) {
+        const classified = classifyNativeLoadError(errorToClassify);
+        const described = describeLoadError(classified);
+        if (described) {
+            hint += '\n' + described;
+            if (classified.kind === 'vc-runtime' && process.platform === 'win32') {
+                const probe = probeVcRuntime();
+                if (!probe.ok) {
+                    // 用无协议域名写法：完整 https URL 会被 ipcSafe 脱敏成 http<path>。
+                    hint += `\n[vc-runtime] missing DLLs: ${probe.missing.join(', ')}`
+                        + ` (checked ${probe.system32}; redist: ${VC_REDIST_HINT})`;
+                }
+            }
+        }
+    }
+    // 提示放在最前：envCheckInfo._sanitize 会把 failureReason 截到 300 字符，
+    // 若把"缺运行库"结论压在几十条 Tried 路径之后会被整段截掉，用户又只看
+    // 到 binding not found。可操作结论必须先出现。
     throw new Error(
-        '[sxs-ort-bridge] native module not found. Tried:\n  ' +
+        hint +
+        '\n[sxs-ort-bridge] native module not found. Tried:\n  ' +
         errors.join('\n  ') +
         '\nBuild it with: npm run build:native'
     );
-}
-
-/** 将 asar.unpacked 内的二进制复制到无 ".asar" 字样的缓存路径并返回路径。 */
-function _cachedCopy(src) {
-    try {
-        const os = require('node:os');
-        const crypto = require('node:crypto');
-        const st = fs.statSync(src);
-        const key = crypto.createHash('sha1').update(`${src}:${st.size}:${Math.floor(st.mtimeMs)}`).digest('hex').slice(0, 12);
-        const dir = path.join(os.tmpdir(), 'sxs-ort-bridge-cache');
-        fs.mkdirSync(dir, { recursive: true });
-        const dst = path.join(dir, `ort_bridge_${key}.node`);
-        if (!fs.existsSync(dst)) fs.copyFileSync(src, dst);
-        return dst;
-    } catch (_e) {
-        return null;
-    }
 }
 
 function getAddon() {
@@ -294,11 +322,6 @@ function listDevices() {
     } catch (_) {
         return [];
     }
-}
-
-/** Pick device indices by predicate over listDevices(). */
-function pickDeviceIndices(pred) {
-    return listDevices().filter(pred).map((d) => d.index);
 }
 
 function _tensorFromDescriptor(v) {
@@ -608,7 +631,6 @@ module.exports = {
     registerEp,
     canLoadLibrary,
     listDevices,
-    pickDeviceIndices,
     createSessionWithEps,
     validateTRTOutput,
     isTrtEngineFailure,

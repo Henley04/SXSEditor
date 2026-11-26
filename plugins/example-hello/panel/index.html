@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Hello Panel</title>
+  <!--
+    这里**故意不写** <meta http-equiv="Content-Security-Policy">：
+    面板的 CSP 由 plugin:// 协议层统一下发（见 src/main/plugins/PluginProtocol.js），
+    页面再声明一份只会与之取交集 —— 多写一条错的就悄悄把自己的脚本挡住。
+  -->
+  <link rel="stylesheet" href="./panel.css">
+</head>
+<body>
+  <h1>Hello Panel</h1>
+  <p class="hint">
+    这个页面跑在 <code>plugin://example-hello/</code> 下的 sandbox iframe 里：
+    它读不到宿主 DOM，也发不了网络请求。所有能力都要走 postMessage 请宿主代劳。
+  </p>
+
+  <div class="row">
+    <button type="button" id="btnRead">读工程快照</button>
+    <button type="button" id="btnBump">BPM → 132</button>
+    <button type="button" id="btnCount">读 greet 计数</button>
+  </div>
+
+  <pre id="out">等待握手…</pre>
+
+  <script src="./panel.js"></script>
+</body>
+</html>

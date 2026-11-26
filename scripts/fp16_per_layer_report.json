@@ -1,0 +1,1370 @@
+{
+  "preflow": {
+    "model": "preflow",
+    "provider": "CPUExecutionProvider",
+    "seq_limit": 512,
+    "samples": 1,
+    "num_weights": 12,
+    "full_fp16_sqnr_db": 73.75335351349399,
+    "layers": [
+      {
+        "weight": "preflow.2.dwconv.weight",
+        "numel": 3584,
+        "sqnr_db": 83.16606217406888
+      },
+      {
+        "weight": "preflow.0.dwconv.weight",
+        "numel": 3584,
+        "sqnr_db": 83.60674100182257
+      },
+      {
+        "weight": "preflow.1.dwconv.weight",
+        "numel": 3584,
+        "sqnr_db": 83.64645037822768
+      },
+      {
+        "weight": "onnx::MatMul_133",
+        "numel": 524288,
+        "sqnr_db": 83.95182340568238
+      },
+      {
+        "weight": "onnx::MatMul_137",
+        "numel": 524288,
+        "sqnr_db": 84.32237694188328
+      },
+      {
+        "weight": "preflow.3.dwconv.weight",
+        "numel": 3584,
+        "sqnr_db": 84.32713869113306
+      },
+      {
+        "weight": "onnx::MatMul_135",
+        "numel": 524288,
+        "sqnr_db": 84.46228797877289
+      },
+      {
+        "weight": "onnx::MatMul_134",
+        "numel": 524288,
+        "sqnr_db": 84.5657181022419
+      },
+      {
+        "weight": "onnx::MatMul_138",
+        "numel": 524288,
+        "sqnr_db": 85.21950412923664
+      },
+      {
+        "weight": "onnx::MatMul_136",
+        "numel": 524288,
+        "sqnr_db": 85.4816793996722
+      },
+      {
+        "weight": "onnx::MatMul_139",
+        "numel": 524288,
+        "sqnr_db": 85.69582453333707
+      },
+      {
+        "weight": "onnx::MatMul_140",
+        "numel": 524288,
+        "sqnr_db": 86.7007756508371
+      }
+    ],
+    "seconds": 0.2
+  },
+  "diff_step": {
+    "model": "diff_step",
+    "provider": "CPUExecutionProvider",
+    "seq_limit": 128,
+    "samples": 1,
+    "num_weights": 163,
+    "full_fp16_sqnr_db": 74.49253824733071,
+    "layers": [
+      {
+        "weight": "diff_estimator.diff_step_mlp.0.weight",
+        "numel": 4194304,
+        "sqnr_db": 86.623772423279
+      },
+      {
+        "weight": "_v_1766",
+        "numel": 3145728,
+        "sqnr_db": 87.5307196512758
+      },
+      {
+        "weight": "val_7",
+        "numel": 4194304,
+        "sqnr_db": 87.76789175575871
+      },
+      {
+        "weight": "diff_estimator.norm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 88.19575577163786
+      },
+      {
+        "weight": "val_450",
+        "numel": 4194304,
+        "sqnr_db": 88.32220948741931
+      },
+      {
+        "weight": "val_1815",
+        "numel": 4194304,
+        "sqnr_db": 88.46414172223147
+      },
+      {
+        "weight": "val_1722",
+        "numel": 1048576,
+        "sqnr_db": 89.19585794260193
+      },
+      {
+        "weight": "val_1818",
+        "numel": 524288,
+        "sqnr_db": 89.21944846271394
+      },
+      {
+        "weight": "diff_estimator.layers.0.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 89.48147790397498
+      },
+      {
+        "weight": "val_1802",
+        "numel": 1048576,
+        "sqnr_db": 89.5471461657751
+      },
+      {
+        "weight": "val_1642",
+        "numel": 1048576,
+        "sqnr_db": 89.97655243891721
+      },
+      {
+        "weight": "_v_1759",
+        "numel": 3145728,
+        "sqnr_db": 90.09455194806415
+      },
+      {
+        "weight": "diff_estimator.diff_step_mlp.2.weight",
+        "numel": 4194304,
+        "sqnr_db": 90.51154200416734
+      },
+      {
+        "weight": "val_530",
+        "numel": 4194304,
+        "sqnr_db": 91.09588467422383
+      },
+      {
+        "weight": "val_1162",
+        "numel": 1048576,
+        "sqnr_db": 91.22456704592425
+      },
+      {
+        "weight": "val_9",
+        "numel": 524288,
+        "sqnr_db": 91.52380475923448
+      },
+      {
+        "weight": "val_842",
+        "numel": 1048576,
+        "sqnr_db": 91.70470491505333
+      },
+      {
+        "weight": "val_1322",
+        "numel": 1048576,
+        "sqnr_db": 91.7194418234081
+      },
+      {
+        "weight": "val_442",
+        "numel": 1048576,
+        "sqnr_db": 91.77217325462883
+      },
+      {
+        "weight": "val_1242",
+        "numel": 1048576,
+        "sqnr_db": 92.37224505707505
+      },
+      {
+        "weight": "val_602",
+        "numel": 1048576,
+        "sqnr_db": 92.75029567062256
+      },
+      {
+        "weight": "val_1002",
+        "numel": 1048576,
+        "sqnr_db": 92.93030015124904
+      },
+      {
+        "weight": "val_922",
+        "numel": 1048576,
+        "sqnr_db": 93.14777678622009
+      },
+      {
+        "weight": "val_1082",
+        "numel": 1048576,
+        "sqnr_db": 93.23523564559764
+      },
+      {
+        "weight": "val_682",
+        "numel": 1048576,
+        "sqnr_db": 93.3133392323637
+      },
+      {
+        "weight": "val_1010",
+        "numel": 4194304,
+        "sqnr_db": 93.90988793230234
+      },
+      {
+        "weight": "val_762",
+        "numel": 1048576,
+        "sqnr_db": 93.91178613753739
+      },
+      {
+        "weight": "val_522",
+        "numel": 1048576,
+        "sqnr_db": 94.11014816153725
+      },
+      {
+        "weight": "val_362",
+        "numel": 1048576,
+        "sqnr_db": 94.1506075293843
+      },
+      {
+        "weight": "_v_1752",
+        "numel": 3145728,
+        "sqnr_db": 94.26166839814087
+      },
+      {
+        "weight": "val_1482",
+        "numel": 1048576,
+        "sqnr_db": 94.33893158649627
+      },
+      {
+        "weight": "val_1090",
+        "numel": 4194304,
+        "sqnr_db": 94.63471028367275
+      },
+      {
+        "weight": "diff_estimator.layers.2.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 94.77085105386584
+      },
+      {
+        "weight": "_v_1640",
+        "numel": 3145728,
+        "sqnr_db": 94.83940158146375
+      },
+      {
+        "weight": "val_12",
+        "numel": 4194304,
+        "sqnr_db": 94.84198862527154
+      },
+      {
+        "weight": "_v_1619",
+        "numel": 3145728,
+        "sqnr_db": 94.8580707295642
+      },
+      {
+        "weight": "val_770",
+        "numel": 4194304,
+        "sqnr_db": 95.0028871072102
+      },
+      {
+        "weight": "val_930",
+        "numel": 4194304,
+        "sqnr_db": 95.02454520716404
+      },
+      {
+        "weight": "val_122",
+        "numel": 1048576,
+        "sqnr_db": 95.32649182673369
+      },
+      {
+        "weight": "val_850",
+        "numel": 4194304,
+        "sqnr_db": 95.34497501709309
+      },
+      {
+        "weight": "val_1807",
+        "numel": 4194304,
+        "sqnr_db": 95.6017095071425
+      },
+      {
+        "weight": "val_1170",
+        "numel": 4194304,
+        "sqnr_db": 95.61279425554952
+      },
+      {
+        "weight": "diff_estimator.layers.1.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 95.64902657819817
+      },
+      {
+        "weight": "_v_1647",
+        "numel": 3145728,
+        "sqnr_db": 95.70952117692273
+      },
+      {
+        "weight": "val_1730",
+        "numel": 4194304,
+        "sqnr_db": 95.94709592612574
+      },
+      {
+        "weight": "val_1562",
+        "numel": 1048576,
+        "sqnr_db": 96.14241134561127
+      },
+      {
+        "weight": "val_1250",
+        "numel": 4194304,
+        "sqnr_db": 96.25715753953426
+      },
+      {
+        "weight": "_v_1710",
+        "numel": 3145728,
+        "sqnr_db": 96.31987101608503
+      },
+      {
+        "weight": "val_282",
+        "numel": 1048576,
+        "sqnr_db": 96.37003988446885
+      },
+      {
+        "weight": "_v_1675",
+        "numel": 3145728,
+        "sqnr_db": 96.48585565606297
+      },
+      {
+        "weight": "val_1809",
+        "numel": 4194304,
+        "sqnr_db": 96.61402144629507
+      },
+      {
+        "weight": "val_202",
+        "numel": 1048576,
+        "sqnr_db": 96.67629322768889
+      },
+      {
+        "weight": "_v_1661",
+        "numel": 3145728,
+        "sqnr_db": 96.68767614702887
+      },
+      {
+        "weight": "_v_1724",
+        "numel": 3145728,
+        "sqnr_db": 96.72338542737245
+      },
+      {
+        "weight": "val_129",
+        "numel": 4194304,
+        "sqnr_db": 96.77061039636634
+      },
+      {
+        "weight": "diff_estimator.layers.4.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 96.78406044722084
+      },
+      {
+        "weight": "_v_1689",
+        "numel": 3145728,
+        "sqnr_db": 96.90675632846731
+      },
+      {
+        "weight": "diff_estimator.layers.0.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 96.93127858456718
+      },
+      {
+        "weight": "val_690",
+        "numel": 4194304,
+        "sqnr_db": 96.97205077242664
+      },
+      {
+        "weight": "_v_1696",
+        "numel": 3145728,
+        "sqnr_db": 97.00731967290501
+      },
+      {
+        "weight": "_v_1703",
+        "numel": 3145728,
+        "sqnr_db": 97.02763651327044
+      },
+      {
+        "weight": "val_1810",
+        "numel": 4194304,
+        "sqnr_db": 97.03820358255342
+      },
+      {
+        "weight": "val_527",
+        "numel": 4194304,
+        "sqnr_db": 97.10884479474029
+      },
+      {
+        "weight": "val_1650",
+        "numel": 4194304,
+        "sqnr_db": 97.13461538668406
+      },
+      {
+        "weight": "_v_1668",
+        "numel": 3145728,
+        "sqnr_db": 97.24136941434926
+      },
+      {
+        "weight": "diff_estimator.layers.21.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 97.34098333369064
+      },
+      {
+        "weight": "_v_1682",
+        "numel": 3145728,
+        "sqnr_db": 97.57865591543671
+      },
+      {
+        "weight": "diff_estimator.layers.3.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 97.58726847269782
+      },
+      {
+        "weight": "_v_1654",
+        "numel": 3145728,
+        "sqnr_db": 97.63534489601665
+      },
+      {
+        "weight": "val_370",
+        "numel": 4194304,
+        "sqnr_db": 97.80980044953985
+      },
+      {
+        "weight": "_v_1738",
+        "numel": 3145728,
+        "sqnr_db": 97.97255683043238
+      },
+      {
+        "weight": "val_610",
+        "numel": 4194304,
+        "sqnr_db": 98.07590992210757
+      },
+      {
+        "weight": "_v_1717",
+        "numel": 3145728,
+        "sqnr_db": 98.11083196996395
+      },
+      {
+        "weight": "_v_1633",
+        "numel": 3145728,
+        "sqnr_db": 98.29954576463763
+      },
+      {
+        "weight": "val_1490",
+        "numel": 4194304,
+        "sqnr_db": 98.45581860465751
+      },
+      {
+        "weight": "val_130",
+        "numel": 4194304,
+        "sqnr_db": 98.71411227297455
+      },
+      {
+        "weight": "val_1330",
+        "numel": 4194304,
+        "sqnr_db": 98.82640300591851
+      },
+      {
+        "weight": "val_1729",
+        "numel": 4194304,
+        "sqnr_db": 99.00456959989393
+      },
+      {
+        "weight": "val_1649",
+        "numel": 4194304,
+        "sqnr_db": 99.18124045481433
+      },
+      {
+        "weight": "_v_1745",
+        "numel": 3145728,
+        "sqnr_db": 99.27860974289567
+      },
+      {
+        "weight": "val_4",
+        "numel": 4194304,
+        "sqnr_db": 99.57896892526395
+      },
+      {
+        "weight": "diff_estimator.layers.5.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 99.86708174472712
+      },
+      {
+        "weight": "diff_estimator.layers.1.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 100.04664152122211
+      },
+      {
+        "weight": "val_529",
+        "numel": 4194304,
+        "sqnr_db": 100.0926923151581
+      },
+      {
+        "weight": "val_1570",
+        "numel": 4194304,
+        "sqnr_db": 100.0956628153885
+      },
+      {
+        "weight": "_v_1626",
+        "numel": 3145728,
+        "sqnr_db": 100.17077447812086
+      },
+      {
+        "weight": "val_1007",
+        "numel": 4194304,
+        "sqnr_db": 100.29398473489836
+      },
+      {
+        "weight": "val_367",
+        "numel": 4194304,
+        "sqnr_db": 100.51582913309747
+      },
+      {
+        "weight": "diff_estimator.layers.2.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 100.52927288368288
+      },
+      {
+        "weight": "val_1009",
+        "numel": 4194304,
+        "sqnr_db": 100.57854970274175
+      },
+      {
+        "weight": "val_607",
+        "numel": 4194304,
+        "sqnr_db": 100.60985233477476
+      },
+      {
+        "weight": "val_1727",
+        "numel": 4194304,
+        "sqnr_db": 100.7654285666547
+      },
+      {
+        "weight": "val_1087",
+        "numel": 4194304,
+        "sqnr_db": 100.81207424062595
+      },
+      {
+        "weight": "val_1089",
+        "numel": 4194304,
+        "sqnr_db": 100.89417758088274
+      },
+      {
+        "weight": "val_1410",
+        "numel": 4194304,
+        "sqnr_db": 101.06320993383872
+      },
+      {
+        "weight": "val_767",
+        "numel": 4194304,
+        "sqnr_db": 101.09339478098298
+      },
+      {
+        "weight": "val_449",
+        "numel": 4194304,
+        "sqnr_db": 101.15272143139106
+      },
+      {
+        "weight": "val_1647",
+        "numel": 4194304,
+        "sqnr_db": 101.15675133608451
+      },
+      {
+        "weight": "val_1249",
+        "numel": 4194304,
+        "sqnr_db": 101.19714112392276
+      },
+      {
+        "weight": "val_687",
+        "numel": 4194304,
+        "sqnr_db": 101.5681257605329
+      },
+      {
+        "weight": "val_1169",
+        "numel": 4194304,
+        "sqnr_db": 101.60936913852667
+      },
+      {
+        "weight": "val_927",
+        "numel": 4194304,
+        "sqnr_db": 101.75221308063647
+      },
+      {
+        "weight": "val_1327",
+        "numel": 4194304,
+        "sqnr_db": 101.89787276421734
+      },
+      {
+        "weight": "val_689",
+        "numel": 4194304,
+        "sqnr_db": 101.91781778991809
+      },
+      {
+        "weight": "val_849",
+        "numel": 4194304,
+        "sqnr_db": 101.9657536523064
+      },
+      {
+        "weight": "val_1167",
+        "numel": 4194304,
+        "sqnr_db": 102.0657007724728
+      },
+      {
+        "weight": "val_447",
+        "numel": 4194304,
+        "sqnr_db": 102.36414436233005
+      },
+      {
+        "weight": "val_769",
+        "numel": 4194304,
+        "sqnr_db": 102.43444537637222
+      },
+      {
+        "weight": "val_847",
+        "numel": 4194304,
+        "sqnr_db": 102.49384679377785
+      },
+      {
+        "weight": "_v_1731",
+        "numel": 3145728,
+        "sqnr_db": 102.64930695372293
+      },
+      {
+        "weight": "val_1487",
+        "numel": 4194304,
+        "sqnr_db": 102.71540934680387
+      },
+      {
+        "weight": "val_1402",
+        "numel": 1048576,
+        "sqnr_db": 102.8439070672654
+      },
+      {
+        "weight": "val_929",
+        "numel": 4194304,
+        "sqnr_db": 102.86136469899061
+      },
+      {
+        "weight": "diff_estimator.layers.8.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 103.22270053224777
+      },
+      {
+        "weight": "val_1247",
+        "numel": 4194304,
+        "sqnr_db": 103.50954773882245
+      },
+      {
+        "weight": "val_1489",
+        "numel": 4194304,
+        "sqnr_db": 103.79713216930247
+      },
+      {
+        "weight": "val_1409",
+        "numel": 4194304,
+        "sqnr_db": 103.85280713066619
+      },
+      {
+        "weight": "diff_estimator.layers.3.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 103.86540685197467
+      },
+      {
+        "weight": "val_1329",
+        "numel": 4194304,
+        "sqnr_db": 103.89887054258591
+      },
+      {
+        "weight": "val_290",
+        "numel": 4194304,
+        "sqnr_db": 103.97465333462479
+      },
+      {
+        "weight": "diff_estimator.layers.19.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 103.98331430410181
+      },
+      {
+        "weight": "diff_estimator.layers.20.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 104.00413456990984
+      },
+      {
+        "weight": "val_1407",
+        "numel": 4194304,
+        "sqnr_db": 104.30056717874905
+      },
+      {
+        "weight": "val_1567",
+        "numel": 4194304,
+        "sqnr_db": 104.52959347308699
+      },
+      {
+        "weight": "val_609",
+        "numel": 4194304,
+        "sqnr_db": 104.88608736023053
+      },
+      {
+        "weight": "diff_estimator.layers.21.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 104.90703939332016
+      },
+      {
+        "weight": "val_1569",
+        "numel": 4194304,
+        "sqnr_db": 105.02910773478725
+      },
+      {
+        "weight": "val_210",
+        "numel": 4194304,
+        "sqnr_db": 105.0743480666388
+      },
+      {
+        "weight": "diff_estimator.layers.9.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 105.23149385821897
+      },
+      {
+        "weight": "diff_estimator.layers.4.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 105.61671310833476
+      },
+      {
+        "weight": "diff_estimator.layers.19.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 106.69579721718563
+      },
+      {
+        "weight": "diff_estimator.layers.13.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 106.73062778035577
+      },
+      {
+        "weight": "val_287",
+        "numel": 4194304,
+        "sqnr_db": 106.73821334636402
+      },
+      {
+        "weight": "diff_estimator.layers.5.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 106.83129329436852
+      },
+      {
+        "weight": "diff_estimator.layers.14.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 107.61296129793897
+      },
+      {
+        "weight": "val_127",
+        "numel": 4194304,
+        "sqnr_db": 107.72947000404307
+      },
+      {
+        "weight": "diff_estimator.layers.6.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 107.72979357661818
+      },
+      {
+        "weight": "diff_estimator.layers.8.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 108.0599526229829
+      },
+      {
+        "weight": "diff_estimator.layers.18.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 108.10692962471637
+      },
+      {
+        "weight": "diff_estimator.layers.11.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 108.4361579478188
+      },
+      {
+        "weight": "val_369",
+        "numel": 4194304,
+        "sqnr_db": 108.64360490528412
+      },
+      {
+        "weight": "diff_estimator.layers.20.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 108.75719836188185
+      },
+      {
+        "weight": "diff_estimator.layers.15.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 109.17403970104354
+      },
+      {
+        "weight": "val_209",
+        "numel": 4194304,
+        "sqnr_db": 109.1946119002468
+      },
+      {
+        "weight": "diff_estimator.layers.7.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 109.41564724935384
+      },
+      {
+        "weight": "diff_estimator.layers.13.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 109.56858069333438
+      },
+      {
+        "weight": "diff_estimator.layers.10.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 109.6884613087781
+      },
+      {
+        "weight": "diff_estimator.layers.11.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 109.8727326189667
+      },
+      {
+        "weight": "val_207",
+        "numel": 4194304,
+        "sqnr_db": 110.14925870055231
+      },
+      {
+        "weight": "diff_estimator.layers.12.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.22056753731896
+      },
+      {
+        "weight": "diff_estimator.layers.7.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.39460246567066
+      },
+      {
+        "weight": "diff_estimator.layers.16.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.42304267965517
+      },
+      {
+        "weight": "diff_estimator.layers.15.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.4391953510401
+      },
+      {
+        "weight": "diff_estimator.layers.12.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.46473205178512
+      },
+      {
+        "weight": "diff_estimator.layers.17.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.88153344714789
+      },
+      {
+        "weight": "diff_estimator.layers.9.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 110.9525137794349
+      },
+      {
+        "weight": "diff_estimator.layers.14.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 111.35370678181887
+      },
+      {
+        "weight": "diff_estimator.layers.17.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 111.5125395044359
+      },
+      {
+        "weight": "diff_estimator.layers.10.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 112.11848053057761
+      },
+      {
+        "weight": "diff_estimator.layers.16.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 112.30990324795039
+      },
+      {
+        "weight": "val_289",
+        "numel": 4194304,
+        "sqnr_db": 112.56273321515832
+      },
+      {
+        "weight": "diff_estimator.layers.6.post_attention_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 113.59252807633501
+      },
+      {
+        "weight": "diff_estimator.layers.18.input_layernorm.to_weight.weight",
+        "numel": 1048576,
+        "sqnr_db": 114.0952437269682
+      }
+    ],
+    "seconds": 61.3
+  },
+  "vocoder": {
+    "model": "vocoder",
+    "provider": "CPUExecutionProvider",
+    "seq_limit": 200,
+    "samples": 1,
+    "num_weights": 92,
+    "full_fp16_sqnr_db": 50.143778934493035,
+    "layers": [
+      {
+        "weight": "backbone.convnext.29.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 59.60046269173113
+      },
+      {
+        "weight": "onnx::MatMul_1076",
+        "numel": 4194304,
+        "sqnr_db": 60.812647536482636
+      },
+      {
+        "weight": "onnx::MatMul_1079",
+        "numel": 1968128,
+        "sqnr_db": 61.23607795564812
+      },
+      {
+        "weight": "backbone.embed.weight",
+        "numel": 917504,
+        "sqnr_db": 62.932133645484555
+      },
+      {
+        "weight": "onnx::MatMul_1074",
+        "numel": 4194304,
+        "sqnr_db": 63.1713545632286
+      },
+      {
+        "weight": "backbone.convnext.27.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 63.52356480436487
+      },
+      {
+        "weight": "onnx::MatMul_1071",
+        "numel": 4194304,
+        "sqnr_db": 64.1181922082193
+      },
+      {
+        "weight": "backbone.convnext.25.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 64.12267194770676
+      },
+      {
+        "weight": "onnx::MatMul_1077",
+        "numel": 4194304,
+        "sqnr_db": 64.1626069315945
+      },
+      {
+        "weight": "onnx::MatMul_1069",
+        "numel": 4194304,
+        "sqnr_db": 64.61313874611866
+      },
+      {
+        "weight": "backbone.convnext.28.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 64.68281247593204
+      },
+      {
+        "weight": "backbone.convnext.26.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 64.77818092043879
+      },
+      {
+        "weight": "onnx::MatMul_1073",
+        "numel": 4194304,
+        "sqnr_db": 66.3819622992809
+      },
+      {
+        "weight": "onnx::MatMul_1075",
+        "numel": 4194304,
+        "sqnr_db": 66.48879227175249
+      },
+      {
+        "weight": "backbone.convnext.24.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 67.55566677227
+      },
+      {
+        "weight": "backbone.convnext.23.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 68.19943763578135
+      },
+      {
+        "weight": "onnx::MatMul_1072",
+        "numel": 4194304,
+        "sqnr_db": 68.61225830538024
+      },
+      {
+        "weight": "onnx::MatMul_1070",
+        "numel": 4194304,
+        "sqnr_db": 69.33157339391383
+      },
+      {
+        "weight": "onnx::MatMul_1078",
+        "numel": 4194304,
+        "sqnr_db": 69.3326003930315
+      },
+      {
+        "weight": "onnx::MatMul_1068",
+        "numel": 4194304,
+        "sqnr_db": 69.3939559312776
+      },
+      {
+        "weight": "onnx::MatMul_1067",
+        "numel": 4194304,
+        "sqnr_db": 69.92355316694362
+      },
+      {
+        "weight": "backbone.convnext.22.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 72.80232723814605
+      },
+      {
+        "weight": "onnx::MatMul_1065",
+        "numel": 4194304,
+        "sqnr_db": 72.82728234239981
+      },
+      {
+        "weight": "onnx::MatMul_1066",
+        "numel": 4194304,
+        "sqnr_db": 73.68586527384899
+      },
+      {
+        "weight": "onnx::MatMul_1063",
+        "numel": 4194304,
+        "sqnr_db": 74.3118307805679
+      },
+      {
+        "weight": "backbone.convnext.20.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 74.5860371940548
+      },
+      {
+        "weight": "backbone.convnext.19.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 75.77585312400659
+      },
+      {
+        "weight": "backbone.convnext.21.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 76.34695829792919
+      },
+      {
+        "weight": "onnx::MatMul_1064",
+        "numel": 4194304,
+        "sqnr_db": 77.63944216927084
+      },
+      {
+        "weight": "onnx::MatMul_1061",
+        "numel": 4194304,
+        "sqnr_db": 77.81824627314475
+      },
+      {
+        "weight": "onnx::MatMul_1021",
+        "numel": 4194304,
+        "sqnr_db": 78.02453380184504
+      },
+      {
+        "weight": "backbone.convnext.0.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 79.05239263992871
+      },
+      {
+        "weight": "onnx::MatMul_1062",
+        "numel": 4194304,
+        "sqnr_db": 79.42255865021052
+      },
+      {
+        "weight": "backbone.convnext.18.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 81.01060430488289
+      },
+      {
+        "weight": "backbone.convnext.3.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 81.33516220572872
+      },
+      {
+        "weight": "onnx::MatMul_1060",
+        "numel": 4194304,
+        "sqnr_db": 81.6368782629554
+      },
+      {
+        "weight": "onnx::MatMul_1059",
+        "numel": 4194304,
+        "sqnr_db": 81.6719516147387
+      },
+      {
+        "weight": "backbone.convnext.1.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 82.44629017606621
+      },
+      {
+        "weight": "onnx::MatMul_1058",
+        "numel": 4194304,
+        "sqnr_db": 82.46365511952561
+      },
+      {
+        "weight": "onnx::MatMul_1057",
+        "numel": 4194304,
+        "sqnr_db": 83.3626217417531
+      },
+      {
+        "weight": "backbone.convnext.7.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 84.2901809314134
+      },
+      {
+        "weight": "backbone.convnext.14.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 84.51212840704733
+      },
+      {
+        "weight": "onnx::MatMul_1055",
+        "numel": 4194304,
+        "sqnr_db": 85.33002817135514
+      },
+      {
+        "weight": "onnx::MatMul_1019",
+        "numel": 4194304,
+        "sqnr_db": 85.86595473993121
+      },
+      {
+        "weight": "onnx::MatMul_1020",
+        "numel": 4194304,
+        "sqnr_db": 86.02389385433386
+      },
+      {
+        "weight": "onnx::MatMul_1056",
+        "numel": 4194304,
+        "sqnr_db": 86.0307727121394
+      },
+      {
+        "weight": "onnx::MatMul_1022",
+        "numel": 4194304,
+        "sqnr_db": 87.18732278491508
+      },
+      {
+        "weight": "onnx::MatMul_1026",
+        "numel": 4194304,
+        "sqnr_db": 87.3327625944996
+      },
+      {
+        "weight": "backbone.convnext.11.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 87.78818562496508
+      },
+      {
+        "weight": "backbone.convnext.16.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 88.56473823050463
+      },
+      {
+        "weight": "onnx::MatMul_1030",
+        "numel": 4194304,
+        "sqnr_db": 88.71723798159255
+      },
+      {
+        "weight": "backbone.convnext.5.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 88.77586626420829
+      },
+      {
+        "weight": "onnx::MatMul_1051",
+        "numel": 4194304,
+        "sqnr_db": 88.84003460294548
+      },
+      {
+        "weight": "onnx::MatMul_1025",
+        "numel": 4194304,
+        "sqnr_db": 89.29684550815061
+      },
+      {
+        "weight": "backbone.convnext.13.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 89.35037039375138
+      },
+      {
+        "weight": "backbone.convnext.12.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 89.37036651627429
+      },
+      {
+        "weight": "onnx::MatMul_1032",
+        "numel": 4194304,
+        "sqnr_db": 89.43020706130602
+      },
+      {
+        "weight": "onnx::MatMul_1044",
+        "numel": 4194304,
+        "sqnr_db": 89.55073514126079
+      },
+      {
+        "weight": "onnx::MatMul_1033",
+        "numel": 4194304,
+        "sqnr_db": 89.74917662709785
+      },
+      {
+        "weight": "onnx::MatMul_1034",
+        "numel": 4194304,
+        "sqnr_db": 89.93715974408018
+      },
+      {
+        "weight": "onnx::MatMul_1042",
+        "numel": 4194304,
+        "sqnr_db": 90.10999176464829
+      },
+      {
+        "weight": "backbone.convnext.2.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 90.52330825207673
+      },
+      {
+        "weight": "onnx::MatMul_1052",
+        "numel": 4194304,
+        "sqnr_db": 90.57826080932367
+      },
+      {
+        "weight": "backbone.convnext.17.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 90.77703965215876
+      },
+      {
+        "weight": "backbone.convnext.15.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 91.70302233263926
+      },
+      {
+        "weight": "onnx::MatMul_1041",
+        "numel": 4194304,
+        "sqnr_db": 91.73334074588199
+      },
+      {
+        "weight": "onnx::MatMul_1023",
+        "numel": 4194304,
+        "sqnr_db": 91.89107350224378
+      },
+      {
+        "weight": "onnx::MatMul_1029",
+        "numel": 4194304,
+        "sqnr_db": 91.92249335423656
+      },
+      {
+        "weight": "onnx::MatMul_1043",
+        "numel": 4194304,
+        "sqnr_db": 92.23436030195826
+      },
+      {
+        "weight": "backbone.convnext.9.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 92.31948447183969
+      },
+      {
+        "weight": "onnx::MatMul_1031",
+        "numel": 4194304,
+        "sqnr_db": 92.79056027655574
+      },
+      {
+        "weight": "onnx::MatMul_1046",
+        "numel": 4194304,
+        "sqnr_db": 93.68533858286492
+      },
+      {
+        "weight": "onnx::MatMul_1047",
+        "numel": 4194304,
+        "sqnr_db": 94.12658174770596
+      },
+      {
+        "weight": "onnx::MatMul_1024",
+        "numel": 4194304,
+        "sqnr_db": 94.33449412711994
+      },
+      {
+        "weight": "backbone.convnext.8.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 94.89156283822646
+      },
+      {
+        "weight": "onnx::MatMul_1048",
+        "numel": 4194304,
+        "sqnr_db": 95.90069598553784
+      },
+      {
+        "weight": "onnx::MatMul_1053",
+        "numel": 4194304,
+        "sqnr_db": 96.27082443383222
+      },
+      {
+        "weight": "backbone.convnext.6.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 96.44682498810675
+      },
+      {
+        "weight": "backbone.convnext.10.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 96.67233994226685
+      },
+      {
+        "weight": "onnx::MatMul_1037",
+        "numel": 4194304,
+        "sqnr_db": 97.05763385211975
+      },
+      {
+        "weight": "onnx::MatMul_1049",
+        "numel": 4194304,
+        "sqnr_db": 97.07372775853531
+      },
+      {
+        "weight": "onnx::MatMul_1045",
+        "numel": 4194304,
+        "sqnr_db": 97.52106030964008
+      },
+      {
+        "weight": "onnx::MatMul_1038",
+        "numel": 4194304,
+        "sqnr_db": 97.91132926659238
+      },
+      {
+        "weight": "onnx::MatMul_1039",
+        "numel": 4194304,
+        "sqnr_db": 98.12264729352381
+      },
+      {
+        "weight": "onnx::MatMul_1054",
+        "numel": 4194304,
+        "sqnr_db": 99.15004213636246
+      },
+      {
+        "weight": "onnx::MatMul_1040",
+        "numel": 4194304,
+        "sqnr_db": 100.21222309761724
+      },
+      {
+        "weight": "onnx::MatMul_1035",
+        "numel": 4194304,
+        "sqnr_db": 100.38007193989797
+      },
+      {
+        "weight": "onnx::MatMul_1050",
+        "numel": 4194304,
+        "sqnr_db": 100.39577976213481
+      },
+      {
+        "weight": "onnx::MatMul_1027",
+        "numel": 4194304,
+        "sqnr_db": 102.5619800194755
+      },
+      {
+        "weight": "onnx::MatMul_1036",
+        "numel": 4194304,
+        "sqnr_db": 103.05364181668617
+      },
+      {
+        "weight": "onnx::MatMul_1028",
+        "numel": 4194304,
+        "sqnr_db": 103.9152347048857
+      },
+      {
+        "weight": "backbone.convnext.4.dwconv.weight",
+        "numel": 7168,
+        "sqnr_db": 104.13005556207602
+      }
+    ],
+    "seconds": 23.7
+  }
+}

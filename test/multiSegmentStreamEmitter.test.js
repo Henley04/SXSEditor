@@ -2,6 +2,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { OnnxSVSPipeline } = require('../src/inference/pipeline');
 const { SAMPLE_RATE } = require('../src/inference/pipeline/constants');
+const { ownsWholeBuffer } = require('../src/shared/pcmTransfer');
 
 /**
  * 多 segment 流式发射器（_createSegmentStreamEmitter）回归测试。
@@ -30,7 +31,7 @@ const BPM = 60;
 const SEC = SAMPLE_RATE; // 1 秒的样本数
 
 /** 收集 onChunkAudio 回调的辅助：返回 {emitter, chunks} */
-function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } = {}) {
+function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null, wrapChunk = null } = {}) {
   const chunks = [];
   const pipeline = buildPipeline();
   const ts = totalSamples != null
@@ -38,7 +39,7 @@ function makeEmitter(segments, { firstNoteStartBeat = 0, totalSamples = null } =
     : Math.floor((segments[segments.length - 1].endBeat / BPM) * 60 * SAMPLE_RATE);
   const emitter = pipeline._createSegmentStreamEmitter(
     segments, BPM, firstNoteStartBeat, ts,
-    (c) => chunks.push(c),
+    (c) => chunks.push(wrapChunk ? wrapChunk(c) : c),
   );
   return { emitter, chunks };
 }
@@ -154,6 +155,63 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
         acc = c.sampleEnd;
       }
       expect(acc).to.equal(Math.round(38 * SEC));
+    });
+  });
+
+  describe('Worker Transferable（真实 buffer 转移）', () => {
+    /**
+     * svsWorker.js 的 onChunkAudio 会在视图独占 buffer 时调用
+     * `postMessage(message, [audio.buffer])`，发送侧 typed array 会同步分离。
+     * 这里用 structuredClone + 同一个 ownsWholeBuffer 谓词复现同一语义。
+     */
+    function transferChunk(c) {
+      const ab = ownsWholeBuffer(c.audio) ? c.audio.buffer : null;
+      return structuredClone(c, ab ? { transfer: [ab] } : undefined);
+    }
+
+    function makeTransferEmitter(segments, opts = {}) {
+      return makeEmitter(segments, { ...opts, wrapChunk: transferChunk });
+    }
+
+    it('长休止：转移后 frontier 仍连续，补零恰好覆盖空白，后段 PCM 保留', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4.15 },
+        { startBeat: 26.15, endBeat: 30.15 },
+      ];
+      const { emitter, chunks } = makeTransferEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4.15, 0.1));
+      emitter.segmentDone(1, makeAudio(4, 0.2));
+
+      expect(chunks).to.have.lengthOf(3);
+      const [c0, gap, c2] = chunks;
+      expect(c0.sampleOffset).to.equal(0);
+      expect(c0.sampleEnd).to.equal(Math.round(4.15 * SEC));
+      expect(gap.sampleOffset).to.equal(c0.sampleEnd);
+      expect(gap.sampleEnd).to.equal(Math.round(26.15 * SEC));
+      expect(gap.audio.length).to.equal(Math.round(22 * SEC));
+      expect(gap.audio[0]).to.equal(0);
+      expect(gap.audio[gap.audio.length - 1]).to.equal(0);
+      expect(c2.sampleOffset).to.equal(Math.round(26.15 * SEC));
+      expect(c2.sampleEnd).to.equal(Math.round(30.15 * SEC));
+      expect(c2.audio[0]).to.be.closeTo(0.2, 1e-6);
+      expect(c2.audio[c2.audio.length - 1]).to.be.closeTo(0.2, 1e-6);
+    });
+
+    it('连续多段：转移后第二段不会从 0 重发', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 4, endBeat: 8 },
+      ];
+      const { emitter, chunks } = makeTransferEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4, 0.1));
+      emitter.segmentDone(1, makeAudio(4, 0.2));
+
+      expect(chunks).to.have.lengthOf(2);
+      expect(chunks[0].sampleOffset).to.equal(0);
+      expect(chunks[0].sampleEnd).to.equal(4 * SEC);
+      expect(chunks[1].sampleOffset).to.equal(4 * SEC);
+      expect(chunks[1].sampleEnd).to.equal(8 * SEC);
+      expect(chunks[1].audio[0]).to.be.closeTo(0.2, 1e-6);
     });
   });
 
@@ -279,6 +337,106 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
       const audio = await pipeline.synthesize(notes, BPM, {});
       expect(spy.called).to.equal(false);
       expect(audio).to.be.an.instanceOf(Float32Array);
+    });
+  });
+
+  /**
+   * #4 / #5 / #13 / #14：发射长度契约。
+   * 旧实现只补零不裁剪、补零块与音频块共用 chunkIndex、且不暴露 frontier，
+   * 越界/欠长只能靠听感发现。
+   */
+  describe('长度契约与诊断字段', () => {
+    it('末段音频超长 → 裁到 totalSamplesRel，sampleEnd 不越界', () => {
+      const segments = [{ startBeat: 0, endBeat: 10 }];
+      const { emitter, chunks } = makeEmitter(segments);
+      emitter.segmentDone(0, makeAudio(10.02)); // vocoder 取整多出 480 样本
+
+      expect(chunks).to.have.lengthOf(1);
+      expect(chunks[0].sampleEnd).to.equal(10 * SEC);
+      expect(chunks[0].audio.length).to.equal(10 * SEC);
+      expect(emitter.frontier).to.equal(10 * SEC);
+      expect(() => emitter.assertComplete()).to.not.throw();
+    });
+
+    it('末段为空且前面还有缺口 → 补零到 total（sampleEnd 不越界）', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 4, endBeat: 8 },
+      ];
+      const { emitter, chunks } = makeEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4));
+      emitter.segmentDone(1, new Float32Array(0));
+
+      const last = chunks[chunks.length - 1];
+      expect(last.isLast).to.equal(true);
+      expect(last.audio.length, '4s 尾段静音补齐时间轴').to.equal(4 * SEC);
+      expect(last.sampleEnd).to.equal(8 * SEC);
+      expect(emitter.frontier).to.equal(8 * SEC);
+      expect(() => emitter.assertComplete()).to.not.throw();
+    });
+
+    it('末段被前段完全覆盖（frontier 已到 total）→ 0 长度 isLast 标记，不 +1 样本', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 8 },
+        { startBeat: 6, endBeat: 8 },
+      ];
+      const { emitter, chunks } = makeEmitter(segments);
+      emitter.segmentDone(0, makeAudio(8));
+      emitter.segmentDone(1, new Float32Array(0));
+
+      const last = chunks[chunks.length - 1];
+      expect(last.isLast).to.equal(true);
+      expect(last.audio.length).to.equal(0);
+      expect(last.sampleOffset).to.equal(8 * SEC);
+      expect(last.sampleEnd).to.equal(8 * SEC);
+      expect(emitter.frontier).to.equal(8 * SEC);
+      expect(() => emitter.assertComplete()).to.not.throw();
+    });
+
+    it('前段多出 480 样本 → 只裁到 meta.relEnd，后段头部不被多裁', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 4, endBeat: 8 },
+      ];
+      const { emitter, chunks } = makeEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4 + 480 / SEC));
+      emitter.segmentDone(1, makeAudio(4));
+
+      expect(chunks[0].sampleEnd, '前段不得越过自身 relEnd').to.equal(4 * SEC);
+      expect(chunks[1].sampleOffset, '后段仍从 4s 开始').to.equal(4 * SEC);
+      expect(chunks[1].audio.length, '后段头部不被多裁').to.equal(4 * SEC);
+      expect(() => emitter.assertComplete()).to.not.throw();
+    });
+
+    it('chunkIndex 单调唯一：补零块与真实音频块不再共用序号', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 26, endBeat: 30 },
+      ];
+      const { emitter, chunks } = makeEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4));
+      emitter.segmentDone(1, makeAudio(4));
+
+      expect(chunks.map((c) => c.chunkIndex)).to.deep.equal([0, 1, 2]);
+      // 补零块属于它前置的那个 segment 槽位（缺口在 seg1 之前）。
+      expect(chunks.map((c) => c.segmentIndex)).to.deep.equal([0, 1, 1]);
+      expect(() => emitter.assertComplete()).to.not.throw();
+    });
+
+    it('assertComplete：欠长 / 未完成必须抛错，不再静默交付', () => {
+      const segments = [
+        { startBeat: 0, endBeat: 4 },
+        { startBeat: 4, endBeat: 8 },
+      ];
+      const { emitter } = makeEmitter(segments);
+      emitter.segmentDone(0, makeAudio(4));
+      expect(() => emitter.assertComplete(), '还有 segment 未完成').to.throw(/incomplete/);
+
+      emitter.segmentDone(1, makeAudio(2)); // 比时间轴短 2s
+      // 末段会自动补零到 total，因此这里应通过；构造真正欠长需直接改 frontier，
+      // 由"末段为空"用例覆盖边界。此处确认补齐后精确铺满。
+      expect(emitter.frontier).to.equal(8 * SEC);
+      expect(() => emitter.assertComplete()).to.not.throw();
     });
   });
 });

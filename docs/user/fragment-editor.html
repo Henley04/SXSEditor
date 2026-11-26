@@ -5,6 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fragment Editor — SXSEditor Docs</title>
   <link rel="icon" href="../images/icon.png" />
+  <style>
+    /* 文档内的小色块：用于三色语义说明（不依赖主题） */
+    .color-chip {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 4px;
+      vertical-align: baseline;
+      border: 1px solid rgba(128, 128, 128, 0.5);
+    }
+  </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -63,6 +75,16 @@
       <p data-lang="en">The Fragment Editor is a full-featured piano-roll editor that opens when you double-click a fragment. It supports notes, lyrics, pitch curves, volume/pan envelopes, and phoneme-level editing.</p>
       <p data-lang="zh">片段编辑器是一个功能完整的钢琴卷帘编辑器，双击片段即可打开。它支持音符、歌词、音高曲线、音量/声像包络以及音素级编辑。</p>
 
+      <figure class="doc-figure">
+        <a class="fig-zoom" href="../images/webp/fragment-editor.en.webp" data-en="../images/webp/fragment-editor.en.webp" data-zh="../images/webp/fragment-editor.zh.webp" aria-label="Open full-size image">
+          <img src="../images/webp/fragment-editor.en.webp" data-en="../images/webp/fragment-editor.en.webp" data-zh="../images/webp/fragment-editor.zh.webp" alt="Fragment Editor: piano keys, piano roll with note bars and lyrics, inspector on the right, parameter lane tabs at the bottom" width="2520" height="1350" loading="lazy" decoding="async" />
+        </a>
+        <figcaption>
+          <span data-lang="en"><strong>Fragment Editor.</strong> <span class="fig-num">1</span> <strong>Inspector</strong> — pitch, timing and lyric of the selected note, its phonemes, and the timbre / post-processing sliders. <span class="fig-num">2</span> <strong>Piano roll</strong> — note bars with inline lyrics; click to add, drag to move, double-click to edit the lyric. Press <kbd class="kbd">2</kbd> for Pitch mode. <span class="fig-num">3</span> <strong>Parameter lanes</strong> — VOL / PAN / Phoneme / Timbre.</span>
+          <span data-lang="zh"><strong>分片编辑器。</strong> <span class="fig-num">1</span> <strong>检查器</strong>——选中音符的音高、时值与歌词，音素列表，以及音色 / 后处理滑杆。<span class="fig-num">2</span> <strong>钢琴卷帘</strong>——音符条内直接显示歌词；点击添加、拖动移动、双击改歌词。按 <kbd class="kbd">2</kbd> 进入音高模式。<span class="fig-num">3</span> <strong>参数泳道</strong>——音量 / 声像 / 音素 / 音色。</span>
+        </figcaption>
+      </figure>
+
       <h2>
         <span data-lang="en">Opening the Fragment Editor</span>
         <span data-lang="zh">打开片段编辑器</span>
@@ -79,12 +101,12 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Edits in the Fragment Editor are automatically synced to the main window — <strong>there is no Save button</strong>. After any edit (MIDI notes, lyrics, pitch curve, envelopes, phoneme parameters), a <strong>500ms debounced auto-save</strong> fires and pushes the updated fragment data to the main window.</p>
-          <p data-lang="zh">片段编辑器中的编辑会自动同步到主窗口——<strong>没有保存按钮</strong>。任何编辑（MIDI 音符、歌词、音高曲线、包络、音素参数）后都会触发 <strong>500ms 防抖自动保存</strong>，将更新后的片段数据推送到主窗口。</p>
+          <p data-lang="en">Edits in the Fragment Editor are synced to the main window automatically; the editor has no Save button. All changes to notes, lyrics, pitch curves, envelopes and phonemes are saved as you work.</p>
+          <p data-lang="zh">片段编辑器的编辑会自动同步到主窗口，无需保存。</p>
         </div>
       </div>
       <ul>
-        <li><span data-lang="en"><strong>Ctrl+S</strong> cancels the debounce timer and pushes the update immediately (force-sync). This is optional — the auto-save already handles sync.</span><span data-lang="zh"><strong>Ctrl+S</strong> 取消防抖计时器并立即推送更新（强制同步）。这是可选操作——自动保存已处理同步。</span></li>
+        <li><span data-lang="en"><strong>Ctrl+S</strong> syncs the fragment to the main window immediately.</span><span data-lang="zh"><strong>Ctrl+S</strong> 立即同步到主窗口。</span></li>
         <li><span data-lang="en">The <strong>Close</strong> button auto-syncs before closing the window.</span><span data-lang="zh"><strong>关闭</strong>按钮在关闭窗口前会自动同步。</span></li>
         <li><span data-lang="en">When you load a new <code>.sxsproj</code> file, all open Fragment Editor windows close automatically to prevent stale references.</span><span data-lang="zh">加载新的 <code>.sxsproj</code> 文件时，所有打开的片段编辑器窗口会自动关闭，以避免引用失效。</span></li>
       </ul>
@@ -99,20 +121,20 @@
         <li><span data-lang="en"><strong>Piano roll</strong> (center): The main editing canvas.</span><span data-lang="zh"><strong>钢琴卷帘</strong>（中部）：主编辑画布。</span></li>
         <li><span data-lang="en"><strong>Inspector</strong> (right): Shows properties of the selected note or singer info.</span><span data-lang="zh"><strong>检查器</strong>（右侧）：显示选中音符的属性或歌手信息。</span></li>
         <li><span data-lang="en"><strong>Parameter panel</strong> (bottom): VOL, PAN, Phoneme, and Timbre (F0 / spectral post-processing) lanes.</span><span data-lang="zh"><strong>参数面板</strong>（底部）：VOL、PAN、Phoneme 与音色（F0 / 频谱后处理）轨道。</span></li>
-        <li><span data-lang="en"><strong>Status bar</strong> (bottom): Shows pipeline status, sample rate (48000 Hz playback / 24000 Hz model), hop size (480), and auto-sync indicator.</span><span data-lang="zh"><strong>状态栏</strong>（底部）：显示管线状态、采样率（48000 Hz 播放 / 24000 Hz 模型）、hop size（480）和自动同步指示。</span></li>
+        <li><span data-lang="en"><strong>Status bar</strong> (bottom): Shows a Ready indicator with the SVS Pipeline label, the model sample rate (<strong>24 kHz</strong>), hop size (<strong>480</strong>), and the auto-sync indicator.</span><span data-lang="zh"><strong>状态栏</strong>（底部）：显示就绪指示灯与 SVS Pipeline 标识、模型采样率（<strong>24 kHz</strong>）、hop size（<strong>480</strong>）和自动同步指示。</span></li>
       </ul>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Synthesis Cancellation</strong> — a cancel button appears during synthesis. Cancellation is <em>cooperative</em>: it exits GPU inference at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach.</p>
-          <p data-lang="zh"><strong>取消合成</strong>——合成过程中会出现取消按钮。取消为<em>协作式</em>：在扩散步之间的安全检查点退出 GPU 推理，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。</p>
+          <p data-lang="en"><strong>Stopping synthesis.</strong> Once playback starts, the <strong>Play</strong> button becomes <strong>Stop</strong>; click it to stop playback and discard the synthesis. Until the first audio chunk plays, the button reads "Synthesizing" and is disabled.</p>
+          <p data-lang="zh"><strong>停止合成。</strong>开始播放后，<strong>Play</strong> 按钮变为 <strong>Stop</strong>，点击即可停止播放并放弃本次合成。首个音频块播放前，按钮显示"合成中"并暂时禁用。</p>
         </div>
       </div>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Viewport-sized canvas</strong> — the timeline canvas now uses a viewport-sized backing store with scroll transform, fixing the Chromium canvas size limit that caused rendering issues on long MIDI projects. This allows smooth scrolling and rendering regardless of project length.</p>
-          <p data-lang="zh"><strong>视口尺寸画布</strong>——时间线画布现在使用视口尺寸的后备存储加滚动变换，修复了 Chromium 画布尺寸限制导致长 MIDI 项目渲染异常的问题。无论项目长度如何，都能流畅滚动和渲染。</p>
+          <p data-lang="en">The timeline scrolls and renders smoothly regardless of project length.</p>
+          <p data-lang="zh">无论片段长度如何，时间线都能流畅滚动与渲染。</p>
         </div>
       </div>
 
@@ -200,17 +222,17 @@
           <tr>
             <td><span data-lang="en">Continuation</span><span data-lang="zh">连音</span></td>
             <td><span data-lang="en">Half-width dash <code>-</code></span><span data-lang="zh">半角连字符 <code>-</code></span></td>
-            <td><span data-lang="en">Slur / continuation — re-sings nothing, extends the previous note's phoneme (noteType 3)</span><span data-lang="zh">连音（延续）——不重新起音，延续前一个音符的音素（noteType 3）</span></td>
+            <td><span data-lang="en">Slur (continuation): no new attack, extends the previous note's phoneme</span><span data-lang="zh">连音（延续）：不重新起音，延续前一个音符的音素</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Rest</span><span data-lang="zh">休止</span></td>
             <td><span data-lang="en">Empty lyric, or the literal token <code>&lt;SP&gt;</code></span><span data-lang="zh">空歌词，或字面 token <code>&lt;SP&gt;</code></span></td>
-            <td><span data-lang="en">Silence. <code>&lt;SP&gt;</code> is the silence phoneme (noteType 1); an empty lyric is also a rest and sings as silence too — with or without a pitch. (New notes start out with the default lyric <code>la</code>; clear the lyric to make a note silent.)</span><span data-lang="zh">静音。<code>&lt;SP&gt;</code> 即静音音素（noteType 1）；空歌词同样按休止处理——无论有无音高都唱静音。（新建音符的默认歌词是 <code>la</code>；把歌词清空即可让该音符静音。）</span></td>
+            <td><span data-lang="en">Silence. <code>&lt;SP&gt;</code> is the silence phoneme; an empty lyric is also a rest and sings as silence, with or without a pitch. (New notes start out with the default lyric <code>la</code>; clear the lyric to make a note silent.)</span><span data-lang="zh">静音。<code>&lt;SP&gt;</code> 为静音音素；空歌词同样按休止处理——无论有无音高都唱静音。（新建音符的默认歌词是 <code>la</code>；把歌词清空即可让该音符静音。）</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Aspiration</span><span data-lang="zh">吸气</span></td>
             <td><span data-lang="en">The literal token <code>&lt;AP&gt;</code></span><span data-lang="zh">字面 token <code>&lt;AP&gt;</code></span></td>
-            <td><span data-lang="en">Audible breath / aspiration — the note keeps its pitch slot but is sung as an unvoiced breath (noteType 2, f0 = 0)</span><span data-lang="zh">可听见的吸气 / 气声——音符保留音高位置，但以无声带振动的气声演唱（noteType 2，f0 = 0）</span></td>
+            <td><span data-lang="en">Audible breath or aspiration: the note keeps its pitch slot but is sung as an unvoiced breath (f0 = 0)</span><span data-lang="zh">可听见的吸气 / 气声：音符保留音高位置，但以无声带振动的气声演唱（f0 = 0）</span></td>
           </tr>
         </tbody>
       </table>
@@ -218,7 +240,7 @@
         <div class="callout-icon">⚠️</div>
         <div class="callout-body">
           <p data-lang="en"><strong>Empty lyric is not a slur.</strong> Only the dash <code>-</code> marks a continuation note. An empty lyric is a rest and always sings as silence, whether or not the note has a pitch. Mixing the two up is the most common cause of "the model sang through my rest" bugs.</p>
-          <p data-lang="zh"><strong>空歌词不是连音。</strong>只有连字符 <code>-</code> 表示延续音符。空歌词表示休止——无论音符有无音高，都按静音处理。混淆这两者是"模型在我的休止段照样唱"这类问题最常见的原因。</p>
+          <p data-lang="zh"><strong>空歌词不是连音。</strong>只有连字符 <code>-</code> 表示延续音符。空歌词表示休止，无论音符有无音高都按静音处理；两者混淆会导致休止段仍然发声。</p>
         </div>
       </div>
       <h3>
@@ -228,43 +250,39 @@
       <p data-lang="en">A <strong>slur</strong> note continues the previous note's sound without re-attacking. To create a slur, double-click a note and type a half-width dash <code>-</code>; the editor stores it as an internal continuation state. The note still displays <code>-</code>, but that character is never sent to the model as a lyric. <strong>Do not use an empty lyric for a slur</strong> — an empty lyric means rest.</p>
       <p data-lang="zh"><strong>连音</strong>音符延续前一个音符的发音而不重新起音。双击后续音符并输入半角连字符 <code>-</code>，编辑器会把它保存为内部连音状态；音符上仍显示 <code>-</code>，但该字符不会作为歌词送入模型。<strong>不要用空歌词表示连音</strong>——空歌词表示休止。</p>
 
-      <h2 id="note-types-notetype">
-        <span data-lang="en">Note Types (noteType)</span>
-        <span data-lang="zh">音符类型（notetype）</span>
+      <h2 id="lyrics-and-articulation">
+        <span data-lang="en">Lyrics and How They Are Sung</span>
+        <span data-lang="zh">歌词与发声方式</span>
       </h2>
-      <p data-lang="en">Every note carries an internal <strong>note type</strong> that tells the model how to treat it. You never set it directly — it is derived from the lyric you type. The three values are:</p>
-      <p data-lang="zh">每个音符都带有一个内部<strong>音符类型</strong>，告诉模型该如何处理它。你无需直接设置——它由你输入的歌词自动推导。三个取值如下：</p>
+      <p data-lang="en">The lyric of a note determines how it is sung.</p>
+      <p data-lang="zh">音符的歌词决定它如何发声。</p>
       <table class="doc-table">
         <thead>
           <tr>
-            <th><span data-lang="en">noteType</span><span data-lang="zh">音符类型</span></th>
-            <th><span data-lang="en">Triggered by</span><span data-lang="zh">触发条件</span></th>
-            <th><span data-lang="en">What the model does</span><span data-lang="zh">模型行为</span></th>
+            <th><span data-lang="en">Lyric</span><span data-lang="zh">歌词写法</span></th>
+            <th><span data-lang="en">Result</span><span data-lang="zh">发声结果</span></th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><code>1</code> <span data-lang="en">— SP (silence)</span><span data-lang="zh">— 静音</span></td>
-            <td><span data-lang="en">Lyric <code>&lt;SP&gt;</code>, an empty lyric (whether or not the note has a pitch), or a note with pitch 0</span><span data-lang="zh">歌词为 <code>&lt;SP&gt;</code>、空歌词（无论该音符有无音高），或音高为 0 的音符</span></td>
-            <td><span data-lang="en">Silence phoneme <code>&lt;SP&gt;</code>; no pitch is sung, the frame is unvoiced (f0 = 0)</span><span data-lang="zh">静音音素 <code>&lt;SP&gt;</code>；不唱音高，该帧为清音（f0 = 0）</span></td>
+            <td><span data-lang="en">Empty, or <code>&lt;SP&gt;</code></span><span data-lang="zh">空歌词，或 <code>&lt;SP&gt;</code></span></td>
+            <td><span data-lang="en">Silence: nothing is sung, with or without a pitch.</span><span data-lang="zh">静音，不发出声音，无论该音符有无音高。</span></td>
           </tr>
           <tr>
-            <td><code>2</code> <span data-lang="en">— normal (sung)</span><span data-lang="zh">— 普通（演唱）</span></td>
-            <td><span data-lang="en">Any real lyric: Chinese characters, English words, kana, or <code>&lt;AP&gt;</code> — including the default <code>la</code> every new note starts with</span><span data-lang="zh">任意真实歌词：汉字、英文单词、假名，或 <code>&lt;AP&gt;</code>——包括每个新音符默认带的 <code>la</code></span></td>
-            <td><span data-lang="en">Sung normally from the lyric's phonemes</span><span data-lang="zh">按歌词音素正常演唱</span></td>
+            <td><span data-lang="en">Any real lyric: Chinese characters, English words, kana, <code>&lt;AP&gt;</code>, or the default <code>la</code></span><span data-lang="zh">任意真实歌词：汉字、英文单词、假名、<code>&lt;AP&gt;</code>，或默认的 <code>la</code></span></td>
+            <td><span data-lang="en">Sung from the lyric's phonemes.</span><span data-lang="zh">按歌词对应的音素演唱。</span></td>
           </tr>
           <tr>
-            <td><code>3</code> <span data-lang="en">— slur (continuation)</span><span data-lang="zh">— 连音（延续）</span></td>
-            <td><span data-lang="en">Lyric <code>-</code></span><span data-lang="zh">歌词为 <code>-</code></span></td>
-            <td><span data-lang="en">Extends the previous note's phoneme without a new attack — use it for one syllable held over several notes</span><span data-lang="zh">延续前一个音符的音素而不重新起音——用于一个音节跨越多个音符的情况</span></td>
+            <td><code>-</code></td>
+            <td><span data-lang="en">Continues the previous note's phoneme without a new attack.</span><span data-lang="zh">延续前一个音符的音素，不重新起音。</span></td>
           </tr>
         </tbody>
       </table>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Why it matters:</strong> a mis-typed note type changes what the model sings, not just how it looks. A slur typed as an empty lyric becomes a rest; a rest typed as a lyric makes the model sing through the silence. The phoneme editor (press <kbd class="kbd">5</kbd>) shows the phoneme sequence the model will actually receive, so you can verify a note landed on the type you intended.</p>
-          <p data-lang="zh"><strong>为什么重要：</strong>音符类型输错会改变模型<em>唱出的内容</em>，而不只是显示效果。连音输成空歌词会变成休止；休止段输了歌词会让模型在静音处发声。音素编辑器（按 <kbd class="kbd">5</kbd>）会显示模型实际收到的音素序列，可用来核对音符是否落到了预期类型上。</p>
+          <p data-lang="en">Lyrics determine what is sung: an empty lyric is a rest, and <code>-</code> continues the previous syllable. Check the lyric of every note, and use the phoneme lane (<kbd class="kbd">5</kbd>) to confirm the phoneme sequence.</p>
+          <p data-lang="zh">MIDI 音符的歌词决定歌声内容，请逐音符核对歌词；按 <kbd class="kbd">5</kbd> 可在音素泳道确认对应的音素序列。</p>
         </div>
       </div>
 
@@ -288,13 +306,13 @@
             <td><code>&lt;SP&gt;</code></td>
             <td><span data-lang="en">Silence phoneme</span><span data-lang="zh">静音音素</span></td>
             <td><span data-lang="en">Nothing — a silent frame</span><span data-lang="zh">无声——静音帧</span></td>
-            <td><span data-lang="en">noteType 1, pitch slot ignored, f0 = 0 (unvoiced)</span><span data-lang="zh">noteType 1，忽略音高，f0 = 0（清音）</span></td>
+            <td><span data-lang="en">Pitch ignored, f0 = 0 (unvoiced)</span><span data-lang="zh">忽略音高，f0 = 0（清音）</span></td>
           </tr>
           <tr>
             <td><code>&lt;AP&gt;</code></td>
             <td><span data-lang="en">Aspiration phoneme</span><span data-lang="zh">吸气音素</span></td>
             <td><span data-lang="en">An audible breath / inhale before a phrase</span><span data-lang="zh">乐句前可听见的吸气 / 换气声</span></td>
-            <td><span data-lang="en">noteType 2 (sung), but f0 = 0 — it is voiced as a breath, not as silence</span><span data-lang="zh">noteType 2（演唱），但 f0 = 0——以气声发出，而非静音</span></td>
+            <td><span data-lang="en">Sung, but f0 = 0: voiced as a breath, not as silence</span><span data-lang="zh">按演唱处理，但 f0 = 0：以气声发出，而非静音</span></td>
           </tr>
         </tbody>
       </table>
@@ -320,8 +338,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Because Extrapolated Euler and STORK-2 keep state across diffusion steps, that state resets at every segment boundary. For long fragments, <strong>Euler or Heun</strong> is the safer sampler choice (see <a href="synthesis-export.html#diffusion-sampler">Diffusion Sampler</a>).</p>
-          <p data-lang="zh">由于 Extrapolated Euler 与 STORK-2 会跨扩散步保留状态，该状态会在每个分段边界重置。因此长分片更推荐 <strong>Euler 或 Heun</strong>（见<a href="synthesis-export.html#diffusion-sampler">扩散求解器</a>）。</p>
+          <p data-lang="en">Because Extrapolated Euler and STORK-2 keep state across diffusion steps, that state resets at every segment boundary. For long fragments, <strong>Euler or Heun</strong> is the safer sampler choice (see <a href="settings.html#diffusion-sampler">Diffusion Sampler</a>).</p>
+          <p data-lang="zh">由于 Extrapolated Euler 与 STORK-2 会跨扩散步保留状态，该状态会在每个分段边界重置。因此长分片更推荐 <strong>Euler 或 Heun</strong>（见<a href="settings.html#diffusion-sampler">扩散求解器</a>）。</p>
         </div>
       </div>
 
@@ -344,10 +362,25 @@
         <span data-lang="en">Pitch Curves</span>
         <span data-lang="zh">音高曲线</span>
       </h2>
-      <p data-lang="en">Pitch curves add pitch slides and other expressive effects on top of the base MIDI pitch. The final pitch is: <strong>MIDI note pitch + pitch curve offset</strong>. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
-      <p data-lang="zh">音高曲线在基础 MIDI 音高之上添加滑音等表现性效果。最终音高为：<strong>MIDI 音符音高 + 音高曲线偏移</strong>。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
+      <p data-lang="en">Pitch curves are stored as <strong>absolute MIDI pitches</strong>: wherever the curve covers a frame, that pitch replaces the frame outright — it is <em>not</em> an offset added on top of the note. Inside the manual range, frames before the first / after the last anchor <strong>hold</strong> the first / last anchor value (they do not fall back to the note pitch). Outside the manual range the <a href="#auto-pitch-curve">auto layer</a> takes over. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
+      <p data-lang="zh">音高曲线的锚点存的是<strong>绝对 MIDI 音高</strong>：曲线覆盖到的帧直接采用该音高，<em>不是</em>在音符音高上叠加偏移。在手动范围内，首个/末个锚点之外的时间会<strong>保持</strong>首/末锚点的值（不回落到音符音高）。手动范围之外由<a href="#auto-pitch-curve">自动层</a>接管。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
       <p data-lang="en">Switch to Pitch mode by pressing <kbd class="kbd">2</kbd> or clicking the <strong>Pitch</strong> button in the toolbar.</p>
       <p data-lang="zh">按 <kbd class="kbd">2</kbd> 或点击工具栏的 <strong>Pitch</strong> 按钮切换到音高模式。</p>
+
+      <h3 id="pitch-mode">
+        <span data-lang="en">Manual vs. Score</span>
+        <span data-lang="zh">Manual 与 Score</span>
+      </h3>
+      <p data-lang="en">The <strong>Manual / Score</strong> switch to the left of the MIDI/Pitch buttons decides where the pitch comes from.</p>
+      <p data-lang="zh">工具栏 MIDI / Pitch 左侧的 <strong>Manual / Score</strong> 开关决定音高从哪里来。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Manual</strong> — the synthesizer follows a pitch curve: drawn anchors, the auto layer, F0 smoothing, or (if the fragment has none of those and you picked Manual explicitly) a flat curve at the MIDI pitch of each note. Use this when you want to control the contour yourself.</span><span data-lang="zh"><strong>Manual</strong> — 按音高曲线唱：手绘锚点、自动层、F0 平滑；如果这个分片什么都没有而你仍显式选了 Manual，则按每个音符的 MIDI 音高给一条平直曲线。想自己控制音高走向时用它。</span></li>
+        <li><span data-lang="en"><strong>Score</strong> — no F0 curve is sent at all. The model receives only the MIDI notes and generates the pitch contour itself: note attacks, transitions between notes, vibrato and drift come from the model rather than from a curve. The <strong>Pitch</strong> button and the <kbd class="kbd">2</kbd> shortcut are disabled in this mode, because a curve would not be used.</span><span data-lang="zh"><strong>Score</strong> — 完全不发送 F0 曲线。模型只拿到 MIDI 音符，音高轮廓由模型自己生成：起音、换音过渡、颤音与漂移都来自模型，而不是来自曲线。此模式下 <strong>Pitch</strong> 按钮与 <kbd class="kbd">2</kbd> 快捷键置灰不可用——曲线本来就不会被使用。</span></li>
+      </ul>
+      <p data-lang="en"><strong>Default behaviour.</strong> If you never touched the switch, the fragment chooses by itself: anything with curve content (anchors, brush strokes, baked segments, the auto layer, F0 smoothing, note vibrato) is Manual; a fragment with nothing set up at all is <strong>Score</strong>. That way a fragment with no pitch work at all no longer gets a flat F0 traced from its MIDI notes — it gets the model's own phrasing. Explicitly turning the pitch curve <em>off</em> counts as a choice and stays Manual (flat), so projects that relied on that keep sounding the same. Note that a brand-new fragment has the <a href="#auto-pitch-curve">auto layer</a> switched on, so it counts as Manual from the start; clear the curve and turn Auto off and it falls back to Score.</p>
+      <p data-lang="zh"><strong>默认行为。</strong>从未碰过开关时由分片自行判断：有任何曲线内容（锚点、画笔笔触、派生段、自动层、F0 平滑、音符颤音）就是 Manual；什么都没有则为 <strong>Score</strong>。未做音高处理的片段由模型自行处理乐句，不再按 MIDI 描一条平直 F0。显式<em>关闭</em>音高曲线视为已作选择，仍按 Manual（平直）处理。新建片段默认开启<a href="#auto-pitch-curve">自动层</a>，因此初始状态为 Manual；清空曲线并关闭自动层后回落到 Score。</p>
+      <p data-lang="en">Switching modes changes the synthesis input, so the fragment is re-synthesized on the next preview or export.</p>
+      <p data-lang="zh">切换模式会改变合成输入，下一次预览或导出会重新合成该分片。</p>
       <h3>
         <span data-lang="en">Anchor Points</span>
         <span data-lang="zh">锚点</span>
@@ -374,8 +407,8 @@
         <li><span data-lang="en">In between, the anchor is pulled that fraction of the way toward the straight line — ideal for "hinting" a pitch without committing to it. A dashed vertical guide links the anchor to where the curve actually runs.</span><span data-lang="zh">介于两者之间时，锚点按该比例被拉向连线——适合"只是暗示一下音高而不完全锁定"。画布上会用虚线把锚点连到曲线实际经过的位置。</span></li>
         <li><span data-lang="en">The first and last anchor have no two-sided neighbours, so strength has no effect on them.</span><span data-lang="zh">首尾锚点没有两侧邻居，强度对其不生效。</span></li>
       </ul>
-      <p data-lang="en"><strong>Smoothing</strong> (0–100) is a separate axis: 0 is a linear ramp, 100 is a full ease-in/ease-out smoothstep. It is taken from the anchor on the <em>left</em> of each segment, exactly as before.</p>
-      <p data-lang="zh"><strong>平滑过渡</strong>（0–100）是另一个维度：0 为线性斜坡，100 为完整的缓入缓出（smoothstep）。与旧版一致，每段取<em>左端</em>锚点的取值。</p>
+      <p data-lang="en"><strong>Smoothing</strong> (0–100) is a separate axis: 0 is a linear ramp, 100 is a full ease-in/ease-out smoothstep. For each segment the value is taken from the anchor on its left.</p>
+      <p data-lang="zh"><strong>平滑过渡</strong>（0–100）是另一个维度：0 为线性斜坡，100 为完整的缓入缓出（smoothstep）。每段取<em>左端</em>锚点的取值。</p>
       <h3>
         <span data-lang="en">Brush Mode &amp; Smoothing</span>
         <span data-lang="zh">画笔模式与平滑</span>
@@ -391,12 +424,105 @@
       <p data-lang="en">Click <strong>↺ Reset</strong> to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.</p>
       <p data-lang="zh">点击 <strong>↺ Reset</strong> 可清除所有音高曲线修改，回到基于 MIDI 音符的自动生成曲线。</p>
 
+      <h2 id="auto-pitch-curve">
+        <span data-lang="en">Auto Pitch Curve</span>
+        <span data-lang="zh">自动音高曲线</span>
+      </h2>
+      <p data-lang="en">The <strong>Auto</strong> switch in the pitch toolbar makes every note sing with a natural contour: a short attack scoop into the note, a portamento between notes, an overshoot after big leaps, a reverse preparation before them, a fall-off at the end, vibrato on long notes, and a little jitter everywhere. It is on by default for new fragments and <strong>off</strong> for existing projects.</p>
+      <p data-lang="zh">音高工具栏的 <strong>自动</strong> 开关会让每个音符带上自然的起伏：起音时的短滑入、音符之间的滑音、大跳进后的过冲、跳进前的反向预备、句尾下滑、长音颤音，以及全程的细微抖动。新建分片默认开启，<strong>已有工程默认关闭</strong>。</p>
+      <p data-lang="en"><strong>Auto never blocks manual editing.</strong> The curve you see is drawn in three colours:</p>
+      <p data-lang="zh"><strong>自动层永远不会妨碍手动编辑。</strong> 曲线用三种颜色表示：</p>
+      <ul>
+        <li><span data-lang="en"><span class="color-chip" style="background:#ffffff"></span><strong>White</strong> — auto curve in effect.</span><span data-lang="zh"><span class="color-chip" style="background:#ffffff"></span><strong>白色</strong> — 自动曲线在此生效。</span></li>
+        <li><span data-lang="en"><span class="color-chip" style="background:#aab2c2"></span><strong>Grey (dashed)</strong> — auto curve suppressed because a manual curve covers this range. It stays visible for reference and comes back the moment you delete the manual content.</span><span data-lang="zh"><span class="color-chip" style="background:#aab2c2"></span><strong>灰色（虚线）</strong> — 该段被手动曲线覆盖，自动曲线暂不生效。它仍然保留作为参考，删掉手动内容就立刻恢复。</span></li>
+        <li><span data-lang="en"><span class="color-chip" style="background:#5b8def"></span><strong>Accent colour</strong> — manual anchors / derived segments. Manual always wins inside its range.</span><span data-lang="zh"><span class="color-chip" style="background:#5b8def"></span><strong>强调色</strong> — 手动锚点/派生段。手动内容在其范围内永远优先。</span></li>
+      </ul>
+      <p data-lang="en">Clicking an empty spot creates a normal manual anchor and turns just that note's range into manual territory — every other note keeps singing with the auto curve. Hand-editing one phrase does not silently disable auto for the whole fragment.</p>
+      <p data-lang="zh">在空白处点击就是普通的新建锚点，只会把<strong>该音符所在的范围</strong>变成手动区，其他音符继续走自动曲线。改一个乐句不会悄悄让整段的自动曲线失效。</p>
+      <figure class="fig">
+        <img src="../images/verify/editor-manual-covered.png" alt="Manual anchors covering one note while the others keep the auto curve" loading="lazy">
+        <figcaption><span data-lang="en">The tinted band is manual territory (two anchors). Outside it, the remaining notes continue to use the auto curve.</span><span data-lang="zh">淡色带是手动区（两个锚点）。区域之外的音符继续使用自动曲线。</span></figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="../images/verify/editor-auto-curve.png" alt="Auto pitch curve over the notes, with the naturalness panel on the right" loading="lazy">
+        <figcaption><span data-lang="en">Auto curve on every note (attack scoop, portamento, vibrato, fall-off). The toolbar shows the Auto switch, preset, Params and Batch; the inspector shows the naturalness check.</span><span data-lang="zh">每个音符上的自动曲线（起音滑入、滑音、颤音、句尾下滑）。工具栏显示 自动 开关、预设、参数与批量；检查器里是自然度自检。</span></figcaption>
+      </figure>
+
+      <p data-lang="en"><strong>It is not "every note, the same way".</strong> Auto decides per note whether a gesture happens at all: a long, high, phrase-final note is likely to get vibrato; a short detached one is not. Leaps overshoot only sometimes, and the amount varies note to note. Fall-offs are reserved for phrase ends, rests and long legato tails — otherwise every note end would dip and the line would wobble. All of this is deterministic: the same project always sounds the same, and undo/redo/export stay reproducible.</p>
+      <p data-lang="zh"><strong>它不是"每个音都照同一个模板做一遍"。</strong> 自动层会逐音符判断"这个音要不要做"：长、高、句尾的音更可能有颤音，短促断开的音多半没有；跳进只是<em>有时候</em>过冲，幅度也逐音不同；下滑只留给乐句尾、休止前和连奏长音的收尾——否则每个音尾都往下掉，整条旋律会一直在晃。这些判断全部是确定性的：同一个工程每次听起来都一样，撤销/重做/导出都可复现。</p>
+      <p data-lang="en">You do not have to open the fragment editor to know which state a fragment is in: the main window draws a badge on every fragment card.</p>
+      <p data-lang="zh">不用打开分片编辑器也能知道分片处于哪种状态：主窗口会在分片卡片上画一个徽标。</p>
+      <figure class="fig">
+        <img src="../images/verify/badge-states.png" alt="Fragment badge: Auto / Mixed / Manual" loading="lazy">
+        <figcaption><span data-lang="en"><strong>Auto</strong> = auto only · <strong>Mixed</strong> = auto + manual overrides · <strong>Manual</strong> = auto off, manual only.</span><span data-lang="zh"><strong>Auto</strong> = 只有自动 · <strong>Mixed</strong> = 自动 + 手动覆盖 · <strong>Manual</strong> = 自动关闭、仅手动。</span></figcaption>
+      </figure>
+
+      <h3 id="auto-pitch-drag">
+        <span data-lang="en">Dragging the Auto Curve</span>
+        <span data-lang="zh">拖动自动曲线</span>
+      </h3>
+      <p data-lang="en">Press and drag directly on a <em>white</em> auto curve: a copy of that note's auto shape is created as a <strong>derived segment</strong> in the manual colour, and you drag the copy. The original auto curve is not deleted — it simply turns grey inside that range and can always be restored by deleting the derived segment. Hold <kbd class="kbd">Alt</kbd> while dragging to bend only the part near the cursor (Gaussian falloff) instead of moving the whole segment. Hold <kbd class="kbd">Ctrl</kbd>/<kbd class="kbd">Cmd</kbd> and click to force a plain anchor instead.</p>
+      <p data-lang="zh">直接按在<strong>白色</strong>自动曲线上拖动：会把该音符的自动形状<strong>复制</strong>成一个派生段（手动颜色），你拖的是这份副本。原自动曲线不会被删除——它只是在该范围内转为灰色，删掉派生段即可恢复。拖动时按住 <kbd class="kbd">Alt</kbd> 只弯折光标附近的一段（高斯衰减），而不是整体平移。按住 <kbd class="kbd">Ctrl</kbd>/<kbd class="kbd">Cmd</kbd> 点击则强制新建普通锚点。</p>
+
+      <h3 id="auto-pitch-params">
+        <span data-lang="en">Parameters</span>
+        <span data-lang="zh">参数</span>
+      </h3>
+      <p data-lang="en">Every number behind the auto curve is editable in the <strong>Params</strong> panel; nothing is hidden or read-only. Changing a parameter never touches your manual anchors — only the auto layer re-derives.</p>
+      <p data-lang="zh">自动曲线背后的每个数值都能在 <strong>参数</strong> 面板里改，没有任何隐藏项或只读项。改参数不会碰你的手动锚点，只有自动层重新生成。</p>
+      <table>
+        <tr><th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th><th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th><th><span data-lang="en">What it does</span><span data-lang="zh">作用</span></th></tr>
+        <tr><td>attackMs / attackCents</td><td>60 / −60</td><td><span data-lang="en">Short scoop into the note from below.</span><span data-lang="zh">从下方滑入音符的起音。</span></td></tr>
+        <tr><td>overshootRatio / overshootMaxCents</td><td>0.04 / 25</td><td><span data-lang="en">Overshoot after a leap: ratio × interval, capped. 7 semitones ≈ 25¢.</span><span data-lang="zh">跳进后的过冲：音程 × 比例，带上限。7 半音约 25 音分。</span></td></tr>
+        <tr><td>prepCents / prepMs</td><td>−15 / 30</td><td><span data-lang="en">Tiny reverse move right before a leap.</span><span data-lang="zh">跳进前的反向小预备。</span></td></tr>
+        <tr><td>glideMs / glideMinSemitones</td><td>90 / 2</td><td><span data-lang="en">Portamento time (auto-scaled by tempo).</span><span data-lang="zh">滑音时间（随速度自动缩放）。</span></td></tr>
+        <tr><td>releaseCents</td><td>−25</td><td><span data-lang="en">Fall-off at the end of a note.</span><span data-lang="zh">句尾下滑。</span></td></tr>
+        <tr><td>jitterCents</td><td>6</td><td><span data-lang="en">Random pitch noise (the "not a machine" texture).</span><span data-lang="zh">随机抖动（"不像机器"的质感）。</span></td></tr>
+        <tr><td>autoVibrato.depth / rate / drift / depthDrift</td><td>22¢ / 5.5Hz / 6% / 8%</td><td><span data-lang="en">Derived vibrato, applied after F0 smoothing so its depth survives. Rate and depth drift slowly and randomly (never a fixed ramp). Not written into <code>note.vibrato</code>; see <a href="#note-effects-vibrato-fade">Note Effects</a> for how to take it over per note.</span><span data-lang="zh">派生的颤音，在 F0 平滑<em>之后</em>叠加，深度不会被削。速率与幅度做慢变随机（不是固定加速）。不写入 <code>note.vibrato</code>；如何逐音符接管见<a href="#note-effects-vibrato-fade">音符效果</a>。</span></td></tr>
+        <tr><td>vibratoProbability / overshootProbability / prepProbability / releaseProbability</td><td>0.82 / 0.55 / 0.40 / 0.65</td><td><span data-lang="en">How often each gesture happens at all. Real singers do <em>not</em> vibrate every long note, overshoot every leap or fall off every note end. The value is a baseline; longer / higher / phrase-final notes are more likely, short detached ones less. 1 = always, 0 = never.</span><span data-lang="zh">每种"表情"发生的基准概率。真人<strong>不会</strong>每个长音都颤、每个跳进都过冲、每个音尾都下滑。该值是基准，随后按上下文调制：更长、更高、句尾的音更容易做，短促断开的音更少做。1 = 一定做，0 = 从不。</span></td></tr>
+        <tr><td>releaseScope / releaseMinBeats</td><td>phrase / 2 拍</td><td><span data-lang="en"><code>phrase</code> = fall off only at phrase ends, before rests and (subtly) on long legato notes; <code>always</code> = every note end (the old behaviour).</span><span data-lang="zh"><code>phrase</code> = 只在乐句尾、休止前、以及连奏长音的收尾轻微下滑；<code>always</code> = 每个音尾都下滑（旧行为）。</span></td></tr>
+        <tr><td>legatoGapBeats / staccatoGapBeats / phraseGapBeats</td><td>0.12 / 0.45 / 1.2 拍</td><td><span data-lang="en">Gap thresholds that decide legato (weak attack, micro glide on stepwise moves), detached (no glide, full attack) and phrase boundaries.</span><span data-lang="zh">用"与相邻音的间隙"判定连奏（弱起音、级进微滑）、断奏（不滑、正常起音）与乐句分界。</span></td></tr>
+        <tr><td>microGlideMs</td><td>45</td><td><span data-lang="en">Very short glide for a one-semitone legato step — a hard cut sounds synthetic, a full 90 ms glide smears.</span><span data-lang="zh">连奏级进（1 半音）的微滑时长——硬切太假，90ms 又会糊。</span></td></tr>
+        <tr><td>variation</td><td>60%</td><td><span data-lang="en">Per-note variation of depth, rate, attack, jitter and overshoot (plus a per-phrase factor). 0 = every note identical (useful for A/B), 100 = maximum human scatter.</span><span data-lang="zh">逐音符的深度/速率/起音/抖动/过冲浮动（另有一个乐句级系数）。0 = 每个音完全一致（适合 A/B），100 = 最大离散度。</span></td></tr>
+        <tr><td>glideOwnership</td><td>auto</td><td><span data-lang="en">Who handles note transitions: the auto curve, the timbre panel's glide, or both stacked.</span><span data-lang="zh">换音过渡由谁负责：自动曲线、音色面板的过渡参数，或两者叠加。</span></td></tr>
+      </table>
+      <figure class="fig">
+        <img src="../images/verify/editor-auto-params-natural.png" alt="Auto pitch curve parameters, naturalness group: gesture probabilities, release scope, legato gaps, micro-glide and per-note variation" loading="lazy">
+        <figcaption><span data-lang="en">The <strong>naturalness</strong> group at the bottom of the parameter panel: how often each gesture happens, where fall-offs are allowed, what counts as legato, and how much notes may differ from each other.</span><span data-lang="zh">参数面板底部的<strong>自然度</strong>分组：每种表情发生的概率、下滑允许出现在哪里、什么算连奏，以及音符之间允许有多大差异。</span></figcaption>
+      </figure>
+
+      <h3 id="pitch-batch-tools">
+        <span data-lang="en">Batch Tools, Snapping &amp; Numeric Input</span>
+        <span data-lang="zh">批量工具、吸附与数值输入</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">The <strong>batch</strong> dropdown transposes the whole curve by ±1 semitone, snaps it to semitones, simplifies it (RDP, keeps the shape, drops redundant points) or smooths it. With anchors selected it only affects the selection.</span><span data-lang="zh"><strong>批量</strong> 下拉可整体移调 ±1 半音、贴合到半音、抽稀（RDP，保留形状、去掉冗余点）或平滑。有选中锚点时只作用于选中项。</span></li>
+        <li><span data-lang="en"><kbd class="kbd">Alt</kbd>+<kbd class="kbd">↑</kbd>/<kbd class="kbd">↓</kbd> transposes by a semitone — repeatable, and each run is a single undo step.</span><span data-lang="zh"><kbd class="kbd">Alt</kbd>+<kbd class="kbd">↑</kbd>/<kbd class="kbd">↓</kbd> 移调一个半音，可连按，每次只占一个撤销步骤。</span></li>
+        <li><span data-lang="en">Hold <kbd class="kbd">Shift</kbd> while dragging an anchor to snap it to the nearest semitone (the snap is on the absolute pitch, not on the drag distance).</span><span data-lang="zh">拖动锚点时按住 <kbd class="kbd">Shift</kbd> 吸附到最近的半音（吸附的是绝对音高，不是拖动量）。</span></li>
+        <li><span data-lang="en">The right-click menu has a <strong>pitch field</strong> for exact input (60.25 = 60 semitones + 25 cents), plus the live cent offset.</span><span data-lang="zh">右键菜单里有<strong>音高输入框</strong>可精确填数（60.25 = 60 半音 + 25 音分），旁边显示实时音分偏差。</span></li>
+      </ul>
+      <figure class="fig">
+        <img src="../images/verify/editor-batch-tools.png" alt="Pitch toolbar: reset, auto switch, preset, params, batch dropdown, brush smoothing" loading="lazy">
+        <figcaption><span data-lang="en">Pitch toolbar: Reset · Auto switch · preset · Params · <strong>Batch…</strong> (transpose / snap / simplify / smooth) · brush smoothing.</span><span data-lang="zh">音高工具栏：重置 · 自动开关 · 预设 · 参数 · <strong>批量…</strong>（移调 / 贴合 / 抽稀 / 平滑）· 画笔平滑。</span></figcaption>
+      </figure>
+
+      <h3 id="naturalness-check">
+        <span data-lang="en">Naturalness Check</span>
+        <span data-lang="zh">自然度自检</span>
+      </h3>
+      <p data-lang="en">The inspector's <strong>Naturalness check</strong> panel samples the curve you actually hear (auto layer + manual overrides + vibrato) and compares it with human singing ranges: vibrato depth, rate and <em>coverage</em> (share of long notes that vibrate), share of dead-flat long notes, leap overshoot (share of leaps that overshoot, not "every leap must"), attack time, jitter, tuning offset and range violations. Green = inside the human range, yellow = borderline, red = mechanical. It runs on demand — the score is a measurement, not a style grade.</p>
+      <p data-lang="zh">检查器里的 <strong>自然度自检</strong> 面板会对"你实际听到的曲线"（自动层 + 手动覆盖 + 颤音）采样，与真人歌唱的统计区间比对：颤音深度、速率与<em>覆盖率</em>（长音里带颤音的比例）、死平长音占比、跳进过冲（看"有多少跳进过冲"，而不是"每个都必须过冲"）、起音时间、抖动、调音偏差、音域越界。绿色=落在真人区间，黄色=临界，红色=机械。点击才运行——分数是测量结果，不是风格评分。</p>
+      <figure class="fig">
+        <img src="../images/verify/editor-naturalness.png" alt="Naturalness check panel with per-metric status" loading="lazy">
+        <figcaption><span data-lang="en">Each metric shows the measured value, the human range and a colour-coded status.</span><span data-lang="zh">每项指标显示实测值、真人区间与颜色状态。</span></figcaption>
+      </figure>
+
       <h2 id="f0-and-spectral-postprocess">
         <span data-lang="en">F0 Smoothing &amp; Spectral Post-Processing</span>
         <span data-lang="zh">F0 平滑与频谱后处理</span>
       </h2>
       <p data-lang="en">Neural singing voices can show three artefacts that the score does not ask for: frame-to-frame pitch jitter, mechanical pitch steps at note changes, and harsh high-frequency edges in the spectrogram. The <strong>Timbre</strong> lane (bottom parameter panel, <kbd class="kbd">6</kbd>) exposes seven post-processing parameters that clean these up — three on the F0 trajectory, four on the Mel spectrogram. Every parameter is a real, per-frame automation curve, and every parameter is <strong>off by default</strong>, so existing projects sound exactly as before until you enable something.</p>
-      <p data-lang="zh">神经网络歌声常带有三类谱面上并不存在的瑕疵：帧与帧之间的音高抖动、音符切换处的机械跳变、以及频谱图上高频的毛刺。底部参数面板的 <strong>音色</strong> lane（按 <kbd class="kbd">6</kbd>）提供七个后处理参数来清理它们——三个作用于 F0 轨迹，四个作用于 Mel 频谱。每个参数都是一条真正的逐帧自动化曲线，且<strong>默认全部关闭</strong>：在你主动开启之前，旧工程的听感与以前完全一致。</p>
+      <p data-lang="zh">神经网络歌声常带有三类谱面上并不存在的瑕疵：帧与帧之间的音高抖动、音符切换处的机械跳变、以及频谱图上高频的毛刺。底部参数面板的 <strong>音色</strong> lane（按 <kbd class="kbd">6</kbd>）提供七个后处理参数来清理它们——三个作用于 F0 轨迹，四个作用于 Mel 频谱。每个参数都是一条逐帧自动化曲线，且<strong>默认全部关闭</strong>，开启前不改变现有输出。</p>
 
       <h3>
         <span data-lang="en">Where it runs</span>
@@ -413,6 +539,8 @@
         <span data-lang="en">Parameters</span>
         <span data-lang="zh">参数</span>
       </h3>
+      <p data-lang="en">The panel shows friendly names (e.g. <em>Skip removal</em>, <em>Denoise</em>). Each row keeps its original technical name in small text below, so you can match it to older guides; the "What it does" column still documents the underlying method in full.</p>
+      <p data-lang="zh">面板显示的是通俗名称（如「抑制跳音」「平滑去噪」）。每一项下方以小字保留原技术名，方便你对照旧资料；「作用」一栏仍完整说明其技术原理。</p>
       <table class="doc-table">
         <thead>
           <tr>
@@ -423,37 +551,37 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en">Smoothing <span class="badge">F0</span></span><span data-lang="zh">平滑强度 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Pitch stability <span class="badge">Pitch</span><br><small>was "Smoothing" · Savitzky-Golay</small></span><span data-lang="zh">音高稳定 <span class="badge">音高</span><br><small>原「平滑强度」· Savitzky-Golay</small></span></td>
             <td>0–100%</td>
             <td><span data-lang="en">Blends the raw F0 with a <strong>Savitzky-Golay</strong> filtered copy (7-frame window, cubic order). SG fits a local polynomial, so the overall pitch trend — vibrato, drawn slides — survives while frame-to-frame jitter is removed. The filter runs in the cents domain and never crosses a silent gap.</span><span data-lang="zh">把原始 F0 与 <strong>Savitzky-Golay</strong> 滤波结果（7 帧窗口、三次多项式）按比例混合。SG 拟合局部多项式，因此整体音高趋势（颤音、手绘滑音）得以保留，只消除帧间抖动。滤波在 cents 域进行，且绝不跨越静音段。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Outlier removal <span class="badge">F0</span></span><span data-lang="zh">异常值抑制 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Skip removal <span class="badge">Pitch</span><br><small>was "Outlier removal" · median filter</small></span><span data-lang="zh">抑制跳音 <span class="badge">音高</span><br><small>原「异常值抑制」· 中值滤波</small></span></td>
             <td>0–9 <span data-lang="en">frames</span><span data-lang="zh">帧</span></td>
             <td><span data-lang="en"><strong>Median filter</strong> window. Removes isolated pitch spikes (octave errors, detection glitches) without smearing the note. 0 = off, 3–5 = typical.</span><span data-lang="zh"><strong>中值滤波</strong>窗口。消除孤立的音高跳点（倍频错误、检测毛刺），且不会把音符抹平。0 = 关闭，通常取 3–5。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Transition overshoot <span class="badge">F0</span></span><span data-lang="zh">过渡过冲 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Slide <span class="badge">Pitch</span><br><small>was "Transition overshoot" · cubic Bézier</small></span><span data-lang="zh">滑音 <span class="badge">音高</span><br><small>原「过渡过冲」· 三次贝塞尔</small></span></td>
             <td>0–100%</td>
 <td><span data-lang="en">At every detected pitch jump the step is replaced by a <strong>cubic Bézier</strong> transition that overshoots the target and settles back — the way a real singer leans into a leap. A candidate jump must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, <em>and</em> the median pitch level well before and well after the jump differs by at least 75 cents (vibrato oscillates back to its midline, a real step does not). Higher = more visible overshoot (up to 35% of the interval). 0 leaves the jump untouched.</span><span data-lang="zh">对每一个检出的音高跳变用<strong>三次贝塞尔</strong>过渡替换阶跃：先冲过目标再回落，模拟真人跳进大音程时的处理。候选跳变必须通过两级判定，保证自然颤音完全不被触碰：相邻帧相差超过 50 音分，<em>且</em>跳变点远离两侧的中值电平相差至少 75 音分（颤音是振荡会回到中线，真跳变不会）。值越大过冲越明显（最多为音程的 35%）。0 表示不处理，保留原始跳变。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Transition length <span class="badge">F0</span></span><span data-lang="zh">过渡时长 <span class="badge">F0</span></span></td>
+            <td><span data-lang="en">Slide length <span class="badge">Pitch</span><br><small>was "Transition length"</small></span><span data-lang="zh">滑音时长 <span class="badge">音高</span><br><small>原「过渡时长」</small></span></td>
             <td>0–300 ms</td>
             <td><span data-lang="en">How long the Bézier transition lasts. Only meaningful when <em>Transition overshoot</em> is above 0. Shorter = crisper attack, longer = rounder portamento.</span><span data-lang="zh">贝塞尔过渡占用的时长，仅在<em>过渡过冲</em>大于 0 时生效。越短起音越干脆，越长滑音越圆润。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Spectral interpolation <span class="badge">mel</span></span><span data-lang="zh">频谱插值 <span class="badge">mel</span></span></td>
+            <td><span data-lang="en">Timbre blend <span class="badge">Timbre</span><br><small>was "Spectral interpolation"</small></span><span data-lang="zh">音色衔接 <span class="badge">音色</span><br><small>原「频谱插值」</small></span></td>
             <td>0–100%</td>
             <td><span data-lang="en">At every note / phoneme boundary the frames in a ±3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised-cosine window. This makes the spectral envelope change continuously across the transition instead of jumping in one frame.</span><span data-lang="zh">在每个音符 / 音素边界处，把 ±3 帧窗口内的频谱按升余弦权重混向"两侧平均频谱的线性插值"。这样频谱包络跨过渡连续变化，而不是在一帧内跳变。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Time–freq smoothing · time <span class="badge">mel</span></span><span data-lang="zh">时频平滑·时间 <span class="badge">mel</span></span></td>
+            <td><span data-lang="en">Denoise <span class="badge">Timbre</span><br><small>was "Time–freq smoothing · time" · Gaussian σ</small></span><span data-lang="zh">平滑去噪 <span class="badge">音色</span><br><small>原「时频平滑·时间」· 高斯 σ</small></span></td>
             <td>0–6 σ</td>
             <td><span data-lang="en">Gaussian σ along the Mel <strong>time</strong> axis (units: mel frames). Light values (0.8–1.5) tame diffusion grit and breath noise; high values blur consonants.</span><span data-lang="zh">沿 Mel <strong>时间</strong>轴的高斯 σ（单位：mel 帧）。0.8–1.5 可压制扩散噪声与气声毛刺；取值过大会糊掉辅音。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Time–freq smoothing · freq <span class="badge">mel</span></span><span data-lang="zh">时频平滑·频率 <span class="badge">mel</span></span></td>
+            <td><span data-lang="en">Soft highs <span class="badge">Timbre</span><br><small>was "Time–freq smoothing · freq" · Gaussian σ</small></span><span data-lang="zh">高频柔化 <span class="badge">音色</span><br><small>原「时频平滑·频率」· 高斯 σ</small></span></td>
             <td>0–6 σ</td>
             <td><span data-lang="en">Gaussian σ along the Mel <strong>frequency</strong> axis. Smooths harmonic edges and removes the "buzzy" high-frequency fringe.</span><span data-lang="zh">沿 Mel <strong>频率</strong>轴的高斯 σ。平滑谐波边缘，去掉高频"发毛"的毛刺。</span></td>
           </tr>
@@ -574,6 +702,12 @@
       <p data-lang="en">Vibrato adds a sinusoidal pitch modulation on top of the note's base pitch. It is layered over any existing pitch curve (anchor points / brush strokes), so slides and manual pitch edits are preserved — the vibrato simply oscillates around the curve's current value.</p>
       <p data-lang="zh">颤音在音符基础音高之上叠加正弦调制。它会叠加在任何已有的音高曲线（锚点 / 画笔笔触）之上，因此滑音与手动音高编辑都会保留——颤音只是围绕曲线当前值上下振荡。</p>
       <p data-lang="en">Toggle the switch at the top of the menu to enable/disable vibrato, then fine-tune the following parameters:</p>
+      <p data-lang="en"><strong>Auto / Manual badge.</strong> When the auto curve is on and you have not touched this note, the menu shows the values you are actually hearing, tagged <em>Auto</em> — these are derived from the note and the auto parameters, not stored on the note. Move any slider and the same values are copied onto the note and tagged <em>Manual</em>: from then on the auto layer leaves this note alone. Turning the switch <strong>off</strong> also pins it to manual (otherwise auto would simply turn it back on). The badge has three states: <em>Auto</em>, <em>Manual</em> and <em>Manual · off</em> (and <em>Auto · off</em> when the auto layer itself decided this note gets no vibrato). Use <em>Clear Effects</em> to hand the note back to the auto layer.</p>
+      <p data-lang="zh"><strong>自动 / 手动 徽标。</strong> 自动曲线开着、而这个音你没动过时，菜单里显示的就是你<em>实际听到</em>的那组值，标记为「自动」——它们由音符与自动参数派生，不存储在这个音符上。拖动任一滑块，这组值会被抄到音符上并标记为「手动」，此后自动层不再碰这个音。<strong>关掉开关</strong>同样会钉成手动（否则自动层下一帧又会打开），此时徽标显示「手动·不颤」，和自动层自己判定「这个音不颤」的「自动·不颤」区分开。想交还给自动层，用「清除效果」。</p>
+      <figure class="fig">
+        <img src="../images/verify/editor-note-vibrato-source.png" alt="Note context menu showing the Auto badge and the derived vibrato values" loading="lazy">
+        <figcaption><span data-lang="en">The menu shows what you actually hear. <strong>Auto</strong> means the values were derived by the auto layer and are not stored on the note; move any slider and they are copied onto the note as <strong>Manual</strong>.</span><span data-lang="zh">菜单里显示的是你实际听到的值。<strong>自动</strong> 表示这些值由自动层派生、不存储在音符上；拖动任一滑块，同一组值会被抄到音符上并标记为 <strong>手动</strong>。</span></figcaption>
+      </figure>
       <p data-lang="zh">在菜单顶部切换开关以启用 / 关闭颤音，然后微调以下参数：</p>
       <table class="doc-table">
         <thead>
@@ -615,6 +749,13 @@
         <li><span data-lang="en"><strong>Presets</strong> — <em>Soft</em> / <em>Medium</em> / <em>Strong</em> apply common vibrato profiles in one click.</span><span data-lang="zh"><strong>预设</strong>——<em>柔和</em> / <em>中等</em> / <em>强烈</em>一键套用常用颤音参数组合。</span></li>
         <li><span data-lang="en"><strong>Visual feedback</strong> — a small sine-wave marker is drawn at the top-left of notes with vibrato enabled, and the pitch curve in Pitch mode shows the actual oscillation.</span><span data-lang="zh"><strong>视觉反馈</strong>——启用颤音的音符左上角会绘制一个小正弦波标记，Pitch 模式下的音高曲线会显示实际振荡。</span></li>
       </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Imported from Synthesizer V projects</strong> — note vibrato parameters in an <code>.svp</code> file are translated into the host's per-note vibrato: depth, rate, start, length and fade-in are converted from Synthesizer V's seconds / semitones / Hz values, and written back to <code>note.attributes</code> when saving as <code>.svp</code>. Only notes with explicit parameters are imported, so an automatically generated Synthesizer V vibrato will not double up with the host's auto pitch layer. Group-level vibrato envelopes, the starting phase and the fade-out have no host equivalent and are reported as warnings on import. The depth (0–200¢) and rate (2–10 Hz) ranges below are also the ranges enforced by the automation interface.</p>
+          <p data-lang="zh"><strong>从 Synthesizer V 工程导入</strong>——<code>.svp</code> 文件中的音符颤音参数会转译为宿主的逐音符颤音：幅度、频率、起始点、长度与渐入由 Synthesizer V 的秒 / 半音 / Hz 换算而来，另存为 <code>.svp</code> 时写回 <code>note.attributes</code>。只导入显式设置了参数的音符，避免 Synthesizer V 自动生成的颤音与宿主的自动音高层叠加成双重颤音。组级颤音包络、起始相位与渐出在宿主中没有承载，导入时逐类告警。下表的幅度（0–200¢）与频率（2–10 Hz）范围，同时也是自动化接口校验时采用的范围。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Fade In / Fade Out</span>
@@ -750,7 +891,7 @@
         <li><span data-lang="en">The MIDI file's notes are loaded into the fragment, replacing existing notes.</span><span data-lang="zh">MIDI 文件的音符会加载到片段中，替换现有音符。</span></li>
       </ol>
       <ul>
-        <li><span data-lang="en">Multi-track MIDI files: The first track with notes is used.</span><span data-lang="zh">多轨 MIDI 文件：使用第一个包含音符的轨道。</span></li>
+        <li><span data-lang="en">Multi-track MIDI files: all non-drum tracks are merged onto a single timeline (drum tracks are skipped).</span><span data-lang="zh">多轨 MIDI 文件：所有非打击乐轨道会合并到同一时间线（跳过打击乐轨道）。</span></li>
         <li><span data-lang="en">Lyrics from MIDI are preserved if present.</span><span data-lang="zh">MIDI 中的歌词（如有）会被保留。</span></li>
         <li><span data-lang="en">Note timing is converted to the project's BPM.</span><span data-lang="zh">音符时序会转换为项目的 BPM。</span></li>
       </ul>
@@ -758,7 +899,7 @@
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
           <p data-lang="en"><strong>Auto Shift</strong> — the checkbox in the toolbar controls <em>global pitch shifting</em> per fragment. When enabled (and a reference audio is loaded for the fragment), SXSEditor analyzes the reference audio's F0 and shifts the synthesized pitch to better match it. This is useful when a song's melody exceeds the model's comfortable range and you want the output to follow the reference singer's actual pitch. <strong>Note:</strong> per-segment autoShift was removed to prevent pitch discontinuities across inference chunks — the toolbar checkbox now applies a consistent shift across the entire fragment. See <a href="synthesis-export.html">Synthesis &amp; Export</a> for details.</p>
-          <p data-lang="zh"><strong>Auto Shift</strong>——工具栏中的复选框控制每个分片的<em>全局移调</em>。启用后（且分片已加载参考音频），SXSEditor 会分析参考音频的 F0 并平移合成音高以更好地贴合参考歌手。当歌曲旋律超出模型舒适音域、希望输出跟随参考歌手实际音高时很有用。<strong>注意：</strong>已移除逐段 autoShift 以防止推理块间的音高不连续——工具栏复选框现在对整个分片施加一致的移调。详见<a href="synthesis-export.html">合成与导出</a>。</p>
+          <p data-lang="zh"><strong>Auto Shift</strong>——工具栏中的复选框控制每个分片的<em>全局移调</em>。启用后（且分片已加载参考音频），SXSEditor 会分析参考音频的 F0 并平移合成音高以更好地贴合参考歌手。当歌曲旋律超出模型舒适音域、希望输出跟随参考歌手实际音高时很有用。移调以整个片段为单位，工具栏复选框对该片段的全部音符施加一致的移调。详见<a href="synthesis-export.html">合成与导出</a>。</p>
         </div>
       </div>
 
@@ -790,7 +931,7 @@
         <tbody>
           <tr><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Z</kbd></td><td><span data-lang="en">Undo</span><span data-lang="zh">撤销</span></td></tr>
           <tr><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Y</kbd></td><td><span data-lang="en">Redo</span><span data-lang="zh">重做</span></td></tr>
-          <tr><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd></td><td><span data-lang="en">Force-sync fragment to main window (cancel 500ms debounce)</span><span data-lang="zh">强制同步片段到主窗口（取消 500ms 防抖）</span></td></tr>
+          <tr><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd></td><td><span data-lang="en">Sync the fragment to the main window immediately</span><span data-lang="zh">立即同步片段到主窗口</span></td></tr>
           <tr><td><kbd class="kbd">Space</kbd></td><td><span data-lang="en">Play / Stop</span><span data-lang="zh">播放 / 停止</span></td></tr>
           <tr><td><kbd class="kbd">1</kbd></td><td><span data-lang="en">Switch to MIDI mode</span><span data-lang="zh">切换到 MIDI 模式</span></td></tr>
           <tr><td><kbd class="kbd">2</kbd></td><td><span data-lang="en">Switch to Pitch mode</span><span data-lang="zh">切换到音高模式</span></td></tr>

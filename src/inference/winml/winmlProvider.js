@@ -27,6 +27,7 @@ const path = require('node:path');
 
 const ortBridge = require('./ortBridge');
 const winmlCatalog = require('./winmlCatalog');
+const detectionCache = require('./winmlDetectionCache');
 
 // Models that already failed at RUNTIME on a WinML vendor EP, keyed by model
 // file name. Creation can succeed (the validation dummy usually has a length
@@ -75,6 +76,10 @@ const RETRY_COOLDOWN_MS = 15000;
 let _registeringPromise = null;
 let _readyEpLibrariesPromise = null;
 let _readyEpLibrariesCache = null;
+// 记录解析缓存时的后端门控状态。缓存随后端失效是必要的：用户在 DML 与
+// Windows ML 之间切换时，gate 关闭期间解析出的空 EP 列表若被永久缓存，切回
+// Windows ML 后所有模型会继续回退到 DML/CPU，界面上的 EP 便一直是 DML。
+let _readyEpLibrariesCacheKey = null;
 
 function _getSettings() {
     // worker_threads 场景：svsWorker 启动时把主进程下发的开关快照挂到
@@ -91,12 +96,142 @@ function _getSettings() {
 }
 
 /** Gate for the WinML branch. On by default with backend auto/winml; closed
- * (returns false) when the user opts into DML (nativeInferenceBackend==='dml')
- * or the platform is unsupported. */
+ * (returns false) when the user opts into DML (nativeInferenceBackend==='dml'),
+ * the global CPU backend ('cpu'), or the platform is unsupported.
+ *
+ * 同时校验 nativeInferenceBackend：界面保存时 winmlEnabled 由后端派生，但
+ * 旧配置、CLI 注入或诊断快照可能只带其中一个字段。两者任一指向 DML/CPU 都应
+ * 关闭 WinML 分支，避免"设置显示已切回 WinML、实际仍走 DML"的不一致。
+ */
 function isWinmlEnabled() {
-    if (!winmlCatalog.isPlatformSupported()) return false;
+    return getWinmlGate().enabled;
+}
+
+/**
+ * WinML 门控判定（单一真源）。
+ *
+ * 历史实现只返回布尔，导致「环境检测」想解释「为什么 WinML 没生效」时只能
+ * 再抄一份判定顺序 —— 两份迟早漂移成「设置说开了、报告说关了」。这里把
+ * 四条短路原样保留并映射成原因码，isWinmlEnabled() 退化为它的布尔投影。
+ *
+ * 短路顺序（与改造前逐条一致）：
+ *   1. 平台 / 架构 / OS Build（WinML vendor EP 需 Win11 24H2 build 26100+）
+ *   2. nativeInferenceBackend 为 dml / cpu（用户显式关掉 WinML）
+ *   3. inferenceProvider 不是本机 ORT（WebNN / 远程 API 模式）
+ *   4. winmlEnabled !== true
+ *
+ * @param {{platform?:string, arch?:string, build?:number, minBuild?:number, settings?:object}} [overrides]
+ *   仅单测与诊断注入；生产调用留空，走真实环境与 loadSettings()。
+ * @returns {{enabled:boolean, reason:string, detail:{build:number, minBuild:number, arch:string, provider:string}}}
+ */
+function getWinmlGate(overrides = {}) {
+    const o = overrides || {};
+    let support;
+    if (o.platform) {
+        const platformOk = o.platform === 'win32';
+        const archOk = o.arch === 'x64' || o.arch === 'arm64';
+        const minBuild = Number(o.minBuild) || winmlCatalog.MIN_BUILD;
+        const build = Number(o.build) || 0;
+        const buildOk = build >= minBuild;
+        support = {
+            supported: platformOk && archOk && buildOk,
+            platform: o.platform,
+            arch: String(o.arch || ''),
+            build,
+            minBuild,
+            reason: !platformOk ? 'platform' : (!archOk ? 'arch' : (!buildOk ? 'build' : 'ok')),
+        };
+    } else {
+        const meta = winmlCatalog.getPlatformSupport();
+        // 以 isPlatformSupported() 作最终裁决而不是直接用 meta.supported：
+        // 它经 module 属性调用，是既有契约，单测与诊断都 stub 这个导出属性来
+        // 模拟 Windows 环境（Linux CI 上真实值恒为 false）。meta 只负责在门关着
+        // 的时候解释「卡在哪一步」。
+        const supported = winmlCatalog.isPlatformSupported();
+        support = { ...meta, supported, reason: supported ? 'ok' : meta.reason };
+    }
+
+    const s = o.settings || _getSettings();
+    const detail = {
+        build: support.build,
+        minBuild: support.minBuild,
+        arch: support.arch,
+        provider: String(s.inferenceProvider || ''),
+    };
+    if (!support.supported) return { enabled: false, reason: support.reason, detail };
+    if (s.nativeInferenceBackend === 'dml') return { enabled: false, reason: 'backendDml', detail };
+    if (s.nativeInferenceBackend === 'cpu') return { enabled: false, reason: 'backendCpu', detail };
+    if (s.inferenceProvider && s.inferenceProvider !== 'ortnode') return { enabled: false, reason: 'provider', detail };
+    if (s.winmlEnabled !== true) return { enabled: false, reason: 'settingOff', detail };
+    return { enabled: true, reason: 'ok', detail };
+}
+
+/** 解析缓存的键：门控开关 + 显式后端。后端一变，旧缓存立即失效。 */
+function _epCacheKey() {
     const s = _getSettings();
-    return s.winmlEnabled === true;
+    return `${isWinmlEnabled() ? 'on' : 'off'}|${String(s.nativeInferenceBackend || 'auto')}|${String(s.inferenceProvider || '')}`;
+}
+
+/** libraryPath 的短标签：<包名>/ExecutionProvider（日志可读性用）。 */
+function _libLabel(libraryPath) {
+    const parts = String(libraryPath || '').split('\\');
+    const dirName = parts.slice(-3, -1).join('/');
+    return dirName || parts[parts.length - 1] || '?';
+}
+
+/**
+ * 从同名 EP 的多份 MSIX 里挑一份"版本最高且真的能加载"的库。
+ *
+ * 核心是一个短路：命中第一个可加载的候选就返回，**不再探测更旧的版本**。
+ * 这不是微优化 —— 旧 ABI 的 provider（如 ORT 1.24 时代的 EP.1.8）在宿主
+ * ORT 1.27 上 LoadLibrary 时，DllMain 会先把 TensorRT/CUDA 初始化跑一遍
+ * 再以 1114 失败：现场日志里这一次探测花了 18.3 s（另外两次 3.5 s），而它
+ * 的结论永远不会被采用（版本排序已经保证取最高版本）。
+ *
+ * 失败结论写进持久化负缓存（winmlDetectionCache.isKnownUnloadable）：
+ * 机器上只剩旧包时，后续启动直接跳过探测，不再重付这份时间。
+ *
+ * @param {string} name EP 名（仅用于日志）
+ * @param {Array<{libraryPath:string}>} candidates 候选
+ * @returns {Promise<{name:string, libraryPath:string}|null>}
+ */
+async function _pickLoadableCandidate(name, candidates) {
+    const ordered = [...candidates].sort(
+        (a, b) => _compareMsixVersion(_msixVersionOf(b.libraryPath), _msixVersionOf(a.libraryPath)),
+    );
+    const skipped = [];
+    let probed = 0;
+    for (const cand of ordered) {
+        const dirName = _libLabel(cand.libraryPath);
+        if (detectionCache.isKnownUnloadable(cand.libraryPath)) {
+            skipped.push(`${dirName}(known-bad)`);
+            continue;
+        }
+        let loadable = false;
+        const started = Date.now();
+        try {
+            await ortBridge.ensureBridgeInit();
+            loadable = ortBridge.canLoadLibrary(cand.libraryPath);
+        } catch (_) { /* 探测本身出错按不可加载处理 */ }
+        const ms = Date.now() - started;
+        probed += 1;
+        if (loadable) {
+            if (skipped.length) {
+                console.log(`[WinML] warmup ${name}: pick ${dirName} (skipped ${skipped.join(', ')}) probed=${probed} ms=${ms}`);
+            } else {
+                console.log(`[WinML] warmup ${name}: candidate ${dirName} OK ms=${ms}`);
+            }
+            detectionCache.clearUnloadable(cand.libraryPath);
+            return { name, libraryPath: cand.libraryPath };
+        }
+        detectionCache.reportUnloadable(cand.libraryPath);
+        console.warn(`[WinML] warmup ${name}: DLL not loadable, skipping ${dirName} ms=${ms}`);
+    }
+    if (skipped.length) {
+        console.warn(`[WinML] ${name}: all candidates skipped by probe cache (${skipped.join(', ')}); `
+            + 'set SXS_WINML_REPROBE=1 or clear the inference cache in settings to re-probe');
+    }
+    return null;
 }
 
 /**
@@ -110,9 +245,18 @@ async function _resolveReadyEpLibraries() {
         console.log('[WinML] getReadyEpLibraries: gate closed (winmlEnabled=false / backend=dml / platform unsupported)');
         return [];
     }
+    const t0 = Date.now();
+    const phases = [];
+    const mark = (label, from) => phases.push(`${label}:${Date.now() - from}`);
+
     const s = _getSettings();
+    const tBoot = Date.now();
     await winmlCatalog.ensureCatalog(s.winmlBootstrapDllPath);
+    mark('catalog', tBoot);
+
+    const tScan = Date.now();
     const entries = await winmlCatalog.listAllProviderEntries();
+    mark('scan', tScan);
     console.log(`[WinML] getReadyEpLibraries: ${entries.length} provider(s) (catalog+fs scan)`);
 
     // 同名 provider 可能存在多个 MSIX 版本（如 NvTensorRtRtx 同时装有
@@ -126,9 +270,11 @@ async function _resolveReadyEpLibraries() {
         byName.set(e.name, arr);
     }
 
+    const tProbe = Date.now();
     const out = [];
     for (const [name, group] of byName) {
-        // Probe highest MSIX version first so the 2.x hint is tried before stale 1.8 (saves a failed canLoad)
+        // 按 MSIX 版本降序整理候选：既让 2.x 排在 1.8 前面（省掉一次必然
+        // 失败的 canLoad），也保证 _pickLoadableCandidate 的短路取到最高版本。
         const sortedGroup = [...group].sort((a, b) => {
             const pa = a.inst ? (a.inst.libraryPath || '') : (a.libraryPathHint || '');
             const pb = b.inst ? (b.inst.libraryPath || '') : (b.libraryPathHint || '');
@@ -152,17 +298,6 @@ async function _resolveReadyEpLibraries() {
                 const lower = libraryPath.toLowerCase();
                 if (seenPaths.has(lower)) continue;
                 seenPaths.add(lower);
-                const dirName = libraryPath.split('\\').slice(-3, -1).join('/') || libraryPath.split('\\').pop();
-                // Verify the DLL can actually be loaded in this process (check 1114 etc.)
-                // This filters out ABI-mismatched old packages like TRT 1.8 on ORT 1.27
-                try {
-                    await ortBridge.ensureBridgeInit();
-                    if (!ortBridge.canLoadLibrary(libraryPath)) {
-                        console.warn(`[WinML] warmup ${name}: DLL not loadable, skipping ${dirName}/${libraryPath.split('\\').pop()}`);
-                        continue;
-                    }
-                } catch (_) { /* ignore, assume loadable */ }
-                console.log(`[WinML] warmup ${name}: candidate ${dirName}/${libraryPath.split('\\').pop()} OK`);
                 candidates.push({ name, libraryPath });
             } catch (e) {
                 console.warn(`[WinML] warmup ${name} threw: ${(e.message || '').split('\n')[0].slice(0, 120)}`);
@@ -172,13 +307,16 @@ async function _resolveReadyEpLibraries() {
             console.warn(`[WinML] no ready candidate for ${name}`);
             continue;
         }
-        candidates.sort((a, b) => _compareMsixVersion(_msixVersionOf(b.libraryPath), _msixVersionOf(a.libraryPath)));
-        const best = candidates[0];
-        if (candidates.length > 1) {
-            console.log(`[WinML] ${name}: ${candidates.length} loadable candidates, picking highest ${best.libraryPath.split('\\').pop()} (skipped: ${candidates.slice(1).map(c => c.libraryPath.split('\\').pop()).join(', ')})`);
+        // 可加载性探测放在这里：只探到第一个能加载的为止（见 _pickLoadableCandidate）。
+        const best = await _pickLoadableCandidate(name, candidates);
+        if (!best) {
+            console.warn(`[WinML] no loadable candidate for ${name} (candidates=${candidates.length})`);
+            continue;
         }
         out.push(best);
     }
+    mark('resolve', tProbe);
+    console.log(`[WinML][ready] phases=${phases.join(',')} total=${Date.now() - t0}`);
     return out;
 }
 
@@ -190,16 +328,45 @@ async function _resolveReadyEpLibraries() {
  * overlap, so all callers must share this single flight.
  */
 async function getReadyEpLibraries() {
-    if (_readyEpLibrariesCache) return _readyEpLibrariesCache.map(e => ({ ...e }));
+    const key = _epCacheKey();
+    // 只有当缓存来自**同一个门控状态**时才复用。旧实现无条件命中，
+    // 于是 DML 后端期间解析出的空列表（甚至是 [] 这个 truthy 值）会在切回
+    // Windows ML 后继续被返回，worker 拿到空 EP 快照，全部模型回退 DML。
+    if (_readyEpLibrariesCache && _readyEpLibrariesCacheKey === key) {
+        return _readyEpLibrariesCache.map(e => ({ ...e }));
+    }
     if (_readyEpLibrariesPromise) {
         console.log('[WinML][ready] join=in-flight');
         return _readyEpLibrariesPromise;
     }
+
+    // 门控关闭时不要解析、也不要缓存：诊断/预热等路径会在后端为 DML 时
+    // 调用本函数，若把 [] 写进缓存，切回 Windows ML 后就是永久短路。
+    if (!isWinmlEnabled()) {
+        _readyEpLibrariesCache = null;
+        _readyEpLibrariesCacheKey = null;
+        console.log('[WinML][ready] gate closed; returning empty without caching');
+        return [];
+    }
+
+    // 跨重启缓存：上一次启动已解析出的可注册 EP 库。libraryPath 仍存在、
+    // 门控键与运行环境（Electron / OS build / 架构）一致时直接复用，跳过
+    // catalog 初始化与逐个 DLL 的可加载性探测 —— 这是管线初始化最慢的一段。
+    const persisted = detectionCache.getCachedReadyEps(key);
+    if (persisted) {
+        _readyEpLibrariesCache = persisted.map(e => ({ ...e }));
+        _readyEpLibrariesCacheKey = key;
+        console.log(`[WinML][ready] persistent-cache eps=${persisted.map(e => e.name).join(',')}`);
+        return persisted.map(e => ({ ...e }));
+    }
+
     const started = Date.now();
     console.log('[WinML][ready] start');
     _readyEpLibrariesPromise = _resolveReadyEpLibraries()
         .then((eps) => {
             _readyEpLibrariesCache = eps.map(e => ({ ...e }));
+            _readyEpLibrariesCacheKey = key;
+            if (eps.length > 0) detectionCache.setCachedReadyEps(key, eps);
             console.log(`[WinML][ready] done ms=${Date.now() - started} eps=${eps.map(e => e.name).join(',') || 'none'}`);
             return _readyEpLibrariesCache.map(e => ({ ...e }));
         })
@@ -207,10 +374,157 @@ async function getReadyEpLibraries() {
     return _readyEpLibrariesPromise;
 }
 
+/** 归一化用户选择的硬件类型：'gpu' | 'cpu' | 'npu' | ''（空 = 沿用该 EP 的全部设备）。 */
+function _normalizeDeviceType(value) {
+    const v = String(value || '').trim().toLowerCase();
+    return (v === 'gpu' || v === 'cpu' || v === 'npu') ? v : '';
+}
+
+/**
+ * 设置页专用：EP 名单 + 每个 EP 实际暴露的硬件设备（gpu / cpu / npu）。
+ *
+ * 为什么要在主进程注册 EP：WinRT catalog 只给 EP 名与安装状态，硬件粒度只有
+ * ORT 的 EpDevice 枚举才有（OrtEpDevice_Device().Type → gpu/cpu/npu）。主进程
+ * 与管线各自持有独立的 OrtEnv（WinML 开启时管线跑在 worker 里），在这里注册
+ * 不会影响 worker 的会话。
+ *
+ * 门控关闭（DML 后端 / WinML 未开启）时只返回名单不枚举设备：枚举要先跑一遍
+ * EP 解析与注册，用户没打算用 WinML 时不该付这份钱。
+ *
+ * @param {{forceRefresh?:boolean}} [options]
+ * @returns {Promise<Array<{name:string, readyState:number, libraryPath:string,
+ *   devices:Array<{deviceType:string, indices:number[], selectable:boolean}>}>>}
+ */
+async function listProviderDevices(options = {}) {
+    const providers = await winmlCatalog.listCompatibleProviders({
+        forceRefresh: options && options.forceRefresh === true,
+    });
+    const out = (providers || []).map((p) => ({
+        name: p.name,
+        readyState: Number(p.readyState) || 0,
+        libraryPath: p.libraryPath || '',
+        source: p.source || '',
+        devices: [],
+    }));
+    if (!out.length || !isWinmlEnabled()) return out;
+
+    const eps = await getReadyEpLibraries();
+    if (!eps.length) return out;
+    const bridgeReady = await ortBridge.ensureBridgeInit();
+    if (!bridgeReady) return out;
+
+    for (const ep of eps) {
+        if (registeredEps.has(ep.name)) continue;
+        try {
+            ortBridge.registerEp(ep.name, ep.libraryPath);
+            registeredEps.add(ep.name);
+        } catch (e) {
+            const msg = (e.message || '').toLowerCase();
+            if (msg.includes('already registered')) {
+                registeredEps.add(ep.name);
+            } else {
+                console.warn(`[WinML][devices] registerEp(${ep.name}) failed: ${(e.message || '').split('\n')[0].slice(0, 140)}`);
+            }
+        }
+    }
+
+    const devices = ortBridge.listDevices();
+    const npuUsable = globalThis.__SXS_NPU_AVAILABLE__ === true
+        && globalThis.__SXS_OPENVINO_NPU_SAFE__ === true;
+    const TYPE_ORDER = { gpu: 0, npu: 1, cpu: 2 };
+    for (const entry of out) {
+        const byType = new Map();
+        for (const d of devices) {
+            // 只认精确 EP 名：`.AUTO` 之类是另一种虚拟设备，混进来会让
+            // "OpenVINO GPU" 同时带上 AUTO 的设备索引。
+            if (d.epName !== entry.name) continue;
+            const type = _normalizeDeviceType(d.deviceType) || 'cpu';
+            if (!byType.has(type)) byType.set(type, []);
+            byType.get(type).push(d.index);
+        }
+        entry.devices = [...byType.entries()]
+            .sort((a, b) => (TYPE_ORDER[a[0]] ?? 9) - (TYPE_ORDER[b[0]] ?? 9))
+            .map(([deviceType, indices]) => ({
+                deviceType,
+                indices,
+                // NPU 被安全门挡住时仍然列出来（让用户知道硬件存在），
+                // 但标记不可选 —— 直接放行会让 OpenVINO 的 NPU compiler 崩。
+                selectable: deviceType !== 'npu' || npuUsable,
+            }));
+    }
+    return out;
+}
+
 /** 从 MSIX libraryPath 提取数字版本串用于比较（如 ...EP.2_2.30.49.0_x64 -> 2.30.49.0）。 */
 function _msixVersionOf(libraryPath) {
     const m = /EP\.(\d+)_(\d+\.\d+\.\d+\.\d+)_/i.exec(libraryPath || '');
     return m ? m[1] + '.' + m[2] : '0';
+}
+
+/**
+ * 读取 provider DLL 的文件版本（PE 版本资源里的 FileVersion）。
+ *
+ * 只在 TRT 会话首次创建时执行一次并缓存：PowerShell 冷启动约 200-400ms，
+ * 放在每次模型加载里不可接受。读不到就返回 null，由调用方回退到文件的
+ * size/mtime 指纹 —— 版本号拿不到不能影响缓存本身的可用性。
+ */
+function _readDllFileVersion(dllPath) {
+    const override = String(process.env.SXS_TRT_VERSION || '').trim();
+    if (override) return `env:${override.slice(0, 40)}`;
+    if (process.platform !== 'win32' || !dllPath) return null;
+    try {
+        const { execFileSync } = require('node:child_process');
+        const escaped = String(dllPath).replace(/'/g, "''");
+        const out = execFileSync('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `(Get-Item -LiteralPath '${escaped}').VersionInfo.FileVersion`,
+        ], { timeout: 2500, windowsHide: true, encoding: 'utf8' });
+        const version = String(out || '').trim().split(/\r?\n/)[0].trim();
+        return version ? version.slice(0, 40) : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+let _trtRuntimeFingerprintPromise = null;
+
+/**
+ * TensorRT-RTX 运行时身份指纹，用于持久化 dummy 校验的缓存键。
+ *
+ * 为什么需要：TRT 的 engine 每次启动都会重新加载/编译，上一次会话校验通过
+ * 不能证明本次 engine 健康。但"同一个 TRT 运行时 + 同一个 GPU + 同一个模型"
+ * 在版本不变时重编译出坏 engine 的概率极低，可以安全复用校验记录。反过来，
+ * TRT 运行时（EP 包 / provider DLL）一升级，旧记录必须立即失效 —— 这正是
+ * 这个指纹的作用。GPU 名称由调用方另外并入缓存键。
+ *
+ * 组成：EP 包 MSIX 版本 + provider DLL 的 FileVersion（取不到时用 size/mtime）。
+ * 拿不到指纹时返回一个"每次启动都不同"的值：宁可每次重新校验，也不误命中
+ * 一个无法判断版本的旧记录。同一进程内仍是稳定的（promise 缓存）。
+ *
+ * @returns {Promise<string>}
+ */
+function getTrtRuntimeFingerprint() {
+    if (_trtRuntimeFingerprintPromise) return _trtRuntimeFingerprintPromise;
+    const unresolved = `unresolved-${Date.now().toString(36)}-${process.pid}`;
+    _trtRuntimeFingerprintPromise = (async () => {
+        try {
+            const eps = await getReadyEpLibraries();
+            const trt = (eps || []).find((e) => String((e && e.name) || '').includes('NvTensor'));
+            if (!trt || !trt.libraryPath) return unresolved;
+            const lib = String(trt.libraryPath);
+            const msix = _msixVersionOf(lib);
+            const fileVersion = _readDllFileVersion(lib);
+            let stamp = 'nostat';
+            try {
+                const stat = fs.statSync(lib);
+                stamp = `${stat.size}-${Math.round(stat.mtimeMs)}`;
+            } catch (_) { /* 文件消失：保留 nostat，下次启动会重新探测 */ }
+            return `trt-rtx@${msix || 'na'}+${fileVersion || stamp}`;
+        } catch (_) {
+            return unresolved;
+        }
+    })();
+    return _trtRuntimeFingerprintPromise;
 }
 
 function _compareMsixVersion(a, b) {
@@ -287,13 +601,34 @@ function _syncRegisteredFromDevices() {
         const devices = ortBridge.listDevices();
         for (const d of devices) {
             if (d.epName && !registeredEps.has(d.epName)) registeredEps.add(d.epName);
-            // Also handle vendor qualified names like OpenVINOExecutionProvider.AUTO
-            const base = String(d.epName).split('.')[0];
-            if (base && !registeredEps.has(base) && (base === 'OpenVINOExecutionProvider' || base === 'NvTensorRTRTXExecutionProvider')) {
-                // Do not auto-add base for AUTO variants, but devices list will contain base already when EP registered
-            }
         }
     } catch (_) {}
+}
+
+/**
+ * worker 侧注册单个 EP 库。
+ * @param {string} epName
+ * @param {string} libPath
+ * @param {boolean} isFallback 仅影响日志措辞
+ * @returns {boolean} 是否已可用
+ */
+function _registerSnapshotEp(epName, libPath, isFallback) {
+    try {
+        ortBridge.registerEp(epName, libPath);
+        registeredEps.add(epName);
+        if (isFallback) console.log(`[WinML] worker registered ${epName} via fallback ${libPath.split('\\').pop()}`);
+        else console.log(`[WinML] worker registered ${epName}`);
+        return true;
+    } catch (e) {
+        const msg = (e.message || '').split('\n')[0].slice(0, 300);
+        if (msg.toLowerCase().includes('already registered')) {
+            console.log(`[WinML] worker ${epName} already registered (gle=126), treating as OK`);
+            registeredEps.add(epName);
+            return true;
+        }
+        console.warn(`[WinML] worker registerEp(${epName} <- ${String(libPath).split('\\').pop()}) failed: ${msg}`);
+        return false;
+    }
 }
 
 async function ensureEpsRegistered(epNames) {
@@ -319,36 +654,22 @@ async function ensureEpsRegistered(epNames) {
         // Snapshot carries the best loadable libPath from main (preferring 2.x).
         // If that specific version fails (e.g. transient 1114 or stale cache),
         // try catalog-discovered hints first (no elevation needed), then filesystem scan.
+        //
+        // 兜底枚举必须懒执行：catalog 初始化 + Get-AppxPackage 要在 worker 里
+        // 付 1–2s（WindowsApps 受限时更久），而快照路径几乎总是直接注册成功。
+        // 旧实现无条件先算兜底列表，等于每次 spawn worker 都白付这笔钱。
         for (const ep of snapshotEps) {
             if (registeredEps.has(ep.name)) continue;
-            let registered = false;
-            const catalogHints = await _getCatalogFallbackPaths(ep.name);
-            const fsHints = _findAlternativeWinMLPaths(ep.name);
-            const merged = [ep.libraryPath];
-            for (const p of [...catalogHints, ...fsHints]) if (p !== ep.libraryPath && !merged.includes(p)) merged.push(p);
-            // Sort fallbacks by MSIX version descending so 2.x is tried before 1.8 even when snapshot was stale
-            const fallbacks = merged.slice(1).sort((a, b) => _compareMsixVersion(_msixVersionOf(b), _msixVersionOf(a)));
-            const candidates = [merged[0], ...fallbacks];
-            for (const libPath of candidates) {
-                try {
-                    ortBridge.registerEp(ep.name, libPath);
-                    registeredEps.add(ep.name);
-                    if (libPath !== ep.libraryPath) {
-                        console.log(`[WinML] worker registered ${ep.name} via fallback ${libPath.split('\\').pop()}`);
-                    } else {
-                        console.log(`[WinML] worker registered ${ep.name}`);
-                    }
-                    registered = true;
-                    break;
-                } catch (e) {
-                    const msg = (e.message || '').split('\n')[0].slice(0, 300);
-                    if (msg.toLowerCase().includes('already registered')) {
-                        console.log(`[WinML] worker ${ep.name} already registered (gle=126), treating as OK`);
-                        registeredEps.add(ep.name);
-                        registered = true;
-                        break;
-                    }
-                    console.warn(`[WinML] worker registerEp(${ep.name} <- ${libPath.split('\\').pop()}) failed: ${msg}`);
+            let registered = _registerSnapshotEp(ep.name, ep.libraryPath, false);
+            if (!registered) {
+                const catalogHints = await _getCatalogFallbackPaths(ep.name);
+                const fsHints = _findAlternativeWinMLPaths(ep.name);
+                const fallbacks = [...catalogHints, ...fsHints]
+                    .filter((p, i, all) => p && p !== ep.libraryPath && all.indexOf(p) === i)
+                    // Sort fallbacks by MSIX version descending so 2.x is tried before 1.8 even when snapshot was stale
+                    .sort((a, b) => _compareMsixVersion(_msixVersionOf(b), _msixVersionOf(a)));
+                for (const libPath of fallbacks) {
+                    if (_registerSnapshotEp(ep.name, libPath, true)) { registered = true; break; }
                 }
             }
             if (!registered) {
@@ -374,8 +695,8 @@ async function ensureEpsRegistered(epNames) {
         return registeredEps.size > 0;
     }
     if (registrationAttempted && now - _lastAttemptAt < RETRY_COOLDOWN_MS) {
-        if (!_emptyReasonLogged) {
-            _emptyReasonLogged = true;
+        if (!_cooldownLogged) {
+            _cooldownLogged = true;
             console.log('[WinML] EP registration cooling down; models in this batch will use DML/CPU');
         }
         return registeredEps.size > 0;
@@ -392,7 +713,7 @@ async function ensureEpsRegistered(epNames) {
             for (const name of missing) {
                 if (registeredEps.has(name)) continue;
                 // 与 getReadyEpLibraries 相同：枚举所有实例（含 filesystem hint），
-                // canLoadLibrary 过滤 1.8 旧 ABI，再择最高版本。
+                // 只探到第一个可加载的候选为止（旧 ABI 的 1.8 包不再白探）。
                 const group = entries.filter((e) => e.name === name);
                 const candidates = [];
                 for (const entry of group) {
@@ -405,11 +726,6 @@ async function ensureEpsRegistered(epNames) {
                         } else if (entry.libraryPathHint) {
                             libraryPath = entry.libraryPathHint;
                         } else continue;
-                        await ortBridge.ensureBridgeInit();
-                        if (!ortBridge.canLoadLibrary(libraryPath)) {
-                            console.warn(`[WinML] register warmup ${name}: DLL not loadable, skipping ${libraryPath.split('\\').pop()}`);
-                            continue;
-                        }
                         candidates.push({ name, libraryPath });
                     } catch (_) { /* try next */ }
                 }
@@ -417,8 +733,11 @@ async function ensureEpsRegistered(epNames) {
                     console.warn(`[WinML] no ready candidate for ${name}`);
                     continue;
                 }
-                candidates.sort((a, b) => _compareMsixVersion(_msixVersionOf(b.libraryPath), _msixVersionOf(a.libraryPath)));
-                const best = candidates[0];
+                const best = await _pickLoadableCandidate(name, candidates);
+                if (!best) {
+                    console.warn(`[WinML] no loadable candidate for ${name} (candidates=${candidates.length})`);
+                    continue;
+                }
                 try {
                     ortBridge.registerEp(best.name, best.libraryPath);
                     registeredEps.add(best.name);
@@ -459,12 +778,22 @@ async function ensureEpsRegistered(epNames) {
     return registeredEps.size > 0;
 }
 
+// R24: 拆成两个标志 —— 一个标志同时抑制"gate 关闭/无可用 EP"和"注册冷却中"
+// 两条完全不同的日志，先命中的那条会把另一条永久吞掉。
+let _emptyReasonLogged = false;
+let _cooldownLogged = false;
+
 /**
  * Ordered WinML EP candidates for this model kind.
+ * @param {boolean} useStaticShapes
+ * @param {boolean} [allowOpenVINO] - 允许非 NV 的 WinML EP（仅 diffstep/vocoder）
+ * @param {{excludeTrtRtx?: boolean}} [options] - excludeTrtRtx: 该模型不尝试
+ *   NvTensorRTRTX（白名单内但按项目决定固定交给 DML 的模型，如 preflow）。
+ *   只剔除 TRT-RTX，用户手动指定的其它 WinML EP 与 OpenVINO 分支保持原样。
  * @returns {Promise<Array<{epName:string, indices:number[]}>>}
  */
-let _emptyReasonLogged = false;
-async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
+async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false, options = {}) {
+    const excludeTrtRtx = options && options.excludeTrtRtx === true;
     if (!isWinmlEnabled()) {
         if (!_emptyReasonLogged) {
             _emptyReasonLogged = true;
@@ -473,7 +802,15 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
         return [];
     }
     // 智能模式(未手动指定 EP)：自动优先 NV(TRT-RTX GPU)；手动指定则尊重用户、置于最先尝试。
-    const selectedEp = String((globalThis.__SXS_SETTINGS_SNAPSHOT__ || {}).winmlPreferredEp || '').trim();
+    // winmlPreferredDevice 是设置页里"同一 EP 的不同硬件分开选"的结果
+    // （如 OpenVINO 的 gpu / cpu / npu）：只对用户手动选中的那个 EP 生效，
+    // 把候选钉在该 deviceType 上；为空表示沿用该 EP 暴露的全部设备。
+    const snapSettings = globalThis.__SXS_SETTINGS_SNAPSHOT__ || {};
+    const selectedEp = String(snapSettings.winmlPreferredEp || '').trim();
+    const selectedDevice = _normalizeDeviceType(snapSettings.winmlPreferredDevice);
+    const npuAvailable = globalThis.__SXS_NPU_AVAILABLE__ === true;
+    const openvinoNpuSafe = globalThis.__SXS_OPENVINO_NPU_SAFE__ === true;
+    const npuUsable = npuAvailable && openvinoNpuSafe;
     const preferred = [selectedEp, 'NvTensorRTRTXExecutionProvider', 'OpenVINOExecutionProvider']
         .filter((name, index, all) => name && all.indexOf(name) === index);
     if (useStaticShapes) {
@@ -501,13 +838,37 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
 
     const chain = [];
     const pushIfMissing = (c) => { if (!chain.some((x) => x.epName === c.epName)) chain.push(c); };
+    const isTrtName = (name) => String(name || '').includes('NvTensorRTRTX');
+    const isNpuIndex = (i) => {
+        const d = devices.find((x) => x.index === i);
+        return !!d && d.deviceType === 'npu';
+    };
+    // 所有交给会话的索引都要过这一层：无论是自动链还是用户手动指定的 EP，
+    // 只要 NPU 安全门没开就不能带 NPU 设备（否则 OpenVINO NPU compiler 崩）。
+    const dropNpu = (indices) => (npuUsable ? indices : indices.filter((i) => !isNpuIndex(i)));
     // 1) 用户手动指定的 EP 最先尝试（尊重选择）
     if (selectedEp) {
-        const selIndices = byNameAny(selectedEp);
-        if (selIndices.length) chain.push({ epName: selectedEp, indices: selIndices });
+        if (excludeTrtRtx && isTrtName(selectedEp)) {
+            console.log(`[WinML][select] model=excluded-trt selectedEp=${selectedEp} skipped reason=trt-rtx-excluded`);
+        } else if (selectedDevice === 'npu' && !npuUsable) {
+            // NPU 被安全门挡着：不能按"用户选了就用"处理，否则 OpenVINO 的
+            // NPU compiler 会在版本错配时空指针崩溃（见下面的 gate 说明）。
+            console.warn(`[WinML][select] selectedEp=${selectedEp} device=npu ignored reason=npu-gated (npuAvailable=${npuAvailable} openvinoNpuSafe=${openvinoNpuSafe})`);
+        } else {
+            const selIndices = dropNpu(selectedDevice ? byName(selectedEp, selectedDevice) : byNameAny(selectedEp));
+            if (selIndices.length) {
+                chain.push({ epName: selectedEp, indices: selIndices });
+            } else if (selectedDevice) {
+                // 选中的硬件在本次探测里消失了（换卡/驱动回退）：如实记录，
+                // 后续仍按自动顺序尝试该 EP 的其它设备，避免用户凭空掉到 DML。
+                console.warn(`[WinML][select] selectedEp=${selectedEp} device=${selectedDevice} not found; falling back to all devices of that EP`);
+                const all = dropNpu(byNameAny(selectedEp));
+                if (all.length) chain.push({ epName: selectedEp, indices: all });
+            }
+        }
     }
     // 2) NV(TRT-RTX GPU) 始终最高优先 —— 智能模式默认选择，NV > ALL OTHER EP
-    const trt = byName('NvTensorRTRTXExecutionProvider', 'gpu');
+    const trt = excludeTrtRtx ? [] : byName('NvTensorRTRTXExecutionProvider', 'gpu');
     if (trt.length) pushIfMissing({ epName: 'NvTensorRTRTXExecutionProvider', indices: trt });
     // 3) 其他 WinML EP(OpenVINO 等)：仅当被允许(diffstep/vocoder)或用户显式指定才纳入
     const openvinoAllowed = allowOpenVINO || selectedEp === 'OpenVINOExecutionProvider';
@@ -522,12 +883,6 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
     // openvino 运行时与驱动 NPU compiler 版本错配时创建 NPU 会话仍会让编译器
     // 空指针崩溃（minidump: openvino_intel_npu_compiler.dll 0xC0000005 读 0x0），
     // 因此默认保守关闭，由 main 在版本匹配验证通过后放开。
-    const npuAvailable = globalThis.__SXS_NPU_AVAILABLE__ === true;
-    const openvinoNpuSafe = globalThis.__SXS_OPENVINO_NPU_SAFE__ === true;
-    const dropNpu = (indices) => indices.filter((i) => {
-        const d = devices.find((x) => x.index === i);
-        return !d || d.deviceType !== 'npu';
-    });
     if (openvinoAllowed) {
         const ovAny = dropNpu(byNameAny('OpenVINOExecutionProvider'));
         if (ovAny.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider', indices: ovAny });
@@ -535,7 +890,7 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
             const ovGpu = byName('OpenVINOExecutionProvider', 'gpu');
             if (ovGpu.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider(gpu)', indices: ovGpu });
         }
-        if (useStaticShapes && npuAvailable && openvinoNpuSafe) {
+        if (useStaticShapes && npuUsable) {
             const npu = byName('OpenVINOExecutionProvider', 'npu');
             if (npu.length && !chain.some((c) => c.indices.includes(npu[0]))) pushIfMissing({ epName: 'OpenVINOExecutionProvider(npu)', indices: npu });
             const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);
@@ -544,7 +899,7 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
     }
     // Log the resolved chain with per-index hardware so a single EP that spans
     // multiple hardware (e.g. OpenVINO NPU/CPU/GPU) is unambiguous in the console.
-    console.log(`[WinML][select] shape=${useStaticShapes ? 'static' : 'dynamic'} chain=${chain.map(fmtCandidate).join('>') || 'none'} devices=${devices.map((d) => `${d.index}:${d.epName}/${d.deviceType || '?'}`).join(',') || 'none'}`);
+    console.log(`[WinML][select] shape=${useStaticShapes ? 'static' : 'dynamic'}${excludeTrtRtx ? ' trt-rtx=excluded' : ''} chain=${chain.map(fmtCandidate).join('>') || 'none'} devices=${devices.map((d) => `${d.index}:${d.epName}/${d.deviceType || '?'}`).join(',') || 'none'}`);
     // Explain single-EP multi-hardware grouping: all indices of that EP ride in
     // one session, and ORT/WinML picks the actual device internally at creation.
     for (const c of chain) {
@@ -558,17 +913,26 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
 
 /**
  * Try creating a WinML-backed session walking the candidate chain.
+ * @param {string} modelPath
+ * @param {boolean} useStaticShapes
+ * @param {boolean} [allowOpenVINO]
+ * @param {{excludeTrtRtx?: boolean}} [options] - 见 getWinmlCandidates
  * @returns {Promise<{session:object, ep:string}|null>}
  */
-async function tryCreateWinMLSession(modelPath, useStaticShapes, allowOpenVINO = false) {
+async function tryCreateWinMLSession(modelPath, useStaticShapes, allowOpenVINO = false, options = {}) {
     const modelName = path.basename(modelPath);
     // Do not rebuild an engine that already proved unusable at runtime.
     if (isRuntimeBlocked(modelPath)) {
         console.log(`[WinML][session] model=${modelName} status=skipped reason=runtime-failure-blocklist`);
         return null;
     }
-    const candidates = await getWinmlCandidates(useStaticShapes, allowOpenVINO);
-    if (!candidates.length) return null;
+    const candidates = await getWinmlCandidates(useStaticShapes, allowOpenVINO, options);
+    if (!candidates.length) {
+        if (options && options.excludeTrtRtx === true) {
+            console.log(`[WinML][session] model=${modelName} status=skipped reason=trt-rtx-excluded (no remaining candidate)`);
+        }
+        return null;
+    }
     for (const cand of candidates) {
         try {
             const session = await ortBridge.createSessionWithEps(modelPath, cand.indices, cand.epName);
@@ -594,7 +958,6 @@ async function tryCreateWinMLSession(modelPath, useStaticShapes, allowOpenVINO =
  */
 function clearTRTEngineCache() {
     const os = require('node:os');
-    const crypto = require('node:crypto');
     let removed = 0;
     // TRT-RTX EP stores cache in subdirectories of these roots:
     //  - %LOCALAPPDATA% (most common on Windows)
@@ -636,26 +999,43 @@ function clearTRTEngineCache() {
     return removed;
 }
 
-/** Test/diagnostic reset. */
-function __resetForTest() {
+/**
+ * 重置全部进程级 EP 状态。
+ *
+ * 后端在 DML 与 Windows ML 之间切换时必须调用：否则主进程里缓存的空 EP
+ * 列表、运行期失败 pin（_runtimeBlockedModels）、已注册集合与冷却计时都会
+ * 残留，导致切回 Windows ML 后仍全部回退 DML。测试也用同一个入口复位。
+ */
+function resetEpState() {
     registeredEps.clear();
     _runtimeBlockedModels.clear();
     registrationAttempted = false;
     _lastAttemptAt = 0;
     _emptyReasonLogged = false;
+    _cooldownLogged = false;
+    _registeringPromise = null;
     _readyEpLibrariesPromise = null;
     _readyEpLibrariesCache = null;
+    _readyEpLibrariesCacheKey = null;
+    // EP 包可能在运行期被更新（应用内升级 / MSIX 刷新），下次解析重新读版本。
+    _trtRuntimeFingerprintPromise = null;
 }
 
 module.exports = {
     isWinmlEnabled,
+    getWinmlGate,
     ensureEpsRegistered,
     getReadyEpLibraries,
+    listProviderDevices,
     getWinmlCandidates,
     tryCreateWinMLSession,
     reportRuntimeFailure,
     isRuntimeBlocked,
+    getTrtRuntimeFingerprint,
     clearTRTEngineCache,
+    resetEpState,
     listCompatibleProviders: (...a) => winmlCatalog.listCompatibleProviders(...a),
-    __resetForTest,
+    // 兼容既有测试与诊断脚本使用的旧名称。
+    __resetForTest: resetEpState,
+    __test: { _normalizeDeviceType, _pickLoadableCandidate, _libLabel },
 };

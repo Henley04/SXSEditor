@@ -136,7 +136,7 @@ Float32Array PCM audio (24kHz model rate, output upsampled to 48kHz)</code></pre
       <ul>
         <li><span data-lang="en"><strong>Chinese</strong> — uses <code>pinyin-pro</code> to convert characters to pinyin, then maps pinyin syllables to <code>zh_*</code> phoneme IDs.</span><span data-lang="zh"><strong>中文</strong>— 使用 <code>pinyin-pro</code> 将汉字转换为拼音，再将拼音音节映射到 <code>zh_*</code> 音素 ID。</span></li>
         <li><span data-lang="en"><strong>English</strong> — looks up the ARPAbet dictionary; unknown words fall back to a letter-based heuristic.</span><span data-lang="zh"><strong>英语</strong>— 查询 ARPAbet 词典；未知单词回退到基于字母的启发式规则。</span></li>
-        <li><span data-lang="en"><strong>Japanese</strong> — hiragana / katakana → phoneme map (built-in <code>JP_HIRAGANA_MAP</code>); a small kanji dictionary is also included. Requires the JP model variants in <code>onnx_models/&lt;precision&gt;/JP/</code>.</span><span data-lang="zh"><strong>日语</strong>— 平假名 / 片假名 → 音素映射（内置 <code>JP_HIRAGANA_MAP</code>）；还包含一个小型汉字字典。需要 <code>onnx_models/&lt;precision&gt;/JP/</code> 下的日语模型变体。</span></li>
+        <li><span data-lang="en"><strong>Japanese</strong> — hiragana / katakana → phoneme map (built-in <code>JP_HIRAGANA_MAP</code>); a small kanji dictionary is also included. Requires the JP model variants in <code>onnx_models/fp16/JP/</code> — the JP LoRA repository is currently published for the <strong>fp16 precision only</strong> (<code>syxppp/SoulX-Singer-onnx-fp16-lora-jp</code>).</span><span data-lang="zh"><strong>日语</strong>— 平假名 / 片假名 → 音素映射（内置 <code>JP_HIRAGANA_MAP</code>）；还包含一个小型汉字字典。需要 <code>onnx_models/fp16/JP/</code> 下的日语模型变体——JP LoRA 仓库目前仅发布 <strong>fp16 精度</strong>（<code>syxppp/SoulX-Singer-onnx-fp16-lora-jp</code>）。</span></li>
       </ul>
       <p data-lang="en">Language auto-detection is done by <code>OnnxSVSPipeline.detectJapanese(notes)</code> (checks for <code>jp_*</code> phonemes or hiragana/katakana characters in lyrics).</p>
       <p data-lang="zh">语言自动检测由 <code>OnnxSVSPipeline.detectJapanese(notes)</code> 完成（检查歌词中是否含 <code>jp_*</code> 音素或平假名/片假名字符）。</p>
@@ -176,17 +176,50 @@ Float32Array PCM audio (24kHz model rate, output upsampled to 48kHz)</code></pre
       <p data-lang="en"><code>preprocessing.js</code> builds the frame-level inputs consumed by the encoders:</p>
       <p data-lang="zh"><code>preprocessing.js</code> 构建编码器消费的帧级输入：</p>
       <ul>
-        <li><span data-lang="en"><strong>F0 frame sequence</strong> — <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>. MIDI note → frequency via <code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>. Frame count = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>. Optional <code>f0Envelope</code> (pitch-bend keyframes) and <code>pitchCurveF0</code> (per-frame F0 override) are applied.</span><span data-lang="zh"><strong>F0 帧序列</strong>— <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>。MIDI 音符 → 频率：<code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>。帧数 = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>。可选的 <code>f0Envelope</code>（音高弯曲关键帧）与 <code>pitchCurveF0</code>（逐帧 F0 覆盖）会被应用。</span></li>
+        <li><span data-lang="en"><strong>F0 frame sequence</strong> — <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>. MIDI note → frequency via <code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>. Frame count = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>. Optional <code>f0Envelope</code> (pitch-bend keyframes) and <code>pitchCurveF0</code> (per-frame F0 override) are applied. With neither, every note gets a <em>constant</em> frequency — see the pitch-control note below.</span><span data-lang="zh"><strong>F0 帧序列</strong>— <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>。MIDI 音符 → 频率：<code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>。帧数 = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>。可选的 <code>f0Envelope</code>（音高弯曲关键帧）与 <code>pitchCurveF0</code>（逐帧 F0 覆盖）会被应用；两者都没有时每个音符拿到的是<em>恒定</em>频率——见下面的音高来源说明。</span></li>
         <li><span data-lang="en"><strong>F0 quantization</strong> — continuous F0 (Hz) → <code>F0_BIN=361</code> bins, anchored at <code>F0_MIN=32.703Hz</code>, for the <code>f0_encoder.onnx</code> lookup table.</span><span data-lang="zh"><strong>F0 量化</strong>— 连续 F0（Hz）→ <code>F0_BIN=361</code> 个 bin，锚点 <code>F0_MIN=32.703Hz</code>，供 <code>f0_encoder.onnx</code> 查表。</span></li>
         <li><span data-lang="en"><strong>mel2token</strong> — maps each mel frame to the phoneme that owns it, derived from the duration allocation above.</span><span data-lang="zh"><strong>mel2token</strong>— 将每个 mel 帧映射到其所属音素，由上面的时长分配得到。</span></li>
         <li><span data-lang="en"><strong>Note type ids</strong> — <code>rest</code> / <code>vocal</code> / <code>slur</code> classification, fed to <code>note_type_encoder.onnx</code>.</span><span data-lang="zh"><strong>音符类型 id</strong>— <code>rest</code> / <code>vocal</code> / <code>slur</code> 分类，送入 <code>note_type_encoder.onnx</code>。</span></li>
         <li><span data-lang="en"><strong>Continuation normalization</strong> — both lyric editors accept the ASCII hyphen <code>-</code>. On save it is normalized to <code>lyric: ''</code>, <code>noteType: 3</code>, <code>isContinuation: true</code>, and <code>isSlur: true</code>. Rendering converts that internal state back to <code>-</code>. Inference must test continuation flags before treating an empty lyric as <code>&lt;SP&gt;</code>.</span><span data-lang="zh"><strong>连音规范化</strong>——两个歌词编辑器都接受半角连字符 <code>-</code>。保存时规范化为 <code>lyric: ''</code>、<code>noteType: 3</code>、<code>isContinuation: true</code> 和 <code>isSlur: true</code>；渲染时再显示为 <code>-</code>。推理必须先判断连音标记，再把空歌词判断为 <code>&lt;SP&gt;</code>。</span></li>
       </ul>
 
+      <h3 id="pitch-control">
+        <span data-lang="en">Pitch control: melody vs. score</span>
+        <span data-lang="zh">音高来源：melody 与 score</span>
+      </h3>
+      <p data-lang="en">The upstream model exposes two mutually exclusive control modes, and they are not symmetric:</p>
+      <p data-lang="zh">上游模型提供两种互斥的控制模式，二者并不对称：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Mode</span><span data-lang="zh">模式</span></th>
+            <th><span data-lang="en">note_pitch</span><span data-lang="zh">note_pitch</span></th>
+            <th><span data-lang="en">f0 condition</span><span data-lang="zh">f0 条件</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>melody</code></td>
+            <td><span data-lang="en">zeros</span><span data-lang="zh">全 0</span></td>
+            <td><span data-lang="en">reference / supplied curve</span><span data-lang="zh">参考或给定的曲线</span></td>
+          </tr>
+          <tr>
+            <td><code>score</code></td>
+            <td><span data-lang="en">real MIDI pitches</span><span data-lang="zh">真实 MIDI 音高</span></td>
+            <td><span data-lang="en">zeros (bin 0, unvoiced)</span><span data-lang="zh">全 0（bin 0，unvoiced）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">In <code>score</code> mode the f0 encoder sees an all-unvoiced condition, so the diffusion model generates the contour itself — attacks, note transitions and vibrato all come from the model. The pipeline must therefore distinguish "no curve" from "leave f0 to the model": feeding a flat MIDI-traced curve is neither mode and sits outside the training distribution. <code>runEncoder(..., scoreMode)</code> zeroes <code>f0Ids</code> in the encoder input only; the real <code>f0Hz</code> sequence is kept for the SiFiGAN vocoder and for chunk-boundary selection.</p>
+      <p data-lang="zh">在 <code>score</code> 模式下 f0 编码器看到的是整条 unvoiced 条件，音高轮廓由扩散模型自己生成——起音、换音过渡、颤音都来自模型。因此管线必须区分"没有曲线"和"把 F0 交给模型"：按 MIDI 填一条平直曲线既不是 melody 也不是 score，落在训练分布之外。<code>runEncoder(..., scoreMode)</code> 只把编码器输入里的 <code>f0Ids</code> 清零；真实的 <code>f0Hz</code> 序列仍保留给 SiFiGAN vocoder 与分块边界选择使用。</p>
+      <p data-lang="en">Mode selection lives on the fragment (<code>pitchMode: 'auto' | 'manual' | 'score'</code>, see <code>src/shared/pitchControl.js</code>). <code>auto</code> resolves by content: any curve material → <code>manual</code>, nothing at all → <code>score</code>. Both the cache key and the renderer signature include the resolved mode, because <code>manual</code> with an empty curve and <code>score</code> both ship <code>pitchCurveF0 = null</code> and would otherwise collide.</p>
+      <p data-lang="zh">模式选择存在分片上（<code>pitchMode: 'auto' | 'manual' | 'score'</code>，见 <code>src/shared/pitchControl.js</code>）。<code>auto</code> 按内容判定：有任何曲线素材 → <code>manual</code>，什么都没有 → <code>score</code>。缓存键与渲染层签名都会带上解析后的模式，因为"manual 空曲线"和"score"都下发 <code>pitchCurveF0 = null</code>，不加区分会互相命中。</p>
+
       <h2>
         <span data-lang="en">Stage 4 — Encoders</span>
         <span data-lang="zh">第 4 阶段 — 编码器</span>
       </h2>
+
       <p data-lang="en">Five encoder models run in parallel to produce the conditioning tensor <code>cond</code> of dimension <code>COND_DIM=1024</code>:</p>
       <p data-lang="zh">五个编码器模型并行运行，生成维度为 <code>COND_DIM=1024</code> 的条件张量 <code>cond</code>：</p>
       <table class="doc-table">
@@ -246,7 +279,13 @@ else                                     noteType = 2;   // text = lyric
 // src/inference/pipeline/preprocessing.js — notesToSequences()
 // NOTE: the slur check MUST come first: slur notes usually have an empty
 // lyric, so testing "empty lyric" first would misclassify them as rests.
-if (note.isSlur || note.isContinuation) noteType = 3;
+// '-' is a continuation marker, not a phoneme: an editor slur is stored as
+// lyric='' + isContinuation, but MIDI import may leave the literal '-' in
+// the lyric — both are normalized to "type 3 with no lyric" here.
+const isSlurMarker = lyric.trim() === '-';
+if (isSlurMarker) lyric = '';                       // never feed '-' to the vocab
+if (note.isSlur || note.isContinuation || note.noteType === 3 || isSlurMarker)
+                                        noteType = 3;
 else if (this.isRestNote(note))         noteType = 1;
 else                                    noteType = 2;</code></pre>
       <table class="doc-table">
@@ -274,8 +313,8 @@ else                                    noteType = 2;</code></pre>
           <tr>
             <td><code>3</code></td>
             <td><span data-lang="en">slur / continuation</span><span data-lang="zh">连音 / 延续</span></td>
-            <td><span data-lang="en">lyric <code>-</code>, or <code>isSlur</code> / <code>isContinuation</code></span><span data-lang="zh">歌词 <code>-</code>，或 <code>isSlur</code> / <code>isContinuation</code></span></td>
-            <td><span data-lang="en">the <em>previous</em> note's phoneme (no new attack)</span><span data-lang="zh"><em>前一个</em>音符的音素（不重新起音）</span></td>
+            <td><span data-lang="en">lyric <code>-</code>, <code>isSlur</code> / <code>isContinuation</code>, or an explicit <code>noteType === 3</code> (MIDI import)</span><span data-lang="zh">歌词 <code>-</code>、<code>isSlur</code> / <code>isContinuation</code>，或显式 <code>noteType === 3</code>（MIDI 导入）</span></td>
+            <td><span data-lang="en">the <em>previous</em> note's phoneme (no new attack). MIDI import copies the previous lyric onto the slur note, so the sequence repeats it. A slur created in the editor stores an empty lyric instead — the token then resolves to <code>&lt;SP&gt;</code> and the "no new attack" comes entirely from <code>note_type</code>; the literal <code>-</code> is never fed to the vocabulary.</span><span data-lang="zh"><em>前一个</em>音符的音素（不重新起音）。MIDI 导入会把前一个歌词抄到连音音符上，序列因此重复一遍；编辑器里创建的连音存的是空歌词，token 解析为 <code>&lt;SP&gt;</code>，"不重新起音"完全由 <code>note_type</code> 承担。字面 <code>-</code> 永远不会进入词表。</span></td>
           </tr>
         </tbody>
       </table>
@@ -286,8 +325,8 @@ else                                    noteType = 2;</code></pre>
           <p data-lang="zh">休止判定有两处独立实现必须保持一致——<code>AudioSegmentation._isRestNote()</code>（用于区间切分，并经 <code>_isRestNote</code> 代理被 <code>index.js::_silenceNonVocalRegions()</code> 使用）与 <code>Preprocessing.isRestNote()</code>（被 <code>notesToSequences()</code> 使用）。两处都把 <code>&lt;AP&gt;</code> 视为<strong>非休止</strong>，把连音音符视为<strong>非休止</strong>。此处一旦分歧，会悄无声息地改变模型唱出的内容。</p>
         </div>
       </div>
-      <p data-lang="en">Where does the neutral <code>la</code> come from, then? Not from the pipeline — it is filled in <strong>upstream</strong>, at note-creation time: a note drawn in the piano roll is created with <code>lyric: 'la'</code> (<code>src/fragmentEditor/eventHandlers.js</code>), MIDI import resolves an empty lyric to <code>text = 'la'</code> and stores it as the note's <code>lyric</code> (<code>src/inference/midiParser.js</code>), and pitch-extraction paths use <code>n.lyric || n.text || 'la'</code> (<code>src/renderer/fragmentOperations.js</code>, <code>audioPreprocess/midiExtraction.js</code>). By the time notes reach <code>notesToSequences()</code>, an empty lyric can only mean one thing: the user deliberately cleared it, and the note is a rest.</p>
-      <p data-lang="zh">那么中性的 <code>la</code> 从哪来？不是管线补的——它在<strong>上游</strong>的音符创建环节就已填好：钢琴卷帘中新画的音符以 <code>lyric: 'la'</code> 创建（<code>src/fragmentEditor/eventHandlers.js</code>）；MIDI 导入把空歌词解析为 <code>text = 'la'</code> 并存入音符的 <code>lyric</code> 字段（<code>src/inference/midiParser.js</code>）；音高提取路径使用 <code>n.lyric || n.text || 'la'</code>（<code>src/renderer/fragmentOperations.js</code>、<code>audioPreprocess/midiExtraction.js</code>）。等音符到达 <code>notesToSequences()</code> 时，空歌词只可能意味着一件事：用户主动清空了它，该音符即休止。</p>
+      <p data-lang="en">The neutral <code>la</code> is filled in <strong>upstream</strong>, at note-creation time, rather than by the pipeline: a note drawn in the piano roll is created with <code>lyric: 'la'</code> (<code>src/fragmentEditor/eventHandlers.js</code>), MIDI import resolves an empty lyric to <code>text = 'la'</code> and stores it as the note's <code>lyric</code> (<code>src/inference/midiParser.js</code>), and pitch-extraction paths use <code>n.lyric || n.text || 'la'</code> (<code>src/renderer/fragmentOperations.js</code>, <code>audioPreprocess/midiExtraction.js</code>). By the time notes reach <code>notesToSequences()</code>, an empty lyric can only mean one thing: the user deliberately cleared it, and the note is a rest.</p>
+      <p data-lang="zh">中性的 <code>la</code> 由<strong>上游</strong>在音符创建时填入，管线本身不补全：钢琴卷帘中新画的音符以 <code>lyric: 'la'</code> 创建（<code>src/fragmentEditor/eventHandlers.js</code>）；MIDI 导入把空歌词解析为 <code>text = 'la'</code> 并存入音符的 <code>lyric</code> 字段（<code>src/inference/midiParser.js</code>）；音高提取路径使用 <code>n.lyric || n.text || 'la'</code>（<code>src/renderer/fragmentOperations.js</code>、<code>audioPreprocess/midiExtraction.js</code>）。等音符到达 <code>notesToSequences()</code> 时，空歌词只可能意味着一件事：用户主动清空了它，该音符即休止。</p>
 
       <h2 id="special-phonemes">
         <span data-lang="en">Special Phonemes: &lt;SP&gt; and &lt;AP&gt;</span>
@@ -430,7 +469,7 @@ flush();</code></pre>
         </thead>
         <tbody>
           <tr>
-            <td><code>euler</code> <span data-lang="en">(default)</span><span data-lang="zh">（默认）</span></td>
+            <td><code>euler</code></td>
             <td><code>euler.js</code></td>
             <td>1</td>
             <td><span data-lang="en">First-order explicit, midpoint time <code>t = (step + 0.5) / totalSteps</code>. Equivalent to the pre-refactor loop.</span><span data-lang="zh">一阶显式，中点时间 <code>t = (step + 0.5) / totalSteps</code>。等价于重构前的循环。</span></td>
@@ -615,7 +654,7 @@ flush();</code></pre>
             <td><code>DIFF_STEP_MAX_SEQ_LEN</code></td>
             <td>8192</td>
             <td>shared/constants.js</td>
-            <td><span data-lang="en">diffusion-step maximum sequence length</span><span data-lang="zh">扩散步最大序列长度</span></td>
+            <td><span data-lang="en">diffusion-step maximum sequence length per call (8192 frames ≈ 163.8 s at 50 fps, including prompt; export currently full-sequence)</span><span data-lang="zh">扩散步单次调用最大序列长度（8192 帧 ≈ 163.8 秒 @50fps，含 prompt；当前导出为整段推理）</span></td>
           </tr>
           <tr>
             <td><code>SIFIGAN_HOP_SIZE</code></td>
@@ -658,6 +697,151 @@ flush();</code></pre>
         <div class="callout-body">
           <p data-lang="en">Node.js v24+ / Electron 42+ (Chromium 138) natively supports <code>Float16Array</code>, but the <code>onnxruntime-node</code> C++ binding cannot read its buffer, causing <code>"not enough space: expected N, got 0"</code>. The patch is required for FP16 models to work. Under webpack, it uses <code>__non_webpack_require__</code> to reach the native <code>require.cache</code>.</p>
           <p data-lang="zh">Node.js v24+ / Electron 42+（Chromium 138）原生支持 <code>Float16Array</code>，但 <code>onnxruntime-node</code> 的 C++ binding 无法读取其 buffer，会报 <code>"not enough space: expected N, got 0"</code>。该补丁是 FP16 模型正常工作的前提。在 webpack 下，它通过 <code>__non_webpack_require__</code> 访问原生 <code>require.cache</code>。</p>
+        </div>
+      </div>
+
+      <h2 id="fp16-parity">
+        <span data-lang="en">FP16 Path vs Upstream</span>
+        <span data-lang="zh">FP16 精度路径与上游差异</span>
+      </h2>
+      <p data-lang="en">Upstream's FP16 is mixed precision, not TrueFP16. <code>cli/inference.py</code> does:</p>
+      <p data-lang="zh">上游的 FP16 是混合精度，而不是 TrueFP16。<code>cli/inference.py</code> 的实际顺序是：</p>
+      <pre><code>model.half()
+model.mel.float()      # mel transform stays FP32
+
+# soulxsinger.py: infer()
+use_fp16 = use_fp16 and pt_wav.is_cuda
+pt_mel = self.mel(pt_wav.float())      # FP32 mel transform
+if use_fp16:
+    pt_mel = pt_mel.half()
+    pt_f0 = pt_f0.half()
+    gt_f0 = gt_f0.half()
+
+with _autocast_if(use_fp16):           # torch.amp.autocast('cuda')
+    features = ... encoders ...
+    generated_mel = self.cfm_decoder.reverse_diffusion(...)
+    generated_audio = self.vocoder(...).float()</code></pre>
+      <p data-lang="en"><code>torch.autocast</code> keeps softmax, LayerNorm, exponentiation and reductions in FP32 even though the weights are half. Two consequences: (1) upstream FP16 is only ever active on CUDA (<code>pt_wav.is_cuda</code>), and (2) its numerics are not reproducible by a fully-half ONNX graph.</p>
+      <p data-lang="zh"><code>torch.autocast</code> 会在权重为 half 的情况下，把 softmax、LayerNorm、指数与归约类算子保持在 FP32。这带来两个后果：(1) 上游 FP16 只在 CUDA 上真正启用（<code>pt_wav.is_cuda</code>）；(2) 它的数值行为无法用一个"全 half"的 ONNX 图复现。</p>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Historical measurement (pre-W16A32).</strong> The full-FP16 vocoder described below had a 32–33 dB noise floor. The current FP16 suite ships the re-exported <strong>W16A32 vocoder</strong> (FP16 weights / FP32 activations) to address underflow. Do not apply the old vocoder SNR figure to the current model.</p>
+          <p data-lang="zh"><strong>历史实测（W16A32 之前）。</strong>下文所述全 FP16 声码器存在 32–33 dB 底噪。当前 FP16 套件已改为重新导出的 <strong>W16A32 声码器</strong>（FP16 权重 / FP32 激活）以解决下溢问题，旧声码器 SNR 不适用于当前模型。</p>
+        </div>
+      </div>
+      <p data-lang="en">SXSEditor loads the <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> checkpoints on DirectML / TensorRT-RTX. The suite is TrueFP16 (FP16 weights and activations), except that the current vocoder is W16A32. Q-Drift compensates without changing the model arithmetic:</p>
+      <p data-lang="zh">SXSEditor 在 DirectML / TensorRT-RTX 上加载 <code>syxppp/SoulX-Singer-onnx-directml-fp16</code> 检查点。该套件为 TrueFP16（权重与激活均为 FP16），只有当前 vocoder 使用 W16A32。Q-Drift 在不改变模型算术的前提下提供补偿：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Q-Drift is opt-out.</strong> A sampler-side per-channel correction (see <code>qdrift/</code>) that upstream does not have. It is on by default for FP16 and locks the sampler contract; for like-for-like comparison with upstream it must be switched off.</span><span data-lang="zh"><strong>Q-Drift 可关闭。</strong>采样器侧的逐通道校正（见 <code>qdrift/</code>），上游没有对应实现。FP16 下默认开启并锁定采样合约；要与上游做对等对比时必须关闭。</span></li>
+        <li><span data-lang="en"><strong>The diffusion arithmetic is unchanged.</strong> CFG combine, variance rescale (<code>cfgRescale</code>), Euler update and the vocoder input are the same formulas as <code>reverse_diffusion</code>; only the dtype of the model evaluations differs. The mel transform follows the TrueFP16 path; the W16A32 exception is limited to the vocoder — see below.</span><span data-lang="zh"><strong>扩散阶段算术不变。</strong>CFG 合并、方差 rescale（<code>cfgRescale</code>）、Euler 更新与 vocoder 输入都使用与 <code>reverse_diffusion</code> 相同的公式，区别只在模型评估的 dtype。mel 变换遵循 TrueFP16 路径；W16A32 例外仅限 vocoder——见下。</span></li>
+      </ul>
+      <p data-lang="en">Measured error against FP32 on the same machine (<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>):</p>
+      <p data-lang="zh">同机实测相对 FP32 的误差（<code>onnx_models/fp16_dynamo/fp16_vs_fp32_comparison.json</code>）：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Model</span><span data-lang="zh">模型</span></th>
+            <th><span data-lang="en">cosine</span><span data-lang="zh">余弦</span></th>
+            <th><span data-lang="en">SNR</span><span data-lang="zh">信噪比</span></th>
+            <th><span data-lang="en">max abs error</span><span data-lang="zh">最大绝对误差</span></th>
+            <th><span data-lang="en">speed-up</span><span data-lang="zh">提速</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>diff_step</code> @256</td>
+            <td>0.999993</td>
+            <td>48.3 dB</td>
+            <td>4.5×10⁻²</td>
+            <td>1.65×</td>
+          </tr>
+          <tr>
+            <td><code>diff_step</code> @1024</td>
+            <td>0.999990</td>
+            <td>46.9 dB</td>
+            <td>5.1×10⁻²</td>
+            <td>2.25×</td>
+          </tr>
+          <tr>
+            <td><code>vocoder</code> @200 frames</td>
+            <td>0.999760</td>
+            <td>33.2 dB</td>
+            <td>1.1×10⁻³</td>
+            <td>9.9×</td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The vocoder dominates the error budget: 32–33 dB SNR is a low-level noise floor, audible only in near-silent passages. Do not "fix" it by raising diffusion precision — the diffusion step is already 15 dB cleaner than the vocoder it feeds.</p>
+      <p data-lang="zh">误差预算由 vocoder 主导：32–33 dB 的信噪比相当于一层很低的底噪，只在近乎无声的段落可闻。不要试图用"提高扩散精度"来修它——扩散步已经比它要喂的 vocoder 干净约 15 dB。</p>
+
+      <h3 id="mel-transform-error">
+        <span data-lang="en">mel_transform under TrueFP16</span>
+        <span data-lang="zh">TrueFP16 下的 mel_transform</span>
+      </h3>
+      <p data-lang="en">The mel transform is only used to turn the reference audio into the prompt condition (<code>extractRefMelOnnx</code>), once per fragment — it never sits in the audio path. Measured against the FP32 graph on three 4-second singing segments plus one non-vocal segment:</p>
+      <p data-lang="zh">mel 变换只用于把参考音频转成 prompt 条件（<code>extractRefMelOnnx</code>），每个分片跑一次，不在音频通路上。以下是对三段 4 秒真实唱段加一段非人声素材、相对 FP32 图的实测：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Measurement</span><span data-lang="zh">指标</span></th>
+            <th><span data-lang="en">Value</span><span data-lang="zh">数值</span></th>
+            <th><span data-lang="en">Note</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Overall SNR</span><span data-lang="zh">整体信噪比</span></td>
+            <td>38.3 – 49.6 dB</td>
+            <td><span data-lang="en">Content-dependent; the quieter the passage, the lower</span><span data-lang="zh">随内容变化，段落越安静越低</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Cosine</span><span data-lang="zh">余弦相似度</span></td>
+            <td>0.99993 – 0.99999</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Mean abs error</span><span data-lang="zh">平均绝对误差</span></td>
+            <td>0.007 – 0.018</td>
+            <td><span data-lang="en">log-mel units (range of the signal is ≈ 12)</span><span data-lang="zh">log-mel 单位（信号本身跨度约 12）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Loudest energy quartile</span><span data-lang="zh">能量最高的四分位</span></td>
+            <td>65 – 71 dB</td>
+            <td><span data-lang="en">MAE 0.0005–0.0006 — effectively FP32</span><span data-lang="zh">MAE 0.0005–0.0006，等同 FP32</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Quietest energy quartile</span><span data-lang="zh">能量最低的四分位</span></td>
+            <td>35 – 46 dB</td>
+            <td><span data-lang="en">MAE 0.02–0.06 — where all the error lives</span><span data-lang="zh">MAE 0.02–0.06，误差几乎全部集中于此</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Max abs error</span><span data-lang="zh">最大绝对误差</span></td>
+            <td>≈ 1.5</td>
+            <td><span data-lang="en">Isolated bins flipping across the <code>clamp(1e-5)</code> floor</span><span data-lang="zh">个别 bin 在 <code>clamp(1e-5)</code> 下限两侧翻转</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The aggregate SNR is misleading here: it is dominated by a handful of near-silent bins sitting on the log floor, which carry no energy and do not move the conditioning. Weighted by energy the transform matches FP32 to ~70 dB. Since the vocoder adds a 32 dB floor to the actual audio, the mel transform is not where the audible difference from upstream comes from.</p>
+      <p data-lang="zh">这里整体 SNR 有误导性：它被少数贴着对数下限的近静音 bin 主导，这些 bin 既没有能量、也不会推动条件。按能量加权后，该变换与 FP32 的差距约 70 dB。而 vocoder 会给真实音频加上 32 dB 的底噪下限，因此与上游的听感差异并不来自 mel 变换。</p>
+      <p data-lang="en">A build that loaded the FP32 graph for <code>melTransform</code> under FP16 (mirroring <code>model.mel.float()</code>) existed briefly and was reverted: the measured gain is smaller than the uncertainty of the whole TrueFP16 path, and it made one stage follow a different precision contract than every other stage in the <code>[Precision]</code> line. <code>extractRefMelOnnx</code> nevertheless keeps reading the input dtype from the session's own <code>inputMetadata</code> instead of the global <code>isFP16</code>, so re-enabling the override later is a one-line change.</p>
+      <p data-lang="zh">曾在 FP16 下把 <code>melTransform</code> 指向 FP32 图（对应 <code>model.mel.float()</code>）的构建存在过很短一段时间，已回退：实测收益小于整条 TrueFP16 路径本身的不确定度，而且会让一个阶段服从与其他所有阶段不同的精度约定，<code>[Precision]</code> 行也就失去可比性。<code>extractRefMelOnnx</code> 仍按会话自己的 <code>inputMetadata</code> 取输入 dtype 而非全局 <code>isFP16</code>，所以将来要重新启用只是一行改动。</p>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Method.</strong> The checkpoint is not in this repository, so the exported graph was re-implemented in torch (reflect-pad STFT n_fft 1920 / hop 480, magnitude, Slaney mel matmul with 128 bands, <code>log(clamp(x, 1e-5))</code>) and quantised at each op boundary. Accumulation is modelled as FP32, which makes the estimate optimistic: the historical W16A32 figure of 66.5 dB on white noise reproduces as 80 dB in this harness. Expect the real DirectML number to be roughly 5–14 dB worse, i.e. in the 30–45 dB band for quiet material. Re-measure on hardware before turning the override back on.</p>
+          <p data-lang="zh"><strong>方法。</strong>仓库里没有权重文件，因此用 torch 重建了导出的图（reflect 填充 STFT，n_fft 1920 / hop 480，取模，128 带 Slaney mel 矩阵，<code>log(clamp(x, 1e-5))</code>），并在每个算子边界做量化。累加按 FP32 建模，所以结果是乐观估计：历史上白噪声的 W16A32 实测值 66.5 dB，在本仿真里复现为 80 dB。真实 DirectML 数值预计要差 5–14 dB，安静素材大约落在 30–45 dB 区间。重新启用前应在真机上复测。</p>
+        </div>
+      </div>
+
+      <p data-lang="en">After loading, <code>_logPrecisionSummary()</code> emits one line so a silent fallback is visible:</p>
+      <p data-lang="zh">加载完成后，<code>_logPrecisionSummary()</code> 会打印一行，让静默回退无所遁形：</p>
+      <pre><code>[Precision] encoders=fp16(dml) diff=fp16(dml) vocoder=fp16(dml) mel=fp16(dml) qdrift=fp16 | official FP16 uses CUDA autocast + fp32 mel_transform</code></pre>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The reported <code>diff</code> / <code>vocoder</code> values come from the session loaders (<code>diffStepIsFP16</code> / <code>vocoderIsFP16</code>), not from the setting. If a FP16 <code>diff_step</code> silently falls back to the FP32 base directory (W16A32), this line shows <code>diff=fp32</code> while Settings still says FP16.</p>
+          <p data-lang="zh">其中的 <code>diff</code> / <code>vocoder</code> 来自会话加载结果（<code>diffStepIsFP16</code> / <code>vocoderIsFP16</code>），不是设置值。若 FP16 的 <code>diff_step</code> 静默回退到了 FP32 基础目录（W16A32），这一行会显示 <code>diff=fp32</code>，而设置里仍然写着 FP16。</p>
         </div>
       </div>
 

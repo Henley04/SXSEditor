@@ -22,13 +22,24 @@ const IPC_CHANNELS = {
   GET_FRAGMENT_DATA: 'getFragmentData',
   FRAGMENT_DATA_SAVED: 'fragmentDataSaved',
   LOAD_FRAGMENT: 'loadFragment',
+  // 主窗口 → 分片编辑器：**已打开**编辑器的增量补丁（MCP / 脚本 / 自动流程
+  // 从主窗口侧改了分片数据后，编辑器必须同步，否则它的 500ms 自动保存会把
+  // 旧数据写回去覆盖掉外部修改）。与 LOAD_FRAGMENT 的区别是只更新指定字段、
+  // 不重建编辑器状态，因此撤销栈与视口位置都保留。
+  PUSH_FRAGMENT_PATCH: 'pushFragmentPatch',
+  FRAGMENT_DATA_PATCH: 'fragmentDataPatch',
   UPDATE_FRAGMENT_BOUNDS: 'updateFragmentBounds',
   FRAGMENT_BOUNDS_CHANGED: 'fragmentBoundsChanged',
   UPDATE_PROJECT_SETTINGS: 'updateProjectSettings',
   PROJECT_SETTINGS_CHANGED: 'projectSettingsChanged',
   OPEN_SINGER_CREATOR: 'openSingerCreator',
+  OPEN_SINGER_EDITOR: 'openSingerEditor',
+  // 主进程 → 歌手编辑：直接按路径打开（用于系统"打开方式"/双击 .sxssinger）
+  SINGER_OPEN_AT: 'singer:openAt',
   SAVE_SINGER_FILE: 'saveSingerFile',
   SINGER_CREATED: 'singerCreated',
+  // 主进程 → 主窗口：已存在的歌手文件被编辑保存，按 filePath 就地更新
+  SINGER_UPDATED: 'singerUpdated',
   OPEN_AUDIO_PREPROCESS: 'openAudioPreprocess',
   SEND_PREPROCESS_DATA: 'sendPreprocessData',
   PREPROCESS_DATA_SAVED: 'preprocessDataSaved',
@@ -40,6 +51,22 @@ const IPC_CHANNELS = {
   // 主进程 → 渲染进程：内容区尺寸可能已变化，请重新布局/重绘。
   // 覆盖停靠式 DevTools 开关这类 window 'resize' 不触发的场景。
   RELAYOUT: 'app:relayout',
+
+  // ==================== OS "open with" ====================
+  // 系统把 .sxsproj / .sxssinger 交给应用（双击、拖到图标、"打开方式"）。
+  // 文件路径先存在主进程，渲染层就绪后主动来取，取走即清空 —— 只走这一条
+  // 数据通道，避免"启动参数"和"运行时事件"两套逻辑各写一遍还互相打架。
+  APP_TAKE_PENDING_FILE: 'app:takePendingOpenFile',
+  // 主进程 → 渲染层：有新文件待取（仅通知，不携带路径）
+  APP_FILE_REQUESTED: 'app:fileRequested',
+
+  // ==================== 最近工程（欢迎页） ====================
+  // 列表存在 userData 的小配置文件里，读写只认主进程这一份：渲染进程开不了
+  // 沙箱外的任意路径，而"最近"本身就是一个跨窗口、跨启动的全局状态。
+  RECENTS_LIST: 'recents:list',
+  RECENTS_RECORD: 'recents:record',
+  RECENTS_REMOVE: 'recents:remove',
+  RECENTS_CLEAR: 'recents:clear',
 
   // ==================== SVS Pipeline ====================
   SVS_INIT: 'svs:init',
@@ -74,8 +101,19 @@ const IPC_CHANNELS = {
   SETTINGS_GET_CURRENT_HARDWARE: 'settings:getCurrentHardware',
   SETTINGS_GET: 'settings:getSettings',
   SETTINGS_SAVE: 'settings:saveSettings',
+  SETTINGS_CLEAR_INFERENCE_CACHE: 'settings:clearInferenceCache',
   SETTINGS_CHECK_MODELS: 'settings:check-models',
   SETTINGS_VALIDATE_DEVICES: 'settings:validateDevices',
+
+  // ==================== API Provider（远程推理） ====================
+  // 密钥明文只存在于主进程；渲染层通过这些通道管理 Provider 元数据与连接测试。
+  API_PROVIDERS_LIST: 'api:providersList',
+  API_PROVIDER_SAVE: 'api:providerSave',
+  API_PROVIDER_DELETE: 'api:providerDelete',
+  API_PROVIDER_SET_ACTIVE: 'api:providerSetActive',
+  API_PROVIDER_RESET_BUILTIN: 'api:providerResetBuiltin',
+  API_PROVIDER_TEST: 'api:providerTest',
+
   APP_GET_VERSION: 'app:getVersion',
   GET_MODEL_DIR: 'getModelDir',
 
@@ -139,6 +177,87 @@ const IPC_CHANNELS = {
   PLUGIN_AUDIO: 'plugin:audio',
   PLUGIN_DIAGNOSTICS: 'plugin:diagnostics',
 
+  // ==================== Plugin Host v2（全应用插件） ====================
+  // 注意与上面的 v1（plugin:*，仅歌声后端）分开：v1 保持原样直到 3.0 移除。
+  // 这里没有"每插件一个通道"的动态通道 —— 插件 runtime 与主进程走
+  // utilityProcess 的 MessagePort，不占 ipcMain，天然免掉一类卸载残留。
+  PLUGINHOST_LIST: 'plugin-host:list',
+  PLUGINHOST_ADMIN: 'plugin-host:admin',
+  PLUGINHOST_INSTALL: 'plugin-host:install',
+  PLUGINHOST_INSTALL_PATH: 'plugin-host:install-path',
+  PLUGINHOST_UNINSTALL: 'plugin-host:uninstall',
+  PLUGINHOST_SET_ENABLED: 'plugin-host:set-enabled',
+  PLUGINHOST_RELOAD: 'plugin-host:reload',
+  PLUGINHOST_RUN_COMMAND: 'plugin-host:run-command',
+  PLUGINHOST_PANEL_RPC: 'plugin-host:panel-rpc',
+  PLUGINHOST_OPEN_DIR: 'plugin-host:open-dir',
+  PLUGINHOST_GET_LOG: 'plugin-host:get-log',
+  // M2：界面贡献点。设置页读写插件设置、管理器开关快捷键、渲染层取 iframe 地址。
+  // 地址必须由主进程 mint（entry 只在主进程可见），渲染层不能自己拼 plugin://。
+  PLUGINHOST_SETTINGS_GET: 'plugin-host:settings-get',
+  PLUGINHOST_SETTINGS_SET: 'plugin-host:settings-set',
+  PLUGINHOST_SET_KEYBINDINGS: 'plugin-host:set-keybindings',
+  // 用户级自动化开关：把某插件的命令从 MCP/CLI 面上摘掉（不影响它自己的菜单命令）
+  PLUGINHOST_SET_AUTOMATION: 'plugin-host:set-automation',
+  PLUGINHOST_OVERLAY_URL: 'plugin-host:overlay-url',
+  // 设置页/管理器 → 主窗口：把某个面板挂到主窗口的右侧抽屉（设置分区用它对
+  // 自定义界面；管理器用它做"打开面板"）。面板的 apiScopes 校验仍在主进程做。
+  PLUGINHOST_OPEN_PANEL_REQUEST: 'plugin-host:open-panel-request',
+  // M4：数据面。渲染层给出路径，主进程按扩展名路由到插件 codec，返回校验过的
+  // 工程文档。路径不经过渲染层的文件系统 API —— 插件格式的解析全在主进程的
+  // codec 进程里完成，渲染层只负责把文档装进 state。
+  PLUGINHOST_OPEN_DOCUMENT: 'plugin-host:open-document',
+  PLUGINHOST_SAVE_DOCUMENT: 'plugin-host:save-document',
+  // 当前工程的渲染意图（document.extSchema[*].render）。pipeline 在主进程跑，
+  // 工程文档在渲染层 —— 这是"这份工程要求哪个插件做后处理"唯一能过来的路。
+  PLUGINHOST_SET_RENDER_INTENT: 'plugin-host:set-render-intent',
+  // M4 第 4 段：成品导出。渲染层跑完合成，把交错浮点采样交过来，插件编码成
+  // 目标格式的字节，写盘仍由主进程完成（插件没有文件系统权限）。
+  PLUGINHOST_LIST_EXPORTERS: 'plugin-host:list-exporters',
+  PLUGINHOST_EXPORT_AUDIO: 'plugin-host:export-audio',
+  // 插件声明的文件格式（对话框过滤器用）。投影里也有 fileTypes，但那份要按
+  // 插件分组、还要算 UI 渲染状态；对话框只要一张扁平的"扩展名 → 显示名"。
+  PLUGINHOST_FILE_FILTERS: 'plugin-host:file-filters',
+  // M6：签名与信任。安装器验签失败时会返回 pendingKey（含公钥与指纹），
+  // 管理器据此弹"信任并重试"——但信任这个动作必须由用户显式触发。
+  PLUGINHOST_TRUST_LIST: 'plugin-host:trust-list',
+  PLUGINHOST_TRUST_ADD: 'plugin-host:trust-add',
+  PLUGINHOST_TRUST_REMOVE: 'plugin-host:trust-remove',
+  PLUGINHOST_REQUIRE_SIGNATURE: 'plugin-host:require-signature',
+  PLUGINHOST_VERIFY_INSTALL: 'plugin-host:verify-install',
+  // M6：市场接口（只定契约，无内置源）。搜索不联网做，索引一次取回本地过滤；
+  // 预览要下载整包才能验签 —— 索引里的签名只是源的自述，不能作为安装依据。
+  PLUGINHOST_MARKET_SOURCES: 'plugin-host:market-sources',
+  PLUGINHOST_MARKET_ADD_SOURCE: 'plugin-host:market-add-source',
+  PLUGINHOST_MARKET_REMOVE_SOURCE: 'plugin-host:market-remove-source',
+  PLUGINHOST_MARKET_SEARCH: 'plugin-host:market-search',
+  PLUGINHOST_MARKET_PREVIEW: 'plugin-host:market-preview',
+  PLUGINHOST_MARKET_INSTALL: 'plugin-host:market-install',
+  // 主进程 → 渲染进程
+  PLUGINHOST_SYNC: 'plugin-host:sync',
+  PLUGINHOST_EVENT: 'plugin-host:event',
+  // 主进程 → 主窗口：一次工程写入往返（插件 runtime 经宿主转发）
+  PLUGINHOST_PROJECT_APPLY: 'plugin-host:project-apply',
+  PLUGINHOST_PROJECT_APPLY_RESULT: 'plugin-host:project-apply-result',
+  // 主进程 → 主窗口：请渲染层挂载某个插件的 iframe 面板（菜单项触发）
+  PLUGINHOST_OPEN_PANEL: 'plugin-host:open-panel',
+
+  // 模型调用面（设计方案 §12）：设置页读写端点/绑定/授权/审计，以及首次调用的确认窗。
+  MODELS_SNAPSHOT: 'models:snapshot',
+  MODELS_ENDPOINT_UPSERT: 'models:endpoint-upsert',
+  MODELS_ENDPOINT_REMOVE: 'models:endpoint-remove',
+  MODELS_BIND: 'models:bind',
+  MODELS_UNBIND: 'models:unbind',
+  MODELS_SET_DEFAULT: 'models:set-default',
+  MODELS_GRANT: 'models:grant',
+  MODELS_REVOKE: 'models:revoke',
+  MODELS_SET_SETTINGS: 'models:set-settings',
+  MODELS_AUDIT: 'models:audit',
+  // 主进程 → 渲染层：请求用户确认（首次调用某端点）
+  MODELS_CONSENT_REQUEST: 'models:consent-request',
+  // 渲染层 → 主进程：确认结果
+  MODELS_CONSENT_REPLY: 'models:consent-reply',
+
   // ==================== Resource Manager ====================
   RESMGR_OPEN: 'resmgr:open',
   RESMGR_GET_GPU_INFO: 'resmgr:getGPUInfo',
@@ -201,17 +320,33 @@ const IPC_CHANNELS = {
   CRASH_LOG: 'crash:log',
   CRASH_OPEN_DUMP_DIR: 'crash:openDumpDir',
   CRASH_OPEN_LOG_DIR: 'crash:openLogDir',
+  // ---- env-check ----
+  // 环境检测刻意拆两个通道：report 是纯内存快照（毫秒级，撑首屏），
+  // probes 才做原生桥 / EP 枚举等重活并自带超时。合成一个会让弹层
+  // 被 EP 枚举卡住（冷启动要扫 catalog 并注册 DLL）。
+  ENV_CHECK_GET_REPORT: 'env-check:get-report',
+  ENV_CHECK_GET_PROBES: 'env-check:get-probes',
   // ---- fragment ----
   FRAGMENT_CLOSE: 'fragment:close',
   FRAGMENT_CLOSE_ALL: 'fragment:closeAll',
   // ---- fragment-svs ----
   FRAGMENT_SVS_CHUNK_AUDIO: 'fragment-svs:chunk-audio',
+  // 显式流结束屏障：携带 streamId / lastSeq，renderer 确认处理完最后序号后
+  // 才允许把 scheduler 置为 inferenceDone（不能靠 invoke 回执猜 chunk 到齐）。
+  FRAGMENT_SVS_STREAM_END: 'fragment-svs:stream-end',
   // ---- main-menu ----
+  MAIN_MENU_EXPORT_MIDI_REQUEST: 'main-menu:export-midi-request',
+  MAIN_MENU_IMPORT_MIDI_REQUEST: 'main-menu:import-midi-request',
+  MAIN_MENU_AUDIO_TO_MIDI_REQUEST: 'main-menu:audio-to-midi-request',
+  MAIN_MENU_MCP_SETUP_REQUEST: 'main-menu:mcp-setup-request',
+  MAIN_MENU_ENV_CHECK_REQUEST: 'main-menu:env-check-request',
   MAIN_MENU_SAVE_AS_REQUEST: 'main-menu:save-as-request',
   MAIN_MENU_SAVE_REQUEST: 'main-menu:save-request',
   // ---- mcp ----
   MCP_AUTOMATION_REQUEST: 'mcp:automation-request',
   MCP_AUTOMATION_RESPONSE: 'mcp:automation-response',
+  MCP_AUTOMATION_EVENT: 'mcp:automation-event',
+  MCP_SETUP_GET_INFO: 'mcp:setup-get-info',
   // ---- model-download ----
   MODEL_DOWNLOAD_CHECK_ALL_VERSIONS: 'model-download:check-all-versions',
   MODEL_DOWNLOAD_CHECK_JP_VERSION: 'model-download:check-jp-version',
@@ -240,7 +375,6 @@ const IPC_CHANNELS = {
   SINGER_MARKET_DOWNLOAD: 'singer-market:download',
   SINGER_MARKET_DOWNLOAD_PROGRESS: 'singer-market:download-progress',
   SINGER_MARKET_FILE_DETAIL: 'singer-market:file-detail',
-  SINGER_MARKET_HEALTH: 'singer-market:health',
   SINGER_MARKET_LICENSES: 'singer-market:licenses',
   SINGER_MARKET_LIST: 'singer-market:list',
   SINGER_MARKET_LOGIN: 'singer-market:login',
@@ -255,6 +389,7 @@ const IPC_CHANNELS = {
   SVS_CANCEL: 'svs:cancel',
   SVS_MODEL_INCOMPATIBLE: 'svs:model-incompatible',
   SVS_PROGRESS: 'svs:progress',
+  SVS_LOAD_PROGRESS: 'svs:loadProgress',
   // ---- update ----
   UPDATE_CANCEL_DOWNLOAD: 'update:cancel-download',
   UPDATE_DOWNLOAD_COMPLETE: 'update:download-complete',

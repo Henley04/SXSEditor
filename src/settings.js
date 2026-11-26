@@ -12,6 +12,7 @@ import {
     normalize,
 } from './themes/index.js';
 import { resolveQDriftDefault } from './inference/pipeline/qdrift/defaults.js';
+import { installSettingsUiPolish } from './settingsUi.js';
 
 const inferenceProviderSelect = document.getElementById('inferenceProvider');
 const inferenceProviderHint = document.getElementById('inferenceProviderHint');
@@ -23,6 +24,22 @@ const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
 const gpuStatusValue = document.getElementById('gpuStatusValue');
 const advancedSettingsGroup = document.getElementById('advancedSettingsGroup');
+// ---- API Provider（远程推理）----
+const apiProviderGroup = document.getElementById('apiProviderGroup');
+const apiProviderSelect = document.getElementById('apiProviderSelect');
+const apiProviderNewBtn = document.getElementById('apiProviderNewBtn');
+const apiProviderNameInput = document.getElementById('apiProviderName');
+const apiProviderUrlInput = document.getElementById('apiProviderUrl');
+const apiProviderKeyInput = document.getElementById('apiProviderKey');
+const apiProviderSaveBtn = document.getElementById('apiProviderSaveBtn');
+const apiProviderUseBtn = document.getElementById('apiProviderUseBtn');
+const apiProviderTestBtn = document.getElementById('apiProviderTestBtn');
+const apiProviderResetBtn = document.getElementById('apiProviderResetBtn');
+const apiProviderDeleteBtn = document.getElementById('apiProviderDeleteBtn');
+const apiProviderStatus = document.getElementById('apiProviderStatus');
+const apiProviderModeHint = document.getElementById('apiProviderModeHint');
+const apiProviderFreeHint = document.getElementById('apiProviderFreeHint');
+const apiProviderSecretsWarning = document.getElementById('apiProviderSecretsWarning');
 const modelDeviceMappingDiv = document.getElementById('modelDeviceMapping');
 const deviceModeRadios = document.querySelectorAll('input[name="deviceMode"]');
 const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
@@ -235,6 +252,7 @@ function initQDriftListeners() {
     }
 }
 const diagnosticModeCheckbox = document.getElementById('diagnosticMode');
+const pluginFileAssociationsCheckbox = document.getElementById('pluginFileAssociations');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
 const audioSampleRateSelect = document.getElementById('audioSampleRate');
@@ -295,6 +313,7 @@ const ortIntraOpNumThreadsValue = document.getElementById('ortIntraOpNumThreadsV
 const ortInterOpNumThreadsSlider = document.getElementById('ortInterOpNumThreads');
 const ortInterOpNumThreadsValue = document.getElementById('ortInterOpNumThreadsValue');
 const ortLogSeverityLevelSelect = document.getElementById('ortLogSeverityLevel');
+const clearInferenceCacheBtn = document.getElementById('clearInferenceCacheBtn');
 
 const updateChannelSelect = document.getElementById('updateChannelSelect');
 const autoCheckUpdatesCheckbox = document.getElementById('autoCheckUpdates');
@@ -360,25 +379,30 @@ function parseKeyframes(text) {
 function applySavedSettingsToUI(currentSetting) {
     if (!currentSetting) return;
 
-    // Inference provider
-    const inferenceProvider = currentSetting.inferenceProvider === 'ortweb' ? 'ortweb' : 'ortnode';
+    // Inference provider：'ortnode' | 'ortweb' | 'api'
+    const inferenceProvider = ['ortweb', 'ortnode', 'api'].includes(currentSetting.inferenceProvider)
+        ? currentSetting.inferenceProvider : 'ortnode';
     if (inferenceProviderSelect) {
         inferenceProviderSelect.value = inferenceProvider;
         updateInferenceProviderHint(inferenceProvider);
         if (nativeInferenceBackendSelect) nativeInferenceBackendSelect.value = currentSetting.nativeInferenceBackend || 'auto';
         updateNativeBackendUI(inferenceProvider, nativeInferenceBackendSelect?.value || 'auto');
+        updateApiProviderVisibility(inferenceProvider);
     }
 
-    // Device mode
-    const deviceMode = currentSetting.deviceMode || 'smart';
+    // Device mode：CPU 后端下设备模式不参与 EP 决策，UI 统一显示 smart，
+    // 避免残留一个被禁用却仍选中的 manual/advanced 造成误解。
+    const cpuOnly = (currentSetting.nativeInferenceBackend || 'auto') === 'cpu'
+        && inferenceProvider !== 'ortweb';
+    const deviceMode = cpuOnly ? 'smart' : (currentSetting.deviceMode || 'smart');
     const radioToCheck = document.querySelector(`input[name="deviceMode"][value="${deviceMode}"]`);
     if (radioToCheck) radioToCheck.checked = true;
     updateDeviceModeUI(deviceMode);
 
     // Diffusion sliders
-    const pSteps = currentSetting.previewDiffSteps ?? 16;
+    const pSteps = currentSetting.previewDiffSteps ?? 32;
     const pCfg = currentSetting.previewCfgStrength ?? 3.0;
-    const pRescale = currentSetting.previewCfgRescale ?? 0.7;
+    const pRescale = currentSetting.previewCfgRescale ?? 0.75;
     const pSampler = currentSetting.previewSampler || 'euler';
     previewDiffStepsSlider.value = pSteps;
     previewDiffStepsValue.textContent = pSteps;
@@ -389,7 +413,7 @@ function applySavedSettingsToUI(currentSetting) {
     previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
 
     // CFG schedule (preview)
-    const pSchedMode = currentSetting.previewCfgScheduleMode || currentSetting.cfgScheduleMode || 'linear';
+    const pSchedMode = currentSetting.previewCfgScheduleMode || currentSetting.cfgScheduleMode || 'constant';
     if (previewCfgScheduleModeSelect) previewCfgScheduleModeSelect.value = pSchedMode;
     const pSchedStart = Number.isFinite(currentSetting.previewCfgStrengthStart)
         ? currentSetting.previewCfgStrengthStart
@@ -413,8 +437,8 @@ function applySavedSettingsToUI(currentSetting) {
     if (previewDynamicThresholdPercentileValue) previewDynamicThresholdPercentileValue.textContent = parseFloat(pDtPercentile).toFixed(3);
     updateDynamicThresholdVisibility('preview');
 
-    // diffStep 分块推理设置
-    const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled === true;
+    // diffStep 分块推理设置（默认开启：仅显式关闭时才为 false）
+    const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled !== false;
     const pChunkFrames = currentSetting.previewDiffStepChunkFrames ?? 500;
     const pOverlapFrames = currentSetting.previewDiffStepOverlapFrames ?? 50;
     if (previewDiffStepChunkEnabledCheckbox) previewDiffStepChunkEnabledCheckbox.checked = pChunkEnabled;
@@ -427,7 +451,7 @@ function applySavedSettingsToUI(currentSetting) {
 
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
-    const eRescale = currentSetting.exportCfgRescale ?? 0.7;
+    const eRescale = currentSetting.exportCfgRescale ?? 0.75;
     const eSampler = currentSetting.exportSampler || 'euler';
     exportDiffStepsSlider.value = eSteps;
     exportDiffStepsValue.textContent = eSteps;
@@ -438,7 +462,7 @@ function applySavedSettingsToUI(currentSetting) {
     exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
 
     // CFG schedule (export)
-    const eSchedMode = currentSetting.exportCfgScheduleMode || currentSetting.cfgScheduleMode || 'linear';
+    const eSchedMode = currentSetting.exportCfgScheduleMode || currentSetting.cfgScheduleMode || 'constant';
     if (exportCfgScheduleModeSelect) exportCfgScheduleModeSelect.value = eSchedMode;
     const eSchedStart = Number.isFinite(currentSetting.exportCfgStrengthStart)
         ? currentSetting.exportCfgStrengthStart
@@ -492,6 +516,7 @@ function applySavedSettingsToUI(currentSetting) {
     _qdriftTouched.export = false;
     updateQDriftLocks();
     if (diagnosticModeCheckbox) diagnosticModeCheckbox.checked = currentSetting.diagnosticMode === true;
+    if (pluginFileAssociationsCheckbox) pluginFileAssociationsCheckbox.checked = currentSetting.pluginFileAssociations === true;
 
     // Audio settings
     if (currentSetting.audioOutputMode) audioOutputModeSelect.value = currentSetting.audioOutputMode;
@@ -566,7 +591,7 @@ function applySavedSettingsToUI(currentSetting) {
     if (releaseDmlVramAfterSynthesisCheckbox) {
         releaseDmlVramAfterSynthesisCheckbox.checked = currentSetting.releaseDmlVramAfterSynthesis === true;
     }
-    // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
+    // Vocoder 推理前释放 diffStep（默认关闭，仅 DML 后端有效）
     if (releaseDiffStepBeforeVocoderCheckbox) {
         releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder === true;
     }
@@ -637,10 +662,226 @@ function getDeviceOptionText(d) {
     return `${d.name}${vramStr} ${typeStr}${npuTag}${webnnGpuTag}`;
 }
 
+/** WinML EP 暴露的硬件类型标签（gpu / cpu / npu）。 */
+function getWinmlDeviceLabel(deviceType) {
+    switch (deviceType) {
+        case 'gpu': return t('settings.winmlDeviceGpu');
+        case 'npu': return t('settings.winmlDeviceNpu');
+        case 'cpu': return t('settings.winmlDeviceCpu');
+        default: return String(deviceType || '');
+    }
+}
+
+// ==================== API Provider（远程推理） ====================
+// 流程：用户选「推理系统 = API」→ 点「新建 API Provider」→ 填名称/网址/可选密钥
+// → 保存 → 设为当前。所有结果（含 401/403、429、网络错误）都写在状态区，
+// 绝不只 console.log 了事。密钥明文只在输入框内短暂存在，保存后由主进程加密存储，
+// 列表只返回 hasKey，界面用「留空保持不变」表达。
+
+let apiProvidersState = { providers: [], activeId: '', freeProviderId: '', secretsEncrypted: true };
+let apiEditId = null;   // null = 新建模式
+let apiBusy = false;
+const API_NEW_OPTION = '__api_new__';
+
+function setApiStatus(message, level = 'info') {
+    if (!apiProviderStatus) return;
+    apiProviderStatus.textContent = message || '';
+    apiProviderStatus.className = `api-provider-status${message ? ` is-${level}` : ''}`;
+}
+
+function currentApiProvider() {
+    return apiProvidersState.providers.find((p) => p.id === apiEditId) || null;
+}
+
+function updateApiProviderVisibility(provider) {
+    const section = document.getElementById('section-inference');
+    if (section) section.classList.toggle('api-mode', provider === 'api');
+    if (apiProviderGroup) apiProviderGroup.classList.toggle('hidden', provider !== 'api');
+}
+
+function fillApiForm(provider) {
+    if (!apiProviderNameInput || !apiProviderUrlInput || !apiProviderKeyInput) return;
+    apiProviderNameInput.value = provider ? provider.name : '';
+    apiProviderUrlInput.value = provider ? provider.url : '';
+    apiProviderKeyInput.value = '';
+    const hasKey = !!(provider && provider.hasKey);
+    // 内置免费服务走免鉴权公开入口：禁用密钥输入，避免用户误以为必须填
+    // ModelScope SDK Token（带了反而会被网关 403 拒绝）。
+    const authRequired = provider ? provider.authRequired !== false : true;
+    apiProviderKeyInput.disabled = !authRequired;
+    apiProviderKeyInput.placeholder = t(!authRequired
+        ? 'settings.apiProviderKeyNotNeeded'
+        : (hasKey ? 'settings.apiProviderKeyPlaceholderSet' : 'settings.apiProviderKeyPlaceholderEmpty'));
+    const builtin = !!(provider && provider.builtin);
+    if (apiProviderDeleteBtn) apiProviderDeleteBtn.disabled = builtin || !provider;
+    if (apiProviderResetBtn) apiProviderResetBtn.disabled = !builtin;
+    if (apiProviderUseBtn) apiProviderUseBtn.disabled = !provider;
+    if (apiProviderFreeHint) apiProviderFreeHint.classList.toggle('hidden', !builtin);
+    if (apiProviderModeHint) {
+        apiProviderModeHint.textContent = provider ? '' : t('settings.apiProviderNewMode');
+        apiProviderModeHint.classList.toggle('hidden', !!provider);
+    }
+}
+
+function renderApiProviderSelect() {
+    if (!apiProviderSelect) return;
+    const { providers, activeId } = apiProvidersState;
+    apiProviderSelect.replaceChildren();
+    if (apiEditId === null) {
+        const opt = document.createElement('option');
+        opt.value = API_NEW_OPTION;
+        opt.textContent = `+ ${t('settings.apiProviderNew')}`;
+        apiProviderSelect.appendChild(opt);
+    }
+    for (const p of providers) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const tags = [
+            p.builtin ? t('settings.apiProviderBuiltinTag') : '',
+            p.id === activeId ? t('settings.apiProviderActiveTag') : '',
+        ].filter(Boolean);
+        opt.textContent = tags.length ? `${p.name} [${tags.join(' / ')}]` : p.name;
+        apiProviderSelect.appendChild(opt);
+    }
+    const target = apiEditId === null ? API_NEW_OPTION
+        : (providers.some((p) => p.id === apiEditId) ? apiEditId : (activeId || providers[0]?.id || API_NEW_OPTION));
+    apiProviderSelect.value = target;
+    if (apiProviderSecretsWarning) {
+        apiProviderSecretsWarning.classList.toggle('hidden', apiProvidersState.secretsEncrypted !== false);
+    }
+}
+
+async function loadApiProviders({ selectActive = false } = {}) {
+    if (!window.electronAPI?.apiProvidersList) return;
+    try {
+        const result = await window.electronAPI.apiProvidersList();
+        apiProvidersState = result;
+        if (selectActive || apiEditId === null && result.providers.length === 0
+            || (apiEditId && !result.providers.some((p) => p.id === apiEditId))) {
+            apiEditId = result.activeId || result.providers[0]?.id || null;
+        }
+        renderApiProviderSelect();
+        fillApiForm(currentApiProvider());
+    } catch (err) {
+        // 读取失败也要显式显示，不能只 console.error（用户要求禁止静默失败）。
+        setApiStatus(`${t('settings.apiProviderLoadFailed')}${err?.message || String(err)}`, 'error');
+    }
+}
+
+function collectApiDraft() {
+    const key = apiProviderKeyInput?.value ?? '';
+    return {
+        id: apiEditId || undefined,
+        name: apiProviderNameInput?.value ?? '',
+        url: apiProviderUrlInput?.value ?? '',
+        key,
+        // 输入为空表示"保持不变"；要清空密钥需走删除后重建（避免误触）。
+        keyChanged: key !== '',
+    };
+}
+
+async function withApiBusy(fn) {
+    if (apiBusy) return;
+    apiBusy = true;
+    const buttons = [apiProviderSaveBtn, apiProviderUseBtn, apiProviderTestBtn,
+        apiProviderResetBtn, apiProviderDeleteBtn, apiProviderNewBtn];
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    try {
+        await fn();
+    } catch (err) {
+        setApiStatus(`${t('settings.apiProviderSaveFailed')}${err?.message || String(err)}`, 'error');
+    } finally {
+        apiBusy = false;
+        buttons.forEach((b) => { if (b) b.disabled = false; });
+        fillApiForm(currentApiProvider());
+    }
+}
+
+function initApiProviderEvents() {
+    if (apiProviderSelect) {
+        apiProviderSelect.addEventListener('change', () => {
+            const v = apiProviderSelect.value;
+            apiEditId = v === API_NEW_OPTION ? null : v;
+            setApiStatus('');
+            renderApiProviderSelect();
+            fillApiForm(currentApiProvider());
+        });
+    }
+    if (apiProviderNewBtn) {
+        apiProviderNewBtn.addEventListener('click', () => {
+            apiEditId = null;
+            setApiStatus('');
+            renderApiProviderSelect();
+            fillApiForm(null);
+            apiProviderNameInput?.focus();
+        });
+    }
+    if (apiProviderSaveBtn) {
+        apiProviderSaveBtn.addEventListener('click', () => withApiBusy(async () => {
+            const draft = collectApiDraft();
+            if (!draft.name.trim()) { setApiStatus(t('settings.apiProviderNameRequired'), 'error'); return; }
+            if (!/^https?:\/\//i.test(draft.url.trim())) { setApiStatus(t('settings.apiProviderUrlRequired'), 'error'); return; }
+            const result = await window.electronAPI.apiProviderSave(draft);
+            apiProvidersState = result;
+            apiEditId = result.savedId || apiEditId;
+            renderApiProviderSelect();
+            setApiStatus(t('settings.apiProviderSaved'), 'ok');
+        }));
+    }
+    if (apiProviderUseBtn) {
+        apiProviderUseBtn.addEventListener('click', () => withApiBusy(async () => {
+            if (!apiEditId) { setApiStatus(t('settings.apiProviderNoSelection'), 'error'); return; }
+            apiProvidersState = await window.electronAPI.apiProviderSetActive(apiEditId);
+            renderApiProviderSelect();
+            // 选中即切到 API 推理系统，保证"设为当前"后立刻生效。
+            if (inferenceProviderSelect) {
+                inferenceProviderSelect.value = 'api';
+                updateInferenceProviderHint('api');
+                updateApiProviderVisibility('api');
+                await applySettings();
+            }
+            setApiStatus(`${t('settings.apiProviderSection')}: ${currentApiProvider()?.name || ''}`, 'ok');
+        }));
+    }
+    if (apiProviderTestBtn) {
+        apiProviderTestBtn.addEventListener('click', () => withApiBusy(async () => {
+            setApiStatus(t('settings.apiProviderTesting'), 'info');
+            const draft = collectApiDraft();
+            const result = await window.electronAPI.apiProviderTest(draft);
+            // 测试连接失败必须把 401/403/429 等原因原样显示出来。
+            setApiStatus(result?.ok ? result.message
+                : `${t('settings.apiProviderTestFailed')}${result?.message || 'unknown error'}`,
+            result?.ok ? 'ok' : 'error');
+        }));
+    }
+    if (apiProviderResetBtn) {
+        apiProviderResetBtn.addEventListener('click', () => withApiBusy(async () => {
+            apiProvidersState = await window.electronAPI.apiProviderResetBuiltin();
+            apiEditId = apiProvidersState.freeProviderId || apiEditId;
+            renderApiProviderSelect();
+            setApiStatus(t('settings.apiProviderSaved'), 'ok');
+        }));
+    }
+    if (apiProviderDeleteBtn) {
+        apiProviderDeleteBtn.addEventListener('click', () => withApiBusy(async () => {
+            const p = currentApiProvider();
+            if (!p) { setApiStatus(t('settings.apiProviderNoSelection'), 'error'); return; }
+            if (p.builtin) { setApiStatus(t('settings.apiProviderBuiltinNoDelete'), 'error'); return; }
+            if (!window.confirm(t('settings.apiProviderConfirmDelete'))) return;
+            apiProvidersState = await window.electronAPI.apiProviderDelete(p.id);
+            apiEditId = apiProvidersState.activeId || apiProvidersState.freeProviderId || null;
+            renderApiProviderSelect();
+            setApiStatus(t('settings.apiProviderDeleted'), 'ok');
+        }));
+    }
+}
+
 function updateInferenceProviderHint(provider) {
     if (!inferenceProviderHint) return;
     if (provider === 'ortweb') {
         inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtweb');
+    } else if (provider === 'api') {
+        inferenceProviderHint.textContent = t('settings.inferenceProviderHintApi');
     } else {
         inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtnode');
     }
@@ -648,8 +889,18 @@ function updateInferenceProviderHint(provider) {
 
 function updateNativeBackendUI(provider, backend) {
     if (nativeBackendGroup) nativeBackendGroup.classList.toggle('hidden', provider === 'ortweb');
+    const cpuOnly = provider === 'ortnode' && backend === 'cpu';
     const advancedRadio = document.querySelector('input[name="deviceMode"][value="advanced"]');
+    const manualRadio = document.querySelector('input[name="deviceMode"][value="manual"]');
     const winmlOnly = provider === 'ortnode' && backend !== 'dml';
+    // CPU 后端是全局强制：manual 的设备下拉与 advanced 的按模型组指定设备都不生效。
+    // 禁用并回落到 smart，避免「界面上选了 GPU、实际全跑 CPU」的静默不一致。
+    if (manualRadio) manualRadio.disabled = cpuOnly;
+    if (cpuOnly && (manualRadio?.checked || advancedRadio?.checked)) {
+        const smart = document.querySelector('input[name="deviceMode"][value="smart"]');
+        if (smart) smart.checked = true;
+        updateDeviceModeUI('smart');
+    }
     if (advancedRadio) {
         advancedRadio.disabled = winmlOnly;
         advancedRadio.closest('.device-mode-radio')?.classList.toggle('hidden', winmlOnly);
@@ -660,7 +911,8 @@ function updateNativeBackendUI(provider, backend) {
         }
     }
     if (!nativeBackendHint) return;
-    const key = backend === 'winml' ? 'settings.nativeBackendWinmlHint'
+    const key = backend === 'cpu' ? 'settings.nativeBackendCpuHint'
+        : backend === 'winml' ? 'settings.nativeBackendWinmlHint'
         : backend === 'dml' ? 'settings.nativeBackendDmlHint'
         : 'settings.nativeBackendAutoHint';
     nativeBackendHint.textContent = t(key);
@@ -669,9 +921,13 @@ function updateNativeBackendUI(provider, backend) {
 function updateDeviceModeUI(mode) {
     const isManual = mode === 'manual';
     const isAdvanced = mode === 'advanced';
+    // CPU 后端下所有模型强制 CPU：即便旧的 deviceMode 还是 manual/advanced，
+    // 设备下拉与按模型组映射也必须保持不可用，不能在这里被重新启用。
+    const cpuOnly = nativeInferenceBackendSelect?.value === 'cpu'
+        && inferenceProviderSelect?.value !== 'ortweb';
 
-    inferenceDeviceSelect.disabled = !isManual;
-    advancedSettingsGroup.classList.toggle('hidden', !isAdvanced);
+    inferenceDeviceSelect.disabled = cpuOnly || !isManual;
+    advancedSettingsGroup.classList.toggle('hidden', cpuOnly || !isAdvanced);
 
     if (isAdvanced) {
         buildModelDeviceMapping();
@@ -703,12 +959,16 @@ async function loadVocoderChunkFramesInfo() {
         const gb = info.bestVramBytes / (1024 * 1024 * 1024);
         _currentVramGb = gb;
         const gpuName = info.bestGpuName || '';
-        const vramStr = gb > 0 ? `${gb.toFixed(1)}GB` : '未知';
-        const text = t('settings.vocoderChunkSmartResult', {
-            frames: info.smartFrames,
-            vram: vramStr,
-            gpu: gpuName || t('settings.unknownGpu'),
-        });
+        const hasVram = Number.isFinite(gb) && gb > 0;
+        // 两个值都没探到时不要再拼 "（未知 VRAM, Unknown GPU）" —— 中英混排
+        // 且括号里两个占位词并排，读起来像没渲染完。整句换成另一种说法。
+        const text = (!hasVram && !gpuName)
+            ? t('settings.vocoderChunkSmartResultUnknown', { frames: info.smartFrames })
+            : t('settings.vocoderChunkSmartResult', {
+                frames: info.smartFrames,
+                vram: hasVram ? `${gb.toFixed(1)}GB` : t('settings.unknownVram'),
+                gpu: gpuName || t('settings.unknownGpu'),
+            });
         if (vocoderChunkSmartText) {
             vocoderChunkSmartText.textContent = text;
         }
@@ -739,17 +999,40 @@ async function loadVocoderChunkFramesTable() {
                 if (r.tierGb <= _currentVramGb) currentTierGb = r.tierGb;
             }
         }
-        const rowsHtml = rows.map((r) => {
-            const isCurrent = r.tierGb === currentTierGb && currentTierGb > 0;
-            const budgetStr = r.budgetGb > 0 ? `${r.budgetGb.toFixed(2)}GB` : '—';
-            const durStr = `${r.approxSeconds.toFixed(1)}s`;
+
+        // 低档位会被预算公式压到同一个最小值（512 帧），于是 2/3/4GB 三行
+        // 内容完全相同、还要占三行。这里把"连续且推荐值相同"的档位合并成
+        // 一行区间（2–4GB），既保留信息又不再重复。
+        const groups = [];
+        for (const row of rows) {
+            const last = groups[groups.length - 1];
+            if (last && last.frames === row.frames && last.approxSeconds === row.approxSeconds) {
+                last.tierMax = row.tierGb;
+                last.budgetGb = Math.max(last.budgetGb, row.budgetGb);
+                continue;
+            }
+            groups.push({
+                tierMin: row.tierGb,
+                tierMax: row.tierGb,
+                frames: row.frames,
+                approxSeconds: row.approxSeconds,
+                budgetGb: row.budgetGb,
+            });
+        }
+
+        const rowsHtml = groups.map((g) => {
+            const isCurrent = currentTierGb > 0
+                && currentTierGb >= g.tierMin && currentTierGb <= g.tierMax;
+            const budgetStr = g.budgetGb > 0 ? `${g.budgetGb.toFixed(2)}GB` : '—';
+            const durStr = `${g.approxSeconds.toFixed(1)}s`;
+            const tierLabel = g.tierMin === g.tierMax ? `${g.tierMin}GB` : `${g.tierMin}–${g.tierMax}GB`;
             const currentBadge = isCurrent
                 ? `<span class="vram-current-badge">${t('settings.vocoderChunkTableCurrent')}</span>`
                 : '';
             return `<tr class="${isCurrent ? 'vram-row-current' : ''}">
-                <td>${r.tierGb}GB${currentBadge}</td>
+                <td>${tierLabel}${currentBadge}</td>
                 <td>${budgetStr}</td>
-                <td>${r.frames}</td>
+                <td>${g.frames}</td>
                 <td>${durStr}</td>
             </tr>`;
         }).join('');
@@ -843,6 +1126,18 @@ const PRECISION_LABELS = {
     'int8-npu': 'INT8-NPU',
 };
 
+/**
+ * 把字节数写成一行人能读的字符串。设置页只需要 GB / MB 两级：
+ * 模型包都是百 MB 量级，再细分没有意义。
+ */
+function _formatBytesShort(bytes) {
+    const n = Number(bytes) || 0;
+    if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+    if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+    if (n > 0) return `${Math.round(n / 1024)} KB`;
+    return '';
+}
+
 function updateModelStatusDisplay(modelStatus) {
     const el = document.getElementById('modelStatusList');
     if (!el || !modelStatus) return;
@@ -857,10 +1152,35 @@ function updateModelStatusDisplay(modelStatus) {
         label.textContent = PRECISION_LABELS[prec] || prec;
         const info = document.createElement('span');
         info.className = 'model-status-info';
-        info.textContent = status.ready ? t('settings.modelReady') : t('settings.modelMissing', { count: status.missing });
+        if (status.ready) {
+            info.textContent = t('settings.modelReady');
+        } else {
+            // "还差 6/18 个文件 · 1.2 GB" —— 三个信息缺一不可：进度、缺口、体积。
+            const parts = [];
+            if (status.total) {
+                parts.push(t('settings.modelProgress', {
+                    done: Math.max(0, status.total - status.missing),
+                    total: status.total,
+                }));
+            }
+            const size = _formatBytesShort(status.missingBytes);
+            if (size) parts.push(size);
+            info.textContent = parts.join(' · ');
+        }
         item.appendChild(dot);
         item.appendChild(label);
         item.appendChild(info);
+        if (!status.ready) {
+            // 就地开下载页，不再让用户自己找入口。
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'model-status-download';
+            btn.textContent = t('settings.downloadMissing');
+            btn.addEventListener('click', () => {
+                window.electronAPI?.modelDownloadOpen?.(prec);
+            });
+            item.appendChild(btn);
+        }
         el.appendChild(item);
     }
 }
@@ -1005,13 +1325,72 @@ async function refreshModelOverview() {
     }
 }
 
+/**
+ * 硬件检测失败时的收尾。
+ *
+ * 原实现只在 catch 里重置了下拉框，三个状态灯会永远停在「检测中...」——
+ * 用户看到的是"程序卡死"，而实际只是一次 IPC 失败。这里统一改成失败态并
+ * 给一个就地重试入口。
+ */
+function markHardwareDetectionFailed() {
+    for (const el of [webnnStatusValue, npuStatusValue, gpuStatusValue]) {
+        if (!el) continue;
+        el.textContent = t('settings.hardwareDetectFailed');
+        el.classList.remove('status-checking', 'status-available', 'status-unavailable');
+        el.classList.add('status-failed');
+    }
+    const textEl = document.getElementById('currentHardwareText');
+    if (textEl) textEl.textContent = t('settings.hardwareDetectFailed');
+
+    const bar = document.querySelector('.webnn-status-bar');
+    if (bar && !bar.querySelector('.hardware-retry-btn')) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hardware-retry-btn';
+        btn.textContent = t('settings.hardwareRetry');
+        btn.addEventListener('click', () => {
+            btn.remove();
+            loadDevices();
+        });
+        bar.appendChild(btn);
+    }
+}
+
+// WinML EP 列表的"缓存优先 + 后台强制刷新"。
+// 设置页首次打开用上次探测结果立即渲染下拉；随后在后台向主进程要一份实时结果
+// （5 分钟节流），有新下载/升级的 EP 才重载设备列表——轮询自身不会再触发刷新。
+let _lastWinmlForceRefreshAt = 0;
+const WINML_FORCE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+function scheduleWinmlProvidersRefresh(currentProviders) {
+    const now = Date.now();
+    if (now - _lastWinmlForceRefreshAt < WINML_FORCE_REFRESH_INTERVAL_MS) return;
+    _lastWinmlForceRefreshAt = now;
+    const signature = (list) => (Array.isArray(list) ? list : [])
+        .map((p) => {
+            const devs = (Array.isArray(p.devices) ? p.devices : [])
+                .map((d) => `${d.deviceType}${d.selectable === false ? '!' : ''}`)
+                .join('+');
+            return `${p.name}:${p.readyState}:${devs}`;
+        })
+        .join('|');
+    const current = signature(currentProviders);
+    setTimeout(async () => {
+        try {
+            const fresh = await window.electronAPI.getWinmlProviders({ forceRefresh: true });
+            if (signature(fresh) !== current) void loadDevices();
+        } catch (_) {
+            // 后台刷新失败不影响已渲染的缓存结果
+        }
+    }, 0);
+}
+
 async function loadDevices() {
     try {
         // 立即显示加载状态
         for (const el of [webnnStatusValue, npuStatusValue, gpuStatusValue]) {
             if (!el) continue;
             el.textContent = t('settings.webnnChecking');
-            el.classList.remove('status-available', 'status-unavailable');
+            el.classList.remove('status-available', 'status-unavailable', 'status-failed');
             el.classList.add('status-checking');
         }
 
@@ -1040,6 +1419,9 @@ async function loadDevices() {
             winmlProviders = await window.electronAPI.getWinmlProviders();
         } else if (backend === 'dml') {
             allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
+        } else if (backend === 'cpu') {
+            // 全局强制 CPU：不探测 WinML/DML 设备，省掉昂贵的硬件枚举。
+            // 下方 NPU/GPU 状态指示仍走独立的 webnnDetectNPU，不受影响。
         } else {
             // Automatic mode starts with Windows ML only. DML is a runtime fallback, not a confusing parallel choice.
             winmlProviders = await window.electronAPI.getWinmlProviders();
@@ -1102,12 +1484,38 @@ async function loadDevices() {
         }
 
         inferenceDeviceSelect.innerHTML = '';
-        const addOption = (parent, value, label, deviceType = '') => {
+        const addOption = (parent, value, label, deviceType = '', disabled = false) => {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             if (deviceType) option.dataset.deviceType = deviceType;
+            if (disabled) option.disabled = true;
             parent.appendChild(option);
+        };
+        // WinML EP 选项：一个 EP 暴露多种硬件时（OpenVINO 的 GPU/CPU/NPU）
+        // 拆成多条，让用户能明确选到某一类硬件；只有一种硬件时保持原来的
+        // 单条形式（兼容早期只存了 winmlPreferredEp 的配置）。
+        const addWinmlOptions = (list) => {
+            for (const ep of list) {
+                const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
+                const devices = Array.isArray(ep.devices) ? ep.devices : [];
+                if (devices.length <= 1) {
+                    addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
+                    continue;
+                }
+                for (const d of devices) {
+                    const typeLabel = getWinmlDeviceLabel(d.deviceType);
+                    const gated = d.selectable === false;
+                    const suffix = gated ? ` · ${t('settings.winmlDeviceGated')}` : '';
+                    addOption(
+                        inferenceDeviceSelect,
+                        `winml:${ep.name}|${d.deviceType}`,
+                        `Windows ML · ${ep.name} · ${typeLabel} · ${state}${suffix}`,
+                        'winml',
+                        gated,
+                    );
+                }
+            }
         };
         addOption(inferenceDeviceSelect, 'auto', t('settings.autoSelect'));
         if (provider === 'ortweb') {
@@ -1116,18 +1524,14 @@ async function loadDevices() {
                 addOption(inferenceDeviceSelect, value, getDeviceOptionText(d), d.deviceType);
             }
         } else if (backend === 'winml') {
-            for (const ep of winmlProviders) {
-                const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
-                addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
-            }
+            addWinmlOptions(winmlProviders);
         } else if (backend === 'dml') {
             for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
+        } else if (backend === 'cpu') {
+            addOption(inferenceDeviceSelect, 'cpu', t('settings.nativeBackendCpu'), 'cpu');
         } else {
             if (winmlProviders.length) {
-                for (const ep of winmlProviders) {
-                    const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
-                    addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
-                }
+                addWinmlOptions(winmlProviders);
             } else {
                 for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
             }
@@ -1135,18 +1539,39 @@ async function loadDevices() {
 
         // Restore device selection from settings（若当前 provider 下不可用则回退 auto）
         const preferredId = currentSetting?.preferredDeviceId ?? currentSetting?.deviceId ?? null;
-        const desiredValue = currentSetting?.winmlPreferredEp
-            ? `winml:${currentSetting.winmlPreferredEp}`
+        const savedEp = currentSetting?.winmlPreferredEp || '';
+        const savedEpDevice = currentSetting?.winmlPreferredDevice || '';
+        let desiredValue = savedEp
+            ? (savedEpDevice ? `winml:${savedEp}|${savedEpDevice}` : `winml:${savedEp}`)
             : (preferredId !== null ? String(preferredId) : 'auto');
-        const validValues = new Set(Array.from(inferenceDeviceSelect.options).map(o => o.value));
-        inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
+        const allValues = Array.from(inferenceDeviceSelect.options).map(o => o.value);
+        if (!allValues.includes(desiredValue) && savedEp) {
+            // 兼容两种迁移：旧配置只有 EP（现在拆成了 EP|设备），或反过来
+            // 指定的硬件这次没被枚举到 —— 落到同 EP 的第一条可选项。
+            const sameEp = allValues.find(v => v.startsWith(`winml:${savedEp}|`) || v === `winml:${savedEp}`);
+            if (sameEp) desiredValue = sameEp;
+        }
+        const validValues = new Set(allValues);
+        const desiredOption = Array.from(inferenceDeviceSelect.options).find(o => o.value === desiredValue);
+        inferenceDeviceSelect.value = (validValues.has(desiredValue) && !desiredOption?.disabled) ? desiredValue : 'auto';
+        // CPU 后端下拉里只有 auto / cpu，且应由后者表达「当前强制 CPU」；
+        // 上面按 preferredDeviceId 还原会得到 auto，这里显式纠正。
+        if (backend === 'cpu' && provider !== 'ortweb') inferenceDeviceSelect.value = 'cpu';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
+
+        // WinML EP 列表走"缓存优先"：上面用上次探测结果立即渲染，这里再强制
+        // 刷新一次。EP 包刚下载完 / 刚升级时，刷新结果会替换下拉选项，用户不必
+        // 重开设置页。非 WinML 后端不做任何额外探测。
+        if (provider !== 'ortweb' && (backend === 'winml' || backend === 'auto')) {
+            scheduleWinmlProvidersRefresh(winmlProviders);
+        }
 
         // Audio discovery is independent and must not block inference hardware.
         loadAudioDevices().catch(() => {});
     } catch (err) {
         console.error('Failed to load device list:', err);
+        markHardwareDetectionFailed();
         inferenceDeviceSelect.textContent = '';
         const opt = document.createElement('option');
         opt.value = 'auto';
@@ -1378,7 +1803,7 @@ function collectSettings() {
     let preferredDeviceType;
     if (deviceMode === 'manual') {
         const inferenceValue = inferenceDeviceSelect.value;
-        preferredDeviceId = inferenceValue === 'auto' || inferenceValue.startsWith('winml:')
+        preferredDeviceId = inferenceValue === 'auto' || inferenceValue === 'cpu' || inferenceValue.startsWith('winml:')
             ? null
             : (inferenceValue === 'npu' || inferenceValue === 'webnn-gpu' ? inferenceValue : parseInt(inferenceValue));
         preferredDeviceType = null;
@@ -1408,8 +1833,19 @@ function collectSettings() {
         deviceMode,
         inferenceProvider,
         nativeInferenceBackend: nativeInferenceBackendSelect?.value || 'auto',
-        winmlEnabled: inferenceProvider === 'ortnode' && (nativeInferenceBackendSelect?.value || 'auto') !== 'dml',
-        winmlPreferredEp: inferenceDeviceSelect?.value?.startsWith('winml:') ? inferenceDeviceSelect.value.slice(6) : '',
+        // CPU 后端与 DML 一样必须关掉 WinML 门控；否则界面派生值与设置里的
+        // 'cpu' 不一致，worker 仍会尝试 Windows ML vendor EP。
+        winmlEnabled: inferenceProvider === 'ortnode'
+            && !['dml', 'cpu'].includes(nativeInferenceBackendSelect?.value || 'auto'),
+        // 设备下拉的 WinML 选项形如 `winml:<EP>` 或 `winml:<EP>|<gpu|cpu|npu>`。
+        // 拆两个字段存：EP 决定候选链起点，device 决定钉在哪类硬件上
+        // （空 = 该 EP 暴露的全部设备，等价于旧配置）。
+        winmlPreferredEp: inferenceDeviceSelect?.value?.startsWith('winml:')
+            ? inferenceDeviceSelect.value.slice(6).split('|')[0]
+            : '',
+        winmlPreferredDevice: inferenceDeviceSelect?.value?.startsWith('winml:')
+            ? (inferenceDeviceSelect.value.slice(6).split('|')[1] || '')
+            : '',
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,
@@ -1418,7 +1854,7 @@ function collectSettings() {
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
         previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'euler',
-        previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'linear',
+        previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'constant',
         previewCfgStrengthStart: previewCfgStrengthStartInput ? (() => {
             const v = parseFloat(previewCfgStrengthStartInput.value);
             return Number.isFinite(v) ? Math.max(0, Math.min(10, v)) : null;
@@ -1426,7 +1862,7 @@ function collectSettings() {
         previewCfgScheduleKeyframes: previewCfgScheduleKeyframesInput ? parseKeyframes(previewCfgScheduleKeyframesInput.value) : null,
         previewDynamicThresholdEnabled: previewDynamicThresholdEnabledCheckbox ? previewDynamicThresholdEnabledCheckbox.checked : false,
         previewDynamicThresholdPercentile: previewDynamicThresholdPercentileSlider ? parseFloat(previewDynamicThresholdPercentileSlider.value) : 0.995,
-        previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
+        previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : true,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
         autoRealtimeInference: autoRealtimeInferenceCheckbox ? autoRealtimeInferenceCheckbox.checked : false,
@@ -1434,7 +1870,7 @@ function collectSettings() {
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
         exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'euler',
-        exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'linear',
+        exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'constant',
         exportCfgStrengthStart: exportCfgStrengthStartInput ? (() => {
             const v = parseFloat(exportCfgStrengthStartInput.value);
             return Number.isFinite(v) ? Math.max(0, Math.min(10, v)) : null;
@@ -1485,6 +1921,7 @@ function collectSettings() {
             ? Math.max(0, Math.min(0xFFFFFFFF, Math.floor(Number(fixedNoiseSeedInput.value) || 0)))
             : 1234,
         diagnosticMode: diagnosticModeCheckbox ? diagnosticModeCheckbox.checked : false,
+        pluginFileAssociations: pluginFileAssociationsCheckbox ? pluginFileAssociationsCheckbox.checked : false,
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : false,
         // ORT 高级设置
@@ -1517,6 +1954,11 @@ async function applySettings(options = {}) {
         // No main window reload needed — avoids losing user's work
     } catch (err) {
         console.error('Failed to apply settings:', err);
+        // 保存失败也要显式告知，不能只留在 console（API 模式下尤其容易造成
+        // "界面选了 API、实际仍是本机推理"的静默不一致）。
+        if (inferenceProviderSelect?.value === 'api') {
+            setApiStatus(`${t('settings.apiProviderSaveFailed')}${err?.message || String(err)}`, 'error');
+        }
     }
 }
 
@@ -1528,10 +1970,14 @@ function applySettingsDebounced() {
 // Inference provider select
 if (inferenceProviderSelect) {
     inferenceProviderSelect.addEventListener('change', async () => {
-        updateInferenceProviderHint(inferenceProviderSelect.value);
-        updateNativeBackendUI(inferenceProviderSelect.value, nativeInferenceBackendSelect?.value || 'auto');
+        const provider = inferenceProviderSelect.value;
+        updateInferenceProviderHint(provider);
+        updateNativeBackendUI(provider, nativeInferenceBackendSelect?.value || 'auto');
+        updateApiProviderVisibility(provider);
         await applySettings();
-        await loadDevices();
+        // 切到 API 时刷新 Provider 列表（含密钥是否已设置），本机硬件枚举无需执行。
+        if (provider === 'api') await loadApiProviders({ selectActive: true });
+        else await loadDevices();
     });
 }
 
@@ -1846,6 +2292,21 @@ if (ortLogSeverityLevelSelect) {
     ortLogSeverityLevelSelect.addEventListener('change', () => applySettings());
 }
 
+if (clearInferenceCacheBtn) {
+    clearInferenceCacheBtn.addEventListener('click', async () => {
+        clearInferenceCacheBtn.disabled = true;
+        try {
+            const result = await window.electronAPI.clearInferenceCaches();
+            const trtCount = result && typeof result.trtEngines === 'number' ? result.trtEngines : 0;
+            showToast(t('settings.clearInferenceCacheDone', { count: trtCount }), 'success');
+        } catch (err) {
+            showToast(t('settings.clearInferenceCacheFailed', { error: (err && err.message) || String(err) }), 'error');
+        } finally {
+            clearInferenceCacheBtn.disabled = false;
+        }
+    });
+}
+
 midiExtractToolSelect.addEventListener('change', () => {
     updateFcpeParamsVisibility(midiExtractToolSelect.value);
     applySettings();
@@ -2001,7 +2462,7 @@ initUpdateSection().catch(() => {});
         const version = await window.electronAPI.getAppVersion();
         if (version) document.getElementById('settings-version').textContent = `v${version}`;
     } catch (err) {
-        console.warn('[Settings] 读取应用版本失败：', err && err.message ? err.message : err);
+        console.warn('[Settings] Failed to read app version:', err && err.message ? err.message : err);
     }
 })();
 
@@ -2056,6 +2517,12 @@ initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
   hydrateIcons(document);
+  // API Provider 管理：等文案就绪后再绑定与加载，保证状态/占位符已本地化。
+  initApiProviderEvents();
+  loadApiProviders({ selectActive: true });
+  // 滑杆数值可编辑 / 长说明折叠。必须放在 applyLocale 之后：折叠与否取决于
+  // 当前语言下的实际文本长度（中文通常比英文短一行）。
+  installSettingsUiPolish();
 });
 
 // Apply saved theme
@@ -2475,6 +2942,39 @@ function renderEditorBody() {
         }
         themeEditorBody.appendChild(section);
     }
+    syncThemeHistoryButtons();
+}
+
+/**
+ * 撤销/重做此前是"永远可点、点了没反应"：栈空时按钮依然是正常态，用户
+ * 只能靠点击无响应来推断到底有没有历史；能点时也说不清这一步撤销的是什么。
+ * 这里统一把可用性写成 disabled，并把"这一步会改动哪些令牌"放进 tooltip。
+ */
+function syncThemeHistoryButtons() {
+    const pairs = [
+        [themeEditorUndoBtn, 'peekUndo', 'undo', 'undoEmpty', 'undoTitle'],
+        [themeEditorRedoBtn, 'peekRedo', 'redo', 'redoEmpty', 'redoTitle'],
+    ];
+    for (const [btn, peekFn, verbKey, emptyKey, titleKey] of pairs) {
+        if (!btn) continue;
+        const peek = typeof themeManager[peekFn] === 'function'
+            ? themeManager[peekFn]()
+            : { available: false, tokens: [] };
+        btn.disabled = !peek.available;
+        if (!peek.available) {
+            btn.removeAttribute('data-i18n-title');
+            btn.title = t(`settings.theme.editor.${emptyKey}`);
+            continue;
+        }
+        const shown = peek.tokens.slice(0, 3).join(t('settings.theme.editor.tokenJoin'));
+        const suffix = peek.tokens.length > 3
+            ? t('settings.theme.editor.moreTokens', { count: peek.tokens.length - 3 })
+            : '';
+        btn.title = t(`settings.theme.editor.${titleKey}`, {
+            tokens: shown + suffix,
+            action: t(`settings.theme.editor.${verbKey}`),
+        });
+    }
 }
 
 if (themeEditBtn) {
@@ -2632,20 +3132,69 @@ if (window.electronAPI?.themeAPI?.onListChanged) {
 
 // ==================== Sidebar Navigation ====================
 
-document.querySelectorAll('.sidebar-item').forEach(item => {
-    item.addEventListener('click', () => {
-        const target = item.dataset.target;
-        if (!target) return;
-
-        // Update active sidebar item
-        document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-
-        // Show target section, hide others
-        document.querySelectorAll('.settings-section').forEach(s => s.classList.add('hidden'));
-        const section = document.getElementById(target);
-        if (section) section.classList.remove('hidden');
+// 把每个分类标题与其后的条目包进 .sidebar-group，使分类可折叠。
+//
+// 为什么在 JS 里包一层而不是直接改 HTML：侧栏条目被搜索逻辑按
+// `.sidebar-item[data-target]` 平铺查询，如果手写包裹层，每个分类都要重复一遍
+// 结构；这里按 DOM 顺序一次分组，搜索逻辑完全不用改。
+(function groupSidebarCategories() {
+    const nav = document.querySelector('.sidebar-nav');
+    if (!nav) return;
+    let group = null;
+    for (const child of Array.from(nav.children)) {
+        if (child.classList.contains('sidebar-category')) {
+            group = document.createElement('div');
+            group.className = 'sidebar-group';
+            nav.insertBefore(group, child);
+            group.appendChild(child);
+        } else if (group && child.classList.contains('sidebar-item')) {
+            group.appendChild(child);
+        }
+    }
+    nav.querySelectorAll('.sidebar-category').forEach((category) => {
+        const container = category.parentElement;
+        if (!container || !container.classList.contains('sidebar-group')) return;
+        const toggle = () => {
+            const collapsed = container.classList.toggle('is-collapsed');
+            category.setAttribute('aria-expanded', String(!collapsed));
+        };
+        category.setAttribute('role', 'button');
+        category.tabIndex = 0;
+        category.setAttribute('aria-expanded', 'true');
+        category.addEventListener('click', toggle);
+        category.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            toggle();
+        });
     });
+})();
+
+// 侧栏跳转用事件委托，而不是给每个条目挂监听：
+// 插件设置分区是异步注入的（见文件末尾 installPluginSettings），
+// 加载时逐个 addEventListener 的写法会让后注入的条目点了没反应。
+document.addEventListener('click', (event) => {
+    const item = event.target && event.target.closest ? event.target.closest('.sidebar-item') : null;
+    if (!item) return;
+    const target = item.dataset.target;
+    if (!target) return;
+
+    // 搜索命中或程序化点击时，条目可能在折叠的分类里：先展开再跳。
+    const group = item.closest('.sidebar-group');
+    if (group && group.classList.contains('is-collapsed')) {
+        group.classList.remove('is-collapsed');
+        const category = group.querySelector('.sidebar-category');
+        if (category) category.setAttribute('aria-expanded', 'true');
+    }
+
+    // Update active sidebar item
+    document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+
+    // Show target section, hide others
+    document.querySelectorAll('.settings-section').forEach(s => s.classList.add('hidden'));
+    const section = document.getElementById(target);
+    if (section) section.classList.remove('hidden');
 });
 
 // ==================== About page: open source usage / papers / links ====================
@@ -2842,10 +3391,13 @@ initQDriftListeners();
     const input = document.getElementById('settingsSearch');
     const empty = document.getElementById('settingsSearchEmpty');
     if (!input) return;
-    const sections = Array.from(document.querySelectorAll('.settings-section'));
-    const navItems = Array.from(document.querySelectorAll('.sidebar-item[data-target]'));
+    // 每次查询时重新取：插件设置分区是异步注入的，加载时快照会让它们搜不到
+    const getSections = () => Array.from(document.querySelectorAll('.settings-section'));
+    const getNavItems = () => Array.from(document.querySelectorAll('.sidebar-item[data-target]'));
     const normalize = value => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
     const apply = () => {
+      const sections = getSections();
+      const navItems = getNavItems();
       const query = normalize(input.value);
       if (!query) {
         document.querySelectorAll('.setting-group.search-hidden').forEach(el => el.classList.remove('search-hidden'));
@@ -2877,3 +3429,577 @@ initQDriftListeners();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
 })();
+
+// ==================== 插件设置分区（M2） ====================
+/**
+ * 把插件声明的 settings 注入设置页。
+ *
+ * 为什么由宿主渲染表单，而不是让插件塞一个 iframe 进来：
+ *   · 设置窗口没有面板那套 postMessage 桥，内嵌 iframe 就是一个**没有 apiScopes
+ *     闸门**的插件页面；
+ *   · 主题、字号、键盘可达性都由宿主统一处理，插件只需给出 schema。
+ *
+ * 需要自定义界面的分区用 `panel` 指向自己的面板 —— 点"打开面板"后复用主窗口
+ * 的抽屉（那里有完整的权限校验），而不是在设置页里再开一套。
+ */
+function _pluginSafeId(id) {
+    return String(id || '').replace(/[^A-Za-z0-9_-]/g, '-');
+}
+
+function _pluginPickText(value) {
+    if (typeof value === 'string') return value;
+    if (!value || typeof value !== 'object') return '';
+    const lang = typeof getLocale === 'function' ? getLocale() : 'en';
+    return value[lang] || value[String(lang).split('-')[0]] || value.en || Object.values(value)[0] || '';
+}
+
+function _pluginFieldControl(pluginId, field, value, onCommit) {
+    const wrap = document.createElement('div');
+    wrap.className = 'setting-group';
+    const controlId = `plugin-field-${_pluginSafeId(pluginId)}-${_pluginSafeId(field.key)}`;
+    const label = _pluginPickText(field.label) || field.key;
+    const description = field.description ? _pluginPickText(field.description) : '';
+
+    if (field.type === 'boolean') {
+        const labelEl = document.createElement('label');
+        labelEl.className = 'device-mode-radio';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = controlId;
+        input.checked = !!value;
+        input.addEventListener('change', () => onCommit(input.checked));
+        const text = document.createElement('span');
+        text.className = 'radio-label';
+        text.textContent = label;
+        labelEl.appendChild(input);
+        labelEl.appendChild(text);
+        wrap.appendChild(labelEl);
+        if (description) {
+            const desc = document.createElement('span');
+            desc.className = 'radio-desc';
+            desc.textContent = description;
+            labelEl.appendChild(desc);
+        }
+        return wrap;
+    }
+
+    const labelEl = document.createElement('label');
+    labelEl.setAttribute('for', controlId);
+    labelEl.textContent = label;
+    wrap.appendChild(labelEl);
+
+    let input;
+    if (field.type === 'select') {
+        input = document.createElement('select');
+        for (const option of field.options || []) {
+            const opt = document.createElement('option');
+            opt.value = String(option.value);
+            opt.textContent = _pluginPickText(option.label) || String(option.value);
+            if (option.value === value) opt.selected = true;
+            input.appendChild(opt);
+        }
+        input.addEventListener('change', () => onCommit(input.value));
+    } else if (field.type === 'multiline') {
+        input = document.createElement('textarea');
+        input.rows = 4;
+        input.value = value == null ? '' : String(value);
+        input.addEventListener('change', () => onCommit(input.value));
+    } else if (field.type === 'number') {
+        input = document.createElement('input');
+        input.type = 'number';
+        if (field.min !== null) input.min = String(field.min);
+        if (field.max !== null) input.max = String(field.max);
+        if (field.step !== null) input.step = String(field.step);
+        input.value = value == null ? '' : String(value);
+        input.addEventListener('change', () => onCommit(Number(input.value)));
+    } else {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.value = value == null ? '' : String(value);
+        input.addEventListener('change', () => onCommit(input.value));
+    }
+    input.id = controlId;
+    wrap.appendChild(input);
+
+    if (description) {
+        const hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = description;
+        wrap.appendChild(hint);
+    }
+    return wrap;
+}
+
+async function installPluginSettings() {
+    const api = window.electronAPI?.pluginHost;
+    if (!api || typeof api.list !== 'function' || typeof api.settingsGet !== 'function') return;
+
+    let snapshot;
+    try {
+        snapshot = await api.list();
+    } catch (err) {
+        console.warn('[settings] Failed to read plugin list:', err && err.message);
+        return;
+    }
+
+    const entries = [];
+    for (const plugin of (snapshot && snapshot.plugins) || []) {
+        if (plugin.status !== 'loaded') continue;
+        for (const section of plugin.settings || []) entries.push({ plugin, section });
+    }
+    if (!entries.length) return;
+
+    const nav = document.querySelector('.sidebar-nav');
+    const content = document.querySelector('.settings-content');
+    if (!nav || !content) return;
+
+    const group = document.createElement('div');
+    group.className = 'sidebar-group';
+    const category = document.createElement('div');
+    category.className = 'sidebar-category';
+    category.textContent = t('plugins.settingsCategory');
+    category.setAttribute('role', 'button');
+    category.tabIndex = 0;
+    category.setAttribute('aria-expanded', 'true');
+    const toggle = () => {
+        const collapsed = group.classList.toggle('is-collapsed');
+        category.setAttribute('aria-expanded', String(!collapsed));
+    };
+    category.addEventListener('click', toggle);
+    category.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        toggle();
+    });
+    group.appendChild(category);
+
+    for (const { plugin, section } of entries) {
+        const sectionId = `plugin-section-${_pluginSafeId(plugin.id)}-${_pluginSafeId(section.localId)}`;
+        const navItem = document.createElement('div');
+        navItem.className = 'sidebar-item';
+        navItem.dataset.target = sectionId;
+        const navText = document.createElement('span');
+        navText.textContent = `${plugin.name} · ${_pluginPickText(section.title)}`;
+        navItem.appendChild(navText);
+        group.appendChild(navItem);
+
+        const sectionEl = document.createElement('div');
+        sectionEl.className = 'settings-section hidden';
+        sectionEl.id = sectionId;
+
+        const head = document.createElement('div');
+        head.className = 'setting-group';
+        const headLabel = document.createElement('label');
+        headLabel.textContent = `${plugin.name} · ${_pluginPickText(section.title)}`;
+        head.appendChild(headLabel);
+        const headHint = document.createElement('p');
+        headHint.className = 'hint';
+        headHint.textContent = t('plugins.settingsSectionHint', { name: plugin.name });
+        head.appendChild(headHint);
+        sectionEl.appendChild(head);
+
+        if (section.panel) {
+            // panel 的值是全局 id（`<pluginId>.<localId>`）；去掉前缀才是本地 id。
+            // 不能用 split('.').pop()：插件 id 自己就允许带点（com.example.demo）。
+            const panelLocalId = String(section.panel).startsWith(`${plugin.id}.`)
+                ? String(section.panel).slice(plugin.id.length + 1)
+                : String(section.panel);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn-theme-action';
+            button.dataset.i18n = 'plugins.openSettingsPanel';
+            button.textContent = t('plugins.openSettingsPanel');
+            button.addEventListener('click', async () => {
+                button.disabled = true;
+                try {
+                    const result = await api.openPanel(plugin.id, panelLocalId);
+                    if (result && result.ok === false) {
+                        headHint.textContent = result.error || t('plugins.actionFailed', { error: '' });
+                    }
+                } finally {
+                    button.disabled = false;
+                }
+            });
+            sectionEl.appendChild(button);
+        }
+
+        if (section.fields && section.fields.length) {
+            let values = {};
+            try {
+                const current = await api.settingsGet(plugin.id);
+                if (current && current.ok) values = current.values || {};
+            } catch (err) {
+                console.warn('[settings] Failed to read plugin settings:', err && err.message);
+            }
+            const status = document.createElement('p');
+            status.className = 'hint';
+            for (const field of section.fields) {
+                sectionEl.appendChild(_pluginFieldControl(plugin.id, field, values[field.key], async (next) => {
+                    status.textContent = t('plugins.settingsSaving');
+                    try {
+                        const result = await api.settingsSet(plugin.id, { [field.key]: next });
+                        status.textContent = result && result.ok ? t('plugins.settingsSaved') : (result && result.error) || '';
+                    } catch (err) {
+                        status.textContent = (err && err.message) || String(err);
+                    }
+                }));
+            }
+            sectionEl.appendChild(status);
+        }
+
+        content.appendChild(sectionEl);
+    }
+
+    nav.appendChild(group);
+
+    // 搜索索引是惰性查询的，但空查询下的"清空隐藏"状态需要重跑一次
+    const search = document.getElementById('settingsSearch');
+    if (search) search.dispatchEvent(new Event('input'));
+}
+
+installPluginSettings().catch((err) => {
+    console.warn('[settings] Plugin settings section init failed:', err && err.message);
+});
+
+// ==================== 模型端点 / 任务绑定 / 访问控制 ====================
+/**
+ * 模型调用面的设置界面（设计方案 §12.4–§12.5）。
+ *
+ * 三条界面原则：
+ *   · 密钥只写不读：表单里永远是空密码框，保存后主进程只回 hasSecret
+ *   · 任务绑定按「任务」组织，不按「端点勾任务」——后者会出现"勾了却绑不上"的两套真相
+ *   · 授权是按端点逐条列的，撤销就是删一条；没有"全部允许"这种按钮
+ */
+async function installModelSettings() {
+    const api = window.electronAPI?.models;
+    if (!api || typeof api.snapshot !== 'function') return;
+
+    // 任务名与位置名走 i18n：这里是动态生成的节点，靠不上 data-i18n。
+    let snapshot = null;
+    let editingId = null;
+
+    const el = (tag, cls, text) => {
+        const node = document.createElement(tag);
+        if (cls) node.className = cls;
+        if (text != null) node.textContent = text;
+        return node;
+    };
+
+    const status = (msg) => {
+        const node = document.getElementById('modelEndpointStatus');
+        if (!node) return;
+        node.textContent = msg || '';
+        if (msg) setTimeout(() => { if (node.textContent === msg) node.textContent = ''; }, 2600);
+    };
+
+    async function reload() {
+        try {
+            snapshot = await api.snapshot();
+        } catch (err) {
+            console.warn('[settings] Failed to read model config:', err && err.message);
+            return;
+        }
+        renderEndpoints();
+        renderBindings();
+        renderAccess();
+        renderTokens();
+        renderAudit();
+    }
+
+    const endpointName = (id) => {
+        const ep = (snapshot?.endpoints || []).find((e) => e.id === id);
+        return ep ? ep.title : id;
+    };
+
+    // ---------------------------------------------------------------- 端点
+    function renderEndpoints() {
+        const host = document.getElementById('modelEndpointList');
+        if (!host) return;
+        host.replaceChildren();
+        const rows = snapshot?.endpoints || [];
+        if (!rows.length) {
+            host.appendChild(el('div', 'model-empty', t('models.noEndpoints')));
+            return;
+        }
+        const encrypted = snapshot?.encrypted !== false;
+        for (const ep of rows) {
+            const row = el('div', 'model-row');
+
+            const main = el('div', 'model-row-main');
+            const title = el('div', 'model-row-title', ep.title);
+            if (!ep.hasSecret && ep.adapter !== 'local-process') {
+                title.appendChild(el('span', 'model-tag model-tag-warn', t('models.missingSecret')));
+            }
+            if (ep.locality === 'device') title.appendChild(el('span', 'model-tag', t('models.localityTag.device')));
+            main.appendChild(title);
+            main.appendChild(el('div', 'model-row-sub',
+                `${ep.adapter} · ${ep.provider} · ${t(`models.localityTag.${ep.locality}`)}`));
+            // 没有地址就分不清两个同名端点。设置页是唯一能看到它的地方。
+            if (ep.baseUrl) main.appendChild(el('div', 'model-row-url', ep.baseUrl));
+            row.appendChild(main);
+
+            const actions = el('div', 'model-row-actions');
+            const edit = el('button', 'btn-secondary btn-sm', t('models.edit'));
+            edit.type = 'button';
+            edit.addEventListener('click', () => openForm(ep));
+            const del = el('button', 'btn-danger btn-sm', t('models.remove'));
+            del.type = 'button';
+            del.addEventListener('click', async () => {
+                if (!window.confirm(t('models.removeConfirm', { title: ep.title }))) return;
+                const r = await api.removeEndpoint(ep.id);
+                if (!r || r.ok === false) status(r?.error || t('models.removeFailed'));
+                await reload();
+            });
+            actions.append(edit, del);
+            row.appendChild(actions);
+
+            host.appendChild(row);
+        }
+        if (!encrypted) {
+            host.appendChild(el('div', 'model-empty model-warn-text', t('models.plaintextWarn')));
+        }
+    }
+
+    function openForm(ep) {
+        const form = document.getElementById('modelEndpointForm');
+        if (!form) return;
+        editingId = ep ? ep.id : null;
+        form.classList.remove('hidden');
+        document.getElementById('mf-title').value = ep ? ep.title : '';
+        document.getElementById('mf-adapter').value = ep ? ep.adapter : 'openai-compatible';
+        document.getElementById('mf-provider').value = ep ? ep.provider : 'custom';
+        document.getElementById('mf-baseurl').value = ep ? (ep.baseUrl || '') : '';
+        document.getElementById('mf-secret').value = '';
+        document.getElementById('mf-locality').value = ep && ep.localityOverride ? ep.localityOverride : '';
+        document.getElementById('mf-title').focus();
+    }
+
+    function closeForm() {
+        const form = document.getElementById('modelEndpointForm');
+        if (form) form.classList.add('hidden');
+        editingId = null;
+    }
+
+    document.getElementById('modelEndpointAdd')?.addEventListener('click', () => openForm(null));
+    document.getElementById('modelEndpointCancel')?.addEventListener('click', closeForm);
+
+    document.getElementById('modelEndpointForm')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const title = document.getElementById('mf-title').value.trim();
+        const adapter = document.getElementById('mf-adapter').value;
+        const provider = document.getElementById('mf-provider').value.trim() || 'custom';
+        const baseUrl = document.getElementById('mf-baseurl').value.trim();
+        const secret = document.getElementById('mf-secret').value;
+        const localityOverride = document.getElementById('mf-locality').value || null;
+
+        // id 一旦定下就不再变：ACL 与绑定都按它索引。新建时用随机段，改名不影响授权。
+        const id = editingId || `user:local.${Math.random().toString(16).slice(2, 10)}`;
+        const payload = { id, title, adapter, provider, baseUrl, localityOverride };
+        if (secret) payload.secret = secret;
+
+        const r = await api.upsertEndpoint(payload);
+        if (!r || r.ok === false) {
+            status(r?.error || t('models.saveFailed'));
+            return;
+        }
+        status(t('models.saved'));
+        closeForm();
+        await reload();
+    });
+
+    // ---------------------------------------------------------------- 绑定
+    function renderBindings() {
+        const host = document.getElementById('modelBindingList');
+        if (!host) return;
+        host.replaceChildren();
+        const endpoints = snapshot?.endpoints || [];
+        const bindings = snapshot?.bindings || [];
+        const tasks = snapshot?.tasks || [];
+
+        if (!endpoints.length) {
+            host.appendChild(el('div', 'model-empty', t('models.needEndpointFirst')));
+            return;
+        }
+
+        for (const task of tasks) {
+            const group = el('div', 'model-bind-group');
+            group.appendChild(el('div', 'model-bind-title', t(`models.taskName.${task}`)));
+
+            const rows = bindings.filter((b) => b.task === task);
+            if (!rows.length) {
+                group.appendChild(el('div', 'model-empty', t('models.unbound')));
+            }
+            for (const b of rows) {
+                const line = el('div', 'model-bind-row');
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = `model-default-${task}`;
+                radio.checked = !!b.isDefault;
+                radio.addEventListener('change', async () => {
+                    await api.setDefault(task, b.endpointId);
+                    await reload();
+                });
+                line.appendChild(radio);
+                const label = el('span', 'model-bind-label');
+                label.appendChild(el('span', 'model-bind-name', endpointName(b.endpointId)));
+
+                // 插件推荐（preferredBy）只做标注，不影响路由、不排序。
+                // 快照里推荐挂在端点上，不在绑定上 —— 绑定只有 endpointId。
+                const prefs = ((snapshot?.endpoints || []).find((e) => e.id === b.endpointId)?.preferredBy || [])
+                    .filter((p) => !p.task || p.task === task);
+                for (const p of prefs) {
+                    const star = el('span', 'model-star', '★');
+                    star.title = t('models.preferredBy', { plugin: p.pluginId }) + (p.note ? `: ${p.note}` : '');
+                    label.appendChild(star);
+                }
+                line.appendChild(label);
+
+                const un = el('button', 'btn-secondary btn-sm', t('models.unbind'));
+                un.type = 'button';
+                un.addEventListener('click', async () => {
+                    await api.unbind(task, b.endpointId);
+                    await reload();
+                });
+                line.appendChild(un);
+                group.appendChild(line);
+            }
+
+            const addRow = el('div', 'model-bind-add');
+            const select = document.createElement('select');
+            select.appendChild(new Option(t('models.chooseEndpoint'), ''));
+            for (const ep of endpoints) select.appendChild(new Option(ep.title, ep.id));
+            const add = el('button', 'btn-secondary btn-sm', t('models.addBinding'));
+            add.type = 'button';
+            add.addEventListener('click', async () => {
+                if (!select.value) return;
+                const r = await api.bind({ task, endpointId: select.value, isDefault: rows.length === 0 });
+                if (!r || r.ok === false) status(r?.error || t('models.bindFailed'));
+                await reload();
+            });
+            addRow.append(select, add);
+            group.appendChild(addRow);
+            host.appendChild(group);
+        }
+    }
+
+    // ---------------------------------------------------------------- 访问控制
+    function renderAccess() {
+        const box = document.getElementById('modelLocalFree');
+        if (box && snapshot) {
+            box.checked = snapshot.settings?.localFree !== false;
+            if (!box.dataset.bound) {
+                box.dataset.bound = '1';
+                box.addEventListener('change', async () => {
+                    await api.setSettings({ localFree: box.checked });
+                });
+            }
+        }
+
+        const host = document.getElementById('modelAclList');
+        if (!host) return;
+        host.replaceChildren();
+        const subjects = snapshot?.acl?.subjects || [];
+        if (!subjects.length) {
+            host.appendChild(el('div', 'model-empty', t('models.noGrants')));
+            return;
+        }
+        for (const s of subjects) {
+            const group = el('div', 'model-bind-group');
+            group.appendChild(el('div', 'model-bind-title', s.subject));
+            if (s.policy === 'deny') {
+                group.appendChild(el('div', 'model-empty', t('models.subjectDenied')));
+            }
+            for (const g of s.grants) {
+                const line = el('div', 'model-bind-row');
+                line.appendChild(el('span', 'model-bind-name', endpointName(g.endpointId)));
+                const scopeKey = g.scope === 'always' ? 'always' : g.scope === 'session' ? 'session' : 'once';
+                line.appendChild(el('span', 'model-tag', t(`models.scope${scopeKey[0].toUpperCase()}${scopeKey.slice(1)}`)));
+                const revoke = el('button', 'btn-secondary btn-sm', t('models.revoke'));
+                revoke.type = 'button';
+                revoke.addEventListener('click', async () => {
+                    await api.revoke(s.subject, g.endpointId);
+                    await reload();
+                });
+                line.appendChild(revoke);
+                group.appendChild(line);
+            }
+            host.appendChild(group);
+        }
+    }
+
+    // ---------------------------------------------------------------- MCP token
+    function renderTokens() {
+        const host = document.getElementById('modelTokenList');
+        if (!host) return;
+        host.replaceChildren();
+        const tokens = snapshot?.tokens || [];
+        if (!tokens.length) {
+            host.appendChild(el('div', 'model-empty', t('models.noTokens')));
+            return;
+        }
+        for (const token of tokens) {
+            const row = el('div', 'model-row');
+            const main = el('div', 'model-row-main');
+            main.appendChild(el('div', 'model-row-title', token.name));
+            // 裸 '*' 对用户没有意义，写成"所有端点"；其余原样显示，因为那是
+            // MCP 侧配置里真实写下的字符串。
+            const scope = token.models && token.models.length
+                ? token.models.map((m) => (m === '*' ? t('models.scopeAll') : m)).join(', ')
+                : t('models.noScope');
+            main.appendChild(el('div', 'model-row-sub', scope));
+            row.appendChild(main);
+
+            const label = el('label', 'model-check');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = !!token.bypassAll;
+            box.addEventListener('change', async () => {
+                const ids = (snapshot.tokens || [])
+                    .map((x) => (x.id === token.id ? { ...x, bypassAll: box.checked } : x))
+                    .filter((x) => x.bypassAll)
+                    .map((x) => x.id);
+                await api.setSettings({ tokenBypass: ids });
+                if (box.checked) status(t('models.bypassEnabled'));
+                await reload();
+            });
+            label.append(box, el('span', '', t('models.bypassAll')));
+            row.appendChild(label);
+            host.appendChild(row);
+        }
+    }
+
+    // ---------------------------------------------------------------- 审计
+    function renderAudit() {
+        const host = document.getElementById('modelAuditList');
+        if (!host) return;
+        host.replaceChildren();
+        api.audit({ limit: 40 }).then((data) => {
+            const rows = (data && data.entries) || [];
+            if (!rows.length) {
+                host.appendChild(el('div', 'model-empty', t('models.noAudit')));
+                return;
+            }
+            for (const r of rows) {
+                const line = el('div', 'model-audit-row');
+                const when = new Date(r.ts).toLocaleTimeString(getLocale());
+                const outcomeText = r.outcome === 'done'
+                    ? t('models.outcomeDone')
+                    : r.outcome === 'error' ? t('models.outcomeError') : (r.outcome || '');
+                const outcome = r.kind === 'consent'
+                    ? t('models.auditConsent', { outcome: t(`models.consentOutcome.${r.outcome}`) })
+                    : `${t(`models.taskName.${r.task}`) || r.task || ''} ${outcomeText}${r.code ? ` (${r.code})` : ''}`;
+                line.appendChild(el('span', 'model-audit-time', when));
+                line.appendChild(el('span', 'model-audit-subject', r.subject || ''));
+                line.appendChild(el('span', 'model-audit-endpoint', r.endpointId || ''));
+                line.appendChild(el('span', 'model-audit-outcome', outcome));
+                host.appendChild(line);
+            }
+        }).catch(() => {});
+    }
+
+    await reload();
+}
+
+installModelSettings().catch((err) => {
+    console.warn('[settings] Model settings section init failed:', err && err.message);
+});

@@ -1,23 +1,26 @@
 {
   "name": "sxseditor",
   "productName": "SXSEditor",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "description": "SoulX Singer Editor - AI歌声合成工作台",
-  "main": ".webpack/main",
+  "main": ".webpack/main/index.cjs",
   "private": true,
   "scripts": {
     "start": "electron-forge start",
-    "prepackage": "node scripts/verify-build-assets.js && node scripts/generate-build-info.js",
+    "prepackage": "node scripts/verify-build-assets.js && node scripts/generate-build-info.js && node scripts/build-mcp-resources.js",
     "package": "cross-env NODE_ENV=production electron-forge package",
-    "prepackage:lite": "node scripts/verify-build-assets.js && node scripts/generate-build-info.js",
+    "prepackage:lite": "node scripts/verify-build-assets.js && node scripts/generate-build-info.js && node scripts/build-mcp-resources.js",
     "package:lite": "cross-env SKIP_ONNX_MODELS=1 NODE_ENV=production electron-forge package",
+    "premake": "node scripts/verify-build-assets.js && node scripts/generate-build-info.js && node scripts/build-mcp-resources.js",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint src test scripts *.config.js --ext .js",
     "lint:ipc": "node scripts/check-ipc-channels.js",
+    "check:inno": "node scripts/check-inno-flags.js",
+    "audit:contrast": "node scripts/audit-contrast.js --strict",
     "check:version": "node scripts/check-version.js",
     "check:assets": "node scripts/verify-build-assets.js",
-    "prestart": "node scripts/generate-build-info.js",
+    "prestart": "node scripts/generate-build-info.js && node scripts/build-mcp-resources.js",
     "test": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --reporter spec",
     "test:ci": "mocha --require ./test/setup.js \"test/**/*.test.js\" --ignore \"test/onnxModelLoading.test.js\" --timeout 30000 --reporter spec",
     "test:coverage": "nyc --reporter=text --reporter=html npm test",
@@ -26,7 +29,12 @@
     "cli:help": "electron-forge start -- --cli help",
     "build:native": "node scripts/build-native-electron.js",
     "mcp": "node scripts/sxseditor-mcp.js",
-    "splash:image": "node scripts/generate-splash-image.js"
+    "splash:image": "node scripts/generate-splash-image.js",
+    "mcp:docs": "node scripts/build-mcp-resources.js && node scripts/gen-mcp-docs.js && node scripts/gen-mcp-html.js",
+    "mcp:selftest": "node scripts/mcp-selftest.js",
+    "plugin:pack": "node scripts/package-plugin.js",
+    "test:e2e:rmvpe": "node test/e2e/rmvpeE2E.js",
+    "test:e2e:singer-edit": "electron test/e2e/singerEditE2E.js"
   },
   "keywords": [
     "electron",
@@ -40,20 +48,23 @@
     "email": "dev@sxseditor.local"
   },
   "license": "MIT",
+  "engines": {
+    "node": "24.x"
+  },
   "devDependencies": {
     "@babel/core": "^7.29.0",
     "@babel/preset-env": "^7.29.2",
     "@babel/register": "^7.28.6",
-    "@electron-forge/cli": "^7.11.2",
-    "@electron-forge/maker-deb": "^7.11.2",
-    "@electron-forge/maker-rpm": "^7.11.2",
-    "@electron-forge/maker-squirrel": "^7.11.2",
-    "@electron-forge/maker-zip": "^7.11.2",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
-    "@electron-forge/plugin-fuses": "^7.11.2",
-    "@electron-forge/plugin-webpack": "^7.11.2",
-    "@electron/fuses": "^1.8.0",
-    "@electron/rebuild": "^4.0.4",
+    "@electron-forge/cli": "^8.0.1",
+    "@electron-forge/maker-deb": "^8.0.1",
+    "@electron-forge/maker-rpm": "^8.0.1",
+    "@electron-forge/maker-squirrel": "^8.0.1",
+    "@electron-forge/maker-zip": "^8.0.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^8.0.1",
+    "@electron-forge/plugin-fuses": "^8.0.1",
+    "@electron-forge/plugin-webpack": "^8.0.1",
+    "@electron/fuses": "^2.1.3",
+    "@electron/rebuild": "^4.2.1",
     "@napi-rs/canvas": "^1.0.11",
     "@vercel/webpack-asset-relocator-loader": "^1.10.0",
     "babel-loader": "^10.1.1",
@@ -61,7 +72,7 @@
     "copy-webpack-plugin": "^14.0.0",
     "cross-env": "^10.1.0",
     "css-loader": "^6.11.0",
-    "electron": "^42.4.1",
+    "electron": "^45.3.4",
     "electron-squirrel-startup": "^1.0.1",
     "eslint": "^9.39.4",
     "globals": "^17.7.0",
@@ -92,6 +103,7 @@
     "nan": "^2.27.0"
   },
   "overrides": {
-    "segfault-handler": "npm:empty-npm-package@1.0.0"
+    "segfault-handler": "npm:empty-npm-package@1.0.0",
+    "node-abi": "4.40.0"
   }
 }

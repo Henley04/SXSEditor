@@ -21,7 +21,8 @@
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-refresh" data-i18n="singerMarket.refresh" data-icon="refresh">Refresh</button>
+          <button id="btn-refresh" data-i18n="singerMarket.refresh" data-i18n-title="singerMarket.refresh"
+                  data-i18n-aria-label="singerMarket.refresh" data-icon="refresh">Refresh</button>
           <button id="btn-upload" style="display:none;" data-i18n="singerMarket.upload" data-icon="upload">Upload</button>
         </div>
       </div>
@@ -58,8 +59,49 @@
           </div>
         </div>
         <div id="loading-state" class="loading-state" style="display:none;">
-          <div class="spinner"></div>
-          <div class="loading-text" data-i18n="singerMarket.loading">Loading...</div>
+          <!-- 骨架卡而不是一个转圈：先把版式占住，数据到位时不会整页跳一下。
+               结构（头像 + 标题行 + 两行标签）与真实歌手卡一致，视觉上像"正在
+               填内容"而不是"程序卡住了"。
+               纯占位，读屏软件只念 sr-only 的一句。 -->
+          <div class="skeleton-grid" aria-hidden="true">
+            <div class="skeleton-card">
+              <div class="skeleton-avatar"></div>
+              <div class="skeleton-line skeleton-line--title"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line skeleton-line--short"></div>
+            </div>
+            <div class="skeleton-card">
+              <div class="skeleton-avatar"></div>
+              <div class="skeleton-line skeleton-line--title"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line skeleton-line--short"></div>
+            </div>
+            <div class="skeleton-card">
+              <div class="skeleton-avatar"></div>
+              <div class="skeleton-line skeleton-line--title"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line skeleton-line--short"></div>
+            </div>
+            <div class="skeleton-card">
+              <div class="skeleton-avatar"></div>
+              <div class="skeleton-line skeleton-line--title"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line skeleton-line--short"></div>
+            </div>
+            <div class="skeleton-card">
+              <div class="skeleton-avatar"></div>
+              <div class="skeleton-line skeleton-line--title"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line skeleton-line--short"></div>
+            </div>
+            <div class="skeleton-card">
+              <div class="skeleton-avatar"></div>
+              <div class="skeleton-line skeleton-line--title"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line skeleton-line--short"></div>
+            </div>
+          </div>
+          <div class="sr-only" role="status" aria-live="polite" data-i18n="singerMarket.listLoading">Loading singers…</div>
         </div>
       </div>
 
@@ -116,7 +158,8 @@
         </div>
         <div class="form-group">
           <label for="upload-tags" data-i18n="singerMarket.tagsLabel">Tags (comma-separated)</label>
-          <input type="text" id="upload-tags" placeholder="vocal, female, pop..." />
+          <input type="text" id="upload-tags" placeholder="vocal, female, pop..."
+                 data-i18n-placeholder="singerMarket.tagsPlaceholder" />
         </div>
         <div class="form-group">
           <label for="upload-visibility" data-i18n="singerMarket.visibility">Visibility</label>

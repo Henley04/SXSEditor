@@ -1,10 +1,13 @@
-const ort = require('onnxruntime-node');
-const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
+// 惰性 ORT：native addon 的加载推迟到首次真正用到 ort.* 时（见 ortRuntime.js）。
+// 此前这里是顶层 require，会在冷启动阶段就把 ORT 及 DML/WinML 依赖 DLL 拉起。
+const { lazyOrt: ort } = require('../ortRuntime.js');
+const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN, HOP_SIZE, SAMPLE_RATE } = require('./constants');
 const { createFloatTensor, outputToFloat32, outputToFloat32Into, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
-const { resolveQDrift, buildQDriftCtx, readQDriftEnabled } = require('./qdrift');
+const { resolveQDrift, buildQDriftCtx, readQDriftEnabled: _readQDriftEnabled } = require('./qdrift');
+const { summarizeXt, formatXtStats, findNonFiniteIndex } = require('./diffusionStats.js');
 
 // One fallback notice per loaded diffStep session, not once per streaming chunk.
 // WeakSet follows session lifetime without retaining disposed sessions.
@@ -372,7 +375,14 @@ class Diffusion {
             [io.maskInput]: condMaskTensorConst,
         });
         const condPredRaw = condResults[io.outName];
-        const condPredFull = outputToFloat32(condPredRaw);
+        // P6: 落地到跨步复用的 predScratchBuf（前半段），不再每步整块新分配。
+        // cond 与 uncond 两份输出必须共存到各自切片完成，所以各占 scratch 的一段；
+        // 容量不足时回退到 alloc 版本（正常路径不会发生）。
+        const _scratch = (reuseBufs && reuseBufs.predScratchBuf) ? reuseBufs.predScratchBuf : null;
+        const _condLen = condPredRaw.data.length;
+        const condPredFull = (_scratch && _scratch.length >= 2 * _condLen)
+            ? outputToFloat32Into(condPredRaw, _scratch.subarray(0, _condLen))
+            : outputToFloat32(condPredRaw);
 
         // TEMP DIAGNOSTIC (SXS_DIAG_PROBE=1): compare EVERY graph output between
         // TRT and the DML peer at the first diffusion step, slicing along every
@@ -500,7 +510,11 @@ class Diffusion {
             [io.maskInput]: uncondMaskTensor,
         });
         const uncondPredRaw = uncondResults[io.outName];
-        const uncondPredFull = outputToFloat32(uncondPredRaw);
+        // P6: uncond 写在 scratch 的后半段（偏移 _condLen），避免覆盖 cond 结果。
+        const _uncondLen = uncondPredRaw.data.length;
+        const uncondPredFull = (_scratch && _scratch.length >= _condLen + _uncondLen)
+            ? outputToFloat32Into(uncondPredRaw, _scratch.subarray(_condLen, _condLen + _uncondLen))
+            : outputToFloat32(uncondPredRaw);
         disposeTensor(uncondPredRaw);
         // uncond 三张输入张量现在跨步复用，不能在步内 dispose ——
         // 由 runDiffusionLoop 的 _disposeAllTensors 在循环结束时统一释放。
@@ -525,9 +539,9 @@ class Diffusion {
      * Task 7 (Welford): combine uses single-pass Welford online variance
      *   instead of three-pass sum/Var/rescale.
      *
-     * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
+     * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js（默认 DEFAULT_SOLVER）
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false, progressCap = 90, diagTag = '') {
         const _diffT0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
@@ -551,7 +565,7 @@ class Diffusion {
             cfgRescale = _qd.params.cfgRescale;
             cfgScheduleOpts = _qd.params.cfgScheduleOpts;
             dynamicThresholdOpts = _qd.params.dynamicThresholdOpts;
-            console.log(`[Q-Drift] 已启用（${_qd.precision}，${_qd.correction.length} 个通道因子）。强制锁定：${_qd.notes.join('；')}`);
+            console.log(`[Q-Drift] enabled (${_qd.precision}, ${_qd.correction.length} channel factors). Forced lock: ${_qd.notes.join('; ')}`);
         }
         const qdriftCtx = buildQDriftCtx(_qd.active, _qd.correction);
         // useCfg 必须在 Q-Drift 覆盖 cfgStrength 之后再判定：若用户原本关闭了 CFG，
@@ -940,10 +954,44 @@ class Diffusion {
                     xt.data[i] += delta[i];
                 }
 
+                // NaN/Inf 早停：一旦某一步产出非有限值，后续所有步都会在 NaN 上
+                // 继续积分，最终整段 mel 全废。原实现只在 32 步全跑完后统计一次
+                // （见下方 summarizeXt），只打一行日志就继续把 NaN 送进 vocoder，
+                // 用户拿到的是坏音频或一句 "Vocoder input mel is non-finite"，
+                // 且无法知道是第几步、哪个 EP、多长序列坏掉的。
+                // 这里在每步累加后立即扫描（early-exit，命中即停），抛出带 step /
+                // ep / seqLen 的结构化错误，并顺手把该模型拉黑到 DML/CPU，
+                // 使用户重试一次就换到能跑的后端。
+                {
+                    const badIndex = findNonFiniteIndex(xt.data);
+                    if (badIndex >= 0) {
+                        const badVal = xt.data[badIndex];
+                        this.lastXtStats = {
+                            invalid: 1,
+                            nan: badVal !== badVal ? 1 : 0,
+                            inf: badVal === badVal ? 1 : 0,
+                        };
+                        this._blacklistDiffStepOnVendorEp(
+                            sessions,
+                            `step ${step + 1}/${totalSteps} non-finite xt (index=${badIndex})`,
+                        );
+                        const nanErr = new Error(
+                            `${diagTag}diffusion produced non-finite xt at step ${step + 1}/${totalSteps} `
+                            + `(ep=${this._diffStepEp || 'unknown'}, seqLen=${seqLen}, frames=${totalFrames}, `
+                            + `ptFrameCount=${ptFrameCount}, firstIndex=${badIndex})`
+                        );
+                        nanErr.code = 'DIFFUSION_STEP_NAN';
+                        nanErr.step = step;
+                        nanErr.totalSteps = totalSteps;
+                        nanErr.firstIndex = badIndex;
+                        throw nanErr;
+                    }
+                }
+
                 const currentProgress = progressStart + (step + 1) * progressPerStep;
-                onProgress(Math.min(Math.round(currentProgress), 90));
-                // GPU 排空：每 8 步用 setTimeout(20) 代替 setImmediate，给 DML 后端 20ms 时间
-                // 回收内部 GPU 资源池中的 transformer 注意力中间张量。
+                onProgress(Math.min(Math.round(currentProgress), progressCap));
+                // GPU 排空：此处仅 setImmediate 让出事件循环一轮，不做墙钟等待
+                // （每 8 步与长片段每步都走同一 setImmediate）。
                 if (step % 8 === 7) {
                     await new Promise(r => setImmediate(r));
                 } else if (totalFrames > 256) {
@@ -969,32 +1017,23 @@ class Diffusion {
             // 诊断：检测扩散输出是否包含 NaN/Inf + 统计输出分布（gated by diagnosticMode）
             // NaN/Inf 致命错误 console.error 始终输出（always-on），不受 diagnosticMode 影响。
             {
-                let xtNaN = 0, xtInf = 0;
-                let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
-                const xtData = xt.data;
-                const xtLen = xtData.length;
-                for (let i = 0; i < xtLen; i++) {
-                    const v = xtData[i];
-                    if (Number.isNaN(v)) { xtNaN++; continue; }
-                    if (!Number.isFinite(v)) { xtInf++; continue; }
-                    if (v < xtMin) xtMin = v;
-                    if (v > xtMax) xtMax = v;
-                    xtSum += v;
-                    xtSumSq += v * v;
-                }
-                const xtMean = xtSum / xtLen;
-                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                const stats = summarizeXt(xt.data);
+                this.lastXtStats = stats;
                 if (diagnosticMode) {
-                    console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}, nfe=${totalNFE}`);
+                    console.log(`${diagTag}[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, ${formatXtStats(stats)}, nfe=${totalNFE}`);
                 }
-                if (xtNaN > 0 || xtInf > 0) {
-                    console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
+                if (stats.invalid > 0) {
+                    // 原实现打印 `Inf=${xtInf - xtNaN}`：xtInf 只计真正的 Infinity，
+                    // 全 NaN 时会输出负数（如 Inf=-70144），误导排查。统一走 formatXtStats。
+                    console.error(`${diagTag}[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! ${formatXtStats(stats)}, frames=${totalFrames}, ep=${this._diffStepEp || 'unknown'}, seqLen=${seqLen}, ptFrameCount=${ptFrameCount}`);
 
                     // diff_step 跑在 vendor EP（TRT-RTX）上时，同一批输入形状会稳定
                     // 产出非法值（引擎 profile 不匹配/编译缺陷）。把该模型拉黑：
                     // 之后重建会话会直接落到 DML/CPU，而不是再次得到同样的 NaN。
+                    // 拉黑只影响"下一次重建"，当前会话仍会被本轮用完，因此同时置
+                    // _diffStepBlacklisted，供静态分段/多流式立即停止后续窗口。
                     this._blacklistDiffStepOnVendorEp(sessions,
-                        `diffusion produced NaN=${xtNaN} Inf=${xtInf} frames=${totalFrames}`);
+                        `diffusion produced NaN=${stats.nan} Inf=${stats.inf} frames=${totalFrames}`);
 
                     // Dump ORT native debug logs from stderr capture
                     if (typeof globalThis._flushOrtDebugLogs === 'function') {
@@ -1006,7 +1045,7 @@ class Diffusion {
             // Task 6: dispose all pre-allocated tensors on exit (success or exception)
             _disposeAllTensors();
             const _elapsed = performance.now() - _diffT0;
-            const _audioSec = totalFrames * 480 / 24000;
+            const _audioSec = totalFrames * HOP_SIZE / SAMPLE_RATE;
             const _rtf = _audioSec / (_elapsed / 1000);
             if (!suppressDoneLog || diagnosticMode) {
                 console.log(`[Diffusion] runDiffusionLoop done: frames=${totalFrames}, steps=${totalSteps}, sampler=${samplerName}, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s, isFP16=${isFP16}`);
@@ -1028,6 +1067,10 @@ class Diffusion {
     _blacklistDiffStepOnVendorEp(sessions, reason) {
         try {
             const ds = sessions && sessions.diffStep;
+            // 无论会话是否为 WinML 包装，本轮输出已经不可用：打标记让调用方
+            // 立即停止继续用同一会话跑后续窗口，而不是把 NaN 一窗窗传下去。
+            this._diffStepBlacklisted = true;
+            if (ds) ds.__invalidOutput = true;
             // WinMLSession 标记 provider='windowsml'；ORT 原生会话没有该字段
             if (!ds || ds.provider !== 'windowsml' || !ds.modelPath) return false;
             const { reportRuntimeFailure } = require('../winml/winmlProvider');
@@ -1035,6 +1078,26 @@ class Diffusion {
         } catch (_) {
             return false;
         }
+    }
+
+    /**
+     * 本会话是否已产出过非有限值。
+     *
+     * 供静态分段 / 多流式在开新窗口前检查：一旦某个窗口坏了，后面的窗口
+     * 只会拿到同样的坏引擎、同样的 NaN，继续拼下去没有意义。此前只写标志
+     * 不读，注释里承诺的"立即停止后续窗口"实际没有实现。
+     */
+    isDiffStepBlacklisted() {
+        return this._diffStepBlacklisted === true;
+    }
+
+    /**
+     * 清空"本会话已产出非有限值"标记。每次合成任务入口调用一次：
+     * 标志是"这一轮坏了"的语义，不能跨任务继承，否则用户换到 DML 后
+     * 第一次分段就会因为上一轮的残留标志被误判为失败。
+     */
+    resetBlacklist() {
+        this._diffStepBlacklisted = false;
     }
 
     /**
@@ -1424,14 +1487,14 @@ class Diffusion {
 
         // 3. 运行完整扩散循环
         // 子进度直接透传：onProgress 已被外层映射到本 chunk 的 [progressStart, progressStart+progressRange] 区间，
-        // 不再截断到 90，避免 32 步 diffusion 期间进度条停滞。
+        // 分块调用传 progressCap=100，不截断到 90，避免 32 步 diffusion 期间进度条停滞。
         const chunkOnProgress = (p) => {
             if (onProgress) onProgress(Math.round(p));
         };
         await this.runDiffusionLoop(
             sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
             chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
-            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog
+            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog, 100
         );
 
         // 4. WSOLA mel 域交叉淡入淡出写回（取代对称 Hann 加权混合）
@@ -1460,7 +1523,7 @@ class Diffusion {
             }
         }
 
-        // 5. GPU 排空（自适应：正常 setImmediate yield，OOM 后 200ms 长等待）
+        // 5. GPU 排空（仅 setImmediate 让出一轮事件循环，不做墙钟等待）
         await gpuDrainAdaptive();
 
         // 6. 计算 committed 帧数
@@ -1544,7 +1607,7 @@ class Diffusion {
         }
 
         const _elapsed = performance.now() - _chunkedT0;
-        const _rtf = (totalFrames * 480 / 24000) / (_elapsed / 1000);
+        const _rtf = (totalFrames * HOP_SIZE / SAMPLE_RATE) / (_elapsed / 1000);
         console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s`);
     }
 

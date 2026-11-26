@@ -1,12 +1,17 @@
 const { parentPort, workerData } = require('node:worker_threads');
 
-try { require('./pipeline/float16Patch'); } catch (_) {}
+// float16 补丁由 ortRuntime.getOrt() 在加载 ORT 后统一施加（幂等），见 ortRuntime.js。
 
 // Windows ML 快照注入：worker_threads 里 require('electron') 不可用（退化为
 // 路径字符串），settings 模块与 dynwinrt/catalog 在 worker 内都不可靠。
 // 主进程在 spawn 时经 workerData 显式下发开关与已就绪的 EP libraryPath 列表，
 // 这里在任何 pipeline/winml 模块加载之前挂到 globalThis。
 if (workerData && typeof workerData === 'object') {
+    // 持久化缓存（dummy 校验 / WinML 探测）在 worker 内拿不到 electron.app，
+    // 由主进程把 userData 目录显式下发。
+    if (typeof workerData.userDataDir === 'string' && workerData.userDataDir) {
+        globalThis.__SXS_USER_DATA_DIR__ = workerData.userDataDir;
+    }
     const snapshot = {
         ...(workerData.settingsSnapshot || {}),
         ...(typeof workerData.winmlEnabled === 'boolean' ? { winmlEnabled: workerData.winmlEnabled } : {}),
@@ -28,6 +33,7 @@ if (workerData && typeof workerData === 'object') {
 
 const { OnnxSVSPipeline } = require('./pipeline');
 const { RmvpePitchDetector } = require('./rmvpePitchDetector');
+const { ownsWholeBuffer } = require('../shared/pcmTransfer');
 
 let pipeline = null;
 let rmvpe = null;
@@ -36,17 +42,34 @@ let queue = Promise.resolve();
 // 协作式取消：记录每个合成请求对应的 AbortController，取消时 abort 而非杀线程。
 // 合成结束（成功/失败）都会删除自身 id，避免 Map 累积泄漏。
 const activeControllers = new Map();
+// cancel 可能在 synthesize 的 ensurePipeline() 之前到达（此时 controller 尚未
+// 注册）。必须记住"预取消"的目标 id，否则这次取消会永久丢失。
+const pendingCancelledIds = new Set();
 
 function abortRequest(requestId) {
   if (requestId != null) {
     const c = activeControllers.get(requestId);
     if (c) { c.abort(); return true; }
+    pendingCancelledIds.add(requestId);
+    // 防止未知 id 无限累积：只保留最近 256 个待取消目标。
+    if (pendingCancelledIds.size > 256) {
+      const oldest = pendingCancelledIds.values().next().value;
+      pendingCancelledIds.delete(oldest);
+    }
+    return false;
   }
   // 未提供有效 id 时回退到最近一次请求，保证取消总能命中活跃合成。
   const entries = Array.from(activeControllers.entries());
   if (entries.length === 0) return false;
   activeControllers.get(entries[entries.length - 1][0]).abort();
   return true;
+}
+
+/** 注册 controller 时兑现此前到达的取消。 */
+function registerController(id, controller) {
+  activeControllers.set(id, controller);
+  if (pendingCancelledIds.delete(id)) controller.abort();
+  return controller;
 }
 
 function serializeError(err) {
@@ -105,21 +128,35 @@ function attachCallbacks(id, options = {}) {
   }
   if (options.__chunkAudio) {
     opts.onChunkAudio = data => {
-      const message = { type: 'event', id, event: 'chunk-audio', data };
-      // 零拷贝传输 chunk 音频：pipeline 所有发出点（postprocessing 的
-      // output.slice()、index.js 的 chunk.audio.slice()/cached 分支）给出的
-      // 都是独立副本，回调返回后不再复用，可直接移交 ArrayBuffer，省去每个
-      // 流式 chunk 的结构化克隆（整条链路原共 3 次拷贝）。
-      // 仅当视图独占整个 backing store 时才移交，避免误伤共享缓冲池。
-      const a = data && data.audio;
-      const ab = a instanceof ArrayBuffer ? a
-        : (ArrayBuffer.isView(a) && a.buffer instanceof ArrayBuffer
-          && a.byteOffset === 0 && a.byteLength === a.buffer.byteLength
-          ? a.buffer : null);
-      if (ab) {
-        parentPort.postMessage(message, [ab]);
-      } else {
-        parentPort.postMessage(message);
+      try {
+        // 下游统一按 Float32Array.length 使用；裸 ArrayBuffer 没有 length，
+        // 必须在 worker 边界归一化，不能要求每个调用方兼容两种类型。
+        const a = data && data.audio;
+        let pcm = null;
+        if (a instanceof Float32Array) pcm = a;
+        else if (a instanceof ArrayBuffer && a.byteLength % 4 === 0) pcm = new Float32Array(a);
+        else if (ArrayBuffer.isView(a) && !(a instanceof DataView)) {
+          const out = new Float32Array(a.length);
+          for (let i = 0; i < a.length; i++) out[i] = Number(a[i]) || 0;
+          pcm = out;
+        }
+        if (!pcm) return;
+        const message = {
+          type: 'event',
+          id,
+          event: 'chunk-audio',
+          data: { ...data, audio: pcm },
+        };
+        // 仅当视图独占 backing store 时移交，避免误伤共享缓冲池。
+        // postMessage 失败不能反向打断整轮合成。
+        // Ownership contract: the producer must not read `audio` after this
+        // callback returns — when the view owns its whole backing store, the
+        // buffer below is transferred to the main thread and detached here.
+        const ab = ownsWholeBuffer(pcm) ? pcm.buffer : null;
+        if (ab) parentPort.postMessage(message, [ab]);
+        else parentPort.postMessage(message);
+      } catch (err) {
+        console.warn('[SVS worker] Failed to post chunk audio:', err && err.message);
       }
     };
   }
@@ -137,9 +174,14 @@ async function handle(msg) {
     case 'synthesize': {
       const p = await ensurePipeline(args.language);
       const options = attachCallbacks(id, args.options);
-      const controller = new AbortController();
-      activeControllers.set(id, controller);
+      const controller = registerController(id, new AbortController());
       options.abortSignal = controller.signal;
+      if (controller.signal.aborted) {
+        activeControllers.delete(id);
+        const err = new Error('Synthesis cancelled before start');
+        err.code = 'SYNTHESIS_CANCELLED';
+        throw err;
+      }
       try {
         if (options.autoShift && options.refAudioWavBuffer) options.refF0Extractor = await getRefF0Extractor();
         return await p.synthesize(args.notes, args.bpm, options);
@@ -150,9 +192,14 @@ async function handle(msg) {
     case 'synthesizeMultiStreaming': {
       const p = await ensurePipeline(args.language);
       const options = attachCallbacks(id, args.options);
-      const controller = new AbortController();
-      activeControllers.set(id, controller);
+      const controller = registerController(id, new AbortController());
       options.abortSignal = controller.signal;
+      if (controller.signal.aborted) {
+        activeControllers.delete(id);
+        const err = new Error('Synthesis cancelled before start');
+        err.code = 'SYNTHESIS_CANCELLED';
+        throw err;
+      }
       try {
         for (const fragment of args.fragments || []) {
           if (fragment.options?.autoShift && fragment.options?.refAudioWavBuffer) {

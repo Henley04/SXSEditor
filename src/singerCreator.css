@@ -549,7 +549,7 @@ html, body {
   position: absolute;
   top: var(--space-1);
   font-size: var(--font-xs);
-  color: var(--accent);
+  color: var(--accent-fg);
   font-weight: 600;
   pointer-events: none;
   white-space: nowrap;

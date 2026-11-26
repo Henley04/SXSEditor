@@ -105,13 +105,14 @@
     --bg-button-primary-hover: #5cc8d6;
     --bg-button-success: #6db86b;
     --bg-button-success-hover: #90d490;
-    --bg-button-danger: #d96a6a;
-    --bg-button-danger-hover: #f09090;
+    --bg-button-danger: #b84a4a;
+    --bg-button-danger-hover: #bf5454;
     --fg-primary: #2a3441;
     --fg-secondary: #4a5568;
-    --fg-muted: #8a93a2;
-    --fg-disabled: #b0a88e;
-    --fg-on-accent: #ffffff;
+    --fg-muted: #5f6773;
+    --fg-disabled: #8f876d;
+    --fg-on-accent: #12262b;
+    --fg-on-danger: #ffffff;
     --fg-on-success: #ffffff;
     --fg-on-warning: #2a3441;
     --fg-toolbar-hover: #1a5f6a;
@@ -127,7 +128,12 @@
     --accent-glow-strong: rgba(63, 184, 201, 0.32);
     --accent-line: rgba(63, 184, 201, 0.25);
     --accent-line-strong: rgba(63, 184, 201, 0.40);
-    --accent-fg: #2a8e9c;
+    --accent-fg: #1b6f7a;
+    /* 语义色的"文字形态"：--success 这类高饱和色只适合当填充/圆点，
+       当文字压在浅色或 soft 底上时对比度只有 2:1 上下，必须另有深色版本。 */
+    --success-fg: #296b35;
+    --warning-fg: #7a5a00;
+    --danger-fg: #9c3030;
     --success-soft: rgba(109, 184, 107, 0.15);
     --success-glow: rgba(109, 184, 107, 0.30);
     --warning-soft: rgba(242, 193, 78, 0.15);

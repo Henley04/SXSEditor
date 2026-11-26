@@ -11,7 +11,7 @@ import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLoc
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
 import { runVocoder, normalizePeakTo } from './postprocessing.js';
-import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
+import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM as _COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
@@ -59,6 +59,7 @@ async function _runSynthesisUnlocked(params) {
         sampler = 'euler',
         cfgScheduleOpts = null,
         dynamicThresholdOpts = null,
+        scoreMode = false,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -69,7 +70,14 @@ async function _runSynthesisUnlocked(params) {
 
     // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
     if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
-        const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
+        // C7: 必须按实际 ptFrameCount 预留 target 帧。此前用
+        // Math.min(ptFrameCount, 50) 预留，大 prompt（>50 帧）时会低估 prompt
+        // 占用的帧数，导致 diffstep 拼接时 offset overflow（与 pipeline/index.js
+        // _clampStaticShapeFrames 的结论一致）。
+        const maxFrames = NPU_STATIC_SEQ_LEN - ptFrameCount;
+        if (maxFrames <= 0) {
+            throw new Error(`[WebNN] NPU static shape: prompt frames (${ptFrameCount}) leave no room for target frames (limit ${NPU_STATIC_SEQ_LEN})`);
+        }
         if (totalFrames > maxFrames) {
             console.warn(`[WebNN] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
             warnings.push(`NPU_STATIC_SHAPE_TRUNCATION: audio truncated from ${totalFrames} to ${maxFrames} frames`);
@@ -85,8 +93,8 @@ async function _runSynthesisUnlocked(params) {
     // ===== Stage 1: Encoder =====
     if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
-    const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
-        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq,
+    const { combinedCond, totalCondFrames: _totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
+        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq, scoreMode,
     });
 
     // ===== Stage 2: Diffusion Loop =====
@@ -177,13 +185,39 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const cfgScheduleOpts = paramsArray[0].cfgScheduleOpts || null;
     const dynamicThresholdOpts = paramsArray[0].dynamicThresholdOpts || null;
 
-    // ===== Stage 1: Encode both segments in parallel =====
+    // ===== Stage 1: Encode both segments (sequentially) =====
     if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
     const segData = [];
+    const batchWarnings = [];
 
     for (const params of paramsArray) {
-        const { sequences, tokenCount, totalFrames, ptMelData, ptFrameCount, promptSeq: batchPromptSeq } = params;
+        // C7: 批量路径此前完全没有 NPU 静态形状钳制，prompt+target 超过
+        // NPU_STATIC_SEQ_LEN 时会把超长输入喂给固定 [1,2048] 的模型。
+        // 与单段路径一致：按实际 ptFrameCount 预留 target 帧，超出则截断。
+        let { sequences, tokenCount, totalFrames, ptMelData, ptFrameCount } = params;
+        let batchPromptSeq = params.promptSeq;
+        if (batchPromptSeq && batchPromptSeq.tokenCount > 0 && ptFrameCount > 0
+            && useStaticShapes && batchPromptSeq.tokenCount + tokenCount > NPU_STATIC_SEQ_LEN) {
+            console.warn(`[WebNN] batch prompt ${batchPromptSeq.tokenCount}tok + target ${tokenCount}tok > static ${NPU_STATIC_SEQ_LEN}; prompt cond will be zero-filled`);
+            batchPromptSeq = null;
+        }
+        if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+            const maxFrames = NPU_STATIC_SEQ_LEN - ptFrameCount;
+            if (maxFrames <= 0) {
+                throw new Error(`[WebNN] NPU static shape: prompt frames (${ptFrameCount}) leave no room for target frames (limit ${NPU_STATIC_SEQ_LEN})`);
+            }
+            if (totalFrames > maxFrames) {
+                console.warn(`[WebNN] NPU frame limit (batch): ${totalFrames} > ${maxFrames}, truncating`);
+                batchWarnings.push(`NPU_STATIC_SHAPE_TRUNCATION: audio truncated from ${totalFrames} to ${maxFrames} frames`);
+                sequences = {
+                    ...sequences,
+                    f0Ids: sequences.f0Ids.subarray(0, maxFrames),
+                    mel2token: sequences.mel2token.subarray(0, maxFrames),
+                };
+                totalFrames = maxFrames;
+            }
+        }
 
         // P1 fix: Merge prompt + target token sequences when promptSeq is available
         const hasPrompt = batchPromptSeq && ptFrameCount > 0 && batchPromptSeq.tokenCount > 0;
@@ -222,12 +256,30 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         const bEncType = useStaticShapes ? padInt64ToLength(typeIds, bEncSeqLen) : typeIds;
         const bEncF0 = useStaticShapes ? padInt64ToLength(f0IdsArr, bEncF0Len) : f0IdsArr;
 
-        const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
-            runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', bEncText, [1, bEncSeqLen]) }),
-            runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', bEncPitch, [1, bEncSeqLen]) }),
-            runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', bEncType, [1, bEncSeqLen]) }),
-            runSession('f0Encoder', { input_ids: new ort.Tensor('int64', bEncF0, [1, bEncF0Len]) }),
-        ]);
+        // 顺序执行（禁止并发）：ORT WASM 共享栈，跨 session 并发 session.run()
+        // 会触发 "memory access out of bounds" / "Session already started"
+        // —— 见 sessionManager.js 全局锁注释 (onnxruntime Issue #19443)。
+        // 失败时释放已拿到的输出张量，避免 NPU/GPU 显存泄漏（原 Promise.all
+        // 的销毁语义）。
+        const batchEncoderNames = ['noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder', 'f0Encoder'];
+        const batchEncoderFeeds = [
+            { input_ids: new ort.Tensor('int64', bEncText, [1, bEncSeqLen]) },
+            { input_ids: new ort.Tensor('int64', bEncPitch, [1, bEncSeqLen]) },
+            { input_ids: new ort.Tensor('int64', bEncType, [1, bEncSeqLen]) },
+            { input_ids: new ort.Tensor('int64', bEncF0, [1, bEncF0Len]) },
+        ];
+        const batchEncoderOutputs = [];
+        try {
+            for (let ei = 0; ei < batchEncoderNames.length; ei++) {
+                batchEncoderOutputs.push(await runSession(batchEncoderNames[ei], batchEncoderFeeds[ei]));
+            }
+        } catch (encErr) {
+            for (const out of batchEncoderOutputs) {
+                if (out && out['embeddings']) disposeTensor(out['embeddings']);
+            }
+            throw encErr;
+        }
+        const [textResults, pitchResults, typeResults, f0Results] = batchEncoderOutputs;
 
         const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], combinedTokenCount) : outputToFloat32(textResults['embeddings']);
         const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], combinedTokenCount) : outputToFloat32(pitchResults['embeddings']);
@@ -262,16 +314,19 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         const combinedMel2token = new Int32Array(combinedFrames);
         if (hasPrompt) {
             for (let f = 0; f < ptFrameCount; f++) {
-                combinedMel2token[f] = batchPromptSeq.mel2token[f];
+                const raw = f < batchPromptSeq.mel2token.length ? (batchPromptSeq.mel2token[f] | 0) : 0;
+                combinedMel2token[f] = Math.max(0, Math.min(ptTokenCount - 1, raw));
             }
         }
         for (let f = 0; f < totalFrames; f++) {
-            combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+            const raw = sequences.mel2token[f] | 0;
+            combinedMel2token[ptFrameCount + f] = ptTokenCount + Math.max(0, Math.min(tokenCount - 1, raw));
         }
 
         const totalCondFrames = combinedFrames;
         const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-        for (let f = 0; f < combinedFrames; f++) {
+        const firstCondFrame = hasPrompt ? 0 : ptFrameCount;
+        for (let f = firstCondFrame; f < combinedFrames; f++) {
             const tokenIdx = combinedMel2token[f];
             for (let d = 0; d < EMBED_DIM; d++) {
                 condCodeData[f * EMBED_DIM + d] =
@@ -296,7 +351,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             totalFramesWithPrompt: ptFrameCount + totalFrames,
             totalSteps: params.totalSteps || 32,
             cfgStrength: params.cfgStrength ?? 3.0,
-            cfgRescale: params.cfgRescale ?? 0.7,
+            cfgRescale: params.cfgRescale ?? 0.75,
             npuVocoderBatchSize: params.npuVocoderBatchSize || 1,
         });
     }
@@ -314,7 +369,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         if (onProgress) onProgress(100);
         const batchSynthMs = performance.now() - tEnc0;
         console.log(`[WebNN] Batch synthesis (skipVocoder): 2 segs (${segData[0].totalFrames}+${segData[1].totalFrames}frm), ${batchSynthMs.toFixed(0)}ms`);
-        return segData.map((s, si) => ({ xtData: xts[si], totalFrames: s.totalFrames }));
+        return segData.map((s, si) => ({ xtData: xts[si], totalFrames: s.totalFrames, warnings: batchWarnings }));
     }
 
     if (onProgress) onProgress(80);
@@ -354,7 +409,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             normalizePeakTo(audioData);
         }
 
-        results.push({ audioData, totalFrames: s.totalFrames });
+        results.push({ audioData, totalFrames: s.totalFrames, warnings: batchWarnings });
     }
 
     const batchSynthMs = performance.now() - tEnc0;

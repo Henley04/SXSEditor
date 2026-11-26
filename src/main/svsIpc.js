@@ -1,9 +1,61 @@
-const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/pipeline');
+// 推理管线的 require 从模块顶层下沉。
+//
+// 冷启动审查：pipeline/index.js 是 5118 行且连带 diffusion / preprocessing /
+// postprocessing 等一整棵子树，require 它要解析并编译数万行 JS。此前它在
+// svsIpc.js 第 1 行，而 svsIpc 在启动的 STEP 4 被同步 require —— 于是这份解析
+// 成本落在主窗口显示之前。ORT native addon 本身已由 ortRuntime 惰性化，
+// 这里再把 JS 解析也推迟到首次真正要建管线时（采样率查询不再触发加载，
+// 见下面的 SAMPLE_RATE）。
+//
+// 采样率不从 pipeline 取：它只是 inference/shared/constants.js 里的一个常量，
+// 而 pipeline/index.js 仅导出 { OnnxSVSPipeline, NativeSVSPipeline, SAMPLE_RATE,
+// enumerateDMLDevices }，从来没有 getSampleRate() 这个函数。此前的写法
+// getPipelineModule().getSampleRate() 让 fragment-svs:getSampleRate 必然抛
+// "is not a function"（渲染进程初始化采样率是打开分片编辑器的第一步）。
+// 直接读轻量常量模块：既修掉异常，也不必为了回答一次采样率查询去解析整棵
+// 5000 行 pipeline（该常量模块本就是 pipeline/constants.js 的唯一来源）。
+const { SAMPLE_RATE } = require('../inference/shared/constants.js');
+let _pipelineModule = null;
+function getPipelineModule() {
+  if (!_pipelineModule) _pipelineModule = require('../inference/pipeline');
+  return _pipelineModule;
+}
+function getSampleRate() { return SAMPLE_RATE; }
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
+
+// ---- 远程 API 推理（设置里「推理系统 = API」）----
+// 惰性 require：这两个模块只依赖 shared/constants 与 locale，不会触发 ONNX 加载。
+// 放在这里而不是文件顶层，是为了不拖慢冷启动（与主注释的惰性化策略一致）。
+let _apiModules = null;
+function apiModules() {
+  if (!_apiModules) {
+    _apiModules = {
+      store: require('./apiProviderStore'),
+      inference: require('./apiInference'),
+    };
+  }
+  return _apiModules;
+}
+function isApiMode() {
+  try { return loadSettings().inferenceProvider === 'api'; } catch (_) { return false; }
+}
+function apiRuntime() {
+  const rt = apiModules().store.getActiveRuntime();
+  if (!rt) throw new Error(t('error.apiNoProvider'));
+  return rt;
+}
+
+// 模型加载进度的目标窗口集合。
+//
+// 用集合而不是单个 sender：SVS_INIT 与 FRAGMENT_SVS_INIT 共享同一个
+// svsPipelineLazy promise，两个窗口可能同时等待同一次初始化。单槽写法会让
+// 后进入者覆盖前者、且先退出者的 finally 把槽位清空后又被后退出者写回旧值，
+// 结果是"只有一个窗口能收到进度"外加一个残留的幽灵 sender。
+const _loadProgressSenders = new Set();
 const { getRmvpeDetector, getBaseModelDir } = require('./pitchMidiIpc');
 const { SvsWorkerClient } = require('./svsWorkerClient');
 const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEnglishNotes, resolveLanguage: _resolveLanguage } = require('./languageDetection');
@@ -30,6 +82,13 @@ let _pendingPipelineReset = false;
 // 当前持有 mutex 的可取消管线引用：svs:cancel 在 lazy 实例尚未注册
 // （pipeline 异步初始化窗口）或已被延迟重置清空时仍能命中正确的 worker。
 let _activeCancellable = null;
+// 分片预览的流身份。旧会话 dispose 时带 streamId 调 svs:cancel；若此刻在跑的
+// 已是新一轮，必须忽略那次取消，否则"停止 A"会把刚启动的 B 一起杀掉。
+let _activeFragmentStreamId = null;
+// streamId -> {state:'queued'|'running'|'cancelled', cancel}。
+// 单一 active ID 只能表达"最后提交者"，无法表示 mutex 队列里排队但尚未
+// 执行的请求；取消必须按 streamId 精确命中任务。
+const _fragmentStreamTasks = new Map();
 function _withSynthMutex(fn, cancellable) {
   const prev = _synthMutex;
   let release;
@@ -63,11 +122,21 @@ async function _createPipeline(languageOverride) {
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp32';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
-  const japaneseVocalization = settings.japaneseVocalization || 'hybrid';
+  const japaneseVocalization = settings.japaneseVocalization || 'en-phonemes';
   console.log(`[Main] Pipeline settings: winmlEnabled=${settings.winmlEnabled === true} deviceMode=${deviceMode} inferenceProvider=${inferenceProvider}`);
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
+
+  // dummy 校验结果缓存目录（跨重启复用，避免每次启动重跑一遍校验推理）。
+  // worker_threads 内拿不到 electron.app，这里解析后随 pipelineOptions / workerData 下发。
+  let userDataDir = null;
+  try {
+    const electron = require('electron');
+    if (electron && electron.app && typeof electron.app.getPath === 'function') {
+      userDataDir = electron.app.getPath('userData');
+    }
+  } catch (_) { /* 非 Electron 环境（测试 / CLI 片段） */ }
 
   const pipelineOptions = {
     deviceId,
@@ -78,6 +147,7 @@ async function _createPipeline(languageOverride) {
     languageOverride,
     inferenceProvider,
     japaneseVocalization,
+    userDataDir,
   };
 
   // WebNN contexts exist only in Chromium renderer processes. A Node
@@ -110,11 +180,30 @@ async function _createPipeline(languageOverride) {
     // svsWorker 启动时挂到 globalThis，winmlProvider 直接 registerEp。
     let winmlEps;
     let winmlEnabled = false;
-    if (settings.winmlEnabled === true) {
+    // 显式后端也要参与判定：settings.winmlEnabled 是界面保存时派生的值，
+    // 后端被改成 DML 但派生字段尚未同步时，不能继续按 WinML 路径下发。
+    // 变量名沿用 backendIsDml 以兼容既有调用点，含义是「不应下发 WinML EP」：
+    // 除 DML 外，全局强制 CPU 后端也必须关掉这条路径，否则 worker 会带着
+    // winmlEps 启动，与设置里的 'cpu' 相互矛盾。
+    const backendIsDml = settings.nativeInferenceBackend === 'dml'
+      || settings.nativeInferenceBackend === 'cpu'
+      || (settings.inferenceProvider && settings.inferenceProvider !== 'ortnode');
+    if (settings.winmlEnabled === true && !backendIsDml) {
       try {
-        winmlEps = await require('../inference/winml/winmlProvider').getReadyEpLibraries();
+        const winmlProvider = require('../inference/winml/winmlProvider');
+        winmlEps = await winmlProvider.getReadyEpLibraries();
+        // 后端已切回 Windows ML 却解析到空列表，通常是旧的门控缓存未失效。
+        // 清一次进程级状态再解析，仍为空则如实告知并回退，不把空快照伪装
+        // 成"WinML 已就绪"。
+        if (!Array.isArray(winmlEps) || winmlEps.length === 0) {
+          winmlProvider.resetEpState();
+          winmlEps = await winmlProvider.getReadyEpLibraries();
+        }
         winmlEnabled = true;
         console.log(`[Main] WinML enabled: resolved ${winmlEps ? winmlEps.length : 0} ready EP(s)${winmlEps && winmlEps.length ? ' -> ' + winmlEps.map((e) => e.name).join(', ') : ''}`);
+        if (!winmlEps || winmlEps.length === 0) {
+          console.warn('[Main] WinML enabled but no compatible EP resolved; sessions will fall back to DML/CPU for this worker');
+        }
       } catch (err) {
         console.warn('[Main] WinML EP resolution failed; worker will use DML/CPU:', err.message);
         winmlEps = [];
@@ -129,12 +218,19 @@ async function _createPipeline(languageOverride) {
       // 主进程硬件检测结果（WebNN + PnP 回退），供 worker 内 winmlProvider 使用
       npuAvailable: globalThis.__SXS_NPU_AVAILABLE__ === true,
       openvinoNpuSafe: globalThis.__SXS_OPENVINO_NPU_SAFE__ === true,
+      ...(userDataDir ? { userDataDir } : {}),
       ...(winmlEps ? { winmlEps } : {}),
       ...(settings.winmlBootstrapDllPath ? { winmlBootstrapDllPath: settings.winmlBootstrapDllPath } : {}),
       settingsSnapshot: settings,
     });
   }
-  return new OnnxSVSPipeline(modelPath, pipelineOptions);
+  // 模型加载进度：factory 在首次 init 时才跑，而 IPC handler 才知道发给哪个
+  // webContents，所以这里把 sender 做成模块级可替换的（handler 进/出时设/清）。
+  // 未设置时为 no-op，不影响 CLI。
+  return new (getPipelineModule().OnnxSVSPipeline)(modelPath, {
+    ...pipelineOptions,
+    onLoadProgress: (p) => { for (const fn of _loadProgressSenders) fn(p); },
+  });
 }
 
 const svsPipelineLazy = createLazyInitializer(async () => {
@@ -163,6 +259,20 @@ function resetSvsPipeline() {
   }
   svsPipelineLazy.reset();
   currentLanguage = null;
+}
+
+/**
+ * MCP pipeline.status 用：只读地披露管线运行态，不触发任何加载。
+ * pendingReset 为 true 表示合成仍在进行、reset 已排队但尚未执行 —— 调用方
+ * 据此决定是稍后重查还是继续等待，不能把"已排队"当成"已卸载"。
+ */
+function getPipelineRuntimeState() {
+  const inst = svsPipelineLazy.getInstance();
+  return {
+    initialized: !!(inst && inst.initialized),
+    pendingReset: _pendingPipelineReset,
+    language: currentLanguage,
+  };
 }
 
 /**
@@ -323,7 +433,7 @@ const MAX_PLUGIN_MIX_SECONDS = 30 * 60;
  * @returns {Promise<{ok:boolean, audio?:Float32Array, error?:string}>}
  */
 async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
-  const sr = Number.isFinite(sampleRate) ? sampleRate : SAMPLE_RATE;
+  const sr = Number.isFinite(sampleRate) ? sampleRate : getSampleRate();
   const maxSamples = Math.floor(MAX_PLUGIN_MIX_SECONDS * sr);
   // bpm 同样来自渲染进程：非正数 / 非有限值时退回 120（与旧实现的 `bpm || 120`
   // 一致），但极小值（如 1e-9）会把 offset 放大几个数量级，交给下面的上限兜住。
@@ -365,7 +475,7 @@ async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
           + ` 超出上限（${MAX_PLUGIN_MIX_SECONDS} 秒 @ ${sr} Hz = ${maxSamples} 采样）：请检查工程的 startTimeBeat / BPM`,
       };
     }
-    parts.push({ audio: result.audio, offset });
+    parts.push({ audio: result.audio, offset, trackId: frag.trackId || frag.id || null });
     totalSamples = Math.max(totalSamples, endSample);
   }
 
@@ -374,7 +484,128 @@ async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
   for (const part of parts) {
     for (let i = 0; i < part.audio.length; i++) mixed[part.offset + i] += part.audio[i];
   }
-  return { ok: true, audio: mixed };
+  // 分轨片段：每片按自己的 trackId + 绝对起点保留，供渲染层实时 M/S。
+  const segments = parts.map(p => ({ trackId: p.trackId, startSample: p.offset, audio: p.audio }));
+  return { ok: true, audio: mixed, segments };
+}
+
+/**
+ * 单组 API 分片：逐分片调用远程 /v1/synthesize，再按 startTimeBeat 混合成
+ * 一条 beat 0 起算的单声道，与内置 synthesizeMultiStreaming / _runPluginGroup
+ * 的返回形态完全一致。任何一个分片报错都直接抛出（含 429/401 明确文案），
+ * 不降级、不静默。
+ * @returns {Promise<Float32Array>}
+ */
+async function _runApiGroup({ group, bpm, runtime, options, startPercent, endPercent }) {
+  const { inference } = apiModules();
+  const sr = getSampleRate();
+  const maxSamples = Math.floor(MAX_PLUGIN_MIX_SECONDS * sr);
+  const effectiveBpm = Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  const parts = [];
+  let totalSamples = 0;
+  const span = Math.max(0, endPercent - startPercent);
+  const rawProgress = options && options.onProgress;
+
+  for (let i = 0; i < group.fragments.length; i++) {
+    const frag = group.fragments[i];
+    const fragBase = startPercent + Math.round((i / Math.max(1, group.fragments.length)) * span);
+    const fragEnd = startPercent + Math.round(((i + 1) / Math.max(1, group.fragments.length)) * span);
+    const onProgress = (p) => {
+      if (typeof rawProgress !== 'function') return;
+      const c = Math.max(0, Math.min(100, Number(p) || 0));
+      rawProgress(Math.round(fragBase + (c / 100) * Math.max(0, fragEnd - fragBase)));
+    };
+    let audio;
+    try {
+      audio = await inference.synthesize({
+        runtime,
+        notes: frag.notes || [],
+        bpm,
+        options: { ...(frag.options || {}), onProgress },
+        onProgress,
+      });
+    } catch (err) {
+      // 带分片位置，便于定位是哪个轨道触发了限流/鉴权失败。
+      throw new Error(`分片 ${i + 1}/${group.fragments.length}（trackId=${frag.trackId || frag.id || `#${i + 1}`}）：${err.message}`);
+    }
+    const startBeat = Number(frag.startTimeBeat);
+    if (!Number.isFinite(startBeat) || startBeat < 0) {
+      throw new Error(`分片 ${i + 1}/${group.fragments.length} 的 startTimeBeat 非法：${frag.startTimeBeat}`);
+    }
+    const offset = Math.max(0, Math.round(((startBeat / effectiveBpm) * 60) * sr));
+    const endSample = offset + audio.length;
+    if (!Number.isFinite(endSample) || endSample > maxSamples) {
+      throw new Error(`分片 ${i + 1}/${group.fragments.length} 的混音长度超出上限（${MAX_PLUGIN_MIX_SECONDS} 秒）`);
+    }
+    parts.push({ audio, offset, trackId: frag.trackId || frag.id || null });
+    totalSamples = Math.max(totalSamples, endSample);
+  }
+  const mixed = new Float32Array(totalSamples);
+  for (const part of parts) {
+    for (let i = 0; i < part.audio.length; i++) mixed[part.offset + i] += part.audio[i];
+  }
+  const segments = parts.map(p => ({ trackId: p.trackId, startSample: p.offset, audio: p.audio }));
+  return { audio: mixed, segments };
+}
+
+/**
+ * 把内置组累积的 segments 归一化到与其权威混音一致的峰值（P2-1）。
+ *
+ * 背景：内置 synthesizeMultiStreaming 在返回前对 mixedAudio 做了
+ * normalizePeakTo(0.95)，但 onChunkAudio 发出的 chunk（svsIpc 据此累积
+ * builtinSegments）是归一化前的原始峰值。若直接把这些 segments 交给
+ * _mixTrackAudio，它按"已归一化"的 audio 峰值算出的增益≈1，segments 保持
+ * 原始峰值 → 分轨播放比整段混音响、甚至削波；内置 + 插件混用时两组在 mix
+ * 与 segments 里的相对比例也不一致。
+ *
+ * 这里从 segments 重建混音峰值，按其与参考混音（归一化后的内置 audio）峰值
+ * 的比例缩放所有 segment，使二者峰值对齐。之后 _mixTrackAudio 的统一增益
+ * 对 audio 与 segments 就是同一系数。
+ *
+ * @param {Array<{trackId:string, startSample:number, audio:Float32Array}>} segments
+ * @param {Float32Array} referenceAudio 归一化后的内置组混音
+ * @returns {number} 实际应用到 segments 的增益（1 表示未改）
+ */
+function _alignBuiltinSegmentsToMix(segments, referenceAudio) {
+  if (!Array.isArray(segments) || segments.length === 0) return 1;
+  if (!referenceAudio || !referenceAudio.length) return 1;
+  let refPeak = 0;
+  for (let i = 0; i < referenceAudio.length; i++) {
+    const a = Math.abs(referenceAudio[i]);
+    if (a > refPeak) refPeak = a;
+  }
+  if (refPeak <= 0) return 1;
+
+  // 从 segments 按绝对起点重建混音，求其归一化前的峰值。
+  let maxLen = 0;
+  for (const seg of segments) {
+    if (seg && seg.audio && seg.audio.length) {
+      maxLen = Math.max(maxLen, (seg.startSample | 0) + seg.audio.length);
+    }
+  }
+  if (maxLen <= 0) return 1;
+  const rebuilt = new Float32Array(maxLen);
+  for (const seg of segments) {
+    if (!seg || !seg.audio || !seg.audio.length) continue;
+    const start = Math.max(0, seg.startSample | 0);
+    for (let i = 0; i < seg.audio.length && start + i < maxLen; i++) {
+      rebuilt[start + i] += seg.audio[i];
+    }
+  }
+  let segPeak = 0;
+  for (let i = 0; i < rebuilt.length; i++) {
+    const a = Math.abs(rebuilt[i]);
+    if (a > segPeak) segPeak = a;
+  }
+  if (segPeak <= 0) return 1;
+  const gain = refPeak / segPeak;
+  if (Number.isFinite(gain) && gain > 0 && Math.abs(gain - 1) > 1e-9) {
+    for (const seg of segments) {
+      if (!seg || !seg.audio) continue;
+      for (let i = 0; i < seg.audio.length; i++) seg.audio[i] *= gain;
+    }
+  }
+  return gain;
 }
 
 /**
@@ -386,17 +617,32 @@ async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
  * 归一化：多组叠加后峰值可能远超 1.0（两条各 0.95 的音轨同时段叠加达 1.9），
  * Int16 转换会严重削波。这里统一按 0.95 阈值归一化 —— 与内置
  * synthesizeMultiStreaming 末尾的 normalizePeakTo 同一阈值、同一语义。
- * @param {Float32Array[]} tracks
- * @returns {Float32Array}
+ * 统一增益必须同时作用于混音与所有 segments，否则实时播放与重新 seek 后音量不一致（4.4）。
+ * @param {Array<Float32Array|{audio:Float32Array, segments:Array}>} tracks
+ * @param {Array<{trackId:string, startSample:number, audio:Float32Array}>} extraSegments
+ * @returns {{audio:Float32Array, segments:Array}}
  */
-function _mixTrackAudio(tracks) {
+function _mixTrackAudio(tracks, extraSegments = []) {
+  // 兼容：tracks 既可能是 Float32Array（内置管线 / 旧调用），也可能是
+  // { audio, segments }（插件 / API 组）。统一取出 audio 与逐轨 segments。
+  const audios = tracks.map(t => (t && ArrayBuffer.isView(t) ? t : (t && t.audio) || null));
+  const allSegments = [];
+  for (const t of tracks) {
+    if (t && !ArrayBuffer.isView(t) && Array.isArray(t.segments)) {
+      for (const seg of t.segments) if (seg && seg.audio && seg.audio.length) allSegments.push(seg);
+    }
+  }
+  for (const seg of extraSegments) {
+    if (seg && seg.audio && seg.audio.length) allSegments.push(seg);
+  }
+
   let totalSamples = 0;
-  for (const audio of tracks) {
+  for (const audio of audios) {
     if (audio && audio.length > totalSamples) totalSamples = audio.length;
   }
   const mixed = new Float32Array(totalSamples);
   let peak = 0;
-  for (const audio of tracks) {
+  for (const audio of audios) {
     if (!audio || audio.length === 0) continue;
     for (let i = 0; i < audio.length; i++) {
       const v = mixed[i] + audio[i];
@@ -405,11 +651,65 @@ function _mixTrackAudio(tracks) {
       if (abs > peak) peak = abs;
     }
   }
-  if (peak > 0.95) {
-    const gain = 0.95 / peak;
+  // 统一峰值增益：混音与 segments 乘同一个系数，否则实时播放与重新 seek 后音量不一致。
+  const gain = peak > 0.95 ? 0.95 / peak : 1;
+  if (gain !== 1) {
     for (let i = 0; i < totalSamples; i++) mixed[i] *= gain;
+    for (const seg of allSegments) {
+      for (let i = 0; i < seg.audio.length; i++) seg.audio[i] *= gain;
+    }
   }
-  return mixed;
+  return { audio: mixed, segments: allSegments };
+}
+
+// 进度节流发送器：100ms 最小间隔，且进度变化 <2% 时跳过；progress>=100 必发。
+// svs:synthesize / svs:synthesizeMultiStreaming / fragment-svs:synthesize 共用，
+// 避免 diffusion 每步回调直接 win.send 形成 IPC 风暴。
+function _makeThrottledSender(win, channel, extra = null) {
+  let lastSentAt = 0;
+  let lastValue = -1;
+  return (progress) => {
+    const now = Date.now();
+    if (progress < 100 && now - lastSentAt < 100 && Math.abs(progress - lastValue) < 2) return;
+    lastSentAt = now;
+    lastValue = progress;
+    try {
+      if (win && !win.isDestroyed()) win.send(channel, { progress, ...(extra || {}) });
+    } catch (_) {}
+  };
+}
+
+/**
+ * 在等待管线初始化期间，把加载进度定向转发给发起请求的窗口。
+ *
+ * 只转发给这一个 webContents：FRAGMENT_SVS_INIT 与 SVS_INIT 可能并发，
+ * 广播会让两个窗口都收到对方的进度。
+ */
+async function _withLoadProgress(event, fn) {
+  const { BrowserWindow } = require('electron');
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return fn();
+  // 注意不能复用 _makeThrottledSender：它只接受数字 progress 并包成
+  // { progress }，而加载进度是 { stage, percent, current, total, name } 对象。
+  let lastAt = 0;
+  let lastPct = -1;
+  const send = (payload) => {
+    const pct = Number(payload && payload.percent);
+    const now = Date.now();
+    const isFinal = pct >= 100;
+    if (!isFinal && now - lastAt < 80 && Math.abs(pct - lastPct) < 1) return;
+    lastAt = now;
+    lastPct = pct;
+    try {
+      if (win && !win.isDestroyed()) win.send(IPC_CHANNELS.SVS_LOAD_PROGRESS, payload);
+    } catch (_) {}
+  };
+  _loadProgressSenders.add(send);
+  try {
+    return await fn();
+  } finally {
+    _loadProgressSenders.delete(send);
+  }
 }
 
 function registerSvsIpc() {
@@ -431,18 +731,30 @@ function registerSvsIpc() {
     return !!(pipeline && pipeline.diffStepLegacyInt8Incompatible === true);
   }
 
-  safeHandle(IPC_CHANNELS.SVS_INIT, async (event) => {
-    await svsPipelineLazy.get();
+  safeHandle(IPC_CHANNELS.SVS_INIT, async (event, options) => {
+    // 纯插件工程没有任何由内置模型支持的轨道，渲染层显式传 needsBuiltin:false。
+    // 必须在 _withLoadProgress 之前短路：一旦进去就会 svsPipelineLazy.get()
+    // 把 9 个 ONNX 模型读进显存，并推"加载模型"进度条。未传或传 true 时
+    // 保持原逻辑逐字不变，内置与混合工程的行为不受影响。
+    if (options && options.needsBuiltin === false) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
+    // API 模式不需要任何本地 ONNX 模型：必须在 svsPipelineLazy.get() 之前短路，
+    // 否则没下载 SoulX-Singer 模型的用户仍会被要求加载 882MB 权重并卡在进度条。
+    if (isApiMode()) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
+    await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
   safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
@@ -456,17 +768,8 @@ function registerSvsIpc() {
     // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
     // 之前主页面合成无进度推送，导致推理预览百分比不显示。
     const win = event.sender;
-    let lastProgressSentAt = 0;
-    let lastProgressValue = -1;
-    opts.onProgress = (progress) => {
-      const now = Date.now();
-      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
-      lastProgressSentAt = now;
-      lastProgressValue = progress;
-      try {
-        if (win && !win.isDestroyed()) win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
-      } catch (_) {}
-    };
+    // 进度推送节流（100ms / 2% 阈值），与 fragment-svs:synthesize 共用同一实现。
+    opts.onProgress = _makeThrottledSender(win, IPC_CHANNELS.SVS_PROGRESS);
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
     // 插件路径下 RMVPE 往往压根没初始化（用户没装内置模型），这里容错处理：
     // 取不到就不注入，由插件自己的 F0 逻辑兜底，不能因为内置模型缺失而阻塞插件。
@@ -490,12 +793,27 @@ function registerSvsIpc() {
         bpm,
         options: opts,
         sender: win,
-        sampleRate: SAMPLE_RATE,
+        sampleRate: getSampleRate(),
       });
       if (!pluginResult.ok) {
         throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
       }
       return pluginResult.audio;
+    }
+
+    // ---- 远程 API 后端（设置里「推理系统 = API」）----
+    // 与插件分支同处"内置管线初始化之前"：API 模式不加载本地模型。
+    // 错误（401/403 鉴权、429 限流、超时、网络）由 apiInference 生成已本地化、
+    // 带 [API ...] 前缀的消息，经 safeHandle 抛给渲染层弹窗，绝不静默返回空音频。
+    if (isApiMode()) {
+      const { inference } = apiModules();
+      return await inference.synthesize({
+        runtime: apiRuntime(),
+        notes,
+        bpm,
+        options: opts,
+        onProgress: opts.onProgress,
+      });
     }
 
     // Check if JP models are needed but missing (only in jp-lora mode)
@@ -526,7 +844,7 @@ function registerSvsIpc() {
   // 接收所有分片，按时间顺序交错推理各分片的 diffusion chunk，边推理边推送音频
   safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE_MULTI_STREAMING, async (event, { fragments, bpm }) => {
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
     // 确定语言用于 pipeline 初始化（假设所有内置分片同语言）。
     // 注意：必须取**内置分片**的首个音符——旧实现取 fragments[0]，当第一条轨是
@@ -540,15 +858,22 @@ function registerSvsIpc() {
 
     // 参数装配与插件派发一律排在内置管线初始化之前（理由同 svs:synthesize）。
     const win = event.sender;
+    // 内置组的权威分轨数据：转发 chunk 的同时按 trackId 累积。
+    // chunk 只负责"边合成边听"；渲染层最终以这里返回的 segments 为准（4.4）。
+    const builtinSegments = [];
     const opts = {
-      onProgress: (progress) => {
+      onProgress: _makeThrottledSender(win, IPC_CHANNELS.SVS_PROGRESS),
+      onChunkAudio: (chunkInfo) => {
         try {
-          if (win && !win.isDestroyed()) {
-            win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
+          if (chunkInfo && chunkInfo.trackId && chunkInfo.audio && chunkInfo.audio.length) {
+            builtinSegments.push({
+              trackId: chunkInfo.trackId,
+              startSample: chunkInfo.sampleOffset,
+              // chunkInfo.audio 会被结构化克隆发给渲染层；这里保留一份独立副本作权威数据。
+              audio: chunkInfo.audio.slice(),
+            });
           }
         } catch (_) {}
-      },
-      onChunkAudio: (chunkInfo) => {
         try {
           if (win && !win.isDestroyed()) {
             win.send(IPC_CHANNELS.SVS_CHUNK_AUDIO, chunkInfo);
@@ -596,12 +921,24 @@ function registerSvsIpc() {
           group,
           bpm,
           sender: win,
-          sampleRate: SAMPLE_RATE,
+          sampleRate: getSampleRate(),
         });
         if (!pluginResult.ok) {
           throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
         }
-        tracks.push(pluginResult.audio);
+        tracks.push({ audio: pluginResult.audio, segments: pluginResult.segments || [] });
+      } else if (isApiMode()) {
+        // API 模式：内置组分片逐个走远程合成，再按 startTimeBeat 混合成绝对路径
+        // 布局的单声道，与内置 synthesizeMultiStreaming 返回形态一致。
+        const apiAudio = await _runApiGroup({
+          group,
+          bpm,
+          runtime: apiRuntime(),
+          options: opts,
+          startPercent,
+          endPercent,
+        });
+        tracks.push(apiAudio); // { audio, segments }
       } else {
         try {
           const pipeline = await ensurePipelineLanguage(language);
@@ -626,10 +963,35 @@ function registerSvsIpc() {
       }
     }
 
-    return _mixTrackAudio(tracks);
+    // P2-1: 内置组混音在 pipeline 末尾已归一化到 0.95，但 onChunkAudio 累积的
+    // builtinSegments 是归一化前的原始峰值。先把 segments 对齐到内置混音的峰值，
+    // 再交给 _mixTrackAudio 统一增益 —— 保证分轨播放与整段混音音量/比例一致。
+    const builtinMix = tracks.find(t => t && ArrayBuffer.isView(t));
+    if (builtinMix) _alignBuiltinSegmentsToMix(builtinSegments, builtinMix);
+
+    // 内置组的 segments 由 onChunkAudio 累积（builtinSegments）；插件/API 组随各自
+    // 返回值带上。统一峰值增益后一起返回给渲染层（结构升级为 { audio, segments }）。
+    return _mixTrackAudio(tracks, builtinSegments);
   });
 
-  safeHandle(IPC_CHANNELS.SVS_CANCEL, async () => {
+  safeHandle(IPC_CHANNELS.SVS_CANCEL, async (_event, options) => {
+    const requestedStreamId = options && typeof options.streamId === 'string' ? options.streamId : null;
+    if (requestedStreamId) {
+      // 携带 streamId 时必须精确命中任务：active 为空或任务尚未执行，
+      // 都不能退化成"取消当前在跑的任意合成"。
+      const task = _fragmentStreamTasks.get(requestedStreamId);
+      if (!task || task.state !== 'running') {
+        if (task && task.state === 'queued') task.state = 'cancelled';
+        console.log(`[Main] svs:cancel ignored stream ${requestedStreamId} (state=${task ? task.state : 'missing'})`);
+        return { success: true, ignoredStaleStream: true };
+      }
+      try { await task.cancel?.cancelActiveSynthesis?.(); } catch (_) {}
+      return { success: true };
+    }
+    // API 模式没有可取消的本地 pipeline，但要中止在途 HTTP 请求（Fetch AbortController）。
+    if (isApiMode()) {
+      try { apiModules().inference.cancelAll(); } catch (_) { /* 尚未加载 API 模块 */ }
+    }
     // 优先命中当前持有 mutex 的实例（覆盖 lazy 实例尚未注册的初始化窗口，
     // 以及延迟重置清空 getInstance() 后仍在收尾的场景）。
     const target = _activeCancellable || svsPipelineLazy.getInstance();
@@ -654,21 +1016,31 @@ function registerSvsIpc() {
   });
 
   safeHandle(IPC_CHANNELS.FRAGMENT_SVS_GET_SAMPLE_RATE, async () => {
-    return SAMPLE_RATE;
+    return getSampleRate();
   });
 
-  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event) => {
-    await svsPipelineLazy.get();
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event, options) => {
+    // 与 svs:init 同一套短路：分片编辑器显示插件后端轨道时，不应为了在编辑器
+    // 里按一次播放就把整套内置 ONNX 模型读进显存。未传或传 true 时原逻辑不变。
+    if (options && options.needsBuiltin === false) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
+    // API 模式不需要任何本地 ONNX 模型：必须在 svsPipelineLazy.get() 之前短路，
+    // 否则没下载 SoulX-Singer 模型的用户仍会被要求加载 882MB 权重并卡在进度条。
+    if (isApiMode()) {
+      return { success: true, skipped: true, diffStepLegacyInt8Incompatible: false };
+    }
+    await _withLoadProgress(event, () => svsPipelineLazy.get());
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
   safeHandle(IPC_CHANNELS.FRAGMENT_SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
@@ -678,33 +1050,103 @@ function registerSvsIpc() {
     const win = event.sender;
     const opts = options || {};
     opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
-    // 进度推送节流：与 svs:synthesize 一致（100ms / 2% 变化阈值）。长合成时
-    // diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
-    // Float32Array 之外的序列化开销），拖慢主进程与渲染进程。
-    let lastProgressSentAt = 0;
-    let lastProgressValue = -1;
-    opts.onProgress = (progress) => {
-      const now = Date.now();
-      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
-      lastProgressSentAt = now;
-      lastProgressValue = progress;
-      try {
-        if (!win.isDestroyed()) {
-          win.send(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, { progress });
-        }
-      } catch (_) {}
-    };
+    // 进度也要带 streamId：渲染侧据此过滤旧任务的迟到进度，避免 A 的 100%
+    // 覆盖 B 的按钮文案。
+    const fragmentStreamId = typeof opts.streamId === 'string' && opts.streamId
+      ? opts.streamId
+      : null;
+    // 进度推送节流：与 svs:synthesize 共用 _makeThrottledSender（100ms / 2% 变化阈值）。
+    // 长合成时 diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
+    // 序列化开销），拖慢主进程与渲染进程。
+    opts.onProgress = _makeThrottledSender(
+      win,
+      IPC_CHANNELS.FRAGMENT_SVS_PROGRESS,
+      fragmentStreamId ? { synthesisId: fragmentStreamId } : null,
+    );
     // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
     // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
     // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。
-    opts.onChunkAudio = opts.background === true
+    //
+    // 每个 chunk 都带 streamId + 单调 seq，流结束时再发一条 STREAM_END(lastSeq)。
+    // 目的有两个：① 旧请求的迟到 chunk 不能被新会话误收（channel 是全局的）；
+    // ② renderer 不再靠 `invoke 回执 + setTimeout(0)` 猜"chunk 已全部到齐"。
+    // STREAM_END 在 invoke 回执之前发出（同一 win 的消息有序），构成显式屏障。
+    let chunkSeq = 0;
+    let streamSendFailed = false;
+    let firstFailedSeq = null;
+    let sendFailuresAfterFirst = 0;
+    const isBackground = opts.background === true;
+    const fragmentTask = !isBackground && fragmentStreamId
+      ? { state: 'queued', cancel: null }
+      : null;
+    if (fragmentTask) _fragmentStreamTasks.set(fragmentStreamId, fragmentTask);
+    /**
+     * 流结束屏障。接收端必须能区分"正常完成 / 合成失败 / 用户取消"，
+     * 否则失败或取消都会被当成完整交付（seq 连续但尾段根本没合成）。
+     *
+     * @param {{complete?:boolean, failed?:boolean, cancelled?:boolean, errorCode?:string|null}} [outcome]
+     */
+    const sendStreamEnd = (outcome = {}) => {
+      if (isBackground || !fragmentStreamId || win.isDestroyed()) return;
+      const failed = outcome.failed === true;
+      const cancelled = outcome.cancelled === true;
+      // 有块发送失败 = 交付不完整，不能报 complete。
+      const complete = outcome.complete === true && !streamSendFailed;
+      const status = cancelled ? 'cancelled' : failed ? 'failed' : complete ? 'complete' : 'incomplete';
+      try {
+        win.send(IPC_CHANNELS.FRAGMENT_SVS_STREAM_END, {
+          streamId: fragmentStreamId,
+          lastSeq: chunkSeq,
+          transportFailed: streamSendFailed,
+          complete,
+          failed,
+          cancelled,
+          status,
+          firstFailedSeq,
+          sendFailuresAfterFirst,
+          errorCode: outcome.errorCode ?? null,
+        });
+      } catch (_) {
+        console.warn(`[Main] Failed to send STREAM_END for ${fragmentStreamId}`);
+      }
+    };
+    opts.onChunkAudio = isBackground
       ? null
       : (chunkInfo) => {
-        try {
-          if (!win.isDestroyed()) {
-            win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, chunkInfo);
+        if (win.isDestroyed()) return;
+        // 先发送、成功后才提交 seq：否则 send 抛错时 lastSeq 会声明一个
+        // renderer 永远收不到的序号，结束屏障永远无法满足。
+        const nextSeq = chunkSeq + 1;
+        // 诊断：区分"推理侧推出静音"与"渲染端播放静音"。抽样 RMS（步长 64）
+        // 足以看出长空当后的块是否真的有内容，开销可忽略。
+        let chunkRms = 0;
+        const audio = chunkInfo && chunkInfo.audio;
+        if (audio && audio.length > 0) {
+          const stride = 64;
+          let sum = 0;
+          let count = 0;
+          for (let i = 0; i < audio.length; i += stride) {
+            const v = audio[i];
+            sum += v * v;
+            count += 1;
           }
-        } catch (_) {}
+          chunkRms = count > 0 ? Math.sqrt(sum / count) : 0;
+        }
+        console.log(`[FragStream] send seq=${nextSeq} offset=${chunkInfo.sampleOffset ?? '-'} end=${chunkInfo.sampleEnd ?? '-'} samples=${audio ? audio.length : 0} rms=${chunkRms.toFixed(6)} isLast=${!!chunkInfo.isLast} stream=${fragmentStreamId}`);
+        try {
+          win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, {
+            ...chunkInfo,
+            streamId: fragmentStreamId,
+            seq: nextSeq,
+          });
+          chunkSeq = nextSeq;
+        } catch (_) {
+          streamSendFailed = true;
+          // 只记首个失败序号：诊断"从哪一块开始丢"比"丢了几个"更有用。
+          if (firstFailedSeq === null) firstFailedSeq = nextSeq;
+          else sendFailuresAfterFirst += 1;
+          console.warn(`[Main] Failed to send fragment chunk seq=${nextSeq} firstFailedSeq=${firstFailedSeq} stream=${fragmentStreamId}`);
+        }
       };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
     // 插件路径下 RMVPE 可能未初始化，容错不注入，由插件自己的 F0 逻辑兜底。
@@ -724,12 +1166,32 @@ function registerSvsIpc() {
         bpm,
         options: opts,
         sender: win,
-        sampleRate: SAMPLE_RATE,
+        sampleRate: getSampleRate(),
       });
       if (!pluginResult.ok) {
         return { error: `PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}` };
       }
       return { data: pluginResult.audio };
+    }
+
+    // ---- 远程 API 后端 ----
+    // 返回 {error} 而不是 throw：preload 的 synthesizeFragmentSVS 会把它转成
+    // Error 抛出，渲染层（含后台自动推理路径）据此显式报错。
+    if (isApiMode()) {
+      const { inference } = apiModules();
+      try {
+        const data = await inference.synthesize({
+          runtime: apiRuntime(),
+          notes,
+          bpm,
+          options: opts,
+          onProgress: opts.onProgress,
+        });
+        return { data };
+      } catch (err) {
+        console.error('[Main] fragment-svs:synthesize (API) failed:', err.message);
+        return { error: err.message };
+      }
     }
 
     // Check if JP models are needed but missing (only in jp-lora mode)
@@ -754,11 +1216,40 @@ function registerSvsIpc() {
       return { error: t('error.fragmentSvsNotInitialized') };
     }
 
+    /** @type {{complete:boolean, failed:boolean, cancelled:boolean, errorCode:string|null}} */
+    let outcome = { complete: false, failed: false, cancelled: false, errorCode: null };
     try {
-      const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts), pipeline);
+      // active ID 必须在实际进入 mutex、真正要用 GPU 时才置位；排队中的
+      // 请求不能被当成"当前执行者"，否则取消会命中错任务。
+      const data = await _withSynthMutex(() => {
+        if (fragmentTask && fragmentTask.state === 'cancelled') {
+          const err = new Error('Synthesis cancelled');
+          err.code = 'SYNTHESIS_CANCELLED';
+          throw err;
+        }
+        if (fragmentTask) {
+          fragmentTask.state = 'running';
+          fragmentTask.cancel = pipeline;
+          _activeFragmentStreamId = fragmentStreamId;
+        }
+        return pipeline.synthesize(notes, bpm, opts);
+      }, pipeline);
+      outcome = { complete: true, failed: false, cancelled: false, errorCode: null };
       return { data };
     } catch (err) {
+      outcome = {
+        complete: false,
+        failed: true,
+        cancelled: err && err.code === 'SYNTHESIS_CANCELLED',
+        errorCode: (err && err.code) || null,
+      };
       return { error: err.message };
+    } finally {
+      // 必须在 invoke 回执之前投递结束屏障；win.send 与 handle 的回复同属
+      // main→renderer 方向，Electron 保证顺序，renderer 处理回执时 END 已排队。
+      sendStreamEnd(outcome);
+      if (fragmentTask) _fragmentStreamTasks.delete(fragmentStreamId);
+      if (_activeFragmentStreamId === fragmentStreamId) _activeFragmentStreamId = null;
     }
   });
 
@@ -799,10 +1290,13 @@ function registerSvsIpc() {
 module.exports = {
   registerSvsIpc,
   getSvsPipeline,
+  getPipelineRuntimeState,
   resetSvsPipeline,
   svsPipelineLazy,
   // 重新导出纯函数供测试（来自 languageDetection 模块）
   detectJapaneseNotes: _detectJapaneseNotes,
   detectEnglishNotes: _detectEnglishNotes,
   resolveLanguage: _resolveLanguage,
+  // 供测试：分轨 segments 汇总（4.4）。这些是纯函数，导出不改变运行时行为。
+  __test: { _mixTrackAudio, _runPluginGroup, _runApiGroup, _alignBuiltinSegmentsToMix },
 };

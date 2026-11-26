@@ -72,16 +72,57 @@ module.exports = [
             'src/inference/pitchWorker.js',
             'src/inference/svsWorker.js',
             'src/inference/pitchPostprocess.js',
+            // ORT 惰性加载入口：主进程 CJS（新建文件必须显式登记，否则会落到
+            // 未覆盖任何分档的默认档，require/module 全被判 no-undef）
+            'src/inference/ortRuntime.js',
+            // 推理层跨重启 JSON 缓存（主进程 / svsWorker 共用的 CJS 工具）
+            'src/inference/persistentCache.js',
             // WinML 后端：主进程 CJS（此前漏在分档外，整个目录的 require/console
             // 全被判 no-undef，等于完全没有 lint 覆盖）
             'src/inference/winml/**/*.js',
             'src/audio/**/*.js',
             'src/utils/**/*.js',
             'src/shared/ipcChannels.js',
+            'src/shared/mcpSchema.js',
+            'src/shared/mcpModel.js',
             'src/shared/jpPhonemeMap.js',
             'src/shared/pluginPermissions.js',
+            // PCM typed-array 归属谓词（主进程 / svsWorker / 单测共用的 CJS 纯函数）
+            'src/shared/pcmTransfer.js',
+            // 插件系统 v2 的共享层：CJS（插件 runtime 是裸拷贝，按路径 require，
+            // 因此这几个文件不能写成 ESM），主进程与 runtime 共用。
+            'src/shared/pluginApi.js',
+            'src/shared/pluginAutomation.js',
+            'src/shared/pluginDisposable.js',
+            'src/shared/pluginProtocol.js',
+            'src/shared/pluginManifest.js',
+            // 随包分发的内置插件 id 清单（CJS，webpack 配置 / 主进程 / 单测共用）
+            'src/shared/builtinPluginIds.js',
+            // 插件级部署依赖（manifest.dependencies）的校验与解析（CJS 纯函数）
+            'src/shared/pluginDependencies.js',
+            // 内置推理管线是否需要初始化的唯一真源（CJS 纯函数，主进程与两个渲染层共用）
+            'src/shared/pipelineDecision.js',
+            // 跨插件服务的命名/版本/依赖图规则（纯函数，CJS，主进程与单测共用）
+            'src/shared/pluginServices.js',
+            // .sxsp 的签名与完整性（纯函数，CJS，主进程 / 打包脚本 / 单测共用）
+            'src/shared/pluginSignature.js',
+            // 内置官方签名公钥表（CJS，被 main/plugins/PluginTrustStore 直接 require）
+            'src/shared/officialKeys.js',
+            // 市场索引的契约与检索（纯函数，CJS，主进程 / CLI / 单测共用）
+            'src/shared/pluginMarket.js',
+            'src/shared/pluginZip.js',
+            // 快捷键字符串的规范化（主进程仲裁与渲染层匹配共用，CJS）
+            'src/shared/pluginKeys.js',
+            // 窗口标识与 preload 高危能力裁剪表（CJS，单测要拿它校验入口名）
+            'src/shared/windowCapabilities.js',
+            // 模型调用面的公共契约（task/locality/错误码，三层共用，CJS）
+            'src/shared/modelContract.js',
             // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
             'src/shared/safeCall.js',
+            // .sxssinger 解析（主进程用，纯函数便于单测）
+            'src/shared/singerFileEdit.js',
+            // VC++ 运行库探测与原生加载错误归类（主进程 / 独立加载器 / 单测共用，CJS）
+            'src/shared/vcRuntime.js',
             'src/modelManager.js',
             'src/modelRegistry.js',
             'src/preload.js',
@@ -97,6 +138,8 @@ module.exports = [
             'src/inference/winml/winrt-bindings/**/*.js',
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
+            // EP 显示标签：utils 目录里的 ESM 纯函数（渲染层 import、单测 require）
+            'src/utils/epLabel.js',
             'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
@@ -133,6 +176,8 @@ module.exports = [
                 UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 SINGER_MARKET_WINDOW_WEBPACK_ENTRY: 'readonly',
                 SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
             },
         },
     },
@@ -147,6 +192,10 @@ module.exports = [
             'src/shared/pluginContract.js',
             // 流式调度器：ESM，被渲染层 bundle（watchdog 用 setTimeout/console）
             'src/shared/streamingScheduler.js',
+            // 播放头分页跟随：ESM 纯逻辑，两个渲染窗口共用（默认时钟用 performance.now）
+            'src/shared/playheadFollow.js',
+            // 流式 chunk 有序队列：被 fragmentEditor 渲染层 require，用 setTimeout/clearTimeout + module.exports
+            'src/shared/sequencedChunkQueue.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',
@@ -157,6 +206,13 @@ module.exports = [
             'src/singerCreator.js',
             'src/singerMarket.js',
             'src/settings.js',
+            'src/settingsUi.js',
+            // 工具栏弹出层的通用装配器：渲染层 ESM（utils 目录整体登记在 CJS 档，
+            // 新文件必须单独列进 ESM 档，否则 import/export 直接解析失败）
+            'src/utils/popoverMenu.js',
+            // EP 显示标签：渲染层 ESM 纯函数，拆出来便于单测直接断言
+            'src/utils/epLabel.js',
+            'src/pluginManager/**/*.js',
             'src/modelDownload.js',
             'src/resourceManager.js',
             'src/alertDialog.js',
@@ -205,6 +261,37 @@ module.exports = [
                 RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 SPLASH_WINDOW_WEBPACK_ENTRY: 'readonly',
                 SPLASH_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_WEBPACK_ENTRY: 'readonly',
+                PLUGIN_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+            },
+        },
+    },
+    // 用 ESM 写的新测试（其余 test/ 文件是 CJS，靠上面的 commonjs 档覆盖）。
+    // babel/mocha 两种写法都支持，但 eslint 需要知道 sourceType。
+    {
+        files: ['test/naturalness.test.js', 'test/autoPitchNaturalness.test.js'],
+        languageOptions: {
+            sourceType: 'module',
+            globals: {
+                ...globals.node,
+                ...globals.mocha,
+                ...globals.browser,
+            },
+        },
+    },
+    // 仓库自带的示例插件（plugins/）。它们不是构建产物的一部分，但会被插件作者
+    // 直接照抄，所以必须与 src/ 保持同样的基本正确性。
+    // 两档 globals 合在一起给：main.js 是 utilityProcess 里的 CJS（node），
+    // panel/*.js 是 sandbox iframe 里的脚本（browser）。按子目录再拆一档不值得。
+    {
+        files: ['plugins/**/*.js'],
+        languageOptions: {
+            sourceType: 'script',
+            globals: {
+                ...globals.node,
+                ...globals.browser,
+                // sandbox iframe 里访问父窗口
+                parent: 'readonly',
             },
         },
     },

@@ -1,0 +1,456 @@
+# SXSEditor 实施记录
+
+> 基线 `d6805a8` → 本次改动约 20 个文件（新增 5 个 shared 纯函数模块）
+> 执行顺序：**审查缺陷修复 → 工程文件地基（M0）→ auto 引擎（M1/M2）→ 渲染与交互（M3）→ 重合处理与导入（M4/M5）→ 导出（M6/M7）**
+
+---
+
+## 一、已实施（可直接运行）
+
+### 1. 审查缺陷修复
+
+| 编号 | 修复内容 | 文件 |
+|---|---|---|
+| **F1** | 文档语义改正：锚点是**绝对 MIDI 音高**，不是"音符音高 + 偏移"（中英文同步） | `docs/user/fragment-editor.html` |
+| **F2** | 抽 `shared/activeNotes.js`（`computeActiveClippedNotes` / `lastNoteEnd` / `firstNoteStart`），五处调用点统一：过滤 inactive → 裁剪 → **按 start 排序**；总时长改用 `max(start+duration)`；音频前置偏移改用 `min(start)` | 新增 `src/shared/activeNotes.js`；`canvasRenderer.js`、`renderer/audioPlayback.js`（3 处 + 2 处偏移）、`fragmentEditor/audioPlayback.js`（2 处偏移）、`mcpAutomation.js`、`preprocessing.js` |
+| **F3** | 主窗口不再把未激活的重叠音符唱出来（与编辑器同一套过滤） | `renderer/audioPlayback.js`、`mcpAutomation.js` |
+| **F4** | 锚点作用域外**延续首/末锚点值**，不再跳回 `note.pitch`（两条路径同一行为，笔刷优先级保留） | `f0Utils.js`、`canvasRenderer.js`、`shared/autoPitchCurve.js` |
+| **F5** | F0→锚点分箱**按秒**（默认 40ms，与 BPM 解耦）+ 时间戳取**桶内真实平均时间**（消除半箱滞后） | `f0Utils.js` |
+| **F6** | **RDP 抽稀**（默认 6 音分）+ 锚点上限 4000 + 导入时打印实际数量 | `f0Utils.js` |
+| **F7** | 生成前**中值 + Savitzky-Golay 滤波**；写入 `strength: 80`；`smoothness` 随桶宽自适应（10/20/30） | `f0Utils.js` |
+| **F8** | FCPE 的 `bend` 在导入时携带 | `fragmentOperations.js` |
+| **F9** | 锚点音域：生成阶段仍按量化器范围 [24,108] 过滤，八度偏差按整八度校正 | `f0Utils.js` |
+| **F10** | 曲线随音符跟随（auto 层由音符派生，改音高自动更新） | `shared/autoPitchCurve.js` |
+| **F11** | 渲染采样点 = 均匀采样 **∪ 全部锚点时间**（锚点必被画出，不再"看着干净听着抖"） | `canvasRenderer.js` |
+| **F12** | MIDI 导出新增 **14-bit pitch bend**（每 16 分音符采样曲线，±2 半音） | `midiExport.js` |
+
+### 2. M0 工程文件地基（auto 能存住的前提）
+
+| 改动 | 文件 |
+|---|---|
+| 新增 `createDefaultPitchCurve` / `normalizePitchCurve`（**合并式**归一化，保留未知字段）、`hasManualContent` | 新增 `src/shared/pitchCurveState.js` |
+| 新增版本常量与兼容判定 `checkProjectHeader`（`version` / `minReader` / `features`） | 新增 `src/shared/projectFormat.js` |
+| **修掉三字段白名单**：`setPitchCurve({enabled, anchorPoints, brushSegments})` → `setPitchCurve(normalizePitchCurve(...))`（这是"打开一次编辑器就丢 auto"的根因） | `fragmentEditor/ipcHandlers.js` |
+| `createFragment` 改为合并归一化；**默认值分入口**（新建分片 auto=on，加载旧工程 auto=off） | `editor/trackManager.js` |
+| 版本号常量化（原来 `'1.1.0'` 与 `[1,1,0]` 两处硬编码）；写入 `minReader` / `features`；读取走统一判定 | `renderer/projectManager.js` |
+| 新增文案 `projectMinReaderTooHigh`（中英） | `i18n/zh-CN.js`、`i18n/en.js` |
+
+### 3. M1/M2 auto 引擎
+
+新增 `src/shared/autoPitchCurve.js`（纯函数，无 DOM）：
+
+- `AUTO_PITCH_DEFAULTS` / `AUTO_PITCH_PRESETS`（off/soft/natural/power/ballad）/ `AUTO_PITCH_PARAM_RANGES`
+- `normalizeAutoConfig`（合并 + 夹紧 + 枚举校验）
+- `autoPitchAt`：起音滑音、滑音（按速度缩放）、**过冲（起点落在滑音之后）**、**预备（反向）**、句尾下滑、抖动、量化、音域夹紧
+- `applyJitterToF0`：抖动**后置**叠加（避开中值/SG 削峰）
+- `computeManualCoverage` / `coverageAt` / `boundaryWeight`：手动作用域与 25ms 边界过渡
+- `evalManualAt`：锚点 → 笔刷 → 派生段
+- `createPitchResolver`：**预构建求值器**（热路径用，一次排序多次求值）
+- `applyAutoVibrato`：给长音符自动填 `note.vibrato`（含 `rateDrift` / `depthDrift`）
+- `resolvePitchRanges`：按语言返回 base[28,88] / ja[48,84]
+
+两条消费路径接入：
+- 主窗口 `f0Utils.buildFragmentPitchCurveF0` → 同一 resolver；**auto 开启但无手动内容时也产出 F0**（原来返回 null → 平线）
+- 分片编辑器 `canvasRenderer.getPitchAtTime` / `buildPitchCurveF0Data` → 同一 resolver（缓存键含 notes/pitchCurve 版本）；`isPitchCurveCustomized` 计入派生段
+
+### 4. M3 渲染与交互
+
+- **三色**：`pitchAutoActive`（白）/ `pitchAutoMuted`（灰虚线）/ `pitchManual`（沿用原色）；四套主题均加了 token，**light-paper 用深色**（白不可见）
+- 手动区背景带（`pitchManualRegion`）
+- **拖动自动曲线 = 派生**：`hitAutoCurveAt` 命中（仅作用域外、±6px）→ `createBakedSegmentAt` 复制快照 → 拖动整体平移 → 撤销栈；`Ctrl/Cmd+点击` 强制新建锚点
+- **空白新建锚点**：锚点所在音符区间自动并入作用域 → 该段自动曲线转灰
+- 撤销快照包含 `auto` + `bakedSegments`；Reset 同时清派生段
+- 参数面板：开关 / 预设下拉 / **15 个可编辑参数** + `换音过渡归属` 三档（无只读项，改任一参数自动切 custom）
+
+### 5. M4 重合处理
+
+- `applyGlideOwnership`（`shared/postprocessCurves.js`）：`auto` 档把 `f0Glide` 置零，`post` 档让自动层不产生滑音，`both` 档叠加
+- 抖动 `jitterStage: 'post'` 在两条路径均在滤波后叠加
+- 面板内注明归属关系
+
+### 6. M5 F0 导入改造
+
+- `f0DataToSlipSegments`：只把**偏离音符 > 25 音分**的连续区间做成 `bakedSegment`，其余交给 auto
+- 导入路径不再写几千个锚点（原来 3 分钟约 4500 个 / 260KB）
+
+### 7. M7 旧版兼容导出
+
+- `buildLegacyProjectJson()`：全自动分片把 auto **烘焙成锚点**（0.08 拍），版本写 `1.1.0`，剔除 `auto`/`bakedSegments`
+- `exportLegacyProject()`：弹保存对话框写盘
+
+---
+
+## 二、验证结果（实际跑通，非静态推断）
+
+| 项目 | 结果 |
+|---|---|
+| 全部改动文件语法检查 | 20/20 通过（ESM `--check`） |
+| F0→锚点往返（BPM 60/120/240） | 平均 11.8 / 12.5 / 15.9 音分；锚点数 16–18 个/秒（修复前 17.0/**286** / 8.1/153 / 0.3/8，锚点数固定 50） |
+| F4 区间外 | 拍 2.0→60、2.1→60、3.9→60（修复前 64） |
+| 工程往返 | `auto` + `bakedSegments` 全字段保留；编辑器归一化后仍在 |
+| 旧工程 / 新建分片 | `auto.enabled` = `false` / `true` ✓ |
+| 版本矩阵 | 1.0→ok / 1.1→ok / 1.3→confirm / 2.0→reject / 无版本→ok |
+| 过冲 | 7 半音跳进 → **41 音分**（上限 40），峰值落在滑音结束之后（beat 2.19） |
+| 滑音 | 90ms 内 60→67 平滑过渡；阈值调到 12 半音后不再滑 |
+| 抖动 | `includeJitter=false` → 0；`jitterCents=10` → 峰峰 21.8 音分 |
+| 作用域 | 单锚点 → 只覆盖所在音符；区外走自动；F4 在区内生效 |
+| auto 开启但无手动 | 150 帧 F0（修复前 null → 平线） |
+| auto 关闭（旧工程） | 仍返回 null，与 v2.0.2 一致 |
+| 自动颤音 | 只填长音符、跳过用户已启用的、不改短音符 |
+
+验证脚本：`/workspace/pitch-f0-audit/verify-{fix,m0,auto}.mjs`（`node --experimental-detect-module` 直接运行）。
+
+---
+
+## 二B、Linux 构建与 MCP 实机核验
+
+### 构建
+
+- `npm run package:lite` 产出 **`out/SXSEditor-linux-x64/`**（Electron 24 可执行包）。
+- 构建注意事项：
+  1. `sxs-ort-bridge`（`native/ort-bridge`）声明 `os: win32`，Linux 上 `npm ci` 会 EBADPLATFORM → 用 `--force`；
+  2. `onnxruntime-node` 的 postinstall 需联网拉二进制 → `--ignore-scripts` 后单独补 `node node_modules/electron/install.js`（ELECTRON_MIRROR 指向 npmmirror）；
+  3. `@electron/rebuild` 需联网下载 Electron headers → 本仓库的 native 模块（decibri/ort-bridge）都是 Windows 专用，Linux 构建加 `packagerConfig.nativeRebuild: process.platform !== 'linux'`（已写入 forge.config.js，Windows/macOS 行为不变）；
+  4. @electron/get 下载 Electron zip 需 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。
+
+### MCP 实机核验（打包产物 + Xvfb 实跑）
+
+| 核验项 | 结果 |
+|---|---|
+| MCP 端点 | 打包产物启动后 `~/.config/SXSEditor/mcp-endpoint.json` 正常生成，bridge 127.0.0.1 正常监听 |
+| 新方法暴露 | `GET /schema` 方法数 46，含 **`fragment.getPitchCurve` / `fragment.setPitchCurve`** |
+| 默认状态 | 新建分片 → `auto.enabled=true, preset=natural`，15 个参数齐全，anchors=0 |
+| 参数写入 | `setPitchCurve` 改 `overshootMaxCents: 70 / jitterCents: 10` → 读回一致，`version` 自增 |
+| 手动锚点写入 | 2 个锚点（拍 2.4/3.4）→ 读回一致 |
+| **作用域计算** | coverage = `[{start:2, end:4, kind:"anchor"}]` —— 锚点所在音符区间自动成为手动区 ✓ |
+| **自动曲线渲染** | 打包产物实跑截图：4 个音符上均叠加白色自动曲线（见下图） |
+| 主窗口徽标 | 分片卡片显示 "Auto" 徽标（见下图） |
+| 工具栏 | "Auto" 开关勾选、"自然" 预设下拉、Pitch 模式高亮、i18n 正常 |
+
+![分片编辑器：白色自动曲线](docs/images/verify/editor-auto-curve.png)
+
+![主窗口徽标：Auto / Mixed / Manual](docs/images/verify/badge-states.png)
+
+### MCP 核验中发现的一个边界
+
+`fragment.setPitchCurve` 修改主窗口的 fragment 数据后，**已打开的分片编辑器窗口不会自动刷新**（原项目的同步是单向的：编辑器→主窗口）。若编辑器窗口开着，之后编辑器的 500ms 自动保存会用旧数据覆盖。当前用法：MCP 写入前先关闭该分片的编辑器窗口（`fragment.open` 重新打开即可拿到新数据）。已补上推送通道：`fragment.setPitchCurve` 落库后调用 `pushFragmentPatch()`，把新的 `pitchCurve` 直接推给已打开的编辑器窗口（否则编辑器的 500ms 防抖保存会把旧曲线写回来）。
+
+### 测试回归
+
+- 全量 `npm run test:ci`：**2010 passing / 7 failing**，失败项全部是 Windows 专有（NPU PowerShell 探测 ×3、WinML onnxruntime.dll ×4），Linux 环境必然失败，与本次改动无关。
+- 两个音高曲线测试（bisect 等价性 / rendererPostprocessParity）的**线性参考实现已同步 F4 新语义**（作用域内延续端点、作用域外交回音符音高），等价性守护仍然逐点成立。
+
+---
+
+---
+
+## 二C、第二轮实施（剩余项收尾）
+
+> 状态：已提交并推送（远端 `92eba4b`，34 个文件）。用户文档同步更新，配图 5 张见 `docs/images/verify/`。
+
+### 修掉上一轮实机发现的缺陷
+
+| 编号 | 问题 | 修法 |
+|---|---|---|
+| **F17** | 主窗口（MCP / 脚本）改了分片数据后，**已打开**的编辑器不刷新，且它的 500 ms 防抖保存会把旧数据写回主窗口 —— 外部修改被静默回退（实机复现：写入的锚点 3 秒后自己消失） | 新增 `PUSH_FRAGMENT_PATCH` / `FRAGMENT_DATA_PATCH` 通道：主窗口 renderer → 主进程（同时更新 `pendingFragmentData` 快照）→ 目标编辑器窗口。编辑器侧 `applyFragmentPatch` **先取消待执行的自动保存**再应用，撤销栈与视口保留。MCP 的 `setPitchCurve` / `update_fragment` / `replace_notes` 都已接入 |
+| **F13** | `insertAnchor` 的 smoothness 缺省 30，`snapshotAnchors` 与文档语义是 0 —— 同一条曲线上"新建"和"复制"的锚点缓动不同 | 统一为 0，并删掉 `pitchCurveState.js` 里那个从未被引用的同名常量 |
+| **F14** | SG 混合在 Hz 域（算术平均 ≠ 音高中点） | 改到 log2（音分）域混合：200 Hz ↔ 250 Hz 在 w=0.5 时差 10.75¢，跨八度时差 102¢。清音帧与 w=0 原样保留 |
+| **F15** | 预处理面板的 F0 曲线只读，提取出错八度只能带错去训练 | F0 区做成笔刷：按住左键刷过一段即把该段拉到光标频率（填满 mousemove 之间的帧，避免"点状孔洞"），写回 `state.f0Data` |
+| **F16** | 无批量工具、无吸附、右键无数值输入 | 工具栏批量下拉（移调 ±1 / 贴合半音 / RDP 抽稀 / 锚点平滑）、Alt+↑↓ 快捷键、拖动时 Shift 吸附半音（吸附绝对音高而非位移）、右键菜单音高数值输入框（60.25 = 60 半音 + 25¢） |
+
+### 新增能力
+
+- **自然度自检面板**（`shared/naturalness.js` + 检查器 section）：对**实际曲线**（自动层 + 手动覆盖 + 颤音）以 400 Hz 采样，输出 8 项指标与加权得分。权重区分"表现力"（颤音/死平/过冲/抖动，权重 1）与"正确性"（调音/起音/音域，权重 0.5）—— 否则一条完全平直的曲线会因为后四项自动满足而拿到 50 分。
+- **Alt 局部高斯变形**：拖动派生段时按住的点是高斯中心，σ = 段长 15%，只弯折光标附近。
+- **过冲默认值修正**：`overshootRatio` 0.25 → **0.04**、`overshootMaxCents` 40 → **25**。原值让任何 ≥2 半音的跳进直接顶到上限（听起来像刻意拉上去再拉回）；实测 3/5/7 半音跳进分别为 13.3 / 17.8 / 20.7 音分，落在真人 10–25¢ 区间。
+- **jitter 改为宽带随机**：原实现是 3–6 Hz 两路正弦，与颤音同频段 —— 自检用高通分离时会被当成颤音减掉，听感上也只是"音高在飘"而不是"颗粒感"。改为 5 ms 网格的伪随机（seed + 网格派生，可复现）+ 少量低频漂移。
+
+### 实机核验（打包产物 + Xvfb + CDP）
+
+| 核验项 | 结果 |
+|---|---|
+| MCP 方法数 | 46，含 `fragment.getPitchCurve` / `fragment.setPitchCurve` |
+| 默认参数 | `auto.enabled=true`、`overshootRatio 0.04`、`overshootMaxCents 25`、`jitterCents 6`、`jitterStage post`、`glideOwnership auto` |
+| 锚点写入 + 作用域 | 写入 2 锚点 → `coverage=[{start:2,end:4,kind:"anchor"}]`；拍 1.0 走自动（60.03）、拍 2.9 走手动（68.50） |
+| 工程保存往返 | `version 1.2.0`、`minReader 1.2.0`、`features ["autoPitchCurve"]`，`auto` 参数与锚点全部保留 |
+| 主窗口徽标三态 | 纯自动 → **Auto**、自动+手动 → **Mixed**、关自动+手动 → **Manual**（见 `docs/images/verify/badge-states.png`） |
+| 自动曲线形态（数值） | 起音 59.35（从下方滑入）、换音 2.02 拍 60.22（滑音中）、2.30 拍 67.09（到位 + 过冲）、句尾 71.75（下滑） |
+| 自然度自检（数值） | 得分 100；颤音深度 24.3¢、速率 7.0 Hz、死平 0%、过冲 15.5¢、起音 76 ms、抖动 2.3¢、调音 0.4¢ |
+| 测试 | `npm run test:ci`：2010 passing / 7 failing（全部 Windows 专有：NPU PnP ×3、WinML ortBridge ×4）；新增 `test/naturalness.test.js` 6 项全通过 |
+
+### 实机核验中发现并修掉的缺陷
+
+**浅色主题下自动曲线"有绘制但看不见"**（本轮新增记录）：
+
+`canvasTheme.js` 的 fallback 硬编码 `#ffffff`，而 4 套内置主题里 `acg` 是米色背景（`--bg-app #ece8da`），我上一轮给它配的 `--pitch-auto-active` 也是 `#ffffff`。结果是曲线在白/米色背景上完全不可见 —— 用户会以为"开了自动但没生效"。
+
+通过 CDP 把变量临时改成红色后曲线立刻显形（起音/滑音/抖动都在），确认是颜色而非绘制逻辑。修法两层：
+
+1. `acg` 主题的 `--pitch-auto-active` 改为 `#2b2438`（深色）；
+2. `canvasTheme` 的 fallback 不再硬编码白色，改为**按 `--bg-app` 相对亮度自适应** —— 自定义主题或将来新增主题漏配 token 时也不会踩同一个坑。
+
+同时修掉批量下拉的首个空选项没有文案（界面上是一个空条目）。
+
+### 实机核验抓到的两个"上一轮埋的运行时错误"
+
+这两个都是**编译期发现不了、只有真的点下去才炸**的问题，记录在此作为方法提醒：
+
+1. **`eventHandlers.js` 缺 `hitAutoCurveAt` / `createBakedSegmentAt` 的 import** —— 上一轮"拖动自动曲线派生出副本"的核心入口。点到自动曲线会抛 `ReferenceError`，功能实际不可用（视觉上"点了没反应"）。本轮用 `eslint no-undef` 一次性抓出（项目原有配置就够）。
+2. **`uiControls.js` 缺 `getCurrentProject` 的 import** —— 自然度自检面板点击后静默无结果（`Renderer` 里事件监听器抛错不会冒泡到调用方）。同样是 `no-undef` 抓到。
+
+两条都说明：**新增 UI 必须过一遍 `npx eslint <改动文件>`**，静态语法检查（`node --check`）只能保证不写错语法，抓不到"引用了不存在的绑定"。
+
+### 又补上的一个"文档承诺了但没实现"的功能
+
+**自动颤音**：设计方案与用户文档都写着"auto 会把颤音填进 `note.vibrato`"，但 `autoVibrato` 当时只是**一组参数**，没有任何代码读它 —— 长音实测 vibratoDepth = 0，自检面板直接标红。本轮在 `autoPitchAt` 里补上（只在 `note.vibrato` **未启用**时叠加，两条路径互斥、用户手设的颤音永远优先；不改写 `note.vibrato` 这个用户资产）。
+
+同时修掉自检里两个因此暴露的测量 bug：
+
+- `sampleNote` 的最后一个采样点正好落在音符终点 → 取到下一个音符或静音，把 -60 半音算进统计（"颤音深度 0"的直接原因）；
+- 颤音的零交叉计数被 jitter 淹没（宽带抖动的过零次数远多于 5.5 Hz 颤音）→ 分析前先做 5 点滑动平均（400 Hz 下约 80 Hz 低通）。
+
+阈值也随之校准：vibratoDepth 的 good 区间改成 **12–32¢**（2 拍短音上颤音是渐入的，22¢ 参数实际测出 14.7¢；用 15 会把"参数完全正确"的曲线误判成 warn）。
+
+### 未做到
+
+- **无模型环境下的编辑器整体截图**：沙箱缺 19 个 onnx 模型文件，编辑器 `initPipeline()` 会一直等主进程，加载遮罩不消失（`MCP` 的 editor.* 调用因此 504）。本轮通过 CDP（`--remote-debugging-port`）移除遮罩来完成像素级核验与截图，但正常路径下的完整 UI 截图仍建议在有模型的环境补一次。
+- 形状库、跨分片复制粘贴（F16 的剩余部分）。
+
+---
+
+## 三、未实施（需要 UI 层或额外确认，非核心）
+
+| 项 | 原因 | 接入位置 |
+|---|---|---|
+| **MCP 暴露 auto 读写** | `mcpSchema.js` 的工具表结构与 handler 参数校验需要整体对齐，改动面大于本次范围 | `shared/mcpSchema.js` + `renderer/mcpAutomation.js` |
+| **主窗口入口与"自动/手动"徽标** | 需要 timeline 卡片渲染与检查器 UI | `renderer/timelineRenderer.js`、分片检查器 |
+| **自然度自检面板** | 依赖 9 项指标的实时 UI | 分片编辑器右侧检查器 |
+| **Alt 局部高斯变形** | 拖动派生目前只做整体平移（先保证语义正确） | `eventHandlers.js` 的 `pitch-baked` 分支 |
+| **批量工具**（抽稀/选区平滑/整体移调/贴合半音） | 独立工具条功能 | 分片编辑器工具栏 |
+| **F13–F16** | `insertAnchor` smoothness 口径、SG 的 Hz 域混合、预处理卷轴 F0 只读、吸附/复制/形状库 | 见审查报告 F13–F16 |
+
+---
+
+## 四、兼容性与回归风险
+
+1. **旧工程听感不变**：`auto.enabled` 缺省 `false`；`rateDrift`/`depthDrift` 缺省 0；`f0Glide` 在没有 auto 时行为不变。
+2. **已知行为变化（有意）**：
+   - 锚点区间外不再跳回 `note.pitch`（F4）——这是修复，但会改变旧工程在该处的听感；
+   - 分片编辑器与主窗口现在都不再合成未激活的重叠音符（F3）——主窗口侧是修复；
+   - F0→锚点默认带 `strength: 80` 与滤波，导入曲线不再"原样含噪"。
+3. **风险点**：`canvasRenderer.getPitchAtTime` 现在依赖 shared resolver，缓存键少了 `auto.version`（已由 `pitchCurveVersion` 覆盖，因为改 auto 会 `invalidatePitchCurveCache()`）。若将来有其他路径在**不 bump 版本**时改 auto，需要补键。
+4. **未跑仓库测试套件**：环境未安装 `node_modules`（Electron 依赖体积大），本次用等价纯函数脚本验证。建议在 CI 上先跑 `npm run test:ci`，重点关注 `test/rendererPostprocessParity.test.js`（F4 改动会影响其中"区间外回落到 note.pitch"的断言，但该用例的末锚点与 note.pitch 同为 60，应仍通过）。
+
+---
+
+## 五、v2：自然度增强（把"参数化机械"逐条拆掉）
+
+> 归属版本：**v3.0.0**（v2.0.3 已于 2026-10-18 发布；原 v2.0.4 草稿已并入 v3.0.0，不再单独发布）
+
+### 5.1 这一轮改的是什么
+
+上一轮把四大波动做了出来，但**做法是"每个音都按同一套参数执行"**：每个 ≥1.5 拍的长音都颤、
+每个 ≥2 半音的跳进都过冲、每个音尾都 -25¢。参数越精细，机械感越强——因为听感上的"人味"
+来自**差异**，不是来自"更细致的规则"。
+
+本轮按七条批判逐条落地（设计细节见设计方案 §15）：
+
+| # | 问题 | 处置 | 关键实现 |
+|---|---|---|---|
+| 1 | 每个长音都颤 / 每个跳进都过冲 / 每音都 attack-release | 概率闸门 × 上下文系数（时长/音高/乐句位置/句首/音程），并给出 `variation` 逐音浮动 | `buildNoteTraits()` |
+| 2 | release 不分"音符尾"和"乐句尾" | 作用域：乐句尾 1.0 / 短休止前 0.7 / 连奏长音 0.32 / 连奏短音 0；连奏起音 ×0.35 | `releaseScale`、`attackScale` |
+| 3 | 自动颤音写 `note.vibrato` 与"后置叠加"矛盾，且会覆盖用户手改 | 改为**派生 + 后置**；菜单显示影子参数，一动即转 `source:'manual'`；删除 `applyAutoVibrato()` | `autoVibratoOffset()`、`applyExpressionToF0()`、`resolveAutoVibratoForNote()` |
+| 4 | 抖动种子单一，长曲/多轨会规律 | 种子 = (seed, 轨道 salt, note.id)；音高缩放；起振 30ms 保护 | `_jitterSemitones()`、`saltFromKey()` |
+| 5 | rateDrift 固定 6% 可预测 | 低频随机调制速率/幅度 + 解析积分保相位连续（0.5–1.4Hz） | `driftComps()` / `driftIntegral()` |
+| 6 | 缺连奏/断奏语义 | 用间隙判定 `onset`：legato（弱起音 + 级进微滑）/ detached（不滑）/ normal；乐句分界 1.2 拍 | `onset`、`microGlideMs` |
+| 7 | 多轨同步抖动 | `ctx.seedSalt = saltFromKey(fragment.id ?? singerId)`，逐轨相位不同 | `createPitchResolver({ seedSalt })` |
+
+### 5.2 顺手修掉的真 bug
+
+- **`paramsForPreset()` 浅拷贝**：`merged.autoVibrato` 与 `AUTO_PITCH_DEFAULTS.autoVibrato` 是同一个对象，
+  UI 改一次"自动颤音深度"就把全局默认值改了，新建工程/重置/归一化全部跟着变，撤销也回不来。
+- **`applyAutoVibrato()` 死代码**：导出但从未调用；一旦有人接上就会把用户手动颤音冲掉。已删除。
+- **`articulation` 用错方向**（本轮引入后又自查发现）：最初用"与下一音的间隙"判断起音，
+  导致句尾长音被判成 `isolated`、起音不再弱化。改成"起音侧 `onset`"与"结尾侧 `gapAfter`"两个维度。
+  这个错误是 `test/autoPitchNaturalness.test.js` 的"连奏起音 35%"用例抓出来的。
+- **自然度自检的颤音速率用零交叉估计**：颤音渐入段幅度与抖动同量级，过零被带偏（5.5Hz 测成 8Hz）。
+  改为**归一化自相关 + 抛物线插值**（`autocorrRate()`），三音实测 5.56/5.79/6.13Hz。
+- **自检指标与设计脱节**：新增"颤音覆盖率"（45–98%）；"跳进过冲"改为看**有过冲的比例**，
+  不再要求每个跳进都过冲（否则我们刚做的"概率过冲"会被自己的自检判红）。
+
+### 5.3 兼容性
+
+| 场景 | 结果 |
+|---|---|
+| 旧工程（无 auto） | `auto.enabled=false`，行为逐位不变 |
+| 1.2.0 工程（有 auto，无自然度参数） | 新参数全部回落默认；听感变成"更有人味"，但不丢数据 |
+| 本版本存 → 1.2.0 读 | 版本 1.3.0、`features` 含未知项 → 提示；读得进，重存丢自然度参数（回落默认） |
+| 手动颤音 | 完全不受影响：`isManualVibrato()` 优先，`source:'manual'` 连"关掉"都算手动 |
+
+### 5.4 数字
+
+- 全量测试：**2031 passing / 7 failing**（7 条全部是 Windows 专属：NPU PnP ×3、WinML ortBridge ×4，
+  与本次改动无关，上一轮基线相同）。新增 15 条（`autoPitchNaturalness` 14 条 + 自检覆盖率 1 条）。
+- 自然度（3 音 / 120BPM）：默认参数 **92 分**（颤音 18.9¢ / 5.8Hz / 过冲按概率分布）；
+  闸门全开 + `variation=0` 时 **100 分** —— 扣分来自"故意的不均匀"，不是算法退化。
+
+### 5.5 实机核验（v2，第二轮）
+
+用 MCP automation 在真实 Electron 实例上跑了一遍配置链路与右键菜单，45 条断言全通过。
+过程中抓到 6 个单测覆盖不到的问题（详见设计方案 §15.10），其中 3 个在自动化路径、
+1 个在协议层、1 个在 UI 分支、1 个是通用布局缺陷：
+
+1. **MCP 换预设只改标签不换参数** — `fragment.setPitchCurve({auto:{preset:'soft'}})` 之后
+   `preset='soft'` 但 `vibratoProbability` 还是 0.82（natural 的值）。UI 走的是
+   `a.params = paramsForPreset(id)`，自动化路径漏了这一步。现在语义与 UI 完全对齐：
+   换预设=换整组参数、同批带 `params` 以 `params` 为准、只改参数则 `preset` 落 `custom`。
+2. **非法枚举静默回默认** — `{releaseScope:'bogus'}` 把用户原来的 `'always'` 改成了 `'phrase'`。
+   新增 `sanitizeAutoParamPatch()` 在补丁层剔除非法键，非法输入变成无操作。
+3. **嵌套 `autoVibrato` 被整体替换** — 只改 `depth` 会丢掉 `rate`/`drift`。改为深合并。
+4. **协议层拿不到 `note.vibrato`** — NOTE 的 `additionalProperties:false` 把它挡在门外，
+   导致"手动标记是否持久化"无法脚本化验证。已把 `vibrato`（含 `source`）写进 schema，
+   `docs/MCP.md` / `docs/dev/mcp.html` 由 `npm run mcp:docs` 重新生成。
+5. **手动关颤音时徽标消失** — "手动关闭"落在三态分支的 `else` 里（因为手动时 `derived` 被置空）。
+   补成 `手动·不颤`，与自动层的 `自动·不颤` 区分；实测三态 + "清除效果"回自动全部正确。
+6. **窗口变窄把右侧 inspector 挤出屏幕** — `#app` 只定义了行，隐式列是 `auto`（子项 max-content），
+   画布被 `resizeCanvases()` 写成固定像素宽度后整列撑到 1707px。改 `minmax(0,1fr)` +
+   `min-width:0` + `max-width:100%`。这条与 v2 无关，属于之前就存在的通用缺陷。
+
+数字更新：全量 **2041 passing / 7 failing**（7 条仍是 Windows 专属）；`autoPitchNaturalness`
+由 14 条增至 24 条。实机演示片段（6 音、96BPM）自然度自检 **100 分**，
+颤音覆盖率 50%（6 个长音里 3 个颤音）——正好落在 45–98% 的"像人"区间。
+
+## 六、时间基准修复（BPM 与对齐）
+
+> 归属版本：**v3.0.0**
+
+用户反馈"有时 BPM 不对、时间对齐不稳"。查下来是四个互相独立的缺陷，叠在一起表现为"有时候准、有时候不准"。
+
+### 6.1 自动 BPM 检测（`src/inference/pitchPostprocess.js`）
+
+旧实现：
+
+```
+energy → 半波整流差分 → 未归一化自相关 → 取最大 → Math.round
+```
+
+四个问题：
+
+1. **用能量而非对数包络**。强拍（底鼓）比弱拍（军鼓/八分音符）大两三个数量级，自相关只认强拍，
+   于是 120 BPM 的歌测成 60（"两拍一循环"）。
+2. **自相关未归一化**。累加后除以 count，长 lag 样本少、短 lag 样本多，天然偏向快的一侧。
+3. **整数 lag 的量化误差**。150 BPM 的 1 拍是 34.45 帧（hop=512@44.1k），取整到 34 就错位 5ms，
+   相关值从 0.99 掉到 0.54，反而让 2 拍间隔（68.9 帧）更像节拍。
+4. **`Math.round` 到整数**。127.4 → 127，5 分钟累积约 1 秒。
+
+新实现（保留 `detectBpm(audio, sampleRate, fallback)` 签名）：
+
+- 分析窗按时间定长（≈23ms → 512@22.05k / 1024@44.1k / 2048@96k），hop 取窗长 1/4（≈5.8ms）。
+- RMS 包络 + `log(knee + rms)` 压缩，软膝在 −60dB，先抑制底噪再抬弱拍。
+- onset = 半波整流差分 − 均值；归一化自相关（除以两段能量）。
+- 局部极大 + 对数正态先验（中心 110，σ 0.85 八度）粗筛前 6 个候选；
+  每个候选在 lag±1 内以 0.1 帧步长、线性插值重采 onset 做细搜。
+- 倍频裁决：取相关值最高者；若其一半 lag 处相关值落在 **0.7–0.95** 区间，说明半拍位置确实有
+  onset（只是被量化削掉一截），取快的一层；>0.95 视为两拍与一拍完全等价，交给先验；
+  <0.7 说明半拍处没有 onset，保持当前值。
+- 边界留 1% 余量（55 与 180 的峰正好压在搜索边界上，取整后是 54.98 / 180.1）。
+- 返回 0.1 精度。
+
+**测量**：55–180 BPM 共 18 条合成节拍轨（含 24kHz、含八分音符弱拍），18/18 误差 ≤ 3%；
+旧实现同样条件下 9/18（120→60、160→80、180→90 等）。单次耗时约 8ms / 12 秒音频。
+
+**已知不可解**：84 BPM（每两拍一个重音）与 168 BPM 在信号上完全等价，任何算法都无法只凭音频
+区分。本实现按"最短周期，除非半拍没有 onset"处理，并在 FAQ 里写明"想要快的一侧请手动填写"。
+
+### 6.2 波形/播放头的时间基准（`src/audioPreprocess/canvasRenderer.js`）
+
+波形层、播放头、`getPlayheadXForTime`、`xToWaveformTime`、`getMaxScrollX`、`updateScrollbars`
+全部用常量 `BPM = 120`（`constants.js`）。而音符、F0 曲线、试听用 `pianoRoll.bpm`，
+提取面板的 BPM 输入只写进 `state.extractOptions`（`panel.js` 的 change 只做 persist）。
+
+结果：BPM ≠ 120 时波形与音符横向错开，播放头不在声音的真实位置，"时间对齐看起来不稳"。
+
+修法：新增 `currentBpm()`（卷帘 → 面板 → 默认），六处换算全部改用它；静态波形缓存 key 加入
+BPM（否则改 BPM 后不重画）；`panel.js` 的 BPM change 新增 `applyBpmToPianoRoll()`，
+同步 `pianoRoll.bpm` + 失效两层缓存 + 重绘。
+
+还有一处同源缺口：`initPianoRoll()` 里写的是 `bpm: BPM`（常量 120），而它要等到音频解码完才被
+调用；`initPanel()` 早在模块加载时就把已保存的 BPM 写进输入框了。于是"面板显示 96、网格按 120 画"
+在**打开窗口的那一刻**就成立，用户不动输入框就永远对不上。改为从 `getOptions().bpm` 取初值
+（默认值仍是 120，行为不变）。
+
+另：自动检测出的 BPM 回填（`midiExtraction.js` 的 `autoBpm` 分支）本来就是直接写
+`pianoRoll.bpm`，配合新的缓存 key（含 BPM）已经自洽，不必再走 `applyBpmToPianoRoll()`。
+
+### 6.3 检测器时间轴校正（`src/audioPreprocess/midiExtraction.js`）
+
+旧代码用首两帧步长外推检测器时长：
+
+```js
+const step = result.f0Array[1].time - result.f0Array[0].time;
+const detectorDuration = last.time + step;
+```
+
+首帧步长受重采样插值与前置 padding 影响，偏几十分之一就会把整段音符拉长/压缩。改为
+**中位帧步长**，并把 `wavDuration / detectorDuration` 夹在 `[0.8, 1.25]`：超出区间说明时间轴
+本身不可信（尾部帧缺失 / 前导静音被裁），此时取 1，宁可不缩放。
+
+### 6.4 复合拍号的小节计算
+
+`timeSignature[0]` 被当成"每小节拍数"，但 MIDI beat 是四分音符：6/8 的每小节是 3 拍而不是 6 拍，
+9/8 是 4.5 拍，2/2 是 4 拍。新增 `src/shared/timeSignature.js`：
+
+```js
+beatsPerMeasureOf(sig) = sig[0] * 4 / sig[1]
+isMeasureBoundary(beat, bpm)   // 容忍浮点
+measureNumberAt(beat, bpm)     // 1-based
+```
+
+四处调用点全部换掉：主时间线网格（`timelineRenderer` 两处）、片段标签的小节范围、音频预处理
+卷帘（两处）、分片编辑器网格。`bpm % beatsPerMeasure === 0` 这种取模在 4.5 上会失效，改走
+`isMeasureBoundary`。
+
+### 6.5 MIDI 导入的时长换算
+
+`importMidiFile` 写 `singerData.duration` 时用常量 `BPM`：
+
+```js
+notes.map((n) => (n.duration * (60 / BPM)).toFixed(2))
+```
+
+96 BPM 的工程导入后整段短约 20%。改用工程 BPM。
+
+### 6.6 测试
+
+新增 `test/bpmAndTimebase.test.js`（25 条）：
+
+- `detectBpm`：太短/静音回落、11 个 BPM 点 ±3%、55 边界不翻倍、168 不半速、
+  0.1 精度、24kHz 一致、八分音符歧义落在两个合法值之一；
+- `beatsPerMeasureOf` / `isMeasureBoundary` / `measureNumberAt`：4/4、3/4、2/2、6/8、9/8、12/8，
+  非法输入回落 4/4；
+- 时间基准：`pianoRoll.bpm = 96` 时播放头按 96 拍计算（不再是 120），像素↔秒往返一致，
+  卷帘未就绪时回落面板 BPM。
+
+全量 **2066 passing / 7 failing**（7 条仍为 Windows 专属：NPU PnP ×3、WinML ortBridge ×4）。
+
+---
+
+## 七、3.0.0 版本合并（2026-11-26）
+
+> 2.0.3 的标签提交日期为 2026-10-18；此前文档核对记录亦引用 `gh release list` 确认该发布日期。
+> 原 2.0.4 草稿并入 3.0.0，2.0.4 不再作为独立版本发布。
+
+本节不替代[应用更新日志](../user/app-updates.html#v3-0-0)。该日志按 `2.0.3..HEAD` 的
+223 个提交归纳最终用户可见行为，覆盖插件平台、工程互操作、MCP/API、音高与预处理、
+逐轨混音与播放、流式生命周期、模型精度、运行时升级、性能与修复。
+
+版本发布链路同步调整：
+
+- `package.json` / lockfile 的目标版本为 `3.0.0`。
+- release CI 在目标版本高于最新 semver 标签时发布目标版本，否则维持原 patch 递增规则。
+- `check-version.js` 允许显式设置更高的发布目标，并修复 Windows 下依赖 shell `head` 导致误报无标签的问题。
+- 随包 MCP 服务器在握手时报告构建版本；`mcp/version.json` 由构建脚本生成，避免安装包再次硬编码旧版本。
+
+文档同步修正了当前后端选项（Auto / Windows ML / DirectML / CPU）、Euler/32 步默认值、
+FP16 W16A32 与 INT8 W8A32、默认开启的 diffStep 分块预览、8192 帧导出上限、
+Score/Manual/Auto 语义、欢迎页、停止后从零重播、独立素材嵌入选项以及预处理 F0/UV 行为。

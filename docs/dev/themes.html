@@ -80,7 +80,7 @@
 │                    default, label } }                      │
 │  buildDefaultTokens(): flat { name: value } from catalog   │
 │  Layers: 'global' | 'alias' | 'component'                  │
-│  Types:  'color' | 'size' | 'motion' | 'shadow' | 'string' │
+│  Types:  'color' | 'size' | 'motion' | 'easing' | 'shadow' | 'string' │
 └────────────────────────────────────────────────────────────┘
         │ defaults
         ▼
@@ -132,8 +132,8 @@
           </tr>
         </tbody>
       </table>
-      <p data-lang="en">Token types drive validation: <code>color</code> (hex/rgb/hsl), <code>size</code> (number + unit), <code>motion</code> (duration), <code>shadow</code> (free-form CSS), <code>string</code> (any non-empty). <code>buildDefaultTokens()</code> produces a flat <code>{ name: value }</code> map from the catalog defaults, used as the base when no theme is loaded.</p>
-      <p data-lang="zh">Token 类型驱动校验：<code>color</code>（hex/rgb/hsl）、<code>size</code>（数值 + 单位）、<code>motion</code>（时长）、<code>shadow</code>（自由 CSS）、<code>string</code>（任意非空）。<code>buildDefaultTokens()</code> 从目录默认值生成扁平的 <code>{ name: value }</code> 映射，作为未加载主题时的基础。</p>
+      <p data-lang="en">Token types drive validation: <code>color</code> (hex/rgb/hsl), <code>size</code> (number + unit), <code>motion</code> (duration), <code>easing</code> (CSS timing function: named / <code>cubic-bezier(...)</code> / <code>steps(...)</code>), <code>shadow</code> (free-form CSS), <code>string</code> (any non-empty). <code>buildDefaultTokens()</code> produces a flat <code>{ name: value }</code> map from the catalog defaults, used as the base when no theme is loaded.</p>
+      <p data-lang="zh">Token 类型驱动校验：<code>color</code>（hex/rgb/hsl）、<code>size</code>（数值 + 单位）、<code>motion</code>（时长）、<code>easing</code>（CSS 时序函数：命名 / <code>cubic-bezier(...)</code> / <code>steps(...)</code>）、<code>shadow</code>（自由 CSS）、<code>string</code>（任意非空）。<code>buildDefaultTokens()</code> 从目录默认值生成扁平的 <code>{ name: value }</code> 映射，作为未加载主题时的基础。</p>
 
       <h2>
         <span data-lang="en">Built-in Themes</span>
@@ -197,8 +197,8 @@
   "extends": null,
   "tokens": {
     "--color-blue-500": "#4a7de0",
-    "--bg-app":     "#14141f",
-    "--bg-panel":   "#1a1a2a",
+    "--bg-app":     "#000000",
+    "--bg-panel":   "#1a1a26",
     "--fg-primary": "#e0e0f0",
     "--accent":     "#5b8def",
     "--button-primary-bg": "var(--bg-button-primary)",
@@ -274,7 +274,7 @@
           </tr>
           <tr>
             <td><code>current()</code> / <code>currentTokens()</code></td>
-            <td><span data-lang="en">Get active id / resolved token map</span><span data-lang="zh">获取活动 id / 已解析 token 映射</span></td>
+            <td><span data-lang="en">Get <code>{ themeId, scope, scopeId }</code> / <code>{ id, scope, scopeId, tokens, baseTokens, overrides }</code> (both <code>null</code> when no theme is active)</span><span data-lang="zh">获取 <code>{ themeId, scope, scopeId }</code> / <code>{ id, scope, scopeId, tokens, baseTokens, overrides }</code>（无活动主题时均为 <code>null</code>）</span></td>
           </tr>
           <tr>
             <td><code>export(id)</code> / <code>import(json)</code></td>
@@ -294,8 +294,8 @@
           </tr>
         </tbody>
       </table>
-      <p data-lang="en">Events: <code>'theme-changed'</code>, <code>'theme-list-changed'</code>, <code>'theme-overwritten'</code>, <code>'theme-imported'</code>. Persisted overrides use the localStorage key <code>sxseditor-theme-overrides</code>.</p>
-      <p data-lang="zh">事件：<code>'theme-changed'</code>、<code>'theme-list-changed'</code>、<code>'theme-overwritten'</code>、<code>'theme-imported'</code>。持久化的覆盖使用 localStorage 键 <code>sxseditor-theme-overrides</code>。</p>
+      <p data-lang="en">Events: <code>'theme-changed'</code>, <code>'theme-list-changed'</code>, <code>'theme-overwritten'</code>, <code>'theme-imported'</code>. User themes are persisted by the main process as <code>*.theme.json</code> files under <code>userData/themes/</code> (see <code>src/themes/themeStorage.js</code>) — the renderer's <code>overrides</code> patch is transient only and is not persisted anywhere.</p>
+      <p data-lang="zh">事件：<code>'theme-changed'</code>、<code>'theme-list-changed'</code>、<code>'theme-overwritten'</code>、<code>'theme-imported'</code>。用户主题由主进程以 <code>*.theme.json</code> 文件形式持久化到 <code>userData/themes/</code>（见 <code>src/themes/themeStorage.js</code>）——渲染进程的 <code>overrides</code> 补丁仅存在于内存，不作任何持久化。</p>
 
       <h2>
         <span data-lang="en">Extends Resolution</span>
@@ -384,8 +384,8 @@ function drawPianoRoll(ctx) {
       <div class="callout warn">
         <div class="callout-icon">⚠️</div>
         <div class="callout-body">
-          <p data-lang="en">When a theme is activated, <code>injectTokens</code> sets every token via <code>root.style.setProperty(k, v)</code>. Switching themes does <strong>not</strong> clear previously-injected properties that are absent from the new theme — call <code>clearInjectedTokens(tokenNames)</code> for the previous theme's tokens first, or design themes to override the same superset of tokens. Built-in themes all define the full token set, so switching among them is safe.</p>
-          <p data-lang="zh">激活主题时，<code>injectTokens</code> 通过 <code>root.style.setProperty(k, v)</code> 设置每个 token。切换主题<strong>不会</strong>清除新主题中缺失的先前注入属性——需先对前一主题的 token 调用 <code>clearInjectedTokens(tokenNames)</code>，或将主题设计为覆盖相同的 token 超集。内置主题都定义了完整 token 集，因此它们之间切换是安全的。</p>
+          <p data-lang="en">When a theme is activated, <code>injectTokens</code> (in <code>themeInit.js</code>) first removes <strong>all</strong> previously-injected <code>--*</code> inline properties on <code>:root</code>, then applies the new theme's tokens via <code>root.style.setProperty(k, v)</code>, and finally dispatches a <code>theme:changed</code> window event so canvas renderers invalidate their cached colors. Stale tokens from a previous theme therefore never survive a switch — custom themes only need to override the tokens they actually change.</p>
+          <p data-lang="zh">激活主题时，<code>injectTokens</code>（位于 <code>themeInit.js</code>）会先移除 <code>:root</code> 上<strong>所有</strong>先前注入的 <code>--*</code> 内联属性，再通过 <code>root.style.setProperty(k, v)</code> 应用新主题的 token，最后派发 <code>theme:changed</code> 窗口事件，使 canvas 渲染层失效缓存颜色。因此切换主题不会残留旧主题的 token——自定义主题只需覆盖实际要修改的 token。</p>
         </div>
       </div>
 

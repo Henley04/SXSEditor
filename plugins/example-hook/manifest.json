@@ -1,0 +1,26 @@
+{
+  "apiVersion": 2,
+  "id": "example-hook",
+  "name": "Example: Pipeline Hook",
+  "version": "1.0.0",
+  "description": "合成后处理 hook 的最小示例：对 postWaveform 做 50ms 淡入并把整体电平压到 -3dB。只有一个 hook，没有命令，也没有界面。",
+  "author": "SXSEditor Dev",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {},
+  "contributes": {
+    "pipeline": {
+      "hooks": [
+        {
+          "stage": "postWaveform",
+          "kind": "js",
+          "hook": "soften",
+          "order": 100,
+          "timeoutMs": 2000
+        }
+      ]
+    }
+  }
+}

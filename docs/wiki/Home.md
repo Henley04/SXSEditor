@@ -14,7 +14,7 @@ You write notes on a piano roll, type lyrics, and SXSEditor generates a singing 
 |----------|--------|-------------|
 | Chinese (Mandarin) | Supported | Chinese characters (optional tone digit 1–5) |
 | English | Supported | English words (auto-converted to phonemes) |
-| Japanese | In Development | — |
+| Japanese | Supported | Hiragana/katakana (hybrid phoneme mapping by default; optional JP model pack for jp-lora models) |
 
 ---
 
@@ -72,6 +72,8 @@ macOS and Linux: build from source (CPU inference only — no DirectML/Windows M
 ---
 
 ## Getting Started
+
+A normal launch opens the welcome page with New, Open, Close and recent projects. Recent entries show the project name, path and local date/time.
 
 New to SXSEditor? Follow the **[Quick Start Guide](Quick-Start)** for a step-by-step walkthrough covering:
 1. Installing and launching

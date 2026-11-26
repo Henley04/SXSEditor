@@ -92,6 +92,9 @@ module.exports = {
       ...(skipOnnxModels ? {} : { unpackDir: 'onnx_models' })
     },
     prune: true,
+    // 临时：Linux 构建跳过 native 模块重编（decibri/ort-bridge 是 Windows 专用，
+    // 且 @electron/rebuild 需要联网下载 Electron headers，离线环境会 socket hang up）
+    nativeRebuild: process.platform !== 'linux',
     quiet: false,
     ignore: (file) => {
       if (!file) return false;
@@ -111,11 +114,39 @@ module.exports = {
       return !keep;
     },
     icon: './assets/SXS',
-    // Ship the documentation site (docs/) next to the app (resources/docs).
-    // It must live OUTSIDE app.asar: the docs are opened with the system
-    // default browser via file:// and a browser cannot read inside an asar.
-    // src/main/docs.js resolves this directory at runtime.
-    ...(skipDocs ? {} : { extraResource: ['docs'] }),
+    // docs / mcp / 文件图标都必须落在 asar 之外：
+    //   · docs 要给系统浏览器以 file:// 打开，浏览器读不了 asar 内部路径；
+    //   · mcp 是独立 node 进程的 stdio 服务器，客户端配置里写的是磁盘绝对路径，
+    //     塞进 asar 后路径既不存在、node 也无法按普通文件加载；
+    //   · fileicons 要给 Windows 注册表的 DefaultIcon 引用。
+    // mcp/ 由 scripts/build-mcp-resources.js 在 prepackage / premake 生成，
+    // 落到 resources/mcp；帮助菜单「MCP 连接」按这个实际路径生成配置片段。
+    // 注意 extraResource 用 fs-extra.copy 直接复制，不受上面的 ignore 白名单影响。
+    extraResource: [
+      ...(skipDocs ? [] : ['docs']),
+      'mcp',
+      'assets/fileicons',
+    ],
+    // macOS 靠 Info.plist 声明"哪些文件归我"，Windows 靠注册表，Linux 靠 .desktop。
+    // 这里只写 macOS 的一份；图标文件随 extraResource 进 Contents/Resources。
+    extendInfo: {
+      CFBundleDocumentTypes: [
+        {
+          CFBundleTypeName: 'SXSEditor Project',
+          CFBundleTypeRole: 'Editor',
+          LSHandlerRank: 'Owner',
+          CFBundleTypeExtensions: ['sxsproj'],
+          CFBundleTypeIconFile: 'fileicons/project.icns',
+        },
+        {
+          CFBundleTypeName: 'SXSEditor Singer',
+          CFBundleTypeRole: 'Editor',
+          LSHandlerRank: 'Owner',
+          CFBundleTypeExtensions: ['sxssinger'],
+          CFBundleTypeIconFile: 'fileicons/singer.icns',
+        },
+      ],
+    },
     // Keep only Chromium locales that match the app's supported UI languages
     // (src/i18n ships 'zh-CN' and 'en'). All other *.pak locale files would
     // otherwise account for ~45 MB of dead bytes in out/SXSEditor-win32-x64/locales.
@@ -128,23 +159,23 @@ module.exports = {
     // Prune Chromium locale .pak files that the app does not ship translations
     // for (src/i18n only carries 'zh-CN' and 'en'). Each .pak is ~0.8-1 MB and
     // there are 50+ of them, so this saves ~40 MB.
+    // Electron Forge 8 / @electron/packager 20 changed hook signatures from
+    // positional args + callback to a single options object + Promise/return:
+    //   old: (buildPath, electronVersion, platform, arch, callback)
+    //   new: ({ buildPath, electronVersion, platform, arch }) => void|Promise
+    // The old form crashes on Forge 8 with "callback is not a function".
     afterExtract: [
-      (buildPath, electronVersion, platform, arch, callback) => {
-        try {
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const keep = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'en-GB.pak']);
-          const localesDir = path.join(buildPath, 'locales');
-          if (fs.existsSync(localesDir)) {
-            for (const file of fs.readdirSync(localesDir)) {
-              if (file.endsWith('.pak') && !keep.has(file)) {
-                fs.unlinkSync(path.join(localesDir, file));
-              }
+      ({ buildPath }) => {
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const keep = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'en-GB.pak']);
+        const localesDir = path.join(buildPath, 'locales');
+        if (fs.existsSync(localesDir)) {
+          for (const file of fs.readdirSync(localesDir)) {
+            if (file.endsWith('.pak') && !keep.has(file)) {
+              fs.unlinkSync(path.join(localesDir, file));
             }
           }
-          callback();
-        } catch (err) {
-          callback(err);
         }
       },
     ],
@@ -166,11 +197,27 @@ module.exports = {
     },
     {
       name: '@electron-forge/maker-deb',
-      config: {},
+      config: {
+        // Linux 打包的可执行文件名来自 package.json 的 productName（SXSEditor），
+        // 而 electron-installer-debian 默认按 name（sxseditor）去找二进制，
+        // 两者不一致会直接失败：
+        //   could not find the Electron app binary at ".../SXSEditor-linux-x64/sxseditor"
+        // 因此显式指定 bin。同时补上 deb 需要的 maintainer / homepage 字段。
+        bin: 'SXSEditor',
+        maintainer: 'SXSEditor Dev <dev@sxseditor.local>',
+        homepage: 'https://github.com/Henley04/SXSEditor',
+        description: 'AI Singing Voice Synthesis Workstation',
+        section: 'sound',
+      },
     },
     {
       name: '@electron-forge/maker-rpm',
-      config: {},
+      config: {
+        // 与 maker-deb 同样的二进制名不一致问题。
+        bin: 'SXSEditor',
+        homepage: 'https://github.com/Henley04/SXSEditor',
+        description: 'AI Singing Voice Synthesis Workstation',
+      },
     },
   ],
   plugins: [
@@ -182,6 +229,17 @@ module.exports = {
       name: '@electron-forge/plugin-webpack',
       config: {
         mainConfig: './webpack.main.config.js',
+        // Forge 8 的 devServer 默认 hot:true，webpack-dev-server 5 会把
+        // `webpack-dev-server/client` + `webpack/hot/dev-server` 注入**所有**
+        // webpack entry，包括各窗口的 preload。preload 编译成 electron-preload
+        // target 时，HMR client 依赖的 webpack/hot/emitter.js 里的
+        // require('events') 在隔离世界解析不到，preload 直接加载失败
+        // （electronAPI 全部缺失）。本项目 preload/renderer 都不依赖 HMR，
+        // 关掉注入即可；改代码后重启 npm start（打包路径本来就没有 dev server）。
+        devServer: {
+          hot: false,
+          client: false,
+        },
         renderer: {
           config: './webpack.renderer.config.js',
           // ⚠️ 这里**故意没有** splash_window 入口。
@@ -272,6 +330,17 @@ module.exports = {
               html: './src/updateNotification.html',
               js: './src/updateNotification.js',
               name: 'update_notification_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
+            {
+              // 插件管理器：安装 / 启停 / 卸载 / 活动日志。
+              // 独立窗口而不是主窗口内嵌面板，理由见 plan §6：管理器要能展示
+              // "插件把应用搞坏了"的现场，主窗口此时可能已经起不来了。
+              html: './src/pluginManager.html',
+              js: './src/pluginManager/index.js',
+              name: 'plugin_manager_window',
               preload: {
                 js: './src/preload.js',
               },

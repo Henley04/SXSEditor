@@ -61,10 +61,10 @@ button.icon-only > .icon,
    fill. For outline icons that need a semantic color, override currentColor
    via the modifier class so both fill="currentColor" and stroke="currentColor"
    follow along. */
-.icon--success { color: var(--success); }
-.icon--warning { color: var(--warning); }
-.icon--danger  { color: var(--danger); }
-.icon--accent  { color: var(--accent); }
+.icon--success { color: var(--success-fg); }
+.icon--warning { color: var(--warning-fg); }
+.icon--danger  { color: var(--danger-fg); }
+.icon--accent  { color: var(--accent-fg); }
 
 /* ===== Context: avatar / placeholder icons =====
    Larger, dimmer icons used as placeholders (singer avatar, upload zone). */

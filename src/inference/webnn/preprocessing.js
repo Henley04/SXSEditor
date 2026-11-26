@@ -18,11 +18,19 @@ import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trim
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @returns {{ combinedCond: Float32Array, totalCondFrames: number, totalFramesWithPrompt: number }}
  */
-export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null }) {
+export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null, scoreMode = false }) {
     await ensureOrt();
     const ort = getOrt();
 
     const tEnc0 = performance.now();
+
+    // Static-shape encoders/preflow are fixed [1, NPU_STATIC_SEQ_LEN]. If prompt
+    // tokens do not fit alongside the target, fall back to zero-filled prompt cond.
+    if (promptSeq && promptSeq.tokenCount > 0 && ptFrameCount > 0
+        && useStaticShapes && promptSeq.tokenCount + tokenCount > NPU_STATIC_SEQ_LEN) {
+        console.warn(`[WebNN] prompt ${promptSeq.tokenCount}tok + target ${tokenCount}tok > static ${NPU_STATIC_SEQ_LEN}; prompt cond will be zero-filled`);
+        promptSeq = null;
+    }
 
     // P1 fix: When promptSeq is provided, merge prompt + target token sequences
     // so the prompt section of cond has full encoder features (text+pitch+type+preflow+f0).
@@ -38,12 +46,16 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     if (hasPrompt) {
         for (let i = 0; i < ptTokenCount; i++) {
-            phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i]);
-            pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
-            typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
+            phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i] || 0);
+            pitchIds[i] = BigInt(promptSeq.notePitchSeq[i] || 0);
+            typeIds[i] = BigInt(promptSeq.noteTypeSeq[i] || 0);
         }
-        for (let i = 0; i < ptFrameCount; i++) {
-            f0IdsArr[i] = BigInt(promptSeq.f0Ids[i]);
+        if (!scoreMode) {
+            // score 模式下 prompt 侧 f0 同样置 0 —— 官方 control="score" 把
+            // gt_f0 / pt_f0 一起 zeros_like，参考音频的音高不参与条件。
+            for (let i = 0; i < ptFrameCount; i++) {
+                f0IdsArr[i] = BigInt(i < promptSeq.f0Ids.length ? promptSeq.f0Ids[i] : 0);
+            }
         }
     }
     for (let i = 0; i < tokenCount; i++) {
@@ -51,8 +63,10 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
         pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
         typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
     }
-    for (let i = 0; i < totalFrames; i++) {
-        f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+    if (!scoreMode) {
+        for (let i = 0; i < totalFrames; i++) {
+            f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+        }
     }
     const tEncPrep = performance.now();
 
@@ -64,30 +78,34 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const encPaddedType = useStaticShapes ? padInt64ToLength(typeIds, encSeqLen) : typeIds;
     const encPaddedF0 = useStaticShapes ? padInt64ToLength(f0IdsArr, encF0Len) : f0IdsArr;
 
-    // Run 4 encoders in parallel (they are independent)
+    // Run 4 encoders sequentially (they are independent, but concurrency is
+    // forbidden: ORT WASM 的 stackAlloc/stackRestore 是共享的，跨 session 并发
+    // session.run() 会破坏栈指针 —— 见 sessionManager.js 的全局锁注释
+    // (onnxruntime Issue #19443)。DML/WebNN GPU 下串行同样符合该约束。
     const t4 = performance.now();
-    // W17: use allSettled so a rejection in one encoder doesn't leak the
-    // successfully-resolved output tensors of the others. With Promise.all,
-    // the first rejection discards the resolved results without disposing them.
-    const encoderSettled = await Promise.allSettled([
-        runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', encPaddedText, [1, encSeqLen]) }),
-        runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', encPaddedPitch, [1, encSeqLen]) }),
-        runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', encPaddedType, [1, encSeqLen]) }),
-        runSession('f0Encoder', { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) }),
-    ]);
-    const firstReject = encoderSettled.find(s => s.status === 'rejected');
-    if (firstReject) {
-        // Dispose all successfully-resolved output tensors to prevent NPU/GPU memory leak.
-        for (const s of encoderSettled) {
-            if (s.status === 'fulfilled' && s.value && s.value['embeddings']) {
-                disposeTensor(s.value['embeddings']);
-            }
+    // W17: 顺序执行时也要保证"某个 encoder 失败 → 已拿到的输出张量必须释放"，
+    // 否则 NPU/GPU 显存泄漏。这里先把成功的输出收集起来，异常时统一 dispose。
+    const encoderNames = ['noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder', 'f0Encoder'];
+    const encoderFeeds = [
+        { input_ids: new ort.Tensor('int64', encPaddedText, [1, encSeqLen]) },
+        { input_ids: new ort.Tensor('int64', encPaddedPitch, [1, encSeqLen]) },
+        { input_ids: new ort.Tensor('int64', encPaddedType, [1, encSeqLen]) },
+        { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) },
+    ];
+    const encoderOutputs = [];
+    try {
+        for (let i = 0; i < encoderNames.length; i++) {
+            encoderOutputs.push(await runSession(encoderNames[i], encoderFeeds[i]));
         }
-        throw firstReject.reason;
+    } catch (err) {
+        for (const out of encoderOutputs) {
+            if (out && out['embeddings']) disposeTensor(out['embeddings']);
+        }
+        throw err;
     }
-    const [textResults, pitchResults, typeResults, f0Results] = encoderSettled.map(s => s.value);
+    const [textResults, pitchResults, typeResults, f0Results] = encoderOutputs;
     const encInferMs = performance.now() - t4;
-    console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${combinedTokenCount}, f0Frames=${combinedFrames}${useStaticShapes ? ', NPU static' : ''}]`);
+    console.log(`[WebNN] 4 encoders (sequential): ${encInferMs.toFixed(0)}ms [tokens=${combinedTokenCount}, f0Frames=${combinedFrames}${useStaticShapes ? ', NPU static' : ''}]`);
     console.log(`[WebNN]   enc prep: ${(t4 - tEncPrep).toFixed(1)}ms, infer: ${encInferMs.toFixed(1)}ms`);
 
     const tEncPost = performance.now();
@@ -136,18 +154,23 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const combinedMel2token = new Int32Array(combinedFrames);
     if (hasPrompt) {
         for (let f = 0; f < ptFrameCount; f++) {
-            combinedMel2token[f] = promptSeq.mel2token[f];
+            const raw = f < promptSeq.mel2token.length ? (promptSeq.mel2token[f] | 0) : 0;
+            combinedMel2token[f] = Math.max(0, Math.min(ptTokenCount - 1, raw));
         }
     }
     for (let f = 0; f < totalFrames; f++) {
-        combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+        const raw = sequences.mel2token[f] | 0;
+        combinedMel2token[ptFrameCount + f] = ptTokenCount + Math.max(0, Math.min(tokenCount - 1, raw));
     }
 
-    // Expand and combine with f0: all frames (prompt + target) have real encoder features
+    // Expand and combine with f0: all frames (prompt + target) have real encoder
+    // features when promptSeq is available. Without promptSeq, keep the prompt
+    // section at zero (old behavior) instead of expanding PAD/f0-bin0 embeddings.
     const tExpand = performance.now();
     const totalCondFrames = combinedFrames;
     const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-    for (let f = 0; f < combinedFrames; f++) {
+    const firstCondFrame = hasPrompt ? 0 : ptFrameCount;
+    for (let f = firstCondFrame; f < combinedFrames; f++) {
         const tokenIdx = combinedMel2token[f];
         for (let d = 0; d < EMBED_DIM; d++) {
             const combined = processedTokenEmb[tokenIdx * EMBED_DIM + d] + f0Emb[f * EMBED_DIM + d];

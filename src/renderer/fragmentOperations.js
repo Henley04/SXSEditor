@@ -2,7 +2,7 @@ import { state, dom, trackManager, history } from './state.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog, showProjectInfoImportDialog } from '../alertDialog.js';
 import { showAudioToMidiDialog, showLoadingOverlay, updateLoadingMessage, hideLoadingOverlay } from './uiControls.js';
-import { f0DataToPitchCurveAnchorPoints } from './f0Utils.js';
+import { f0DataToSlipSegments } from './f0Utils.js';
 import { markDirty } from './projectManager.js';
 import { refreshAll, renderFragmentTimeline } from './timelineRenderer.js';
 
@@ -11,17 +11,69 @@ export function openFragmentEditor(fragment) {
     const singer = trackManager.getSingers().find(s => s.id === fragment.singerId);
     const wavBuffer = singer?.wavBuffer || null;
 
+    // 扩展域的**声明**要跟着分片一起过去：分片编辑器靠它判断
+    // "这条 note 上的 ext 该不该画、能不能改"（音素目前是只读呈现）。
+    // 声明挂在 project 上而不是单独字段，是因为它本来就是文档属性，
+    // 主进程转发 payload 时不需要认识它。
+    const project = state.projectExt?.schema
+      ? { ...state.project, extSchema: state.projectExt.schema }
+      : state.project;
+
     // 轨道后端随分片一起送到分片编辑器：跨进程 payload 由主进程原样转发。
     // 老工程 / 内置轨道没有 backend 字段，缺省按内置后端处理。
     window.electronAPI.openFragmentEditor({
       fragment,
-      project: state.project,
+      project,
       wavBuffer,
       backend: singer?.backend ?? { type: 'sxs' },
+      singerAnnotation: singer ? {
+        singerData: singer.singerData || null,
+        midiNotes: singer.midiNotes || null,
+        f0Data: singer.f0Data || null,
+      } : null,
     });
   } else {
     showAlertDialog(t('main.fragmentEditorNotImplemented'));
   }
+}
+
+/**
+ * 把一个分片同步到已打开的分片编辑器：边界 + （换轨时）新歌手的音色。
+ *
+ * 为什么必须把音色一起送过去：编辑器 window 是独立进程，它手上的
+ * `wavBuffer / backend` 是**打开那一刻**从轨道取的快照。主窗口把分片拖到
+ * 另一个歌手之后，只同步 singerId 会让编辑器拿着「新歌手的 id + 老歌手的
+ * 参考音频」去推理 —— 既不是老声音也不是新声音。所以换轨时必须把新轨道的
+ * 参考音频与后端一起推过去，编辑器才能真的换成新音色。
+ *
+ * 没换轨时只发边界：参考音频是几 MB 的 ArrayBuffer，每次拖动都发一遍没有意义。
+ *
+ * @param {string} fragmentId
+ * @param {{startTime:number, duration:number}} bounds
+ * @param {{singerId?: string|null, previousSingerId?: string|null}} [routing]
+ */
+function _syncFragmentToEditor(fragmentId, bounds, routing) {
+  if (!window.electronAPI?.updateFragmentBounds) return;
+  const payload = { ...bounds };
+  const nextId = routing ? routing.singerId : null;
+  const prevId = routing ? routing.previousSingerId : null;
+  if (routing && nextId !== prevId) {
+    const singer = nextId ? trackManager.getSinger(nextId) : null;
+    payload.singerId = nextId ?? null;
+    payload.color = singer ? singer.color : undefined;
+    payload.voice = singer
+      ? {
+        wavBuffer: singer.wavBuffer || null,
+        backend: singer.backend ?? { type: 'sxs' },
+        singerAnnotation: {
+          singerData: singer.singerData || null,
+          midiNotes: singer.midiNotes || null,
+          f0Data: singer.f0Data || null,
+        },
+      }
+      : null;
+  }
+  window.electronAPI.updateFragmentBounds(fragmentId, payload);
 }
 
 export function finishDrag() {
@@ -34,6 +86,7 @@ export function finishDrag() {
     const newDuration = fragment.duration;
     const newSingerId = fragment.singerId;
     const fragmentId = fragment.id;
+    const routing = { singerId: newSingerId, previousSingerId: oldSingerId };
 
     if (oldStart !== newStart || oldDuration !== newDuration || oldSingerId !== newSingerId) {
       history.push({
@@ -49,9 +102,9 @@ export function finishDrag() {
             }
           }
           renderFragmentTimeline();
-          if (window.electronAPI?.updateFragmentBounds) {
-            window.electronAPI.updateFragmentBounds(fragmentId, { startTime: oldStart, duration: oldDuration });
-          }
+          _syncFragmentToEditor(fragmentId,
+            { startTime: oldStart, duration: oldDuration },
+            { singerId: oldSingerId, previousSingerId: newSingerId });
         },
         redo() {
           const f = trackManager.getFragment(fragmentId);
@@ -65,16 +118,20 @@ export function finishDrag() {
             }
           }
           renderFragmentTimeline();
-          if (window.electronAPI?.updateFragmentBounds) {
-            window.electronAPI.updateFragmentBounds(fragmentId, { startTime: newStart, duration: newDuration });
-          }
+          _syncFragmentToEditor(fragmentId,
+            { startTime: newStart, duration: newDuration },
+            { singerId: newSingerId, previousSingerId: oldSingerId });
         }
       });
       markDirty();
-      if (window.electronAPI?.updateFragmentBounds) {
-        window.electronAPI.updateFragmentBounds(fragmentId, { startTime: newStart, duration: newDuration });
-      }
     }
+
+    // 无条件做最终精确同步：拖拽期间的 IPC 被节流到 ~32ms，最后一帧可能停在
+    // 中间值。用户拖出去再拖回原位（净变化为 0）时上面的 changed 分支不会进入，
+    // 若不在这里补发，编辑器/主进程快照会停留在中间边界。
+    _syncFragmentToEditor(fragmentId,
+      { startTime: newStart, duration: newDuration },
+      routing);
   }
   state.dragState = null;
   state.fragmentDragSnapshot = null;
@@ -185,6 +242,10 @@ export async function handleAudioToMidi() {
           start: n.start ?? 0,
           duration: n.duration ?? 0.25,
           lyric: n.lyric || 'la',
+          // F8：携带 FCPE 在 pitchbend 量化模式下算出的滑音数据。
+          // 之前只映射 pitch/start/duration/lyric，pitchBends 被整体丢弃，
+          // 导致"保留滑音"设置在这条导入路径上实际失效（试听也听不到滑音）。
+          ...(Array.isArray(n.bend) && n.bend.length > 0 ? { bend: n.bend } : {}),
         }));
 
         if (extractPitch) {
@@ -259,13 +320,16 @@ export async function handleAudioToMidi() {
     });
 
     if (f0Data && f0Data.length > 0) {
-      const anchorPoints = f0DataToPitchCurveAnchorPoints(f0Data, bpm);
-      if (anchorPoints.length > 0) {
-        fragment.pitchCurve = {
-          enabled: true,
-          anchorPoints,
-          brushSegments: [],
-        };
+      // "仅滑音"导入：只把明显偏离音符的片段做成派生段，其余交给自动曲线。
+      // 之前是把整条 F0 转成几千个锚点（3 分钟约 4500 个 / 260KB），
+      // 既无法手工编辑，也让"自动/手动"边界完全消失。
+      const { segments, anchors, keptRatio } = f0DataToSlipSegments(f0Data, bpm, midiNotes);
+      if (segments.length > 0) {
+        fragment.pitchCurve.bakedSegments = segments;
+        fragment.pitchCurve.enabled = true;
+        console.log(`[audioToMidi] Generated ${anchors.length} anchors -> merged into ${segments.length} glide segments (kept ${(keptRatio * 100).toFixed(0)}%, rest left to auto curve)`);
+      } else {
+        console.log(`[audioToMidi] No significant glide found (${anchors.length} anchors all within fit tolerance), leaving all to auto curve`);
       }
     }
 

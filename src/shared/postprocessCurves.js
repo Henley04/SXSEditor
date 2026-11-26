@@ -198,3 +198,37 @@ export function serializePostprocessForSignature(state) {
   }
   return parts.join('|');
 }
+
+/**
+ * 自动曲线与 `f0Glide` 的重合处理（设计方案 §6.2）。
+ *
+ * 背景：`f0Glide` 与自动曲线的 glide+overshoot 都做"换音过渡与过冲"，
+ * 叠加会双重过冲（7 半音跳进时两处相加可超过一个半音，听感跑调）。
+ * 而 `f0Glide` 自身的过冲还严重打折：名义 245 音分，实测 90ms/100% 只有 33 音分，
+ * ≤50% 时几乎为 0（三次贝塞尔控制点把过冲稀释了）。
+ *
+ * 因此默认让"有音符语义"的自动曲线接管换音过渡：
+ *   · glideOwnership = 'auto'（默认）→ 本函数把 f0Glide 置零
+ *   · 'both' → 保留叠加（给想要夸张滑音的用户）
+ *   · 'post' → 自动曲线侧不产生 glide（在 autoPitchCurve 里处理），由后处理接管
+ *
+ * @param {object} params buildF0PostprocessParams 的结果
+ * @param {object|null} auto 归一化后的 auto 配置
+ * @returns {object} 同一个 params（就地修改，调用方持有引用）
+ */
+export function applyGlideOwnership(params, auto) {
+  if (!params || !params.glide) return params;
+  const mode = auto && auto.params ? auto.params.glideOwnership : null;
+  if (mode !== 'auto') return params;
+  params.glide.fill(0);
+  let hasMedian = false;
+  for (let i = 0; i < params.median.length; i++) {
+    if (params.median[i] >= 3) { hasMedian = true; break; }
+  }
+  let hasSmooth = false;
+  for (let i = 0; i < params.smooth.length; i++) {
+    if (params.smooth[i] > 0) { hasSmooth = true; break; }
+  }
+  params.active = hasMedian || hasSmooth;
+  return params;
+}

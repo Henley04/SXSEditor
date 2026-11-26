@@ -1,11 +1,16 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT, BPM } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, getF0AreaHeight, BPM } from './constants.js';
 import { t } from '../i18n/index.js';
 import { debounce } from '../utils/debounce.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
 import { getCanvasColors } from '../themes/canvasTheme.js';
 import { drawWaveformWithPlayhead, getMaxScrollX, getMaxScrollY, updateScrollbars } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
+import { getOptions } from './extractionOptions.js';
+import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
+// 播放头画的是"耳朵听到的位置"，不是渲染线程的位置：输出设备缓冲会让声音晚
+// 20–120 ms 才到喇叭，直接用 ctx.currentTime 画，指示器会稳定跑在声音前面。
+import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
 
 // visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
 // Registered once per module; resumes _tickPlayback when visible again.
@@ -36,6 +41,13 @@ function _ensureVisibilityHandler() {
 export function initPianoRoll() {
   if (state.pianoRoll) return Promise.resolve();
 
+  // 卷帘一出生就必须和面板显示同一个 BPM。
+  // 面板在模块加载时（initPanel）就把已保存的 BPM 写进输入框了，而本函数要等到
+  // 音频解码完成才调用；这中间若用常量 BPM，波形 / 节拍线 / 播放头会按 120 画，
+  // 面板却显示 96 —— 用户看到的就是"网格和音频对不齐"。
+  const savedBpm = Number(getOptions().bpm);
+  const initialBpm = savedBpm > 0 ? savedBpm : BPM;
+
   const notes = [];
   state.pianoRoll = {
     canvas: dom.midiCanvas,
@@ -54,9 +66,11 @@ export function initPianoRoll() {
     dragStartX: 0,
     dragStartY: 0,
     dragNoteStart: { start: 0, pitch: 0, duration: 0 },
+    // 本次按下是否新建了音符（id）。mouseup 后清空，用于只在真正新建时刷新计数。
+    _dragCreatedNoteId: null,
     hoverNoteId: null,
-    bpm: BPM,
-    projectSettings: { bpm: BPM, timeSignature: [4, 4] },
+    bpm: initialBpm,
+    projectSettings: { bpm: initialBpm, timeSignature: [4, 4] },
     // Snap grid in beats per cell. Default 1/16 (sixteenth note) matches the
     // historical behavior. Mutators below read this so the grid is configurable.
     snapGrid: 1 / 16,
@@ -64,9 +78,25 @@ export function initPianoRoll() {
 
     _staticCache: null,
     _staticCacheDirty: true,
+    // canvas.getBoundingClientRect() 缓存：_getMousePos 在拖拽/F0 笔刷的
+    // mousemove 热路径上高频调用，每次读 rect 都会强制同步 layout。
+    // _resize / ResizeObserver 时置空。
+    _canvasRect: null,
+
+    // 命中测试用的「按 start 排序」视图缓存：避免每次 mousemove 反向线性扫描。
+    // notes 数组被替换 / 长度变化 / 音符被就地移动时置空（见 _invalidateSortedNotes）。
+    _sortedNoteEntries: null,
+    _sortedNotesRef: null,
+    _sortedNotesLen: -1,
 
     _initEvents() {
       this._boundResize = debounce(() => this._resize(), 100);
+      // 非 debounce 的 rect 失效：window resize 可能先改变画布 top（顶部面板换行），
+      // 而 canvas 像素尺寸尚未变化；等 100ms 的 _resize 清缓存会让这段时间的
+      // hit-test 用旧 top。
+      this._boundResizeInvalidate = () => {
+        this._canvasRect = null;
+      };
       this._boundMouseUp = () => this._onMouseUp();
       this._boundKeyDown = (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -81,6 +111,15 @@ export function initPianoRoll() {
         }
       };
       window.addEventListener('resize', this._boundResize);
+      window.addEventListener('resize', this._boundResizeInvalidate);
+      // 子元素尺寸变化（面板收/放、分隔条拖拽）不会触发 window resize：
+      // 用 ResizeObserver 及时失效 rect 缓存，避免命中测试按旧坐标偏移。
+      if (typeof ResizeObserver !== 'undefined') {
+        this._canvasResizeObserver = new ResizeObserver(() => {
+          this._canvasRect = null;
+        });
+        this._canvasResizeObserver.observe(this.canvas);
+      }
       this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
       this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
       document.addEventListener('mouseup', this._boundMouseUp);
@@ -105,7 +144,13 @@ export function initPianoRoll() {
         this._wheelRaf = 0;
       }
       this._wheelAcc = null;
+      if (this._canvasResizeObserver) {
+        this._canvasResizeObserver.disconnect();
+        this._canvasResizeObserver = null;
+      }
+      this._canvasRect = null;
       window.removeEventListener('resize', this._boundResize);
+      window.removeEventListener('resize', this._boundResizeInvalidate);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
       // W22: release offscreen static cache canvas + its context so they can be GC'd.
@@ -131,6 +176,7 @@ export function initPianoRoll() {
       this.canvas.height = Math.floor(height * this.dpr);
       this.width = width;
       this.height = height;
+      this._canvasRect = null;
       this.ctx = this.canvas.getContext('2d');
       this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       // 视口尺寸变化后，原有 scrollX/scrollY 可能超出新的最大值，需重新 clamp
@@ -142,7 +188,10 @@ export function initPianoRoll() {
     },
 
     _getMousePos(e) {
-      const rect = this.canvas.getBoundingClientRect();
+      if (!this._canvasRect) {
+        this._canvasRect = this.canvas.getBoundingClientRect();
+      }
+      const rect = this._canvasRect;
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     },
 
@@ -156,17 +205,36 @@ export function initPianoRoll() {
 
     _pitchToY(pitch) {
       const maxPitch = 127;
-      const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+      const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
       return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT * this.zoomY - this.scrollY;
     },
 
     _yToPitch(y) {
       const maxPitch = 127;
-      const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+      const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
       const pianoAreaBottom = this.height;
       if (y >= pianoAreaBottom) return 0;
       if (y <= pianoAreaTop) return maxPitch;
       return Math.round(maxPitch - (y + this.scrollY - pianoAreaTop) / (NOTE_HEIGHT * this.zoomY));
+    },
+
+    /**
+     * 把某个音高区间滚动到可视区中部。
+     *
+     * 载入已有音符（歌手编辑）时，scrollY 还停在 0 —— 视口只显示 127 以下
+     * 十几个半音，C4 附近的音符全在屏幕外，看起来像"没加载出来"。
+     */
+    scrollPitchRangeIntoView(minPitch, maxPitch) {
+      const pianoAreaTop = HEADER_HEIGHT + getF0AreaHeight();
+      const visibleH = Math.max(NOTE_HEIGHT * 4, this.height - pianoAreaTop);
+      const nh = NOTE_HEIGHT * this.zoomY;
+      const midPitch = (Math.max(0, Math.min(127, minPitch)) + Math.max(0, Math.min(127, maxPitch))) / 2;
+      const target = (127 - midPitch) * nh - visibleH / 2;
+      const maxScroll = Math.max(0, 128 * nh - visibleH);
+      this.scrollY = Math.max(0, Math.min(maxScroll, target));
+      this._staticCacheDirty = true;
+      this.render();
+      updateScrollbars();
     },
 
     _snapBeats(beats) {
@@ -192,6 +260,72 @@ export function initPianoRoll() {
       return clampedPx / pxPerBeat;
     },
 
+    // ---- F0 曲线编辑辅助（F15）----
+
+    /** F0 区 y → 频率（与 _drawF0Curve 的 50–1500Hz 对数刻度一致）。 */
+    _f0YToFreq(y) {
+      const areaHeight = getF0AreaHeight();
+      const minF0 = 50;
+      const maxF0 = 1500;
+      const minLogF0 = Math.log2(minF0);
+      const logRange = Math.log2(maxF0) - minLogF0;
+      const bottom = HEADER_HEIGHT + areaHeight;
+      const normalized = Math.max(0, Math.min(1, (bottom - y) / Math.max(1, areaHeight)));
+      return Math.pow(2, minLogF0 + normalized * logRange);
+    },
+
+    /** x → f0Data 帧索引（按 time 二分，帧距可能不是常数）。 */
+    _f0FrameIndexAtX(x) {
+      const data = this.f0Data;
+      if (!data || data.length === 0) return -1;
+      const t = this._xToTime(x);
+      let lo = 0;
+      let hi = data.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        if (data[mid].time < t) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      return Math.max(0, Math.min(data.length - 1, lo));
+    },
+
+    /**
+     * 把上一帧到当前帧之间的所有帧设成光标频率。
+     *
+     * 为什么要填满区间而不是只改一帧：鼠标快速拖动时 mousemove 是稀疏的
+     * （每秒几十个），只改当前帧会在曲线上留下"点状"孔洞。填满区间 = 拖过
+     * 的地方都被覆盖，符合"刷子"的直觉。
+     */
+    _applyF0Brush(x, y) {
+      const data = this.f0Data;
+      if (!data || data.length === 0) return;
+      const idx = this._f0FrameIndexAtX(x);
+      if (idx < 0) return;
+      const freq = this._f0YToFreq(y);
+      const prev = Number.isFinite(this._f0LastFrameIdx) && this._f0LastFrameIdx >= 0
+        ? this._f0LastFrameIdx
+        : idx;
+      const from = Math.min(prev, idx);
+      const to = Math.max(prev, idx);
+      let touched = false;
+      for (let i = from; i <= to; i++) {
+        if (Math.abs(data[i].f0 - freq) > 0.01) {
+          data[i].f0 = freq;
+          touched = true;
+        }
+      }
+      this._f0LastFrameIdx = idx;
+      this._f0BrushFreq = freq;
+      if (touched) {
+        this._f0BrushMoved = true;
+        // pianoRoll.f0Data 与 state.f0Data 通常同一引用，但保存流程读的是
+        // state.f0Data —— 显式写回，避免将来某处改成副本后编辑"看不见"。
+        state.f0Data = data;
+        this._staticCacheDirty = true;
+        this.render();
+      }
+    },
+
     _findNoteAt(x, y) {
       // Hit-test the exact rectangles users see. Converting y back to a rounded
       // MIDI pitch made the top/bottom pixels of a drawn note resolve to the
@@ -199,8 +333,26 @@ export function initPianoRoll() {
       // as empty space and the legacy create-note path fired below the note.
       const verticalTolerancePx = 2;
       const resizeHotZonePx = Math.max(4, Math.min(12, this.snapGrid * BEAT_WIDTH * this.zoomX / 2));
-      for (let i = this.notes.length - 1; i >= 0; i--) {
-        const note = this.notes[i];
+      const entries = this._getSortedNoteEntries();
+      if (entries.length === 0) return null;
+      // 候选区间：只有 start ∈ [xBeat - maxDuration, xBeat] 的音符可能覆盖 x。
+      // 先二分定位下界再顺序扫描，取代原先每次 mousemove 的反向线性扫描。
+      const xBeat = this._xToTime(x);
+      const lowerBound = xBeat - (this._sortedMaxDuration || 0) - 1e-9;
+      let lo = 0;
+      let hi = entries.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (entries[mid].start < lowerBound) lo = mid + 1;
+        else hi = mid;
+      }
+      let best = null;
+      for (let i = lo; i < entries.length; i++) {
+        const entry = entries[i];
+        if (entry.start > xBeat + 1e-9) break;
+        // 命中优先级与原实现一致：数组里越靠后（越晚加入）的音符越优先。
+        if (best && entry.order < best.order) continue;
+        const note = entry.note;
         const nx = this._timeToX(note.start);
         const ny = this._pitchToY(note.pitch);
         const nw = Math.max(1, note.duration * BEAT_WIDTH * this.zoomX);
@@ -208,17 +360,82 @@ export function initPianoRoll() {
         if (x < nx || x > nx + nw) continue;
         if (y < ny - verticalTolerancePx || y > ny + nh + verticalTolerancePx) continue;
         const onResizeEdge = x >= nx + nw - resizeHotZonePx;
-        return { note, nx, ny, nw, nh, onResizeEdge };
+        best = { note, nx, ny, nw, nh, onResizeEdge, order: entry.order };
       }
-      return null;
+      if (!best) return null;
+      return { note: best.note, nx: best.nx, ny: best.ny, nw: best.nw, nh: best.nh, onResizeEdge: best.onResizeEdge };
+    },
+
+    /** 命中测试用排序视图（按 start 升序，附带原数组下标用于保持既有优先级）。 */
+    _getSortedNoteEntries() {
+      if (this._sortedNoteEntries &&
+        this._sortedNotesRef === this.notes &&
+        this._sortedNotesLen === this.notes.length) {
+        return this._sortedNoteEntries;
+      }
+      const entries = new Array(this.notes.length);
+      let maxDuration = 0;
+      for (let i = 0; i < this.notes.length; i++) {
+        const note = this.notes[i];
+        entries[i] = { note, order: i, start: note.start };
+        if (note.duration > maxDuration) maxDuration = note.duration;
+      }
+      entries.sort((a, b) => a.start - b.start || b.note.duration - a.note.duration);
+      this._sortedNoteEntries = entries;
+      this._sortedNotesRef = this.notes;
+      this._sortedNotesLen = this.notes.length;
+      this._sortedMaxDuration = maxDuration;
+      return entries;
+    },
+
+    /** 音符被就地移动/改长度后调用，下一次命中测试重建排序视图。 */
+    _invalidateSortedNotes() {
+      this._sortedNoteEntries = null;
+      this._sortedNotesRef = null;
+      this._sortedNotesLen = -1;
+    },
+
+    /**
+     * 同一音高上 [start, end) 是否与既有音符重叠。
+     *
+     * 与分片编辑器的 hasNoteOverlap 语义一致：只比较同音高、半开区间相交。
+     * 新建音符与拖拽加长时用它兜底，避免手绘出同音高叠在一起的音符（合唱
+     * 声部数据里这种重叠会让 note_pitch/duration 两列对不上）。
+     */
+    _hasNoteOverlap(excludeId, pitch, start, end) {
+      for (const note of this.notes) {
+        if (note.id === excludeId) continue;
+        if (note.pitch !== pitch) continue;
+        if (note.start < end && note.start + note.duration > start) return true;
+      }
+      return false;
     },
 
     _onMouseDown(e) {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
       if (x < PIANO_KEY_WIDTH) return;
-      if (y < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT) return;
 
+      // ---- F0 曲线区（F15）：拖动修正 F0 ----
+      // 原来是只读的（画布上直接写着"只读"），于是"提取出错八度/倍频"只能
+      // 回到别的工具里改，或者干脆带着错数据去训练。这里做成笔刷：
+      // 按住左键水平刷过一段，就把这段 F0 拉到光标所在频率。
+      const f0H = getF0AreaHeight();
+      if (f0H > 0 && y >= HEADER_HEIGHT && y < HEADER_HEIGHT + f0H) {
+        if (e.button !== 0) return;
+        if (!this.f0Data || this.f0Data.length === 0) return;
+        this.dragMode = 'f0-brush';
+        this._f0BrushMoved = false;
+        this._f0LastFrameIdx = this._f0FrameIndexAtX(x);
+        this._f0BrushFreq = this._f0YToFreq(y);
+        this.canvas.style.cursor = 'ns-resize';
+        return;
+      }
+
+      if (y < HEADER_HEIGHT + getF0AreaHeight()) return;
+      if (e.button !== 0) return;
+
+      this._dragCreatedNoteId = null;
       const hit = this._findNoteAt(x, y);
       if (hit) {
         this.selectedNoteId = hit.note.id;
@@ -230,19 +447,54 @@ export function initPianoRoll() {
         this.dragStartY = y;
         this._dragMoved = false;
       } else {
-        // Empty-space single click only clears/selects. Creating on mousedown
-        // made a near-miss below an existing note immediately add a note.
+        // 空白处按下 = 新建音符，与分片编辑器保持一致：按下即落一个 1/4 拍
+        // （不小于吸附网格）的音符并直接进入 resize 拖拽，拖动决定时值。
+        //
+        // 迁移前这里只清选择、新建只能靠双击 —— 两个编辑器手感不同，按分片
+        // 编辑器的习惯拖一下就什么都不会发生（用户感知为"无法新建 MIDI"）。
         this.selectedNoteId = null;
         this.dragMode = null;
+
+        const beats = Math.max(0, this._snapBeats(this._xToTime(x)));
+        const pitch = Math.max(0, Math.min(127, this._yToPitch(y)));
+        const newDuration = Math.max(this.snapGrid, 0.25);
+        // 同音高重叠时不新建（与分片编辑器一致）：紧贴既有音符下方的误点
+        // 不应该凭空多出一个音符。
+        if (!this._hasNoteOverlap(null, pitch, beats, beats + newDuration)) {
+          const newNote = {
+            id: Date.now() + Math.random(),
+            pitch,
+            start: beats,
+            duration: newDuration,
+            lyric: 'la',
+          };
+          this.notes.push(newNote);
+          this.selectedNoteId = newNote.id;
+          this.dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
+          this.dragMode = 'resize';
+          this.dragStartX = x;
+          this.dragStartY = y;
+          this._dragMoved = false;
+          this._dragCreatedNoteId = newNote.id;
+          this._invalidateSortedNotes();
+        }
       }
 
       this._staticCacheDirty = true;
       this.render();
+      // 新建后立刻刷新头部计数（此前只在 mouseup 且发生过位移时才刷）。
+      if (this._dragCreatedNoteId !== null) updateMidiInfo();
     },
 
     _onMouseMove(e) {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
+
+      if (this.dragMode === 'f0-brush') {
+        this._applyF0Brush(x, y);
+        return;
+      }
+
       if (!this.dragMode) {
         const hit = this._findNoteAt(x, y);
         if (hit) {
@@ -273,19 +525,34 @@ export function initPianoRoll() {
         newPitch = Math.max(0, Math.min(127, newPitch));
         note.start = newStart;
         note.pitch = newPitch;
+        this._invalidateSortedNotes();
       } else if (this.dragMode === 'resize') {
         const dxBeats = (x - this.dragStartX) / (BEAT_WIDTH * this.zoomX);
         let newDuration = this.dragNoteStart.duration + dxBeats;
         // Resize minimum = one snap grid cell so the result always lands on
         // a grid line.
         newDuration = Math.max(this.snapGrid, this._snapBeats(newDuration));
-        note.duration = newDuration;
+        // 加长时禁止吃进同音高的下一个音符；缩短永远放行（否则一旦历史上
+        // 存在重叠，用户就再也拉不回合法长度）。
+        if (newDuration < note.duration ||
+            !this._hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+          note.duration = newDuration;
+          this._invalidateSortedNotes();
+        }
       }
       this._staticCacheDirty = true;
       this.render();
     },
 
     _onMouseUp() {
+      if (this.dragMode === 'f0-brush') {
+        this.dragMode = null;
+        this._f0LastFrameIdx = -1;
+        this.canvas.style.cursor = 'default';
+        this._staticCacheDirty = true;
+        this.render();
+        return;
+      }
       if (this.dragMode && this._dragMoved) {
         updateMidiInfo();
       } else if (this.dragMode && !this._dragMoved) {
@@ -295,6 +562,7 @@ export function initPianoRoll() {
           note.start = this.dragNoteStart.start;
           note.pitch = this.dragNoteStart.pitch;
           note.duration = this.dragNoteStart.duration;
+          this._invalidateSortedNotes();
           this._staticCacheDirty = true;
           this.render();
         }
@@ -303,32 +571,24 @@ export function initPianoRoll() {
       this.dragStartX = 0;
       this.dragStartY = 0;
       this._dragMoved = false;
+      this._dragCreatedNoteId = null;
     },
 
+    /**
+     * 双击只做「编辑歌词」。
+     *
+     * 新建音符已经下移到 mousedown/拖拽（与分片编辑器一致），这里若再新建，
+     * 空白处双击会在 mousedown 已建的那个音符上再叠一个，变成一次双击两个音符。
+     */
     _onDoubleClick(e) {
       const pos = this._getMousePos(e);
       const { x, y } = pos;
       if (x < PIANO_KEY_WIDTH) return;
-      if (y < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT) return;
+      if (y < HEADER_HEIGHT + getF0AreaHeight()) return;
 
       const hit = this._findNoteAt(x, y);
       if (hit) {
-        const note = hit.note;
-        startInlineEdit(this, note, hit);
-      } else {
-        const beats = this._snapBeats(this._xToTime(x));
-        const newNote = {
-          id: Date.now() + Math.random(),
-          pitch: Math.max(0, Math.min(127, this._yToPitch(y))),
-          start: Math.max(0, beats),
-          duration: Math.max(this.snapGrid, 0.25),
-          lyric: 'la',
-        };
-        this.notes.push(newNote);
-        this.selectedNoteId = newNote.id;
-        this._staticCacheDirty = true;
-        this.render();
-        updateMidiInfo();
+        startInlineEdit(this, hit.note, hit);
       }
     },
 
@@ -393,11 +653,31 @@ export function initPianoRoll() {
       return (seconds / 60) * this.bpm;
     },
 
+    // 播放时钟基准：优先用 audioContext.currentTime（与音频输出同一时钟，
+    // 见 fragmentEditor/audioPlayback.js 的做法），避免 performance.now()
+    // 与音频缓冲区调度之间的漂移。
+    // 注意：这是**渲染域**时钟，只用作基准；算已播位置必须过 _elapsedSinceStart()。
+    _clockNow() {
+      const audioCtx = state.audioContext;
+      if (audioCtx && audioCtx.state !== 'closed') return audioCtx.currentTime;
+      return performance.now() / 1000;
+    },
+
+    // 已播秒数（可听域）：扣除设备输出延迟，播放头才与耳朵听到的位置一致。
+    // 有 audioContext 时走共享的可听时钟；没有（纯网格试听）时退回渲染时钟差值。
+    _elapsedSinceStart() {
+      const audioCtx = state.audioContext;
+      if (audioCtx && audioCtx.state !== 'closed') {
+        return getAudibleElapsedSec(audioCtx, this.playStartTime);
+      }
+      return this._clockNow() - this.playStartTime;
+    },
+
     startPlayback() {
       _ensureVisibilityHandler();
       if (this.isPlaying) return;
       this.isPlaying = true;
-      this.playStartTime = performance.now();
+      this.playStartTime = this._clockNow();
       this.playStartOffset = this.currentTime;
       this._tickPlayback();
     },
@@ -409,7 +689,7 @@ export function initPianoRoll() {
         cancelAnimationFrame(this.playbackRaf);
         this.playbackRaf = null;
       }
-      const elapsed = (performance.now() - this.playStartTime) / 1000;
+      const elapsed = this._elapsedSinceStart();
       this.currentTime = this.playStartOffset + elapsed;
     },
 
@@ -425,10 +705,12 @@ export function initPianoRoll() {
 
     _tickPlayback() {
       if (!this.isPlaying) return;
-      const elapsed = (performance.now() - this.playStartTime) / 1000;
-      this.currentTime = this.playStartOffset + elapsed;
+      // 一帧只取一次时间：网格与波形两个画布必须画在**同一时刻**，
+      // 否则 rAF 回调里的第二次取钟会让两条播放头差出零点几毫秒，
+      // 高缩放下看起来就是"波形播放头和网格播放头错开一像素"。
+      this.currentTime = this.playStartOffset + this._elapsedSinceStart();
       this.render();
-      drawWaveformWithPlayhead(this.getCurrentTime());
+      drawWaveformWithPlayhead(this.currentTime);
       this.playbackRaf = requestAnimationFrame(() => this._tickPlayback());
     },
 
@@ -439,7 +721,7 @@ export function initPianoRoll() {
 
     getCurrentTime() {
       if (this.isPlaying) {
-        return this.playStartOffset + (performance.now() - this.playStartTime) / 1000;
+        return this.playStartOffset + this._elapsedSinceStart();
       }
       return this.currentTime;
     },
@@ -449,6 +731,7 @@ export function initPianoRoll() {
       if (idx !== -1) {
         this.notes.splice(idx, 1);
         if (this.selectedNoteId === noteId) this.selectedNoteId = null;
+        this._invalidateSortedNotes();
         this._staticCacheDirty = true;
         this.render();
       }
@@ -463,8 +746,11 @@ export function initPianoRoll() {
       const c = getCanvasColors();
       const pixelW = Math.floor(w * this.dpr);
       const pixelH = Math.floor(h * this.dpr);
+      // 静态层命中 = 自上次全量重绘以来没有发生 scroll/zoom/内容/尺寸变化。
+      const staticCacheHit = !this._staticCacheDirty && this._staticCache &&
+        this._staticCache.width === pixelW && this._staticCache.height === pixelH;
 
-      if (!this._staticCacheDirty && this._staticCache && this._staticCache.width === pixelW && this._staticCache.height === pixelH) {
+      if (staticCacheHit) {
         // Use cached static layer (background/grid/f0/notes/keys)
         ctx.clearRect(0, 0, w, h);
         ctx.drawImage(this._staticCache, 0, 0, w, h);
@@ -493,8 +779,9 @@ export function initPianoRoll() {
       // Always draw playhead on top
       this._drawPlayhead(ctx, h, c);
       updateInlineInputPosition(this);
-      // 同步底部和右侧滚动条滑块位置（在所有视口/内容变化后）
-      updateScrollbars();
+      // 只在此前发生了 scroll/zoom/内容/尺寸变化（静态层未命中）时同步滚动条：
+      // 播放头推进、悬停高亮等纯重绘不再每帧做 O(n) 内容扫描 + DOM 写入。
+      if (!staticCacheHit) updateScrollbars();
     },
 
     _drawBackground(ctx, w, h, c) {
@@ -504,10 +791,13 @@ export function initPianoRoll() {
 
     _drawF0Curve(ctx, w, h, c) {
       if (!this.f0Data || this.f0Data.length === 0) return;
+      // 折叠后高度为 0：整块跳过，否则会在钢琴键区顶部留下一条 100px 的空白带
+      const areaHeight = getF0AreaHeight();
+      if (areaHeight <= 0) return;
 
       const f0AreaTop = HEADER_HEIGHT;
-      const f0AreaBottom = f0AreaTop + F0_CURVE_AREA_HEIGHT;
-      const f0AreaHeight = f0AreaBottom - f0AreaTop;
+      const f0AreaBottom = f0AreaTop + areaHeight;
+      const f0AreaHeight = areaHeight;
       const minF0 = 50;
       const maxF0 = 1500;
       const minLogF0 = Math.log2(minF0);
@@ -520,10 +810,10 @@ export function initPianoRoll() {
       const f0BgEndX = state.wavDuration > 0 ? Math.min(Math.floor(audioEndX), w) : w;
 
       ctx.fillStyle = c.bgInput;
-      ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, F0_CURVE_AREA_HEIGHT);
+      ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, areaHeight);
 
       // 在F0区域背景之上重绘节拍网格线
-      const beatsPerMeasure = this.projectSettings.timeSignature[0];
+      const beatsPerMeasure = beatsPerMeasureOf(this.projectSettings.timeSignature);
       const startBeat = this._xToTime(PIANO_KEY_WIDTH);
       const endBeat = this._xToTime(f0BgEndX);
       ctx.lineWidth = 1;
@@ -531,7 +821,7 @@ export function initPianoRoll() {
         const x = this._timeToX(b);
         if (x < PIANO_KEY_WIDTH) continue;
         if (x > f0BgEndX) break;
-        const isMeasureLine = (b % beatsPerMeasure === 0);
+        const isMeasureLine = isMeasureBoundary(b, beatsPerMeasure);
         ctx.strokeStyle = isMeasureLine ? c.gridLineMajor : c.gridLineMinor;
         ctx.beginPath();
         ctx.moveTo(x, f0AreaTop);
@@ -554,7 +844,7 @@ export function initPianoRoll() {
       ctx.fillStyle = c.timeText;
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(t('preprocess.f0CurveReadOnly'), PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
+      ctx.fillText(t('preprocess.f0CurveEditable'), PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
 
       ctx.strokeStyle = c.borderStrong;
       ctx.lineWidth = 1;
@@ -660,7 +950,7 @@ export function initPianoRoll() {
     },
 
     _drawGrid(ctx, w, h, c) {
-      const beatsPerMeasure = this.projectSettings.timeSignature[0];
+      const beatsPerMeasure = beatsPerMeasureOf(this.projectSettings.timeSignature);
       const startBeat = this._xToTime(PIANO_KEY_WIDTH);
       const endBeat = this._xToTime(w);
 
@@ -668,28 +958,28 @@ export function initPianoRoll() {
       for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
         const x = this._timeToX(b);
         if (x < PIANO_KEY_WIDTH) continue;
-        const isMeasureLine = (b % beatsPerMeasure === 0);
+        const isMeasureLine = isMeasureBoundary(b, beatsPerMeasure);
         ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
         ctx.beginPath();
         ctx.moveTo(x, HEADER_HEIGHT);
-        ctx.lineTo(x, HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+        ctx.lineTo(x, HEADER_HEIGHT + getF0AreaHeight());
         ctx.stroke();
         ctx.strokeStyle = isMeasureLine ? c.fgDisabled : c.borderStrong;
         ctx.beginPath();
-        ctx.moveTo(x, HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+        ctx.moveTo(x, HEADER_HEIGHT + getF0AreaHeight());
         ctx.lineTo(x, h);
         ctx.stroke();
         if (isMeasureLine) {
           ctx.fillStyle = c.timeText;
           ctx.font = '11px sans-serif';
           ctx.textAlign = 'center';
-          const measureNum = Math.floor(b / beatsPerMeasure) + 1;
+          const measureNum = measureNumberAt(b, beatsPerMeasure);
           ctx.fillText(String(measureNum), x, HEADER_HEIGHT - 6);
         }
       }
 
       const startPitch = this._yToPitch(h);
-      const endPitch = this._yToPitch(HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+      const endPitch = this._yToPitch(HEADER_HEIGHT + getF0AreaHeight());
       const blackKeys = new Set([1, 3, 6, 8, 10]);
       for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
         const y = this._pitchToY(p);
@@ -709,7 +999,7 @@ export function initPianoRoll() {
         const w = note.duration * BEAT_WIDTH * this.zoomX;
         const h = NOTE_HEIGHT * this.zoomY;
 
-        if (x + w < PIANO_KEY_WIDTH || x > this.width || y + h < HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT || y > this.height) continue;
+        if (x + w < PIANO_KEY_WIDTH || x > this.width || y + h < HEADER_HEIGHT + getF0AreaHeight() || y > this.height) continue;
 
         const isSelected = note.id === this.selectedNoteId;
         const isHover = note.id === this.hoverNoteId;
@@ -752,7 +1042,7 @@ export function initPianoRoll() {
       };
 
       const startPitch = this._yToPitch(h);
-      const endPitch = this._yToPitch(HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
+      const endPitch = this._yToPitch(HEADER_HEIGHT + getF0AreaHeight());
       const blackKeys = new Set([1, 3, 6, 8, 10]);
 
       for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {

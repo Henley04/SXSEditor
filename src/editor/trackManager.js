@@ -11,6 +11,9 @@
  * `singer.backend?.type === 'plugin'`，否则插件被删除后的兼容策略会散落得到处都是。
  */
 
+import { createDefaultPitchCurve, normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { normalizePitchMode } from '../shared/pitchControl.js';
+
 /** 内置后端（缺省）。每次返回新对象，避免调用方共享引用后互相污染。 */
 export function createBuiltinBackend() {
   return { type: 'sxs' };
@@ -100,6 +103,10 @@ function createSinger(data = {}) {
     wavPath: data.wavPath ?? null,
     midiPath: data.midiPath ?? null,
     color: data.color ?? TRACK_COLORS[_hashCode(String(id)) % TRACK_COLORS.length],
+    // 轨道开关：静音 / 独奏。判定规则集中在 shared/trackAudibility.js，
+    // 这里只负责存取 —— 白名单重建时漏掉这两个字段，工程一存一读就失效。
+    mute: data.mute === true,
+    solo: data.solo === true,
     singerFilePath: data.singerFilePath ?? null,
     singerFileMissing: data.singerFileMissing ?? false,
     // Accompaniment track fields (only used when type === 'accompaniment')
@@ -114,15 +121,17 @@ function createSinger(data = {}) {
     numberOfChannels: data.numberOfChannels ?? 1,
     // 'sxs' = 内置 SoulX-Singer 推理（缺省）；'plugin' = 第三方/自定义歌声后端
     backend: normalizeBackend(data.backend),
+    // 插件扩展域（轨道级）。白名单重建时必须显式列出，否则 round-trip 一过
+    // 就丢 —— 而这个字段的价值恰恰只在"打开再保存"这一趟里体现。
+    ext: data.ext ?? undefined,
   };
 }
 
 function createPitchCurve() {
-  return {
-    enabled: true,
-    anchorPoints: [],
-    brushSegments: [],
-  };
+  // 新建分片默认开启自动音高曲线（开箱即用）。
+  // 加载旧工程走 normalizePitchCurve(raw)（autoDefault=false）—— 旧工程没有
+  // auto 字段，归一化后 auto.enabled=false，听感与旧版本逐位一致。
+  return createDefaultPitchCurve({ autoDefault: true });
 }
 
 function createFragment(data = {}) {
@@ -140,12 +149,22 @@ function createFragment(data = {}) {
     color: data.color ?? TRACK_COLORS[_hashCode(String(data.singerId ?? id)) % TRACK_COLORS.length],
     notes: data.notes ?? [],
     envelopes,
-    pitchCurve: data.pitchCurve ?? createPitchCurve(),
+    // pitchCurve 走"合并式归一化"而不是白名单重建：既补齐 auto/bakedSegments 的
+    // 默认值，又保留未来新增的未知字段（否则下一版加字段又会重演 F2 的静默丢失）。
+    // 有 pitchCurve 字段 = 来自工程/更新（缺 auto 即关闭）；没有 = 新建分片（自动开启）。
+    pitchCurve: data.pitchCurve ? normalizePitchCurve(data.pitchCurve) : createPitchCurve(),
+    // 音高来源：'auto'（未选择，按内容判定）/ 'manual' / 'score'。
+    // 同样是白名单字段 —— 漏登记会让用户的选择在"存盘 → 重新打开"后丢失，
+    // 退回 auto，于是"显式 manual 的空曲线"会被判成 score 而变声。
+    pitchMode: normalizePitchMode(data.pitchMode),
     // 汉字分组与音色/后处理曲线都是分片的持久化字段：createFragment 是显式
     // 白名单对象，漏登记的字段会在工程 load→addFragment 时被静默丢弃
     // （postprocess 丢失后编辑器回退全默认，首次自动保存还会把默认值写回）。
     kanjiGroups: data.kanjiGroups ?? [],
     postprocess: data.postprocess ?? null,
+    // 插件扩展域（分片级）。同 ext 在 singer 上的理由：白名单重建是 F2 那类
+    // "存一次就永久丢失"的老坑，新字段必须显式登记。
+    ext: data.ext ?? undefined,
   };
 }
 

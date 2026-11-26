@@ -464,7 +464,7 @@ function startWorkerRuntime() {
   function installRequireGuard(permissions) {
     if (!Array.isArray(permissions) || permissions.length === 0) return;
     const allowed = new Set(permissions);
-    // eslint-disable-next-line global-require
+     
     const Module = require('node:module');
     if (Module.__sxsPluginGuarded) return; // 同一个线程只装一次
     const origLoad = Module._load;
@@ -496,7 +496,7 @@ function startWorkerRuntime() {
     installRequireGuard(msg && msg.permissions);
     let mod;
     try {
-      // eslint-disable-next-line global-require
+       
       mod = require(msg.entry);
     } catch (err) {
       const denied = err && err.code === 'PLUGIN_PERMISSION_DENIED';

@@ -69,33 +69,53 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
     });
   });
 
-  describe('indexToF0', () => {
-    it('should convert index 0 to F0_MIN', () => {
-      const f0 = detector.indexToF0(0);
-      expect(f0).to.be.closeTo(30, 1);
-    });
+  describe('decodeSalience', () => {
+    const N_CLASS = 360;
+    const CENTS_OFFSET = 1997.3794084376191;
+    const hzOfBin = (bin) => 10 * Math.pow(2, (20 * bin + CENTS_OFFSET) / 1200);
 
-    it('should convert max index to F0_MAX', () => {
-      const f0 = detector.indexToF0(2559);
-      expect(f0).to.be.closeTo(7600, 100);
-    });
+    function salienceFor(bins) {
+      const data = new Float32Array(bins.length * N_CLASS);
+      bins.forEach((bin, t) => {
+        if (bin >= 0) data[t * N_CLASS + bin] = 0.9;
+      });
+      return data;
+    }
 
-    it('should produce monotonically increasing frequencies', () => {
-      const f0_0 = detector.indexToF0(0);
-      const f0_500 = detector.indexToF0(500);
-      const f0_1000 = detector.indexToF0(1000);
-      const f0_2000 = detector.indexToF0(2000);
-
-      expect(f0_500).to.be.greaterThan(f0_0);
-      expect(f0_1000).to.be.greaterThan(f0_500);
-      expect(f0_2000).to.be.greaterThan(f0_1000);
-    });
-
-    it('should produce positive frequencies', () => {
-      for (let i = 0; i < 2560; i += 100) {
-        const f0 = detector.indexToF0(i);
-        expect(f0).to.be.greaterThan(0);
+    it('should decode an isolated peak to its bin frequency', async () => {
+      const bins = Array.from({ length: 16 }, () => 100);
+      const f0 = await RmvpePitchDetector.decodeSalience(salienceFor(bins), bins.length);
+      expect(f0.length).to.equal(16);
+      for (let i = 0; i < 16; i++) {
+        expect(f0[i]).to.be.closeTo(hzOfBin(100), 0.5);
       }
+    });
+
+    it('should output 0 for silent frames', async () => {
+      const bins = [-1, -1, -1, -1];
+      const f0 = await RmvpePitchDetector.decodeSalience(salienceFor(bins), bins.length);
+      expect(Array.from(f0)).to.deep.equal([0, 0, 0, 0]);
+    });
+
+    it('should follow the 360-bin cents mapping (not a log LUT)', async () => {
+      const bins = [0, 90, 180, 270, 359];
+      const f0 = await RmvpePitchDetector.decodeSalience(salienceFor(bins), bins.length);
+      bins.forEach((bin, i) => {
+        expect(f0[i]).to.be.closeTo(hzOfBin(bin), 0.5);
+      });
+      // bin 0 ~32.7Hz, bin 359 ~1.9kHz: 必须严格单调递增
+      for (let i = 1; i < bins.length; i++) {
+        expect(f0[i]).to.be.greaterThan(f0[i - 1]);
+      }
+    });
+
+    it('should respect the voicing threshold', async () => {
+      const data = new Float32Array(2 * N_CLASS);
+      data[0 * N_CLASS + 50] = 0.02;  // below 0.03 -> unvoiced
+      data[1 * N_CLASS + 50] = 0.5;   // above -> voiced
+      const f0 = await RmvpePitchDetector.decodeSalience(data, 2);
+      expect(f0[0]).to.equal(0);
+      expect(f0[1]).to.be.closeTo(hzOfBin(50), 0.5);
     });
   });
 

@@ -1,6 +1,6 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT } from './constants.js';
-import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH, getMaxScrollX, getMaxScrollY } from './canvasRenderer.js';
+import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT, NOTE_HEIGHT, getF0AreaHeight, isF0AreaCollapsed, setF0AreaCollapsed } from './constants.js';
+import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH, getMaxScrollX, getMaxScrollY, getWaveformCanvasRect, invalidateWaveformCanvasRect } from './canvasRenderer.js';
 import { togglePlayback, startPlayback, stopPlayback, pausePlayback } from './playback.js';
 import { extractF0AndPitch } from './f0Extraction.js';
 import { extractF0BasicPitch, importMidiFile } from './midiExtraction.js';
@@ -19,6 +19,20 @@ let _playheadTooltip = null;
 // 避免长音频拖拽时 drawWaveformWithPlayhead 重复 drawImage 造成掉帧。
 let _playheadDragRaf = 0;
 let _playheadDragPendingSeconds = 0;
+
+// waveform canvas 的 getBoundingClientRect 缓存位于 canvasRenderer
+// （面板重排时由 panel.js 显式失效，也与波形绘制共享同一份 DOM 引用）。
+let _waveformCursor = '';
+function _setWaveformCursor(cursor) {
+  if (_waveformCursor === cursor) return;
+  _waveformCursor = cursor;
+  dom.waveformCanvas.style.cursor = cursor;
+}
+
+// 非拖拽 hover 的 rAF 合并：同一帧内的多次 mousemove 只保留最新坐标，
+// 每帧最多做一次命中测试 + tooltip/光标更新。
+let _hoverRaf = 0;
+let _hoverPending = null;
 
 function _formatTime(seconds) {
   const m = Math.floor(seconds / 60);
@@ -73,8 +87,42 @@ function _getCurrentPlayheadX() {
 }
 
 function _mouseToCanvasX(e) {
-  const rect = dom.waveformCanvas.getBoundingClientRect();
+  const rect = getWaveformCanvasRect();
   return e.clientX - rect.left;
+}
+
+/**
+ * 处理合并后的 hover：命中测试、光标与 tooltip。
+ * 只在 rAF 中执行，同一帧内无论收到多少次 mousemove 都只做一次布局读取与样式写。
+ */
+function _processHoverMove() {
+  _hoverRaf = 0;
+  const pending = _hoverPending;
+  _hoverPending = null;
+  if (!pending) return;
+  if (_isPlayheadDragging || !state.wavAudioBuffer) return;
+
+  const rect = getWaveformCanvasRect();
+  const x = pending.clientX - rect.left;
+  const y = pending.clientY - rect.top;
+
+  if (x < PIANO_KEY_WIDTH) {
+    _setWaveformCursor('default');
+    _hidePlayheadTooltip();
+    return;
+  }
+
+  const playheadX = _getCurrentPlayheadX();
+  const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
+  const onHeader = y <= HEADER_HEIGHT;
+  if (onPlayhead || onHeader) {
+    _setWaveformCursor('ew-resize');
+    const tipSeconds = _canvasXToClampedSeconds(x);
+    _showPlayheadTooltip(pending.clientX, pending.clientY, tipSeconds);
+  } else {
+    _setWaveformCursor('default');
+    _hidePlayheadTooltip();
+  }
 }
 
 /**
@@ -156,6 +204,17 @@ function _detachPlayheadDragWindowListeners() {
 }
 
 export function setupEventHandlers() {
+  // waveform rect 缓存的失效入口：窗口 resize、面板收/放、拖拽分隔条都会改变
+  // canvas 的尺寸或位置。除 canvas 自身外还必须观察 #extract-panel —— 面板折叠
+  // 只改变画布的 top，画布尺寸不变（#waveform-section 是固定百分比高度），
+  // 只 observe canvas 的 ResizeObserver 不会触发。
+  window.addEventListener('resize', invalidateWaveformCanvasRect);
+  if (typeof ResizeObserver !== 'undefined') {
+    const waveformResizeObserver = new ResizeObserver(invalidateWaveformCanvasRect);
+    waveformResizeObserver.observe(dom.waveformCanvas);
+    if (dom.extractPanel) waveformResizeObserver.observe(dom.extractPanel);
+  }
+
   // Keyboard
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
@@ -171,6 +230,41 @@ export function setupEventHandlers() {
   if (dom.btnImportMidi) {
     dom.btnImportMidi.addEventListener('click', importMidiFile);
   }
+  // F0 曲线折叠开关：编辑歌手与新建歌手的预处理窗口共用同一份状态
+  // （constants.js 里持久化到 localStorage），折叠后钢琴卷轴占满整个编辑区。
+  const btnToggleF0 = document.getElementById('btn-toggle-f0');
+  if (btnToggleF0) {
+    const syncF0ToggleState = () => {
+      btnToggleF0.setAttribute('aria-pressed', String(!isF0AreaCollapsed()));
+    };
+    syncF0ToggleState();
+    btnToggleF0.addEventListener('click', () => {
+      const roll = state.pianoRoll;
+      // 折叠会把可视区顶边从「头部 + F0 区」挪到「头部」，同时 maxScroll 变小，
+      // scrollY 会被 clamp 回一个更小的值 —— 音符会整体下移甚至掉出视口。
+      // 先记住当前视口中心对应的音高，切换后再把它放回中心，视觉位置就稳定了。
+      let centerPitch = null;
+      if (roll) {
+        const areaTop = HEADER_HEIGHT + getF0AreaHeight();
+        const visibleH = Math.max(NOTE_HEIGHT * 4, roll.height - areaTop);
+        centerPitch = roll._yToPitch(areaTop + visibleH / 2);
+      }
+
+      setF0AreaCollapsed(!isF0AreaCollapsed());
+      syncF0ToggleState();
+
+      if (roll) {
+        roll._staticCacheDirty = true;
+        if (centerPitch !== null) {
+          // 同一个音高同时作为上下界 → 重新居中
+          roll.scrollPitchRangeIntoView(centerPitch, centerPitch);
+        } else {
+          roll.render();
+        }
+      }
+    });
+  }
+
   dom.btnSave.addEventListener('click', saveSingerData);
   dom.btnBack.addEventListener('click', () => {
     stopPlayback();
@@ -184,7 +278,7 @@ export function setupEventHandlers() {
     if (!state.wavAudioBuffer || !state.wavDuration) return;
     if (e.button !== 0) return;
 
-    const rect = dom.waveformCanvas.getBoundingClientRect();
+    const rect = getWaveformCanvasRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
@@ -222,27 +316,9 @@ export function setupEventHandlers() {
 
     if (!state.wavAudioBuffer) return;
 
-    const rect = dom.waveformCanvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    if (x < PIANO_KEY_WIDTH) {
-      dom.waveformCanvas.style.cursor = 'default';
-      _hidePlayheadTooltip();
-      return;
-    }
-
-    const playheadX = _getCurrentPlayheadX();
-    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
-    const onHeader = y <= HEADER_HEIGHT;
-    if (onPlayhead || onHeader) {
-      dom.waveformCanvas.style.cursor = 'ew-resize';
-      const tipSeconds = _canvasXToClampedSeconds(x);
-      _showPlayheadTooltip(e.clientX, e.clientY, tipSeconds);
-    } else {
-      dom.waveformCanvas.style.cursor = 'default';
-      _hidePlayheadTooltip();
-    }
+    // 高频 hover 合并到下一帧：仅记录最新坐标，命中测试与样式写在 rAF 中做一次。
+    _hoverPending = { clientX: e.clientX, clientY: e.clientY };
+    if (!_hoverRaf) _hoverRaf = requestAnimationFrame(_processHoverMove);
   });
 
   dom.waveformCanvas.addEventListener('mouseup', () => {
@@ -253,7 +329,12 @@ export function setupEventHandlers() {
     // 注意：playhead 拖拽不能在这里终结——快速拖出边界时 mouseleave 会把最后一次
     // canvas 内侧采样定格为终值，造成归零残留（0.08~0.13s，取决于速度）。
     // 拖拽由 window 级 mouseup/blur（_onWindowPlayheadDragUp）收尾。
-    dom.waveformCanvas.style.cursor = 'default';
+    if (_hoverRaf) {
+      cancelAnimationFrame(_hoverRaf);
+      _hoverRaf = 0;
+    }
+    _hoverPending = null;
+    _setWaveformCursor('default');
   });
 
   // Waveform canvas wheel — rAF-coalesced.
@@ -283,7 +364,7 @@ export function setupEventHandlers() {
       _wheelAcc.ev = null;
       if (!ev || !state.pianoRoll) return;
 
-      const rect = dom.waveformCanvas.getBoundingClientRect();
+      const rect = getWaveformCanvasRect();
       const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
 
       if (zoom) {
@@ -306,6 +387,8 @@ export function setupEventHandlers() {
       } else {
         state.pianoRoll.scrollY += dy;
         state.pianoRoll.scrollY = Math.max(0, Math.min(getMaxScrollY(), state.pianoRoll.scrollY));
+        // 垂直滚动同样改变了可见内容，必须失效静态层（否则不会重绘/不会同步滚动条）。
+        state.pianoRoll._staticCacheDirty = true;
         state.pianoRoll.render();
       }
 

@@ -1,7 +1,10 @@
 import { t, tOr } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
+// pitchCurve 归一化：补齐 auto/bakedSegments 默认值，并保留未来字段
+import { normalizePitchCurve } from '../shared/pitchCurveState.js';
 import {
   getFragmentIsSynthesizing,
+  getFragmentSynthesisId, setFragmentSynthesisProgress,
   getFragmentIsExporting,
   getPitchCurve,
   getNotes,
@@ -14,6 +17,7 @@ import {
   getCurrentProject,
   setScrollY,
   setWavFileBuffer,
+  setSingerAnnotation,
   setPitchCurveSnapshotBeforeDrag,
   setEnvelopeSnapshotBeforeDrag,
   setDragOperation,
@@ -24,20 +28,25 @@ import {
   getPhonemeCache,
   setCurrentParamMode,
   setNotes,
+  bumpNotesVersion,
+  getAutoSaveTimer, setAutoSaveTimer,
   setEnvelopes,
   setPitchCurve,
+  setPitchMode,
   setCurrentFragment,
   setCurrentProject,
+  setProjectExtSchema,
   setTrackBackend,
   invalidatePitchCurveCache,
   setFragmentDataReceived,
   getKanjiGroups, setKanjiGroups,
   setPostprocess, invalidateTimbreCache, getSelectedTimbreAnchors,
+  setFragmentAudioDataSignature,
 } from './state.js';
 import { PARAM_MODES } from './constants.js';
 import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
-import { updateParamModeButtons, syncPostprocessUi } from './uiControls.js';
+import { updateParamModeButtons, syncPostprocessUi, updateFragmentPlayButton } from './uiControls.js';
 import { normalizeTrackBackend } from './pluginEditorMode.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 import { showAlertDialog } from '../alertDialog.js';
@@ -53,13 +62,18 @@ export function setupIpcHandlers() {
     if (cleanupIncompatible) _ipcCleanups.push(cleanupIncompatible);
   }
 
-  const cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
-    // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
-    // 之前回调同时更新两个按钮，播放时导出按钮也被改成"导出 X%"，
-    // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
+  const cleanupProgress = window.electronAPI.onFragmentSVSProgress((info) => {
+    const data = info && typeof info === 'object' ? info : { progress: info };
+    const progress = Math.max(0, Math.min(100, Math.round(Number(data.progress) || 0)));
+    // 旧任务的迟到进度不得覆盖当前合成任务的按钮文案。
+    if (data.synthesisId && getFragmentSynthesisId()
+        && data.synthesisId !== getFragmentSynthesisId()) return;
+
     if (getFragmentIsSynthesizing()) {
-      const btnPlayFragment = document.getElementById('btn-play-fragment');
-      if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.synthesizingProgress', { progress }), { icon: 'play' });
+      // 只更新状态，按钮文案统一由 updateFragmentPlayButton 派生；避免
+      // IPC 回调直接写 DOM 后遗留陈旧"100%"。
+      setFragmentSynthesisProgress(progress);
+      updateFragmentPlayButton();
     } else if (getFragmentIsExporting()) {
       const btnExportFragment = document.getElementById('btn-export-fragment');
       if (btnExportFragment) setLabel(btnExportFragment, t('fragment.exportingProgress', { progress }), { icon: 'download' });
@@ -81,12 +95,21 @@ export function setupIpcHandlers() {
       if (currentFragment && currentFragment.id === fragmentId) {
         if (startTime !== undefined) currentFragment.startTime = startTime;
         if (duration !== undefined) currentFragment.duration = duration;
+        applyRoutingChange(currentFragment, data);
         render();
       } else {
         // currentFragment 尚未就绪（分片编辑器刚打开、handleFragmentData 还没跑完），
         // 缓存最新的边界更新，待 handleFragmentData 完成后回放，避免静默丢弃。
-        setPendingBoundsUpdate({ fragmentId, startTime, duration });
+        setPendingBoundsUpdate({ fragmentId, startTime, duration, singerId: data.singerId, color: data.color, voice: data.voice });
       }
+    });
+    if (cleanup) _ipcCleanups.push(cleanup);
+  }
+
+  // 主窗口 → 编辑器：增量补丁（MCP / 脚本 / 自动流程改了分片数据）
+  if (window.electronAPI?.onFragmentDataPatched) {
+    const cleanup = window.electronAPI.onFragmentDataPatched((payload) => {
+      applyFragmentPatch(payload);
     });
     if (cleanup) _ipcCleanups.push(cleanup);
   }
@@ -103,12 +126,131 @@ export function setupIpcHandlers() {
   }
 }
 
+/**
+ * 主窗口把分片拖到别的歌手轨道后，同步编辑器的「路由 + 音色」。
+ *
+ * 只同步 singerId 是不够的：编辑器手上的参考音频（wavBuffer）与后端是**打开
+ * 那一刻**从轨道取的快照。只改 id 会让它拿着"新歌手的 id + 老歌手的参考音频"
+ * 去推理，唱出来还是老声音。所以换轨时主窗口把新轨道的 wavBuffer/backend
+ * 一起推过来（见 renderer/fragmentOperations.js 的 _syncFragmentToEditor）。
+ *
+ * 音色变化后必须作废本地音频签名：签名里含 singerId，本来下一次比对也能发现，
+ * 但显式清空让"需要重新推理"这件事在点播放之前就成立，不依赖比对时机。
+ *
+ * @param {object} fragment 编辑器当前分片
+ * @param {{singerId?:string|null, color?:string, voice?:{wavBuffer?:ArrayBuffer|null, backend?:object}|null}} data
+ */
+function applyRoutingChange(fragment, data) {
+  if (!fragment || !data) return;
+  let changed = false;
+  if (data.singerId !== undefined && fragment.singerId !== data.singerId) {
+    fragment.singerId = data.singerId;
+    changed = true;
+  }
+  if (typeof data.color === 'string') fragment.color = data.color;
+  if (data.voice) {
+    setWavFileBuffer(data.voice.wavBuffer || null);
+    setSingerAnnotation(data.voice.singerAnnotation || null);
+    setTrackBackend(normalizeTrackBackend(data.voice.backend));
+    getPhonemeCache().clear();
+    invalidateTimbreCache();
+    changed = true;
+  }
+  if (changed) setFragmentAudioDataSignature(null);
+}
+
+/**
+ * 应用主窗口推来的增量补丁（MCP / 脚本 / 自动流程从主窗口侧改了分片数据）。
+ *
+ * 为什么必须"先取消本地待执行的自动保存"：
+ * 编辑器的保存是 500ms 防抖。若此刻队列里还压着一次保存，它会在补丁应用后
+ * 把**编辑器内存里的旧数据**写回主窗口 —— 外部修改被静默回退。实机复现过：
+ * MCP 写入手动锚点 → 界面上 3 秒后自己消失。
+ *
+ * 取消之后不补发保存：远端数据此刻就是权威，本地 state 已与之一致；
+ * 用户下一次编辑会正常触发自动保存。
+ *
+ * 与 handleFragmentData 的区别：只更新指定字段，不重建编辑器（撤销栈、
+ * 视口位置、选区都保留）。
+ */
+function applyFragmentPatch(payload) {
+  const patch = payload && payload.patch;
+  const currentFragment = getCurrentFragment();
+  if (!patch || typeof patch !== 'object' || !currentFragment) return;
+  if (payload.fragmentId && payload.fragmentId !== currentFragment.id) return;
+
+  const timer = getAutoSaveTimer();
+  if (timer) {
+    clearTimeout(timer);
+    setAutoSaveTimer(null);
+  }
+
+  let changed = false;
+
+  if (Array.isArray(patch.notes)) {
+    // 与 handleFragmentData 同样的默认值补全，避免旧 note 缺 fadeIn/fadeOut
+    const nextNotes = patch.notes.map((n) => ({
+      ...n,
+      fadeIn: typeof n.fadeIn === 'number' ? n.fadeIn : 0,
+      fadeOut: typeof n.fadeOut === 'number' ? n.fadeOut : 0,
+    }));
+    setNotes(nextNotes);
+    currentFragment.notes = nextNotes;
+    bumpNotesVersion();
+    setNextNoteId(nextNotes.reduce((max, n) => Math.max(max, (n.id || 0) + 1), 1));
+    // 音符变了，锚点索引可能越界
+    getSelectedAnchorIndices().clear();
+    changed = true;
+  }
+
+  if (patch.pitchCurve) {
+    const pc = normalizePitchCurve(patch.pitchCurve);
+    setPitchCurve(pc);
+    currentFragment.pitchCurve = pc;
+    invalidatePitchCurveCache();
+    changed = true;
+  }
+
+  if (patch.envelopes) {
+    setEnvelopes(patch.envelopes);
+    currentFragment.envelopes = patch.envelopes;
+    changed = true;
+  }
+  if (patch.postprocess) {
+    setPostprocess(normalizePostprocessState(patch.postprocess));
+    currentFragment.postprocess = patch.postprocess;
+    invalidateTimbreCache();
+    syncPostprocessUi();
+    changed = true;
+  }
+  if (patch.kanjiGroups) {
+    setKanjiGroups(patch.kanjiGroups);
+    currentFragment.kanjiGroups = patch.kanjiGroups;
+    changed = true;
+  }
+  if (typeof patch.startTime === 'number') { currentFragment.startTime = patch.startTime; changed = true; }
+  if (typeof patch.duration === 'number') { currentFragment.duration = patch.duration; changed = true; }
+  if (typeof patch.name === 'string') {
+    currentFragment.name = patch.name;
+    document.getElementById('fragment-name').textContent = patch.name;
+    changed = true;
+  }
+
+  if (!changed) return;
+  // 刷新自动曲线控件（开关/预设/参数面板）与画布
+  try { document.dispatchEvent(new CustomEvent('sxse:fragment-loaded')); } catch (_e) { /* 非 DOM 环境忽略 */ }
+  render();
+}
+
 async function handleFragmentData(data) {
   if (!data || getFragmentDataReceived()) return;
   setFragmentDataReceived(true);
 
   setCurrentFragment(data.fragment);
   setCurrentProject(data.project);
+  // 扩展声明：只有插件来源的工程才有。内置工程为 null，音素面板的行为
+  // 与 M4 之前完全一致（只画宿主推导出来的那一份）。
+  setProjectExtSchema(data.project && data.project.extSchema);
   // 轨道后端（内置 {type:'sxs'} 或插件 {type:'plugin', pluginId, kindId}）。
   // 走 getFragmentData 兜底路径时 payload 可能没有 backend 字段（老工程/旧主进程），
   // 这里退化成内置后端而不是报错 —— 形态裁剪由 pluginEditorMode.js 负责。
@@ -127,22 +269,24 @@ async function handleFragmentData(data) {
   });
 
   if (data.fragment.pitchCurve) {
-    setPitchCurve({
-      enabled: data.fragment.pitchCurve.enabled !== undefined ? data.fragment.pitchCurve.enabled : true,
-      anchorPoints: data.fragment.pitchCurve.anchorPoints || [],
-      brushSegments: data.fragment.pitchCurve.brushSegments || [],
-    });
+    // 合并式归一化（不是三字段白名单重建）：
+    // 旧代码只取 enabled/anchorPoints/brushSegments，导致 auto 参数与
+    // bakedSegments 在"打开编辑器 → 500ms 自动保存"后被永久抹掉。
+    // normalizePitchCurve 会补默认值、夹紧数值，并保留未识别的未来字段。
+    setPitchCurve(normalizePitchCurve(data.fragment.pitchCurve));
     if (getPitchCurve().brushSegments.length > 0) {
       convertExistingBrushSegmentsToAnchorPoints();
     }
   } else {
-    setPitchCurve({
-      enabled: true,
-      anchorPoints: [],
-      brushSegments: [],
-    });
+    // 极旧工程没有 pitchCurve 字段：按"无自动曲线"处理，保持听感不变
+    setPitchCurve(normalizePitchCurve(null));
   }
+  // 音高来源：缺省 = auto（按曲线内容判定），旧工程因此会落到"什么都没设
+  // → score"，这正是想要的行为；显式选过 manual/score 的则原样恢复。
+  setPitchMode(data.fragment.pitchMode);
   invalidatePitchCurveCache();
+  // 通知 UI 刷新自动曲线控件（开关/预设/参数面板）
+  try { document.dispatchEvent(new CustomEvent('sxse:fragment-loaded')); } catch (_e) { /* 非 DOM 环境忽略 */ }
 
   // 音色 / 后处理曲线：旧工程没有该字段 → 退回全默认（所有处理关闭，音频与旧版本一致）。
   // normalizePostprocessState 逐参数合并到注册表默认值上，并把默认值/锚点值全部
@@ -177,6 +321,9 @@ async function handleFragmentData(data) {
   if (data.wavBuffer) {
     setWavFileBuffer(data.wavBuffer);
   }
+  // 歌手标注（singerData / midiNotes / f0Data）用于 prompt cond；老工程没有该
+  // 字段时置 null，保持旧的 prompt cond=0 行为。
+  setSingerAnnotation(data.singerAnnotation || null);
 
   getPhonemeCache().clear();
   resizeCanvases();
@@ -194,6 +341,7 @@ async function handleFragmentData(data) {
     if (cf && cf.id === pendingBounds.fragmentId) {
       if (pendingBounds.startTime !== undefined) cf.startTime = pendingBounds.startTime;
       if (pendingBounds.duration !== undefined) cf.duration = pendingBounds.duration;
+      applyRoutingChange(cf, pendingBounds);
       render();
     }
   }

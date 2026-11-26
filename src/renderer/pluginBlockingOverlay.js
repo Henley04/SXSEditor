@@ -202,7 +202,7 @@ export function createPluginBlockingOverlay(options = {}) {
         try {
           cancelTicket(ticket.ticketId);
         } catch (err) {
-          console.warn('[plugins] 取消阻滞 ticket 失败：', err && err.message ? err.message : err);
+          console.warn('[plugins] Failed to cancel blocking ticket:', err && err.message ? err.message : err);
         }
       }
     });
@@ -292,7 +292,7 @@ export function createPluginBlockingOverlay(options = {}) {
     }
     if (stallTimeoutMs <= 0) return;
     ticket.stallTimer = setTimer(() => {
-      console.warn(`[plugins] 阻滞 ticket ${ticket.ticketId} 超过 ${stallTimeoutMs}ms 无更新，已收起浮层（插件可能卡死或忘记 end）`);
+      console.warn(`[plugins] Blocking ticket ${ticket.ticketId} had no update for over ${stallTimeoutMs}ms, overlay collapsed (plugin may be stuck or forgot to call end)`);
       if (onStalled) onStalled(ticket.ticketId, 'stall-timeout');
       _forget(ticket.ticketId);
     }, stallTimeoutMs);
@@ -305,7 +305,7 @@ export function createPluginBlockingOverlay(options = {}) {
   function _armHardWatcher(ticket) {
     if (ticket.hardTimer != null || hardTimeoutMs <= 0) return;
     ticket.hardTimer = setTimer(() => {
-      console.warn(`[plugins] 阻滞 ticket ${ticket.ticketId} 存活超过 ${hardTimeoutMs}ms，已强制收起浮层`);
+      console.warn(`[plugins] Blocking ticket ${ticket.ticketId} exceeded ${hardTimeoutMs}ms, overlay force-collapsed`);
       if (onStalled) onStalled(ticket.ticketId, 'hard-timeout');
       _forget(ticket.ticketId);
     }, hardTimeoutMs);
@@ -401,7 +401,7 @@ export function createPluginBlockingOverlay(options = {}) {
       _clearWatchers(ticket);
       tickets.delete(id);
       // Map 为空时循环体不执行，正常路径不会产生噪音日志。
-      console.warn(`[plugins] 阻滞浮层被强制清理（reason=${reason || 'manual'}，ticket=${id}）`);
+      console.warn(`[plugins] Blocking overlay force-cleared (reason=${reason || 'manual'}, ticket=${id})`);
     }
     activeId = null;
     _render();
@@ -481,7 +481,7 @@ export function installPluginPlaybackBridge(options = {}) {
       const diag = data && data.diagnostics;
       const summary = summarizeDiagnostics(diag);
       const pluginId = data && data.pluginId ? data.pluginId : '?';
-      console.info('[plugins] 诊断上报', pluginId, diag);
+      console.info('[plugins] Diagnostic report', pluginId, diag);
       if (summary) overlay.setDiagnostic(summary);
     }));
   }

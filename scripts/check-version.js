@@ -1,28 +1,21 @@
-// Guards against version drift: the highest semver git tag is the source of
-// truth for the released version (see .github/workflows/ci.yml, "Determine
-// version and tag"), so a committed package.json that disagrees with it means
-// someone bumped one side and forgot the other.
-//
-// Note: this is intentionally NOT wired as a hard CI gate yet. The release
-// branch bumps the git tag inside CI without ever committing package.json, so
-// right after a release the two legitimately differ until the next commit
-// syncs them. Run it manually (`npm run check:version`) or from a pre-commit
-// hook; see the comment block below for how to enable it in CI later.
+// The highest semver tag is the latest published version. package.json may
+// name a newer release target (including a major version); an older or malformed
+// target is version drift. CI publishes a newer target, otherwise bumps patch.
 //
 // Usage: node scripts/check-version.js
 
 'use strict';
 
-const { execSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 
 const pkg = require('../package.json');
 
 function latestSemverTag() {
   try {
-    return execSync("git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1", {
+    return execFileSync('git', ['tag', '--list', '[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    }).trim().split(/\r?\n/)[0];
   } catch (_) {
     // No git / not a repo / shallow clone without tags.
     return '';
@@ -35,10 +28,25 @@ if (!last) {
   process.exit(0);
 }
 
-if (pkg.version !== last) {
-  console.error(`[check-version] package.json version (${pkg.version}) != latest semver tag (${last}).`);
-  console.error('[check-version] The git tag is the source of truth; bump package.json or re-tag.');
+const parse = (value) => {
+  const parts = String(value).split('.');
+  return parts.length === 3 && parts.every((part) => /^\d+$/.test(part))
+    ? parts.map(Number)
+    : null;
+};
+const current = parse(pkg.version);
+const released = parse(last);
+const isNewer = current && released && (
+  current[0] > released[0]
+  || (current[0] === released[0] && (
+    current[1] > released[1]
+    || (current[1] === released[1] && current[2] > released[2])
+  ))
+);
+
+if (!current || !isNewer) {
+  console.error(`[check-version] package.json version (${pkg.version}) must be newer than latest semver tag (${last}).`);
   process.exit(1);
 }
 
-console.log(`[check-version] OK: ${pkg.version}`);
+console.log(`[check-version] OK: ${pkg.version} (release target; latest tag ${last})`);

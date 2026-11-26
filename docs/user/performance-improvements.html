@@ -62,13 +62,13 @@
       </h1>
 
       <p data-lang="en">Over the last few releases we reworked the SXSEditor inference stack to run faster on NVIDIA GPUs and to be more robust across hardware. This article summarizes what changed, with a focus on the <strong>WindowsML TensorRT-RTX</strong> execution provider and the ~<strong>4× FP16 inference speedup</strong> it delivers on an <strong>NVIDIA GeForce RTX 5060 Laptop</strong>.</p>
-      <p data-lang="zh">在最近几个版本中，我们重构了 SXSEditor 的推理栈，使其在 NVIDIA GPU 上运行更快、并在不同硬件上更加稳健。本文总结了这些改动，重点介绍 <strong>WindowsML TensorRT-RTX</strong> 执行提供器，以及它在 <strong>NVIDIA GeForce RTX 5060 Laptop</strong> 上带来的约 <strong>4 倍 FP16 推理加速</strong>。</p>
+      <p data-lang="zh">最近几个版本对 SXSEditor 的推理栈进行了重构，使其在 NVIDIA GPU 上运行更快、并在不同硬件上更加稳健。本文总结了这些改动，重点介绍 <strong>WindowsML TensorRT-RTX</strong> 执行提供器，以及它在 <strong>NVIDIA GeForce RTX 5060 Laptop</strong> 上带来的约 <strong>4 倍 FP16 推理加速</strong>。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Related reading: <a href="app-updates.html">Application Updates</a> (v2.0.2) · <a href="model-updates.html">Model Updates</a> · <a href="../dev/inference-pipeline.html">Inference Pipeline</a>.</p>
-          <p data-lang="zh">相关阅读：<a href="app-updates.html">应用更新</a>（v2.0.2）· <a href="model-updates.html">模型更新</a> · <a href="../dev/inference-pipeline.html">推理管线</a>。</p>
+          <p data-lang="en">Related reading: <a href="app-updates.html">Application Updates</a> (v3.0.0) · <a href="model-updates.html">Model Updates</a> · <a href="../dev/inference-pipeline.html">Inference Pipeline</a>.</p>
+          <p data-lang="zh">相关阅读：<a href="app-updates.html">应用更新</a>（v3.0.0）· <a href="model-updates.html">模型更新</a> · <a href="../dev/inference-pipeline.html">推理管线</a>。</p>
         </div>
       </div>
 
@@ -80,7 +80,7 @@
       <p data-lang="zh">SXSEditor 现在提供 FP16 ONNX 模型，可通过 <strong>Windows ML (WinML)</strong> 的 <code>NvTensorRTRTXExecutionProvider</code>（基于 MSIX WinML 运行时封装 TensorRT，ORT 1.27 + TensorRT-RTX）在 NVIDIA GPU 上运行。当 TensorRT-RTX 路径可用且模型文件存在时，<code>preflow</code>、<code>diff_step</code> 与 <code>vocoder</code> 会在 <code>[winml:NvTensor]</code> 后端加载，并自动以 <code>DML</code>（以及 <code>CPU</code>）作为回退。</p>
 
       <p data-lang="en">We measured both model-level p50 latency and end-to-end synthesis on an <strong>NVIDIA GeForce RTX 5060 Laptop (8 GB), Windows 11 24H2</strong>. The TensorRT-RTX FP16 path is roughly <strong>4–5× faster</strong> than the DML FP32 baseline on individual models, and approx. <strong>4× faster</strong> end-to-end for a single 16-step segment.</p>
-      <p data-lang="zh">我们在 <strong>NVIDIA GeForce RTX 5060 Laptop（8 GB）、Windows 11 24H2</strong> 上测得了模型级 p50 延迟与端到端合成时间。TensorRT-RTX 的 FP16 路径在单个模型上比 DML FP32 基线快约 <strong>4–5 倍</strong>，对于单个 16 步乐段，端到端约<strong>快 4 倍</strong>。</p>
+      <p data-lang="zh">以下数据在 <strong>NVIDIA GeForce RTX 5060 Laptop（8 GB）、Windows 11 24H2</strong> 上测得：模型级 p50 延迟与端到端合成时间。TensorRT-RTX 的 FP16 路径在单个模型上比 DML FP32 基线快约 <strong>4–5 倍</strong>，对于单个 16 步乐段，端到端约<strong>快 4 倍</strong>。</p>
 
       <table>
         <thead>
@@ -113,15 +113,15 @@
         </tbody>
       </table>
 
-      <p data-lang="en">TensorRT-RTX is <strong>opt-in</strong>: the app exposes a <em>one-click TensorRT-RTX diagnostic</em> and keeps the TRT dynamic profile generation optional. Model files are drop-in compatible with the existing <code>fp16/</code> folder, so switching between DML and TensorRT-RTX requires no extra downloads.</p>
-      <p data-lang="zh">TensorRT-RTX 为<strong>可选开启</strong>：应用提供<em>一键 TensorRT-RTX 诊断</em>，并保持 TRT 动态 profile 生成可选。模型文件与现有 <code>fp16/</code> 目录直接兼容，因此在 DML 与 TensorRT-RTX 之间切换无需额外下载。</p>
+      <p data-lang="en">TensorRT-RTX needs no manual setup: on the Windows ML path, ONNX Runtime probes the <code>NvTensorRtRtx</code> execution provider first (then OpenVINO) and falls back to DirectML/CPU when unavailable — an installed TensorRT-RTX runtime is therefore used automatically. Model files are drop-in compatible with the existing <code>fp16/</code> folder, so switching between DML and TensorRT-RTX requires no extra downloads.</p>
+      <p data-lang="zh">TensorRT-RTX 无需手动开启：在 Windows ML 路径上，ONNX Runtime 会优先探测 <code>NvTensorRtRtx</code> 执行提供器（随后是 OpenVINO），不可用时自动回退 DirectML/CPU——因此安装了 TensorRT-RTX 运行时即自动启用。模型文件与现有 <code>fp16/</code> 目录直接兼容，在 DML 与 TensorRT-RTX 之间切换无需额外下载。</p>
 
       <h2>
         <span data-lang="en">Native backend selection</span>
         <span data-lang="zh">原生后端选择</span>
       </h2>
-      <p data-lang="en">The old WAML-enabled checkbox has been replaced by a <strong>native inference backend selector</strong> in Settings. A single execution provider now serves multiple hardware paths — you pick a preferred backend (e.g. <em>TensorRT-RTX</em>, <em>DML</em>, <em>WebNN NPU/GPU</em> or <em>CPU</em>) and SXSEditor falls back automatically when a path is unavailable. This removes a whole class of "model loaded on CPU" surprises and makes hardware switching explicit.</p>
-      <p data-lang="zh">设置中旧的 WinML 开关已被<strong>原生推理后端选择器</strong>取代。单一执行提供器现可服务多条硬件路径——你选择一个首选后端（如 <em>TensorRT-RTX</em>、<em>DML</em>、<em>WebNN NPU/GPU</em> 或 <em>CPU</em>），当某条路径不可用时 SXSEditor 会自动回退。这消除了一整类"模型意外跑到 CPU 上"的问题，也让硬件切换变得清晰。</p>
+      <p data-lang="en">The old WAML-enabled checkbox has been replaced by a <strong>native inference backend selector</strong> in Settings (Inference → Native backend). You pick a preferred backend — <em>Auto (Windows ML first)</em>, <em>Windows ML</em> or <em>DirectML</em> — and SXSEditor falls back automatically when a path is unavailable. On the Windows ML paths the runtime probes the TensorRT-RTX and OpenVINO execution providers before falling back to DirectML/CPU. This removes a whole class of "model loaded on CPU" surprises and makes hardware switching explicit.</p>
+      <p data-lang="zh">设置中旧的 WinML 开关已被<strong>原生推理后端选择器</strong>取代（推理 → 本机执行后端）。你选择一个首选后端——<em>自动（Windows ML 优先）</em>、<em>Windows ML</em> 或 <em>DirectML</em>——当某条路径不可用时 SXSEditor 会自动回退。在 Windows ML 路径上，运行时会先探测 TensorRT-RTX 与 OpenVINO 执行提供器，再回退 DirectML/CPU。这消除了一整类"模型意外跑到 CPU 上"的问题，也让硬件切换变得清晰。</p>
 
       <h2>
         <span data-lang="en">Robustness: zero-output protection &amp; D2H fallback</span>
@@ -140,6 +140,7 @@
       <ul>
         <li><span data-lang="en"><strong>GPU drain delay removal</strong> — the fixed per-chunk GPU drain waits are gone; waits are now applied only after an out-of-memory event, cutting idle time in the diffusion loop.</span><span data-lang="zh"><strong>移除 GPU 排空延迟</strong>——移除每 chunk 固定的 GPU 排空等待；仅在发生显存不足后才施加等待，减少扩散循环中的空闲时间。</span></li>
         <li><span data-lang="en"><strong>Streaming chunk-resume cache</strong> — long streams resume from cached chunks, so scrubbing back and replaying a section avoids re-running inference.</span><span data-lang="zh"><strong>流式 chunk 续播缓存</strong>——长流可从已缓存 chunk 续播，回拉播放头重放某段时无需重新推理。</span></li>
+        <li><span data-lang="en"><strong>Playback cache keyed by input signature</strong> — resuming playback now compares a signature of the current inputs (fragment, notes, pitch curve, singer, inference backend, reference audio, tempo and inference parameters) instead of checking whether audio data merely exists. Changing the singer, its backend or the reference audio always re-synthesizes instead of replaying stale audio.</span><span data-lang="zh"><strong>播放缓存按输入签名判定</strong>——续播时不再只看「是否已有音频数据」，而是比对当前输入的签名（分片、音符、音高曲线、歌手、推理后端、参考音频、速度与推理参数）。更换歌手、后端或参考音频都会重新合成，不会复用旧结果。</span></li>
         <li><span data-lang="en"><strong>Vocal region splitting &amp; long-rest fix</strong> — non-vocal regions (incl. long rests ≥ 1.5 s) are split out of model input, and streaming synthesis keeps absolute note starts so voices no longer pile up after a long rest.</span><span data-lang="zh"><strong>人声区域切分与长休止修复</strong>——非人声区域（含 ≥ 1.5 秒的长休止）从模型输入中切分出去，流式合成保持绝对音符起点，长休止后的人声不再重叠堆叠。</span></li>
       </ul>
 
@@ -148,12 +149,12 @@
         <span data-lang="zh">如何启用</span>
       </h2>
       <ol>
-        <li data-lang="en">Install the latest <strong>v2.0.2</strong> build.</li>
-        <li data-lang="zh">安装最新的 <strong>v2.0.2</strong> 版本。</li>
-        <li data-lang="en">Open <em>Settings → Backend</em> and select <strong>TensorRT-RTX (NVIDIA)</strong> after running the built-in diagnostic.</li>
-        <li data-lang="zh">打开 <em>设置 → 后端</em>，运行内置诊断后选择 <strong>TensorRT-RTX (NVIDIA)</strong>。</li>
-        <li data-lang="en">Confirm the log shows <code>[winml:NvTensor]</code> for <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code>.</li>
-        <li data-lang="zh">确认日志中 <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> 显示 <code>[winml:NvTensor]</code>。</li>
+        <li data-lang="en">Install the latest build.</li>
+        <li data-lang="zh">安装最新的版本。</li>
+        <li data-lang="en">Open <em>Settings → Inference</em> and leave Native backend on <strong>Auto (Windows ML first)</strong> — this is the path that probes TensorRT-RTX.</li>
+        <li data-lang="zh">打开 <em>设置 → 推理</em>，将本机执行后端保持为<strong>自动（Windows ML 优先）</strong>——这是会探测 TensorRT-RTX 的路径。</li>
+        <li data-lang="en">Confirm the log shows the <code>[TRTRTX]</code> scope for <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> (e.g. <code>[TRTRTX][session:…] created ep=…NvTensorRtRtx…</code>); <code>[WinML]</code> appears when another Windows ML EP serves the model.</li>
+        <li data-lang="zh">确认日志中 <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code>显示 <code>[TRTRTX]</code> 前缀（例如 <code>[TRTRTX][session:…] created ep=…NvTensorRtRtx…</code>）；当其他 Windows ML EP 承载模型时显示 <code>[WinML]</code>。</li>
       </ol>
 
       <nav class="doc-pager">

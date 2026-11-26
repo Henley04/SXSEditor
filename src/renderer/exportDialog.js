@@ -12,7 +12,7 @@
 
 import '../exportDialog.css';
 import { t } from '../i18n/index.js';
-import { dom, trackManager } from './state.js';
+import { dom, state, trackManager } from './state.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { runExportJob } from './audioPlayback.js';
@@ -22,7 +22,7 @@ import { createIcon } from '../icons/iconHelper.js';
 
 // ==================== 常量 ====================
 
-function resampleForExport(interleaved, sourceRate, targetRate, channels) {
+export function resampleForExport(interleaved, sourceRate, targetRate, channels) {
   if (sourceRate === targetRate) return interleaved;
   const sourceFrames = Math.floor(interleaved.length / channels);
   const targetFrames = Math.max(1, Math.round(sourceFrames * targetRate / sourceRate));
@@ -63,21 +63,30 @@ export async function openExportDialog() {
   const fullCleanup = () => {
     cleanupFns.forEach(fn => { try { fn(); } catch (_) {} });
     cleanupFns.length = 0;
+    if (overlay) {
+      // 进度视图的已用时计时器挂在节点上，必须显式停止，否则关窗后 interval 继续跑。
+      const progressView = overlay.querySelector('.export-dialog-progress');
+      if (progressView && typeof progressView._stopElapsedTimer === 'function') {
+        try { progressView._stopElapsedTimer(); } catch (_) {}
+      }
+    }
     if (overlay && overlay.parentElement) overlay.remove();
     overlay = null;
     _dialogOpen = false;
   };
 
   try {
-    // 早期检查：分片与音符
+    // 早期检查：既无分片又无伴奏轨才拒绝（仅伴奏轨工程可导出纯伴奏 WAV，
+    // runExportJob 已支持该路径）。
     const fragments = trackManager.getFragments();
-    if (fragments.length === 0) {
+    const hasAccompaniment = trackManager.getSingers().some(s => s.type === 'accompaniment');
+    if (fragments.length === 0 && !hasAccompaniment) {
       _dialogOpen = false;
       showAlertDialog(t('main.exportDialog.noFragments'));
       return;
     }
     const hasNotes = fragments.some(f => f.notes && f.notes.length > 0);
-    if (!hasNotes) {
+    if (!hasNotes && !hasAccompaniment) {
       _dialogOpen = false;
       showAlertDialog(t('main.exportDialog.noNotes'));
       return;
@@ -91,7 +100,7 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.7,
+      exportCfgRescale: settings.exportCfgRescale ?? 0.75,
       exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : false,
       outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
@@ -103,11 +112,11 @@ export async function openExportDialog() {
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
       releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder === true,
       // Task 11/17/18: new settings keys
-      exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'constant',
       exportCfgStrengthStart: Number.isFinite(settings.exportCfgStrengthStart) ? settings.exportCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
       exportCfgScheduleKeyframes: Array.isArray(settings.exportCfgScheduleKeyframes) ? settings.exportCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
       // M5: preview CFG schedule mirrors (fall back to top-level cfg* keys)
-      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'constant',
       previewCfgStrengthStart: Number.isFinite(settings.previewCfgStrengthStart) ? settings.previewCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
       previewCfgScheduleKeyframes: Array.isArray(settings.previewCfgScheduleKeyframes) ? settings.previewCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
       // Dynamic thresholding (export path)
@@ -130,7 +139,31 @@ export async function openExportDialog() {
       exportEnableQDrift: (settings.modelPrecision === 'fp16' || settings.modelPrecision === 'int8')
         && resolveQDriftDefault(settings, 'exportEnableQDrift'),
       outputPath: '',
+      // 导出内容：'mix' 人声 + 伴奏 / 'vocal' 仅人声 / 'accompaniment' 仅伴奏。
+      // 与轨道静音、独奏叠加生效（静音/独奏判定在 trackAudibility.js）。
+      scope: ['mix', 'vocal', 'accompaniment'].includes(settings.exportScope) ? settings.exportScope : 'mix',
+      // 成品格式。'wav' 是宿主内置编码器；插件导出器存成 {pluginId,id,ext,label}。
+      // 存对象而不是 id 字符串：导出时要同时知道"问哪个插件的哪个导出器"，
+      // 以及"目标扩展名必须是什么"（主进程会校验两者一致）。
+      exporter: null,
+      _exporters: [],
     };
+
+    // 「导出内容」的可选项由工程实际内容决定：没有伴奏轨就没有"仅伴奏"，
+    // 没有带音符的分片就没有"仅人声"。上次存下的选择若已不适用，回落混合。
+    form._hasVocalNotes = hasNotes;
+    form._hasAccompaniment = hasAccompaniment;
+    if (form.scope === 'accompaniment' && !hasAccompaniment) form.scope = 'mix';
+    if (form.scope === 'vocal' && !hasNotes) form.scope = 'mix';
+
+    // 插件导出器清单。拿不到（插件系统未初始化 / 一个都没装）就是空数组，
+    // 界面上格式下拉只剩 WAV 一项 —— 这是正常状态，不是错误。
+    try {
+      const list = await window.electronAPI?.pluginHost?.listExporters?.();
+      if (Array.isArray(list)) form._exporters = list;
+    } catch (err) {
+      console.warn('[ExportDialog] listExporters failed:', err && err.message);
+    }
 
     // 默认输出路径：用户上次导出位置或桌面
     const defaultName = `${t('main.exportDialog.defaultFileName')}_${formatTimestamp(new Date())}.wav`;
@@ -186,6 +219,9 @@ function buildDialog(form, settings, fullCleanup) {
 
   // --- 高级选项区 ---
   body.appendChild(buildAdvancedSection(form, settings));
+
+  // --- 导出内容区 ---
+  body.appendChild(buildScopeSection(form));
 
   // --- 导出位置区 ---
   body.appendChild(buildOutputSection(form));
@@ -357,7 +393,7 @@ function buildParamsSection(form) {
     value: form.exportCfgRescale,
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
-    warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
+    warning: (v) => (v < 0.5 || v > 0.75) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
   });
   section.appendChild(rescaleField);
 
@@ -481,7 +517,7 @@ function buildParamsSection(form) {
   for (const opt of bitDepthOptions) {
     const option = document.createElement('option');
     option.value = String(opt.value);
-    option.textContent = `${t(opt.labelKey)}${opt.value === 32 ? ` (${t('main.exportDialog.sampleRateDefault')})` : ''}`;
+    option.textContent = `${t(opt.labelKey)}${opt.value === 32 ? ` (${t('main.exportDialog.bitDepthDefault')})` : ''}`;
     bitDepthSelect.appendChild(option);
   }
   bitDepthSelect.value = String(form.outputBitDepth);
@@ -872,6 +908,86 @@ function updateSifiganPrecisionVisibility(content, form) {
   if (group) group.hidden = form.vocoderType !== 'sifigan';
 }
 
+/**
+ * 换掉路径的最后一段扩展名，目录与主文件名不动。
+ *
+ * 不用 `path` 模块：这段代码在渲染层，没有 Node 的 path；
+ * 也不能用 URL 解析 —— Windows 盘符会被当成协议。
+ */
+function swapOutputExt(p, ext) {
+  const s = String(p || '').trim();
+  if (!s) return s;
+  const m = /[\\/]([^\\/]*)$/.exec(s);
+  const base = m ? m[1] : s;
+  const dirLen = s.length - base.length;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return `${s.slice(0, dirLen)}${stem}${ext}`;
+}
+
+function buildScopeSection(form) {
+  const section = document.createElement('div');
+  section.className = 'export-dialog-section';
+  section.appendChild(buildSectionTitle('main.exportDialog.scopeSection'));
+
+  const hint = document.createElement('div');
+  hint.className = 'export-dialog-field-hint';
+  hint.textContent = t('main.exportDialog.scopeHint');
+  section.appendChild(hint);
+
+  const group = document.createElement('div');
+  group.className = 'export-dialog-scope-group';
+  // role=radiogroup + 原生 radio：键盘方向键切换、读屏播报都由浏览器保证，
+  // 不需要自己实现 roving tabindex。
+  group.setAttribute('role', 'radiogroup');
+  group.setAttribute('aria-label', t('main.exportDialog.scopeSection'));
+
+  const options = [
+    { value: 'mix', labelKey: 'main.exportDialog.scopeMix' },
+    { value: 'vocal', labelKey: 'main.exportDialog.scopeVocal', available: form._hasVocalNotes !== false, reasonKey: 'main.exportDialog.noNotes' },
+    { value: 'accompaniment', labelKey: 'main.exportDialog.scopeAccompaniment', available: form._hasAccompaniment !== false, reasonKey: 'main.exportDialog.noAccompaniment' },
+  ];
+
+  const inputs = [];
+  for (const opt of options) {
+    const label = document.createElement('label');
+    label.className = 'export-dialog-scope-option';
+    label.dataset.scopeValue = opt.value;
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'export-scope';
+    input.value = opt.value;
+    input.checked = form.scope === opt.value;
+    // 工程里没有对应内容时直接禁用，而不是让用户导出一次再看到报错。
+    if (opt.available === false) {
+      input.disabled = true;
+      label.classList.add('is-disabled');
+      label.title = t(opt.reasonKey);
+    }
+    label.classList.toggle('is-checked', input.checked);
+
+    const text = document.createElement('span');
+    text.textContent = t(opt.labelKey);
+
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      form.scope = opt.value;
+      for (const el of inputs) {
+        el.label.classList.toggle('is-checked', el.input.checked);
+      }
+    });
+
+    label.appendChild(input);
+    label.appendChild(text);
+    group.appendChild(label);
+    inputs.push({ input, label });
+  }
+
+  section.appendChild(group);
+  return section;
+}
+
 function buildOutputSection(form) {
   const section = document.createElement('div');
   section.className = 'export-dialog-section';
@@ -882,10 +998,57 @@ function buildOutputSection(form) {
   hint.textContent = t('main.exportDialog.outputHint');
   section.appendChild(hint);
 
+  // 格式下拉：内置 WAV + 插件导出器。
+  //
+  // 放在路径之前，是因为"选格式"决定了路径该是什么扩展名 —— 顺序反过来，
+  // 用户会先看到 .wav 的路径，再选 FLAC，然后疑惑文件名为什么没变。
+  let pathInput = null;
+  if (form._exporters && form._exporters.length) {
+    const fmtField = document.createElement('div');
+    fmtField.className = 'export-dialog-field';
+    const fmtLabel = document.createElement('div');
+    fmtLabel.className = 'export-dialog-field-label';
+    const fmtLabelText = document.createElement('span');
+    fmtLabelText.textContent = t('main.exportDialog.formatLabel');
+    fmtLabel.appendChild(fmtLabelText);
+    fmtField.appendChild(fmtLabel);
+
+    const select = document.createElement('select');
+    select.className = 'export-dialog-select';
+    const wavOpt = document.createElement('option');
+    wavOpt.value = 'wav';
+    wavOpt.textContent = t('main.exportDialog.formatWav');
+    select.appendChild(wavOpt);
+    for (const ex of form._exporters) {
+      const opt = document.createElement('option');
+      opt.value = `plugin:${ex.pluginId}:${ex.id}`;
+      opt.textContent = `${ex.label} · ${ex.ext}`;
+      if (ex.description) opt.title = ex.description;
+      select.appendChild(opt);
+    }
+    select.value = form.exporter ? `plugin:${form.exporter.pluginId}:${form.exporter.id}` : 'wav';
+    select.addEventListener('change', () => {
+      if (select.value === 'wav') {
+        form.exporter = null;
+      } else {
+        const ex = form._exporters.find((e) => `plugin:${e.pluginId}:${e.id}` === select.value);
+        form.exporter = ex
+          ? { pluginId: ex.pluginId, id: ex.id, ext: ex.ext, label: ex.label }
+          : null;
+      }
+      const next = swapOutputExt(form.outputPath, form.exporter ? form.exporter.ext : '.wav');
+      form.outputPath = next;
+      if (pathInput) pathInput.value = next;
+    });
+    fmtField.appendChild(select);
+    section.appendChild(fmtField);
+  }
+
   const row = document.createElement('div');
   row.className = 'export-dialog-path-row';
 
   const input = document.createElement('input');
+  pathInput = input;
   input.type = 'text';
   input.value = form.outputPath;
   input.placeholder = t('main.exportDialog.outputHint');
@@ -899,10 +1062,14 @@ function buildOutputSection(form) {
   if (browseIcon) browseBtn.appendChild(browseIcon);
   browseBtn.appendChild(document.createTextNode(t('main.exportDialog.browse')));
   browseBtn.addEventListener('click', async () => {
+    const ext = form.exporter ? form.exporter.ext : '.wav';
     const result = await window.electronAPI.showSaveDialog({
       title: t('main.exportDialog.title'),
       defaultPath: form.outputPath || undefined,
-      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+      filters: [{
+        name: form.exporter ? form.exporter.label : 'WAV Audio',
+        extensions: [ext.slice(1)],
+      }],
     });
     if (!result.canceled && result.filePath) {
       form.outputPath = result.filePath;
@@ -1029,18 +1196,24 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
   // an absolute path before starting the expensive synthesis job.
   const candidate = (form.outputPath || '').trim();
   const isAbsolute = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(candidate);
+  const targetExt = form.exporter ? form.exporter.ext : '.wav';
   if (!isAbsolute) {
     const result = await window.electronAPI.showSaveDialog({
       title: t('main.exportDialog.title'),
       defaultPath: candidate || undefined,
-      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+      filters: [{
+        name: form.exporter ? form.exporter.label : 'WAV Audio',
+        extensions: [targetExt.slice(1)],
+      }],
     });
     if (result.canceled || !result.filePath) return;
     form.outputPath = result.filePath;
   }
   const trimmedPath = form.outputPath.trim();
-  if (!trimmedPath.toLowerCase().endsWith('.wav')) {
-    form.outputPath = trimmedPath + '.wav';
+  // 扩展名以当前格式为准：用户可能手打了一个 .wav 却选了 FLAC 导出器，
+  // 而主进程会拒绝"导出器与扩展名不符" —— 与其让他在 98% 处失败，不如现在改对。
+  if (!trimmedPath.toLowerCase().endsWith(targetExt)) {
+    form.outputPath = swapOutputExt(trimmedPath, targetExt);
   } else {
     form.outputPath = trimmedPath;
   }
@@ -1077,6 +1250,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     exportEnableQDrift: form.exportEnableQDrift === true,
     exportSampleRate: form.outputSampleRate,
     exportBitDepth: form.outputBitDepth,
+    exportScope: form.scope,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -1145,7 +1319,7 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
   timeEl.className = 'export-dialog-field-hint';
   timeEl.style.textAlign = 'center';
   timeEl.style.marginTop = '8px';
-  timeEl.textContent = t('main.exportDialog.elapsed', { time: '0.0s' }) || '已用时 0.0s';
+  timeEl.textContent = t('main.exportDialog.elapsed', { time: '0.0s' });
   progressView.appendChild(timeEl);
 
   // 调整 panel 高度以适应进度视图
@@ -1154,11 +1328,10 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
   const t0 = performance.now();
   let timerId = setInterval(() => {
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-    timeEl.textContent = (t('main.exportDialog.elapsed', { time: elapsed + 's' }) || `已用时 ${elapsed}s`);
+    timeEl.textContent = t('main.exportDialog.elapsed', { time: elapsed + 's' });
   }, 200);
   const stopTimer = () => { if (timerId) { clearInterval(timerId); timerId = null; } };
-  // 清理时需停表，避免泄漏
-  const _origRemove = progressView.remove.bind(progressView);
+  // 挂到进度视图节点上，由 fullCleanup 在关窗时统一停表，避免 interval 泄漏。
   progressView._stopElapsedTimer = stopTimer;
 
   const setProgress = (pct) => {
@@ -1189,7 +1362,9 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(0);
     setStatus('progressPreparing');
 
-    const { mixedAudio, numChannels, maxDuration, fragmentCount } = await runExportJob({
+    const { mixedAudio, numChannels, maxDuration, fragmentCount, accompanimentCount } = await runExportJob({
+      // 导出内容：mix / vocal / accompaniment，由"导出内容"单选决定。
+      scope: form.scope,
       nSteps: form.exportDiffSteps,
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
@@ -1219,24 +1394,62 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setStatus('progressEncoding');
     setProgress(95);
 
-    // 编码 WAV
-    // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
-    const { encodeWav } = require('../audio/wavEncoder.js');
+    // 重采样到用户在"采样率"里选的档位。插件拿到的是**成品采样**，
+    // 不是 24k 的中间结果：导出设置里写了 48k，插件的编码器就该看到 48k。
     const outputAudio = resampleForExport(mixedAudio, SAMPLE_RATE, form.outputSampleRate, numChannels || 1);
-    const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1, form.outputBitDepth);
 
-    setStatus('progressSaving');
-    setProgress(98);
+    if (form.exporter) {
+      // 插件导出：不经过 WAV 编码器。宿主只负责合成、重采样、写盘，
+      // 压缩/封装是插件的事（这正是导出器贡献点存在的理由）。
+      const res = await window.electronAPI.pluginHost.exportAudio(
+        form.outputPath,
+        { pluginId: form.exporter.pluginId, id: form.exporter.id },
+        {
+          interleaved: outputAudio,
+          channels: numChannels || 1,
+          sampleRate: form.outputSampleRate,
+          durationSec: maxDuration,
+          meta: {
+            bpm: state.project.bpm,
+            exporter: form.exporter.id,
+            fragmentCount,
+            scope: form.scope,
+          },
+        },
+      );
+      if (!res || !res.ok) {
+        const err = new Error((res && res.message) || t('main.exportDialog.progressFailed'));
+        err.code = res && res.code;
+        throw err;
+      }
+      if (Array.isArray(res.warnings) && res.warnings.length) {
+        // 插件说"有些东西没能完整写进去"必须让用户看见，不能只 console：
+        // 导出是终点，用户拿到的文件就是最终产物。
+        console.warn('[ExportDialog] Plugin export warnings:\n' + res.warnings.join('\n'));
+        form._exportWarnings = res.warnings;
+      }
+    } else {
+      // 编码 WAV
+      // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
+      const { encodeWav } = require('../audio/wavEncoder.js');
+      const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1, form.outputBitDepth);
 
-    // 保存文件
-    const saveResult = await window.electronAPI.saveFile(form.outputPath, wavData);
-    if (saveResult && saveResult.success === false) throw new Error(saveResult.error || 'Failed to save export');
+      setStatus('progressSaving');
+      setProgress(98);
+
+      // 保存文件
+      const saveResult = await window.electronAPI.saveFile(form.outputPath, wavData);
+      if (saveResult && saveResult.success === false) throw new Error(saveResult.error || 'Failed to save export');
+    }
 
     setProgress(100);
     setStatus('progressDone');
 
     // 显示成功视图
-    showSuccessView(body, footer, form.outputPath, maxDuration, fragmentCount, fullCleanup);
+    showSuccessView(body, footer, form.outputPath, maxDuration, fragmentCount, form._exportWarnings || [], fullCleanup, {
+      scope: form.scope,
+      accompanimentCount,
+    });
 
     // 自动打开导出位置
     try {
@@ -1263,7 +1476,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
 
 // ==================== 成功/失败视图 ====================
 
-function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, fullCleanup) {
+function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, warnings, fullCleanup, extra = {}) {
   body.innerHTML = '';
 
   const progressView = document.createElement('div');
@@ -1295,8 +1508,29 @@ function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, f
   const metaEl = document.createElement('div');
   metaEl.className = 'export-dialog-field-hint';
   metaEl.style.textAlign = 'center';
-  metaEl.textContent = `${formatDuration(maxDuration)} · ${fragmentCount} fragments`;
+  // 仅伴奏导出没有合成任何分片，写「0 个分片」只会让人以为出了错，
+  // 这里改报伴奏轨数量。
+  const metaParts = [formatDuration(maxDuration)];
+  if (extra.scope === 'accompaniment') {
+    metaParts.push(t('main.exportDialog.scopeAccompaniment'));
+    metaParts.push(t('main.exportDialog.accompanimentCount', { count: extra.accompanimentCount || 0 }));
+  } else {
+    if (extra.scope === 'vocal') metaParts.push(t('main.exportDialog.scopeVocal'));
+    metaParts.push(t('main.exportDialog.fragmentCount', { count: fragmentCount }));
+  }
+  metaEl.textContent = metaParts.join(' · ');
   result.appendChild(metaEl);
+
+  // 插件的导出警告（"8bit 目标被量化"这类）。放在成功视图里而不是弹窗：
+  // 文件确实写出来了，用户需要的是"哪里不完整"，不是一个打断流程的错误框。
+  if (Array.isArray(warnings) && warnings.length) {
+    const warnEl = document.createElement('div');
+    warnEl.className = 'export-dialog-field-hint export-dialog-field-warn';
+    warnEl.style.textAlign = 'center';
+    warnEl.style.whiteSpace = 'pre-line';
+    warnEl.textContent = warnings.slice(0, 8).join('\n');
+    result.appendChild(warnEl);
+  }
 
   // Footer 按钮
   footer.innerHTML = '';

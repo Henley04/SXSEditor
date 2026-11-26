@@ -209,7 +209,8 @@ The Audio Preprocessing window extracts MIDI notes and F0 (fundamental frequency
 Click **RMVPE Extract F0**:
 - Uses the RMVPE neural model to detect pitch from the audio.
 - The F0 curve appears in the bottom panel.
-- This is a read-only visualization of the detected pitch contour.
+- This is a read-only visualization of the detected pitch contour. It generates F0 only, not MIDI notes.
+- Non-positive F0 frames represent unvoiced/clear audio. There is no separate editable UV channel; the singer file stores MIDI notes, F0 data and singerData.
 
 ### Step 2: Extract MIDI Notes
 
@@ -217,6 +218,7 @@ Click **Extract MIDI**:
 - Uses FCPE (recommended, ONNX-based) to detect note boundaries and pitches. Alternatively, Basic Pitch (TensorFlow.js) or RMVPE can be selected in Settings.
 - Extracted notes appear on the MIDI canvas.
 - Note count is displayed.
+- An existing RMVPE F0 curve is preserved when FCPE or Basic Pitch extracts MIDI. BPM defaults to 120 and auto-detection is off; successful FCPE auto-BPM fills the panel and drives note-time conversion, singer duration, waveform and playhead alignment. BPM does not time-stretch the reference audio.
 
 Alternatively, click **Import MIDI** to load notes from an existing `.mid` or `.midi` file. This replaces any notes currently on the canvas. Standard MIDI files (format 0/1/2, including SMPTE and multi-track) are supported; drum tracks (channel 10) are filtered out automatically.
 
@@ -488,7 +490,13 @@ When a fragment already contains Japanese kana (hiragana or katakana) in any not
 
 ## Pitch Curves
 
-Pitch curves add vibrato, pitch slides, and other expressive effects on top of the base MIDI pitch.
+Pitch curves define expressive absolute MIDI pitches, vibrato and slides. They are not offsets added to the MIDI note pitch.
+
+### Pitch Control Modes
+
+- **Manual** follows the pitch curve. With no curve content it produces a flat curve at the MIDI pitch.
+- **Score** sends no F0 condition: the model receives note pitches and generates its own contour. Pitch-curve editing is unavailable in this mode.
+- **Auto** is the compatibility state. It resolves to Manual when anchors, brush strokes, baked segments, automatic pitch processing or note vibrato exist; otherwise it resolves to Score. Explicitly disabling curves still counts as Manual.
 
 ### Switching to Pitch Mode
 
@@ -497,7 +505,7 @@ Press `2` or click the **Pitch** button in the toolbar. The pitch curve editing 
 ### Anchor Points
 
 - **Click** to add an anchor point on the pitch curve.
-- **Drag** an anchor to move it (changes both time and pitch offset).
+- **Drag** an anchor to move it (changes both time and absolute MIDI pitch).
 - **Right-click** an anchor to delete it.
 - **Select** anchors with box-select (middle-click drag).
 - **Delete** selected anchors with the Delete key.
@@ -523,15 +531,15 @@ Every anchor carries two extra properties beyond time and pitch:
 
 ### Reset
 
-Click **↺ Reset** to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.
+Click **↺ Reset** to clear pitch-curve modifications. The resulting behavior follows the current control mode; do not assume every mode returns to the same MIDI-generated curve.
 
 ### Pitch Curve Data
 
 The pitch curve consists of:
-- **Anchor points**: Fixed points with time and pitch offset values.
+- **Anchor points**: Fixed points with time and absolute MIDI pitch values.
 - **Brush segments**: Freehand-drawn segments (stored as sequences of points).
 
-The final pitch is: MIDI note pitch + pitch curve offset.
+In Manual mode, these values define the F0 condition sent to the model.
 
 ---
 
@@ -545,28 +553,32 @@ All seven are **off by default**, so existing projects sound exactly as before u
 
 | Group | Runs in | Affects |
 | --- | --- | --- |
-| **F0** (smoothing, outlier removal, transition overshoot, transition length) | The editor, on the F0 curve sent to the model | Preview **and** export identically |
-| **Spectral** (spectral interpolation, time sigma, frequency sigma) | The inference pipeline, on the Mel spectrogram just before the vocoder | Preview **and** export identically |
+| **Pitch** (pitch stability, skip removal, slide, slide length) | The editor, on the F0 curve sent to the model | Preview **and** export identically |
+| **Timbre** (timbre blend, denoise, soft highs) | The inference pipeline, on the Mel spectrogram just before the vocoder | Preview **and** export identically |
+
+> Names above are the friendly names shown in the app. The technical terms are kept in the parameter table below for reference.
 
 Mel frame rate is 24 kHz / 480 = **50 frames per second** (20 ms per frame); frame-based values use those frames.
 
 ### Parameters
 
+The app labels these with friendly names; the original technical term follows each in parentheses.
+
 | Parameter | Range | What it does |
 | --- | --- | --- |
-| Smoothing (F0) | 0–100% | Blends the raw F0 with a Savitzky-Golay filtered copy (7-frame window, cubic order). The local polynomial fit keeps the overall pitch trend (vibrato, drawn slides) while removing frame-to-frame jitter. Runs in the cents domain and never crosses a silent gap. |
-| Outlier removal (F0) | 0–9 frames | Median filter window. Removes isolated pitch spikes (octave errors, detector glitches) without smearing the note. 0 = off; 3–5 is typical. |
-| Transition overshoot (F0) | 0–100% | At every detected pitch jump the step is replaced by a cubic Bezier that overshoots the target and settles back, like a singer leaning into a leap. A candidate must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, and the median level well before/after the jump differs by at least 75 cents (vibrato oscillates back to its midline; a step does not). Higher = more overshoot (up to 35% of the interval). 0 leaves the jump untouched. |
-| Transition length (F0) | 0–300 ms | Duration of the Bezier transition. Only meaningful when overshoot is above 0. |
-| Spectral interpolation (mel) | 0–100% | At every note / phoneme boundary, frames in a +/-3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised cosine. The spectral envelope then changes continuously across the transition instead of jumping in one frame. |
-| Time-freq smoothing, time (mel) | 0–6 sigma | Gaussian sigma along the Mel time axis. Light values (0.8–1.5) tame diffusion grit and breath noise; large values blur consonants. |
-| Time-freq smoothing, freq (mel) | 0–6 sigma | Gaussian sigma along the Mel frequency axis. Smooths harmonic edges and removes the buzzy high-frequency fringe. |
+| Pitch stability (was *Smoothing*, Savitzky-Golay) | 0–100% | Blends the raw F0 with a Savitzky-Golay filtered copy (7-frame window, cubic order). The local polynomial fit keeps the overall pitch trend (vibrato, drawn slides) while removing frame-to-frame jitter. Runs in the cents domain and never crosses a silent gap. |
+| Skip removal (was *Outlier removal*, median filter) | 0–9 frames | Median filter window. Removes isolated pitch spikes (octave errors, detector glitches) without smearing the note. 0 = off; 3–5 is typical. |
+| Slide (was *Transition overshoot*, cubic Bézier) | 0–100% | At every detected pitch jump the step is replaced by a cubic Bezier that overshoots the target and settles back, like a singer leaning into a leap. A candidate must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, and the median level well before/after the jump differs by at least 75 cents (vibrato oscillates back to its midline; a step does not). Higher = more overshoot (up to 35% of the interval). 0 leaves the jump untouched. |
+| Slide length (was *Transition length*) | 0–300 ms | Duration of the Bezier transition. Only meaningful when slide is above 0. |
+| Timbre blend (was *Spectral interpolation*) | 0–100% | At every note / phoneme boundary, frames in a +/-3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised cosine. The spectral envelope then changes continuously across the transition instead of jumping in one frame. |
+| Denoise (was *Time-freq smoothing, time*, Gaussian sigma) | 0–6 sigma | Gaussian sigma along the Mel time axis. Light values (0.8–1.5) tame diffusion grit and breath noise; large values blur consonants. |
+| Soft highs (was *Time-freq smoothing, freq*, Gaussian sigma) | 0–6 sigma | Gaussian sigma along the Mel frequency axis. Smooths harmonic edges and removes the buzzy high-frequency fringe. |
 
 ### One Curve per Parameter
 
 The seven values are **not** drawn on one shared lane — percentages, integer frame counts and Gaussian sigmas have different units and ranges. Each parameter owns its own automation curve:
 
-- The **chips** in the lane header (grouped *F0 smoothing* / *Spectral*) switch the active curve; the lane always shows only the active parameter, in its own units.
+- The **chips** in the lane header (grouped *Pitch* / *Timbre*) switch the active curve; the lane always shows only the active parameter, in its own units.
 - An **empty curve means "constant"** — the value comes from the inspector slider. Add an anchor and the curve takes over between the first and last anchor; outside that span the endpoint value holds.
 - The inspector banner reads **Manual** (constant) or **Auto** (curve active).
 
@@ -654,12 +666,12 @@ When you press Play, SXSEditor:
 
 | Parameter | Preview | Export |
 |-----------|---------|--------|
-| Diffusion Steps | 16 (default) | 32 (default) |
+| Diffusion Steps | 32 (default) | 32 (default) |
 | CFG Strength | 3.0 | 3.0 |
 | CFG Rescale | 0.75 | 0.75 |
 | Sampler | Euler (default) | Euler (default) |
 
-Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings. The Sampler (diffusion ODE solver) is also configurable per path — see [Diffusion Sampler](#diffusion-sampler).
+Preview and export use the same official sampling defaults. Both are configurable in Settings, and the Sampler (diffusion ODE solver) can be selected independently per path — see [Diffusion Sampler](#diffusion-sampler). Chunked preview is enabled by default; export still renders the full sequence per call.
 
 ### Playback Controls
 
@@ -704,6 +716,8 @@ In the main window, click **📤 Export**:
 3. Fragments are mixed together according to their timeline positions.
 4. A file save dialog appears.
 5. The mixed WAV file is saved.
+
+> **8192-frame export limit** — the diff_step model accepts at most **8192 mel frames per call** (50 fps, about **163.8 seconds**), including the reference prompt. Export currently runs the whole target in one pass and does not split automatically; if the input exceeds the limit, the reference prompt is trimmed first, and the target is clamped only if it still exceeds the limit. Automatic smart segmented export is planned for a future release. Until then, avoid excessively long single fragments — especially continuous notes or rest-free passages near the limit — and split long songs into shorter fragments. Chunked preview is on by default, so this limit mainly affects export.
 
 ### Export Progress
 
@@ -799,18 +813,13 @@ Open Settings from the menu bar: **SXSEditor > Settings**.
 
 Configure which hardware devices are used for neural network inference.
 
-**Device Modes**:
-- **Smart Mode** (recommended): Automatically selects the best device and assigns models optimally. Prefers discrete GPU; falls back to integrated GPU or CPU.
-- **Manual Mode**: Specify a single device for all models.
-- **Advanced Mode**: Assign different devices to different model groups (SVS Diffusion, SVS Encoder, SVS Auxiliary, RMVPE).
+**Native execution backends**:
+- **Auto** (default): prefers an available Windows ML execution provider and falls back to DirectML.
+- **Windows ML**: uses compatible Windows ML providers.
+- **DirectML**: uses GPU adapters detected by DirectML.
+- **CPU (all models)**: forces every model onto CPU; device selection and per-model mapping have no effect.
 
-**Available devices**:
-- Discrete GPU (NVIDIA, AMD, Intel) via DirectML
-- Integrated GPU via DirectML
-- NPU via WebNN
-- CPU (fallback)
-
-**WebNN/NPU Status**: The settings page shows whether WebNN and NPU are available on your system.
+WebNN belongs to the deprecated `ortweb` inference system, not the native backend selector. Help → Environment Check reports GPU, WinML and VC++ runtime status.
 
 #### Preview Inference Parameters
 
@@ -818,10 +827,10 @@ Used when playing back in the editor (fast preview):
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
-| Diffusion Steps | 16 | 4–64 | Fewer steps = faster, lower quality |
+| Diffusion Steps | 32 | 4–64 | Fewer steps = faster, lower quality |
 | CFG Strength | 3.0 | 0–10 | Higher = more aligned with conditions. 0 = skip unconditional prediction (2x speed) |
 | CFG Rescale | 0.75 | 0–1 | Mitigates over-guidance artifacts |
-| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. See [Diffusion Sampler](#diffusion-sampler) below. |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: Euler). See [Diffusion Sampler](#diffusion-sampler) below. |
 
 #### Export Inference Parameters
 
@@ -832,7 +841,7 @@ Used when exporting WAV files (high quality):
 | Diffusion Steps | 32 | 4–64 | More steps = higher quality |
 | CFG Strength | 3.0 | 0–10 | Same as preview |
 | CFG Rescale | 0.75 | 0–1 | Same as preview |
-| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. The export dialog also lets you override this per export. |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver (default: Euler). The export dialog also lets you override this per export. |
 
 #### Diffusion Sampler
 
@@ -840,7 +849,7 @@ The diffusion model iteratively denoises a mel spectrogram by integrating the fl
 
 | Sampler | NFE / step | Description |
 |---------|------------|-------------|
-| **Euler** (default) | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
+| **Euler** | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
 | **Heun** | 2 | Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating `t > 1`. |
 | **Extrapolated Euler** | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation. Not the full stabilized RK formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Falls back to Euler when extrapolation is unsafe (amplitude / sign-flip / NaN guards). |
 | **STORK-2** | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
@@ -893,25 +902,25 @@ Controls the number of overlapping frames used at vocoder chunk boundaries for s
 
 #### Output Mode
 - **Shared Mode** (WASAPI Shared): Standard Windows audio. Other apps can play audio simultaneously.
-- **Exclusive Mode** (WASAPI Exclusive): Direct hardware access. Lower latency (1–3ms), bit-perfect output, but blocks other apps from using the audio device.
+- **Exclusive Mode** (WASAPI Exclusive): Selectable in Settings for future support, but not implemented in the current version — the decibri backend ignores the exclusive-mode flag and always opens the device in shared mode.
 
 #### Output Device
 - **System Default** or a specific audio device.
-- Exclusive mode only supports WASAPI devices.
+- Playback currently always uses WASAPI shared mode.
 
 #### Sample Rate
 Options: 22050, 24000 (native), 44100, 48000 (default), 96000, 192000 Hz.
 - The default is 48 kHz (changed from 24 kHz in earlier versions). The SVS model runs at 24 kHz internally and the output is upsampled to the selected rate with a band-limited Kaiser windowed-sinc interpolator.
-- In exclusive mode, the device must support the selected rate or it falls back to shared mode.
+- Because playback always runs in shared mode, the app resamples the synthesized audio to the selected rate itself.
 
 #### Bit Depth
 Options: 32-bit Float (recommended), 32-bit Integer, 24-bit Integer, 16-bit Integer.
-- Only applies in exclusive mode.
+- Applies to the playback stream in shared mode too; the backend supports only int16 / float32, so 24-bit and 32-bit Integer fall back to 32-bit Float.
 
 #### Buffer Size
 Options: 64 to 4096 samples.
 - Smaller = lower latency but higher CPU load and risk of audio glitches.
-- Recommended: 256 or below in exclusive mode.
+- Currently not forwarded to the device (the decibri backend ignores buffer size).
 
 #### Master Volume
 Slider from 0% to 100%.
@@ -927,9 +936,11 @@ Slider from 0% to 100%.
 #### Model Precision
 
 Select which precision of ONNX models to use:
-- FP16, FP32, INT8, INT8-NPU
-- Different precisions are stored independently and coexist.
-- Switching does not require re-downloading — each precision has its own subdirectory.
+- **FP32** (default), FP16, INT8 and INT8-NPU.
+- FP16 is **TrueFP16** (FP16 weights and activations); only its vocoder uses **W16A32** (FP16 weights / FP32 activations).
+- INT8 uses **W8A32** (INT8 weights / FP32 activations).
+- Different precisions are stored independently and coexist. Switching requires the selected set to be installed.
+- Q-Drift defaults on for FP16 and off for INT8/FP32 unless explicitly configured. INT8 correction is opt-in because measured W8A32 benefit is negligible.
 - See the precision info box in Settings for detailed descriptions.
 
 #### Model Status
@@ -1067,9 +1078,9 @@ Every edit in a Fragment Editor window (MIDI notes, lyrics, pitch curve, VOL/PAN
 
 - **Auto-save**: After each fragment sync (flow #1 above), the main window auto-saves to `state.currentProjectFilePath` if a path is already set (i.e., you have saved or loaded a project at least once). This is silent — no dialog.
 - **Manual save** (File → Save / `Ctrl+S`): If a project path exists, writes silently to the same path. If no path exists yet, falls back to Save As.
-- **Save As** (File → Save As / `Ctrl+Shift+S`): Opens a dialog with the **embed singer files** option:
-  - **Embed**: Singer reference audio and preprocessed data are included in the project file. Makes the project self-contained but larger.
-  - **Don't embed**: The project references external `.sxssinger` files by path. Smaller file, but requires singer files to be accessible.
+- **Save As** (File → Save As / `Ctrl+Shift+S`): Opens a dialog with independent **embed singer files** and **embed accompaniment audio** options:
+  - **Embed**: The selected assets are included in the project file, making it more self-contained but larger.
+  - **Don't embed**: The project references external `.sxssinger` files and/or accompaniment audio by path. Those files must remain accessible.
 - **Unsaved changes on close**: When closing the main window with unsaved changes, a dialog offers **Save & Exit**, **Don't Save**, or **Cancel**.
 
 #### 3. Singer Creator → `.sxssinger` file (singer file save)

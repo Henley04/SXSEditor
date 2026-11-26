@@ -25,7 +25,15 @@ const {
   getLocalSifiganVersion,
   getLocalSifiganRevision,
   getSifiganVersionPath,
+  invalidateModelCache,
 } = require('../src/modelManager');
+
+// P14: 版本检查新增进程内 tags 缓存（TTL 3min）。本文件的用例通过 stub
+// https.request 模拟不同的远端返回，必须在每个用例前清缓存，否则后续
+// 用例会命中上一个用例的 tags（表现为“只返回一个远端 tag”却拿到上次的值）。
+beforeEach(() => {
+  invalidateModelCache();
+});
 
 // ===== Helpers =====
 

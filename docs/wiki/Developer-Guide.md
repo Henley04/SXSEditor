@@ -136,7 +136,7 @@ SXSEditor/
 │   │   │   ├── float16Patch.js
 │   │   │   ├── samplers/      # Pluggable diffusion ODE solvers
 │   │   │   │   ├── index.js   # Registry + factory (resolveSamplerName, createSampler)
-│   │   │   │   ├── euler.js   # Euler (1st-order, default baseline)
+│   │   │   │   ├── euler.js   # Euler (1st-order, original baseline)
 │   │   │   │   ├── heun.js    # Heun (2nd-order trapezoidal)
 │   │   │   │   ├── extrap.js  # Extrapolated Euler (STORK-inspired heuristic)
 │   │   │   │   └── stork2.js  # STORK-2 (paper-faithful, RKC 2nd-order)
@@ -183,7 +183,7 @@ SXSEditor/
 │   ├── settings.js            # Settings renderer
 │   ├── modelDownload.js       # Model download renderer
 │   └── alertDialog.js         # Custom alert dialog
-├── test/                      # Test suite (~1500 tests, 61 files)
+├── test/                      # Test suite (~1840 tests, 86 files)
 │   ├── setup.js               # JSDOM setup, mocks, sandbox cleanup
 │   └── *.test.js              # Test files
 ├── forge.config.js            # Electron Forge config
@@ -233,6 +233,8 @@ Binary audio data uses `Float32Array` transfer for low latency.
 
 Key constants: `SAMPLE_RATE=24000`, `HOP_SIZE=480`, `EMBED_DIM=512`, `COND_DIM=1024`.
 
+**Prompt conditioning**: when the singer has `.sxssinger` annotations (`singerData` + `midiNotes` + `f0Data`), `buildPromptSequence()` builds the prompt token/pitch/type/F0 sequence and aligns it to the reference mel on the original WAV timeline. Prompt and target tokens are encoded together (four encoders → preflow → `mel2token` expansion → `cond_emb`), matching upstream `SoulXSinger.infer()`. The full reference prompt is used by default; `maxPromptFrames > 0` is an explicit opt-in cap. Without annotations, the prompt section falls back to zero-filled cond.
+
 ### Diffusion Samplers
 
 `src/inference/pipeline/samplers/` is a pluggable ODE-solver abstraction for the flow-matching diffusion loop. The model outputs a velocity field `flow_pred = v(x, t)`; sampling solves `dx/dt = v(x, t)` with `t` going 0 → 1 (equivalent to the paper's reverse integration). The solver only decides *when* to call `diffStep` and *how* to combine predictions into the `xt` delta — CFG / Rescale / tensor lifecycle stay with the caller, so both the ORT/DML path (`pipeline/diffusion.js`) and the WebNN/NPU path (`webnn/diffusion.js`) share one algorithm.
@@ -249,7 +251,7 @@ async step({ evalDiffStep, combine, step, totalSteps, xtData, buffers }) → { n
 
 | Solver | File | NFE / step | Algorithm |
 |--------|------|------------|-----------|
-| `euler` (default) | `euler.js` | 1 | First-order explicit, midpoint time `t = (step + 0.5) / totalSteps`. Equivalent to the pre-refactor loop. |
+| `euler` | `euler.js` | 1 | First-order explicit, midpoint time `t = (step + 0.5) / totalSteps`. Equivalent to the pre-refactor loop. |
 | `heun` | `heun.js` | 2 | RK2 trapezoidal: predict `x_pred = x + v1·dt`, then correct `delta = 0.5·(v1 + v2)·dt`. Final step degrades to Euler to avoid `t > 1`. |
 | `extrap` | `extrap.js` | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). `v2 = v1 + γ·(v1 − v_prev)` with γ=0.5; `delta = 0.5·dt·(v1 + v2)`. First step and unsafe extrapolation fall back to Euler. Stability guards: velocity-jump ratio > 2, `\|v2\|/\|v1\| > 3`, sign-flip with growing amplitude, NaN/Inf. |
 | `stork2` | `stork2.js` | 1 | Paper-faithful STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with `s=8` sub-stages and Taylor-expansion virtual NFE. First step bootstraps as Euler. `b(j)` coefficients via closed-form RKG formula. Designed for stiff ODEs (stability region ~2s² = 128×). |
@@ -438,7 +440,7 @@ npm run test:coverage    # With NYC coverage
 npm run test:watch       # Watch mode
 ```
 
-The test suite includes **~1500 test cases across 61 test files** covering:
+The test suite includes **~1840 test cases across 86 test files** covering:
 - WAV encoding/decoding
 - Track management (add, remove, move, resize fragments)
 - SVS pipeline logic (text processing, phoneme merging, note type detection)

@@ -21,7 +21,7 @@ Yes. SXSEditor is open-source under the MIT License.
 |----------|--------|
 | Chinese (Mandarin) | Supported — Chinese characters with optional tone digit (1–5) |
 | English | Supported — English words, auto-converted to phonemes |
-| Japanese | In development |
+| Japanese | Supported — hiragana/katakana via Hybrid Phoneme mapping by default (per-kana ARPAbet/Cantonese selection); full support with the optional JP model pack (jp-lora) |
 
 ---
 
@@ -181,11 +181,11 @@ DirectML supports NVIDIA, AMD, and Intel GPUs (both discrete and integrated). NP
 ### What audio output modes are available?
 
 - **Shared Mode** (WASAPI Shared): Standard Windows audio. Other apps can play audio simultaneously. Default mode.
-- **Exclusive Mode** (WASAPI Exclusive): Direct hardware access with lower latency (1–3ms). Blocks other apps from using the audio device. Falls back to shared mode if the device doesn't support the selected settings.
+- **Exclusive Mode** (WASAPI Exclusive): Selectable in Settings for future support, but not implemented in the current version — the decibri backend ignores the exclusive-mode flag and always opens the device in shared mode, so the low-latency / bit-perfect behaviour does not apply.
 
 ### What is the output sample rate?
 
-Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with a band-limited Kaiser windowed-sinc resampler for accurate high-frequency reproduction. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
+Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with a band-limited Kaiser windowed-sinc resampler for accurate high-frequency reproduction. Output sample rate is configurable in Settings (22050 to 192000 Hz). Playback always runs in shared mode, so the app performs the rate conversion itself.
 
 ### What format is the exported WAV?
 
@@ -229,12 +229,12 @@ The diffusion model iteratively denoises a mel spectrogram by solving an ODE. Th
 
 | Sampler | Speed | Quality | Notes |
 |---------|-------|---------|-------|
-| **Euler** (default) | Fastest | Baseline | Most predictable; best for chunked previews |
+| **Euler** | Fastest | Baseline | Most predictable; best for chunked previews |
 | **Heun** | 2× slower | Higher accuracy | Second-order trapezoidal rule |
 | **Extrapolated Euler** | Same as Euler | Heuristic improvement | Reuses previous step's velocity; benefit is strongest with smooth velocity fields |
 | **STORK-2** | Same as Euler | Designed for stiff ODEs | Paper-faithful (ICLR 2026); higher per-step algebraic cost |
 
-For most users, **Euler** is the best choice for preview (fast) and **Heun** or **STORK-2** for export (higher quality). Samplers can be configured independently for preview and export in Settings.
+**Euler** is the default for both preview and export, with 32 diffusion steps. Heun, Extrapolated Euler and STORK-2 remain selectable; Euler is the safest choice for chunked previews. Samplers can be configured independently for preview and export in Settings.
 
 ### What is Dynamic Thresholding?
 
@@ -252,8 +252,12 @@ The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz,
 
 | File | Extension | Description |
 |------|-----------|-------------|
-| Project | `.sxsproj` | Contains all singers, fragments, and project settings |
-| Singer | `.sxssinger` | Contains singer metadata, reference audio, and preprocessed data |
+| Project | `.sxsproj` / `.sxs` | Native projects with singers, fragments and settings |
+| Singer | `.sxssinger` | Singer metadata, reference audio and preprocessed data |
+| Plugin package | `.sxsp` | Signed/installable plugin package |
+| Official project interchange | `.vsqx`, `.vpr`, `.svp` | Open/save through the bundled official plugin; round-trips are lossy |
+
+VPR can carry accompaniment audio. SVP accompaniment uses relative WAV references; VSQX does not carry accompaniment.
 
 ### Should I embed singer files in the project?
 

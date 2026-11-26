@@ -5,16 +5,22 @@ const { setLocale } = require('./locale');
 const DEFAULT_THEME = 'acg';
 const DEFAULT_THEME_PER_WINDOW = {};
 
+// 会话重载/卸载类开关统一默认关闭：diffStep 与 vocoder 保持已加载，不自动重建 session。
+const DEFAULT_SESSION_RELEASE_SETTINGS = Object.freeze({
+  releaseDmlVramAfterSynthesis: false,
+  releaseDiffStepBeforeVocoder: false,
+});
 
 const ENUM_SETTINGS = {
   deviceMode: ['smart', 'manual', 'advanced'],
-  inferenceProvider: ['ortnode', 'ortweb'],
+  // 'api' = 远程 API 推理（Settings → 推理与硬件 → API）。不加载本地 ONNX 模型。
+  inferenceProvider: ['ortnode', 'ortweb', 'api'],
   modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
   audioOutputMode: ['shared', 'exclusive'],
   audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
   vocoderType: ['default', 'sifigan'],
   sifiganPrecision: ['fp32', 'fp16'],
-  japaneseVocalization: ['hybrid', 'en-phonemes', 'jp-lora'],
+  japaneseVocalization: ['en-phonemes', 'hybrid', 'jp-lora'],
   vocoderChunkMode: ['smart', 'manual'],
   ortGraphOptLevel: ['disabled', 'basic', 'extended', 'all'],
   ortExecutionMode: ['sequential', 'parallel'],
@@ -26,7 +32,7 @@ const ENUM_SETTINGS = {
 };
 
 const NUMERIC_SETTINGS = {
-  previewDiffSteps: [4, 64, 16], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
+  previewDiffSteps: [4, 64, 32], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
   previewDiffStepChunkFrames: [100, 2000, 500], previewDiffStepOverlapFrames: [0, 200, 50],
   exportDiffSteps: [4, 64, 32], exportCfgStrength: [0, 10, 3], exportCfgRescale: [0, 1, 0.75], exportSampleRate: [24000, 96000, 48000],
   audioSampleRate: [8000, 192000, 48000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
@@ -53,6 +59,28 @@ function normalizeSettings(settings) {
   if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
   if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
   if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
+  // API Provider 元数据：settings.json 是信任边界，只保留结构合法的条目，
+  // 密钥不在这里（见 apiProviderStore.js / secretsStore.js）。
+  if (out.apiProviders !== undefined) {
+    if (!Array.isArray(out.apiProviders)) {
+      delete out.apiProviders;
+    } else {
+      out.apiProviders = out.apiProviders.slice(0, 32).filter((p) =>
+        p && typeof p === 'object' && !Array.isArray(p)
+        && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.url === 'string'
+        && /^https?:\/\//i.test(p.url)
+      ).map((p) => ({
+        id: p.id.slice(0, 64), name: p.name.slice(0, 64),
+        url: p.url.slice(0, 512), builtin: p.builtin === true,
+      }));
+    }
+  }
+  if (out.activeApiProviderId !== undefined && typeof out.activeApiProviderId !== 'string') {
+    delete out.activeApiProviderId;
+  }
+  // 写注册表的开关：只认严格的 true。字符串 "true" / 1 一律当关 —— 这个开关的
+  // 副作用是改用户系统，宽松解析的代价不对称。
+  if (out.pluginFileAssociations !== undefined) out.pluginFileAssociations = out.pluginFileAssociations === true;
   return out;
 }
 
@@ -134,7 +162,7 @@ function loadSettings() {
 
   // 合成完成后是否释放并重建重型 DML session，强制回收 DirectML 内存池（默认关闭，仅 DML 后端有效）
   if (typeof _settingsCache.releaseDmlVramAfterSynthesis !== 'boolean') {
-    _settingsCache.releaseDmlVramAfterSynthesis = false;
+    _settingsCache.releaseDmlVramAfterSynthesis = DEFAULT_SESSION_RELEASE_SETTINGS.releaseDmlVramAfterSynthesis;
   }
 
   // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
@@ -145,7 +173,7 @@ function loadSettings() {
   // 默认 false：尊重用户显式选择。只有用户开启时，OOM 路径才允许释放并重试。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = false;
+    _settingsCache.releaseDiffStepBeforeVocoder = DEFAULT_SESSION_RELEASE_SETTINGS.releaseDiffStepBeforeVocoder;
   }
 
   // 诊断模式（默认关闭）。开启后输出 [DiffusionDiag] / [VocoderDiag] 统计/采样日志，
@@ -217,11 +245,11 @@ function loadSettings() {
   // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
   // cfgStrengthStart: null 时回退到 cfgStrength * 0.5（linear/cosine 从 0.5×cfg 上升到 cfg）
   // cfgScheduleKeyframes: null 或 [{step, value}, ...]（custom 模式分段线性插值）
-  // 默认 'linear'：早期低 CFG 稳定结构，后期高 CFG 锐化细节。
+  // 默认 'constant'：官方全程恒定 CFG、无调度；任何非恒定调度都偏离官方采样合约。
   // 顶层键为通用默认；preview*/export* 镜像键分别覆盖预览/导出路径。
   const _validScheduleModes = ['constant', 'linear', 'cosine', 'custom'];
   if (!_validScheduleModes.includes(_settingsCache.cfgScheduleMode)) {
-    _settingsCache.cfgScheduleMode = 'linear';
+    _settingsCache.cfgScheduleMode = 'constant';
   }
   if (_settingsCache.cfgStrengthStart !== null && !Number.isFinite(_settingsCache.cfgStrengthStart)) {
     _settingsCache.cfgStrengthStart = null;
@@ -231,7 +259,7 @@ function loadSettings() {
   }
   // 预览镜像键
   if (!_validScheduleModes.includes(_settingsCache.previewCfgScheduleMode)) {
-    _settingsCache.previewCfgScheduleMode = 'linear';
+    _settingsCache.previewCfgScheduleMode = 'constant';
   }
   if (_settingsCache.previewCfgStrengthStart !== null && !Number.isFinite(_settingsCache.previewCfgStrengthStart)) {
     _settingsCache.previewCfgStrengthStart = null;
@@ -241,7 +269,7 @@ function loadSettings() {
   }
   // 导出镜像键
   if (!_validScheduleModes.includes(_settingsCache.exportCfgScheduleMode)) {
-    _settingsCache.exportCfgScheduleMode = 'linear';
+    _settingsCache.exportCfgScheduleMode = 'constant';
   }
   if (_settingsCache.exportCfgStrengthStart !== null && !Number.isFinite(_settingsCache.exportCfgStrengthStart)) {
     _settingsCache.exportCfgStrengthStart = null;
@@ -272,8 +300,9 @@ function loadSettings() {
   // 预览时将 diffStep 的目标帧分块推理（每块独立运行完整扩散循环，再交叉淡入淡出拼接）。
   // 注意力复杂度 O(n²)，分块可显著加速长片段预览，代价是块边界可能产生轻微伪影。
   // 仅影响预览路径（getPreviewInferenceOptions 传入），导出始终使用整段推理。
+  // 默认开启：缺失或非布尔值一律按开启处理。
   if (typeof _settingsCache.previewDiffStepChunkEnabled !== 'boolean') {
-    _settingsCache.previewDiffStepChunkEnabled = false;
+    _settingsCache.previewDiffStepChunkEnabled = true;
   }
   if (!Number.isFinite(_settingsCache.previewDiffStepChunkFrames) || _settingsCache.previewDiffStepChunkFrames < 100) {
     _settingsCache.previewDiffStepChunkFrames = 500;
@@ -294,16 +323,22 @@ function loadSettings() {
     _settingsCache.autoRealtimeInference = false;
   }
 
-  // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
-  if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
+  // 推理提供者: 'ortnode'(默认, onnxruntime-node DirectML/CPU) | 'ortweb'(WebNN) | 'api'(远程 HTTP)
+  if (!['ortweb', 'ortnode', 'api'].includes(_settingsCache.inferenceProvider)) {
     _settingsCache.inferenceProvider = 'ortnode';
   }
-  if (!['auto', 'winml', 'dml'].includes(_settingsCache.nativeInferenceBackend)) {
+  // 'cpu' 是用户显式选择的全局强制 CPU 后端：所有模型都不再尝试 WinML/DML。
+  // 必须进白名单，否则下次 loadSettings() 会把它静默重置成 'auto'，设置无法持久化。
+  if (!['auto', 'winml', 'dml', 'cpu'].includes(_settingsCache.nativeInferenceBackend)) {
     _settingsCache.nativeInferenceBackend = 'auto';
   }
   if (typeof _settingsCache.winmlPreferredEp !== 'string') {
     _settingsCache.winmlPreferredEp = '';
   }
+  // 同一 EP 的不同硬件分开选（OpenVINO 的 gpu / cpu / npu）。空串表示
+  // "沿用该 EP 暴露的全部设备"，与旧配置（只有 winmlPreferredEp）等价。
+  const winmlDevice = String(_settingsCache.winmlPreferredDevice || '').toLowerCase();
+  _settingsCache.winmlPreferredDevice = ['gpu', 'cpu', 'npu'].includes(winmlDevice) ? winmlDevice : '';
 
   // ===== ONNX Runtime session 选项 =====
   // 这些选项在模型加载时（InferenceSession.create）生效，修改后需要重置 pipeline。
@@ -374,12 +409,14 @@ function loadSettings() {
     _settingsCache.sifiganPrecision = 'fp32';
   }
 
-  // Japanese vocalization method: 'hybrid' (default, improved ARPAbet mapping:
-  // L for ら行, AO for お段, on base model)
-  // | 'en-phonemes' (English ARPAbet on base model, original mapping)
+  // Japanese vocalization method: 'en-phonemes' (default — English ARPAbet on the
+  // base multilingual model: one mora = onset+vowel, AO1 for お段, L for ら行,
+  // ん place assimilation; no Cantonese syllables)
+  // | 'hybrid' (same ARPAbet conversion but prefers a Cantonese yue_ syllable
+  //   where one is closer — opt-in, keeps Cantonese timbre)
   // | 'jp-lora' (JP LoRA models, in development — not available for download yet)
   if (_settingsCache.japaneseVocalization !== 'en-phonemes' && _settingsCache.japaneseVocalization !== 'hybrid' && _settingsCache.japaneseVocalization !== 'jp-lora') {
-    _settingsCache.japaneseVocalization = 'hybrid';
+    _settingsCache.japaneseVocalization = 'en-phonemes';
   }
 
   // Vocoder type default + startup fallback:
@@ -437,9 +474,16 @@ function loadSettings() {
 // cannot leave a truncated/invalid JSON file that would lose all settings
 // on next launch. On failure the cache is invalidated and an error result
 // is returned so callers do not report a false success.
+//
+// 临时文件名必须每次唯一：settings:save / 主题切换 / 模型下载进度会从不同窗口
+// 并发调到这里，共用一个 `settings.json.tmp` 时后一个 rename 会撞上"源文件已被
+// 前一个搬走"→ ENOENT（ConfigStore 的 locale 写就踩过这个坑，见 configStore.js）。
+let _saveTmpSeq = 0;
+
 async function saveSettingsFile(settings) {
   const filePath = getSettingsFilePath();
-  const tmpPath = `${filePath}.tmp`;
+  _saveTmpSeq += 1;
+  const tmpPath = `${filePath}.${process.pid}.${_saveTmpSeq}.tmp`;
   try {
     const data = JSON.stringify(settings, null, 2);
     await fs.promises.writeFile(tmpPath, data, 'utf-8');
@@ -483,6 +527,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
   'diagnosticMode',
+  'pluginFileAssociations',
   'vocoderOverlapFrames',
   'enableLoudnormFinal',
   'enableAntiAliasing',
@@ -506,8 +551,11 @@ const ALLOWED_SETTINGS_KEYS = [
   'exportDynamicThresholdPercentile',
   'autoRealtimeInference',
   'inferenceProvider',
+  'apiProviders',
+  'activeApiProviderId',
   'nativeInferenceBackend',
   'winmlPreferredEp',
+  'winmlPreferredDevice',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',
   'ortEnableCpuMemArena',
@@ -551,4 +599,5 @@ module.exports = {
   normalizeSettings,
   DEFAULT_THEME,
   DEFAULT_THEME_PER_WINDOW,
+  DEFAULT_SESSION_RELEASE_SETTINGS,
 };

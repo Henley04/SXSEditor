@@ -1,4 +1,22 @@
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+// F2/F3：参与合成的音符集合统一走 shared 真源（过滤未激活重叠 + 裁剪 + 排序）。
+// 之前本文件自己实现一遍、主窗口再实现一遍，两处对 inactive 与排序的处理不一致。
+import { computeActiveClippedNotes, computeInactiveNoteIds } from '../shared/activeNotes.js';
+// 自动/手动统一求值（与主窗口 f0Utils 共用同一引擎）
+import {
+  createPitchResolver,
+  resolvePitchRanges,
+  buildAutoCurve,
+  coverageAt,
+  saltFromKey,
+  findNoteAtBeat as findNoteAtBeatShared,
+} from '../shared/autoPitchCurve.js';
+import { normalizePitchCurve } from '../shared/pitchCurveState.js';
+import { evaluatePitchCurveFrames } from '../shared/pitchCurveEval.js';
+import { resolvePitchMode } from '../shared/pitchControl.js';
+import { readPhonemeField } from '../shared/pluginPhonemes.js';
+import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
+import { createPlayheadFollower, PLAYHEAD_FOLLOW_DEFAULTS } from '../shared/playheadFollow.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
 import { t } from '../i18n/index.js';
@@ -10,19 +28,21 @@ import {
 import {
   createNotesIndex,
   ensureSorted as ensureNotesSorted,
+  markDirty as markNotesDirty,
   hasOverlapAtPitch,
   clampPosition as clampPositionIdx,
   findNoteAtBeat,
   notesInRange,
 } from './notesIndex.js';
 import {
-  getScrollX, getScrollY, getZoomX,
+  getScrollX, getScrollY, getZoomX, setScrollX,
   getCurrentParamMode,
   getNotes,
   getSnapGrid,
   getSelectedNoteIds,
   getSelectedAnchorIndices,
   getPitchCurve,
+  getPitchMode,
   getPitchDragAnchorIdx,
   getCurrentBrushStroke,
   getIsBoxSelecting,
@@ -48,7 +68,9 @@ import {
   getNextNoteId, setNextNoteId,
   getBrushSmoothing,
   getPhonemeCache,
+  getProjectExtSchema,
   getSampleRate,
+  getPostprocess,
   getParamPanelCollapsed,
   getParamPanelMode,
   getDragMode,
@@ -57,17 +79,17 @@ import {
   getSelectedTimbreAnchors,
   getTimbreDragAnchorIdx,
   getAnchorDragHud,
+  getTimbreVersion,
 } from './state.js';
-import { buildEffectiveValues, evalSortedCurve } from './automationCurve.js';
-import { applyF0Postprocess } from './f0Smoothing.js';
+import { buildEffectiveValues, evalSortedCurve as _evalSortedCurve, buildPitchCurveSampleTimes } from './automationCurve.js';
+import { collectCurves, sampleCurve, applyCurveSpec } from '../shared/pluginCurve.js';
 import {
-  buildF0ParamArrays,
   hasF0PostprocessEffect,
   getTimbreValueAt,
   getTimbreDefault,
   getTimbreKeyframes,
 } from './postprocessAccess.js';
-import { POSTPROCESS_PARAMS, formatParamValue } from './postprocessParams.js';
+import { POSTPROCESS_PARAMS, formatParamValue, paramUnitText } from './postprocessParams.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -98,6 +120,9 @@ let _renderInFlight = 0;
 // 失效，其余时间复用缓存值，避免 hit-test（mousemove 高频路径）反复触发
 // 同步 layout 读取。
 let _layoutCacheValid = false;
+// inline 歌词编辑框相对容器的偏移缓存：updateInlineInputPosition 每帧调用，
+// 旧实现每帧读两次 getBoundingClientRect。位置只在布局变化时改变。
+let _inlineGeomCache = null;
 
 function _getParentHeight() {
   if (_layoutCacheValid && _cachedParentHeight > 0) return _cachedParentHeight;
@@ -114,6 +139,7 @@ export function invalidateLayoutCache() {
   _layoutCacheValid = false;
   _cachedParentHeight = 0;
   _cachedParentWidth = 0;
+  _inlineGeomCache = null;
 }
 
 /**
@@ -133,6 +159,115 @@ function _getParentWidth() {
  */
 export function getParentHeightCached() {
   return _getParentHeight();
+}
+
+// ==================== 播放头分页跟随 ====================
+// 逻辑本体在 shared/playheadFollow.js（与主窗口时间轴同一套），这里只做窗口侧接线：
+// 提供 scrollX 读写、滚动上限、视口宽度，并在跟随改写了滚动位置时重绘。
+//
+// 与主窗口的差别仅在坐标：钢琴卷帘的 timeToX() 返回的是**视口**坐标（已减 scrollX），
+// 跟随器要的是世界坐标，所以这里直接用 beat × beatWidth 算。
+let _follow = null;
+// 最近一次渲染的视口宽度（px）：clientWidth 是同步 layout 读取，播放循环里每帧
+// 读一次会平白多一次强制重排。渲染时记下来，跟随只读缓存。
+let _lastViewportWidth = 0;
+
+export function getPlayheadViewportWidth() {
+  if (_lastViewportWidth > 0) return _lastViewportWidth;
+  return _getParentWidth();
+}
+
+/** 内容右端（拍）：分片时长与最后一个音符末端取大者 —— 播放头不会超过它。 */
+function _contentEndBeat() {
+  const fragment = getCurrentFragment();
+  let end = fragment && Number.isFinite(fragment.duration) ? fragment.duration : 0;
+  for (const n of getNotes()) {
+    const noteEnd = n.start + n.duration;
+    if (noteEnd > end) end = noteEnd;
+  }
+  return end;
+}
+
+/**
+ * 滚动上限：让"内容末端"正好停在锚点（左侧 1/5）处。
+ * 再往右自动滚动就只剩空白；而播放头 ≤ 内容末端，所以它永远能落到锚点，
+ * 不会在末尾被上限挡住、停在屏幕右侧。
+ */
+function _maxScrollXForFollow() {
+  const w = getPlayheadViewportWidth();
+  if (!(w > 0)) return 0;
+  const contentPx = _contentEndBeat() * BEAT_WIDTH * getZoomX();
+  return Math.max(0, contentPx - w * PLAYHEAD_FOLLOW_DEFAULTS.anchorRatio);
+}
+
+function _ensureFollow() {
+  if (_follow) return _follow;
+  _follow = createPlayheadFollower({
+    getScrollX: () => getScrollX(),
+    setScrollX: (v) => setScrollX(v),
+    getMaxScrollX: _maxScrollXForFollow,
+  });
+  return _follow;
+}
+
+function _playheadWorldX(currentTimeSec) {
+  const project = getCurrentProject();
+  const bpm = project ? project.bpm : 120;
+  return (currentTimeSec / 60) * bpm * BEAT_WIDTH * getZoomX();
+}
+
+/**
+ * 播放循环每帧调用：按需把视口分页前移，让播放头始终落在可见范围内。
+ * 必须在 render() 之前调用（播放头与内容用同一个 scrollX 画）。
+ *
+ * @param {number} currentTimeSec 当前播放位置（秒，与画布播放头同源）
+ * @returns {boolean} 是否改写了滚动位置（改了会排一帧重绘）
+ */
+export function tickPlayheadFollow(currentTimeSec) {
+  if (!Number.isFinite(currentTimeSec)) return false;
+  const w = getPlayheadViewportWidth();
+  if (!(w > 0)) return false;
+  const changed = _ensureFollow().tick(_playheadWorldX(currentTimeSec), w);
+  if (changed) render();
+  return changed;
+}
+
+/** 起播 / seek：清掉在途动画；reveal=true 时若播放头在视口外会立即回填到 1/5。 */
+export function resetPlayheadFollow(options) {
+  _ensureFollow().reset(options);
+}
+
+/** 暂停/停止：在途动画直接落到终点（停在半程会像"卡住"）。 */
+export function settlePlayheadFollow() {
+  if (!_follow) return false;
+  const changed = _follow.settle();
+  if (changed) render();
+  return changed;
+}
+
+/** 任意用户操作（点击/按键）：清零 3s 空闲计时。 */
+export function markPlayheadFollowActivity() {
+  _ensureFollow().markActivity();
+}
+
+/** 用户直接操作视口（滚轮/缩放/画布拖拽）：清零计时并立即终止在途动画。 */
+export function markPlayheadFollowViewportGesture() {
+  _ensureFollow().markViewportGesture();
+}
+
+/** 指针按住状态（拖拽期间禁止跟随）。 */
+export function setPlayheadFollowPointerDown(down) {
+  _ensureFollow().setPointerDown(down);
+}
+
+/** 兜底解除按住状态（不动空闲计时）。 */
+export function clearPlayheadFollowPointerDown() {
+  if (_follow) _follow.clearPointerDown();
+}
+
+/** 诊断/测试用。 */
+export function getPlayheadFollowSnapshot() {
+  return _follow ? _follow.snapshot() : null;
 }
 
 export function timeToX(beats) {
@@ -182,9 +317,10 @@ export function snapBeats(beats) {
 
 // --- Notes index (sorted array + pitch-bucketed binary search) -------------
 // Module-level cache wrapping the live notes array from state. The cache is
-// rebuilt automatically when getNotes() returns a new array reference, and
-// ensureSorted() also re-validates on every read so external in-place
-// mutations (note.start = ..., notes.push(...)) are picked up correctly.
+// rebuilt automatically when getNotes() returns a new array reference;
+// ensureSorted() re-validates only when notesVersion changed (see
+// notesIndex.ensureSorted) — in-place mutations that don't bump the version
+// must call _markNotesIndexDirty().
 let _notesIdx = null;
 
 /**
@@ -196,9 +332,17 @@ function _getNotesIdx() {
   if (!_notesIdx || _notesIdx.notes !== notes) {
     _notesIdx = createNotesIndex(notes);
   } else {
-    ensureNotesSorted(_notesIdx);
+    ensureNotesSorted(_notesIdx, getNotesVersion());
   }
   return _notesIdx;
+}
+
+/**
+ * 就地修改 note.start/pitch/duration 但不想 bump notesVersion（例如拖拽过程中
+ * 每帧都会变）时调用：只标记索引失效，避免整条 inactive/oob 缓存链路跟着失效。
+ */
+export function _markNotesIndexDirty() {
+  if (_notesIdx) markNotesDirty(_notesIdx);
 }
 
 /**
@@ -212,8 +356,8 @@ export function _getCanvasRendererNotesIndex() {
 /**
  * Reset the cached notes index. Call after setNotes() replaces the array
  * reference, or whenever notes are mutated in a way that changes ordering
- * (the O(n) verification scan in ensureSorted will catch most cases, but
- * explicitly resetting avoids the per-call scan cost).
+ * (markDirty/_markNotesIndexDirty covers the in-place case, this drops the
+ * whole cache).
  */
 export function _resetNotesIndex() {
   _notesIdx = null;
@@ -497,22 +641,11 @@ export function _interpolateEnvelope(envelope, time) {
 export function getClippedNotes() {
   const currentFragment = getCurrentFragment();
   const notes = getNotes();
-  // 过滤掉未激活的重叠 note：同一时间点只有第一个 note 参与合成
-  const inactiveIds = getCachedInactiveNoteIds(notes);
-  const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
-  if (!currentFragment || !currentFragment.duration) return activeNotes;
-  const fragDuration = currentFragment.duration;
-  const clipped = [];
-  for (const note of activeNotes) {
-    if (note.start >= fragDuration) continue;
-    const noteEnd = note.start + note.duration;
-    if (noteEnd > fragDuration) {
-      clipped.push({ ...note, duration: fragDuration - note.start });
-    } else {
-      clipped.push(note);
-    }
-  }
-  return clipped;
+  // F2/F3：过滤未激活重叠 note → 裁剪到分片时长 → 按 start 升序。
+  // 排序是必须的：buildPitchCurveF0Data 曾用 clippedNotes 末元素当"最晚音符"，
+  // 而新建音符是 push 到数组末尾的，乱序时 F0 会被截断（实测丢 3 秒的音高 conditioning）。
+  // inactive 过滤的判定序仍按"原始数组顺序"（先插入者激活），见 shared/activeNotes.js。
+  return computeActiveClippedNotes(currentFragment, notes);
 }
 
 /**
@@ -523,57 +656,62 @@ export function getClippedNotes() {
  *   后处理链的结果已由 ppHash（曲线序列化）单独覆盖，无需在 400ms 轮询里
  *   反复跑整条滤波（长分片实测每次 7–15ms）。
  */
+/**
+ * 该分片是否含"有信息量"的音高曲线内容。
+ *
+ * 与 buildPitchCurveF0Data() 里那条 `!hasCustom && !smoothingActive && !autoOn`
+ * 必须等价 —— 这条判断同时决定"发不发曲线"和"是不是 score 模式"，
+ * 两处分叉会让编辑器与主窗口对同一个分片给出不同结论。
+ */
+export function hasPitchCurveContent() {
+  const pitchCurve = normalizePitchCurve(getPitchCurve());
+  if (pitchCurve.enabled === false) return true; // 显式关掉 = 用户的选择，按 manual 平直处理
+  if (isPitchCurveCustomized()) return true;
+  if (pitchCurve.auto && pitchCurve.auto.enabled) return true;
+  return hasF0PostprocessEffect();
+}
+
+/** 本次合成是否走 score（不向模型提供 F0 条件）。 */
+export function isScorePitchMode() {
+  return resolvePitchMode(getPitchMode(), hasPitchCurveContent()) === 'score';
+}
+
 export function buildPitchCurveF0Data(options = {}) {
   const applyPostprocess = options.postprocess !== false;
   const pitchCurve = getPitchCurve();
   const notes = getNotes();
   if (!pitchCurve.enabled || notes.length === 0) return null;
+  // score 模式：曲线不参与条件，交给 diffusion 自己生成 F0。
+  // 返回 null 让管线走 score 分支（f0Ids 全 0），而不是被预处理填成平直。
+  if (isScorePitchMode()) return null;
 
+  const pcNorm = normalizePitchCurve(pitchCurve);
+  const autoOn = !!(pcNorm.auto && pcNorm.auto.enabled);
   const hasCustom = isPitchCurveCustomized();
   // F0 后处理（中值 / Savitzky-Golay / 贝塞尔过渡）即使没有手绘音高曲线也必须生效，
   // 否则用户在"音色"lane 里开的平滑只对改过音高的分片有效。
   const smoothingActive = applyPostprocess && hasF0PostprocessEffect();
-  if (!hasCustom && !smoothingActive) return null;
+  // 自动层：没有任何手动内容时也必须产出 F0（"开了 auto 就有曲线"）
+  if (!hasCustom && !smoothingActive && !autoOn) return null;
 
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const currentFragment = getCurrentFragment();
-  const fragDuration = currentFragment ? currentFragment.duration : Infinity;
   const clippedNotes = getClippedNotes();
   if (clippedNotes.length === 0) return null;
-  const lastNote = clippedNotes[clippedNotes.length - 1];
-  const totalBeats = Math.min(lastNote.start + lastNote.duration, fragDuration);
-  const totalSeconds = (totalBeats / bpm) * 60;
-  const hopSize = 480;
-  const totalFrames = Math.floor(totalSeconds * getSampleRate() / hopSize);
 
-  let f0Array = new Float32Array(totalFrames);
-  for (let i = 0; i < totalFrames; i++) {
-    const frameTimeSec = (i * hopSize) / getSampleRate();
-    const frameBeat = (frameTimeSec / 60) * bpm;
-    const inNote = clippedNotes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
-    if (!inNote) {
-      f0Array[i] = 0;
-      continue;
-    }
-    const pitch = getPitchAtTime(frameBeat);
-    if (pitch !== null && pitch > 0) {
-      f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
-    } else {
-      f0Array[i] = 0;
-    }
-  }
-
-  if (smoothingActive && totalFrames > 0) {
-    const params = buildF0ParamArrays(totalFrames, bpm, getSampleRate(), hopSize);
-    if (params.active) {
-      f0Array = applyF0Postprocess(f0Array, params, {
-        sampleRate: getSampleRate(),
-        hopSize,
-      });
-    }
-  }
-
-  return f0Array;
+  // 逐帧求值统一走 shared/pitchCurveEval（与主窗口 buildFragmentPitchCurveF0
+  // 同一个真源）：曲线层 → 手动颤音 → 后处理 → 后置抖动/自动颤音，音符外 0。
+  return evaluatePitchCurveFrames({
+    pitchCurve: pcNorm,
+    notes: clippedNotes,
+    bpm,
+    postprocess: smoothingActive ? getPostprocess() : null,
+    seedSalt: saltFromKey(currentFragment ? (currentFragment.id !== undefined
+      ? currentFragment.id : currentFragment.singerId) : 0),
+    sampleRate: getSampleRate(),
+    hopSize: 480,
+    durationBeats: currentFragment ? currentFragment.duration : Infinity,
+  });
 }
 
 export function midiToNoteName(midi) {
@@ -621,16 +759,22 @@ export function clonePitchCurveState() {
   const pitchCurve = getPitchCurve();
   return {
     enabled: pitchCurve.enabled,
+    // 自动层与派生段都是可编辑状态，必须进撤销快照 —— 否则"拖动自动曲线"
+    // 与"改自动参数"无法撤销
+    auto: pitchCurve.auto ? deepClone(pitchCurve.auto) : undefined,
     anchorPoints: deepClone(pitchCurve.anchorPoints),
     brushSegments: deepClone(pitchCurve.brushSegments),
+    bakedSegments: deepClone(pitchCurve.bakedSegments || []),
   };
 }
 
 export function applyPitchCurveSnapshot(snapshot) {
   const pitchCurve = getPitchCurve();
   pitchCurve.enabled = snapshot.enabled;
+  if (snapshot.auto !== undefined) pitchCurve.auto = deepClone(snapshot.auto);
   pitchCurve.anchorPoints = deepClone(snapshot.anchorPoints);
   pitchCurve.brushSegments = deepClone(snapshot.brushSegments);
+  pitchCurve.bakedSegments = deepClone(snapshot.bakedSegments || []);
   invalidatePitchCurveCache();
 }
 
@@ -688,25 +832,9 @@ export function hasNoteOverlapMulti(excludeIds, pitch, start, end) {
  * @returns {Set<number>} 未激活的 note id 集合
  */
 export function getInactiveNoteIds(notes) {
-  const inactive = new Set();
-  const activeRanges = []; // 已激活 note 的时间区间 [{start, end}]
-  for (const n of notes) {
-    const nEnd = n.start + n.duration;
-    // 检查是否与任意已激活 note 时间重叠
-    let overlapped = false;
-    for (const r of activeRanges) {
-      if (n.start < r.end && nEnd > r.start) {
-        overlapped = true;
-        break;
-      }
-    }
-    if (overlapped) {
-      inactive.add(n.id);
-    } else {
-      activeRanges.push({ start: n.start, end: nEnd });
-    }
-  }
-  return inactive;
+  // 判定逻辑已抽到 shared/activeNotes.js（主窗口也要用同一套），
+  // 这里保留导出与"按原始插入序判定"的历史语义。
+  return computeInactiveNoteIds(notes);
 }
 
 // ---- 缓存：getInactiveNoteIds / getOutOfPitchRangeNotes ----
@@ -849,6 +977,8 @@ export function generateAutoPitchPoints() {
 export function isPitchCurveCustomized() {
   const pitchCurve = getPitchCurve();
   if (pitchCurve.anchorPoints.length > 0 || pitchCurve.brushSegments.length > 0) return true;
+  // 派生段（拖动自动曲线 / F0 导入产生）同样是手动资产，必须计入"已自定义"
+  if (Array.isArray(pitchCurve.bakedSegments) && pitchCurve.bakedSegments.length > 0) return true;
   // 启用了颤音的 note 也算作"已自定义"，确保 buildPitchCurveF0Data 会生成 F0
   const notes = getNotes();
   for (let i = 0; i < notes.length; i++) {
@@ -1051,72 +1181,327 @@ function _bisectSegmentIndex(pts, time) {
   return j === 0 ? 0 : j - 1;
 }
 
-export function getPitchAtTime(time) {
+/**
+ * 自动/手动统一求值器的缓存。
+ *
+ * getPitchAtTime 在渲染循环里每帧被调用数千次（采样点 + 拖拽），必须避免
+ * 每次重新排序锚点、重算强度有效值。缓存键 = notesVersion + pitchCurveVersion
+ * + 分片时长 + BPM —— 任一变化都会重建（notes 被替换时 state 会自增 version）。
+ */
+const _pitchResolverCache = new Map();
+
+/** 使统一求值器缓存失效（备注：key 已覆盖版本，这里供显式场景调用）。 */
+export function invalidatePitchResolver() {
+  _pitchResolverCache.clear();
+}
+
+/**
+ * @param {boolean} [includeJitter] 抖动是否计入曲线层（渲染计入；F0 构建在
+ *   jitterStage='post' 时不计入，改在滤波之后叠加）
+ * @param {boolean} [includeVibrato] 自动颤音是否计入曲线层（渲染计入；F0 构建
+ *   不计入，改在滤波之后叠加 —— 见设计方案 §6.3）
+ */
+function _getPitchResolver(includeJitter = true, includeVibrato = true) {
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const frag = getCurrentFragment();
+  const flags = `${includeJitter ? 1 : 0}${includeVibrato ? 1 : 0}`;
+  const key = `${getNotesVersion()}|${getPitchCurveVersion()}|${frag ? frag.duration : 0}|${bpm}|${flags}`;
+  const cached = _pitchResolverCache.get(key);
+  if (cached) return cached;
+  // 只在缓存失效时做过滤/排序（getClippedNotes 本身也有 inactive 缓存）
+  const clipped = getClippedNotes();
+  // 归一化兜底：旧工程没有 auto 字段 → auto.enabled=false，行为与旧版一致
+  const pc = normalizePitchCurve(getPitchCurve());
+  const resolver = createPitchResolver({
+    pitchCurve: pc,
+    auto: pc.auto,
+    sortedNotes: clipped,
+    bpm,
+    ranges: resolvePitchRanges(clipped),
+    seedSalt: saltFromKey(frag ? (frag.id !== undefined ? frag.id : frag.singerId) : 0),
+    includeJitter,
+    includeVibrato,
+  });
+  // 只保留最近 4 个变体，避免长会话里无限增长
+  if (_pitchResolverCache.size > 4) _pitchResolverCache.clear();
+  _pitchResolverCache.set(key, resolver);
+  return resolver;
+}
+
+/**
+ * 某时刻的曲线层音高 + 该时刻的激活音符。
+ *
+ * 单次求值内只做一次 `_findActiveNoteAtTime`：旧实现先为回退取一次、又为
+ * 颤音取一次（采样循环里每帧上千次，二分成本翻倍）。绘制侧需要同时判断
+ * "是否有音高"与"是否在音符内"时直接用返回值，避免再查一次。
+ *
+ * 返回值是**模块内共享的可复用对象**：调用方必须在当次求值内立即消费
+ * （现有调用点均为即时解构/取属性），不得跨调用保存引用。这样采样循环
+ * 里每帧数千次的调用不再产生临时对象，减轻 GC 压力。
+ *
+ * @param {number} time
+ * @param {{pitch:number|null, note:object|null}} out
+ * @returns {{pitch:number|null, note:object|null}}
+ */
+function _evalPitchState(time, out) {
   const pitchCurve = getPitchCurve();
-  if (!pitchCurve.enabled) return null;
-
-  let basePitch = null;
-
-  if (pitchCurve.anchorPoints.length > 0) {
-    const sorted = getSortedAnchorPoints();
-    if (!(time < sorted[0].time || time > sorted[sorted.length - 1].time)) {
-      const i = _bisectSegmentIndex(sorted, time);
-      if (i >= 0) {
-        // 锚点强度：先把锚点值按强度拉向"相邻锚点连线"，再做原有平滑插值。
-        // 强度 100（缺省）时 eff 与 value 完全一致，历史曲线逐点不变。
-        basePitch = evalSortedCurve(sorted, _getEffectivePitchValues(sorted), time);
-      }
-      if (basePitch === null) basePitch = sorted[sorted.length - 1].pitch;
-    }
+  if (!pitchCurve.enabled) {
+    out.pitch = null;
+    out.note = null;
+    return out;
   }
 
-  if (basePitch === null) {
-    for (const seg of pitchCurve.brushSegments) {
-      if (seg.points.length < 2) continue;
-      const pts = seg.points;
-      if (time >= pts[0].time && time <= pts[pts.length - 1].time) {
-        const i = _bisectSegmentIndex(pts, time);
-        if (i >= 0) {
-          const t = (pts[i + 1].time - pts[i].time) > 0
-            ? (time - pts[i].time) / (pts[i + 1].time - pts[i].time)
-            : 0;
-          basePitch = pts[i].pitch + t * (pts[i + 1].pitch - pts[i].pitch);
-        }
-        break;
-      }
-    }
-  }
+  const resolver = _getPitchResolver();
+  let basePitch = resolver.pitchAt(time);
+  const note = _findActiveNoteAtTime(time);
 
-  if (basePitch === null) {
-    const activeNote = _findActiveNoteAtTime(time);
-    if (activeNote) basePitch = activeNote.pitch;
-  }
-
-  if (basePitch === null) {
-    const autoPoints = generateAutoPitchPoints();
-    if (autoPoints.length > 0) {
-      const i = _bisectSegmentIndex(autoPoints, time);
-      if (i >= 0 && !autoPoints[i].breakAfter) {
-        const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
-          ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
-          : 0;
-        basePitch = autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
-      }
-    }
-  }
+  // 回退：作用域外且自动层关闭时，曲线层没有值 → 用激活音符的音高。
+  // 这是旧行为（v2.0.2 的 getPitchAtTime 同样在锚点/笔刷都未覆盖时回落到
+  // note.pitch），保留它以免"auto 关闭"时渲染与 F0 构建出现 null。
+  if (basePitch === null && note) basePitch = note.pitch;
 
   // 颤音叠加：在锚点/笔刷/自动音高之上加正弦调制。
   // 兼容性说明：
   //   - 若 note 有自定义锚点/笔刷，颤音在它们算出的音高上叠加（保留滑音等表现）。
   //   - 若 note 没有自定义曲线，颤音在 note.pitch 上叠加，并把 basePitch 从 null 提升为
   //     note.pitch，让 buildPitchCurveF0Data 能为该帧生成 F0（否则该帧 F0=0 静音）。
-  const note = _findActiveNoteAtTime(time);
   if (note && note.vibrato && note.vibrato.enabled) {
     if (basePitch === null) basePitch = note.pitch;
     basePitch += computeVibratoOffset(note, time);
   }
 
-  return basePitch;
+  out.pitch = basePitch;
+  out.note = note;
+  return out;
+}
+
+const _pitchStateScratch = { pitch: null, note: null };
+
+function _getPitchStateAtTime(time) {
+  return _evalPitchState(time, _pitchStateScratch);
+}
+
+export function getPitchAtTime(time) {
+  return _evalPitchState(time, _pitchStateScratch).pitch;
+}
+
+/** 供渲染层判断某时刻是否处于手动作用域（决定自动曲线画白还是画灰）。 */
+export function getManualCoverage() {
+  return _getPitchResolver().coverage;
+}
+
+/** 供渲染层取当前生效的 auto 配置（已归一化）。 */
+export function getResolvedAuto() {
+  return _getPitchResolver().autoCfg;
+}
+
+/**
+ * 批量：把选中的锚点/派生段整体移调 N 个半音（只影响手动资产）。
+ * 自动层由音符派生，不需要也不应该被移调 —— 这正是"逐音符编辑曲线不跟随"
+ * 反过来的那一半：用户显式移调手动内容时，必须能一次改完。
+ *
+ * @param {number} semitones
+ * @param {number[]} [anchorIndices] 缺省 = 全部锚点
+ * @returns {number} 实际移动的锚点数
+ */
+export function transposePitchCurve(semitones, anchorIndices) {
+  const shift = Number(semitones);
+  if (!Number.isFinite(shift) || shift === 0) return 0;
+  const pc = getPitchCurve();
+  // 目标集语义：显式给了索引 = 用户在做"选区操作"，只动这些锚点，
+  // 派生段不跟着动（否则"我只选了两个点"会把整段导入曲线一起移调）。
+  // 没给索引 = 整体移调，锚点与派生段一起走。
+  const hasSelection = Array.isArray(anchorIndices) && anchorIndices.length > 0;
+  const idxs = hasSelection ? anchorIndices : pc.anchorPoints.map((_, i) => i);
+  let moved = 0;
+  for (const i of idxs) {
+    const ap = pc.anchorPoints[i];
+    if (!ap) continue;
+    ap.pitch = Math.max(0, Math.min(127, ap.pitch + shift));
+    moved++;
+  }
+  if (!hasSelection) {
+    for (const seg of pc.bakedSegments || []) {
+      for (const pt of seg.points) pt.pitch = Math.max(0, Math.min(127, pt.pitch + shift));
+    }
+  }
+  if (moved > 0) invalidatePitchCurveCache();
+  return moved;
+}
+
+/**
+ * 批量：抽稀手动锚点（RDP，以"时间 × 音分"为平面）。
+ *
+ * 场景：从音频导入或长时间手绘后，几百个锚点里真正定义形状的只有十几个。
+ * 抽稀后曲线听感基本不变，但用户可以整体拖动/移调/改强度了。
+ *
+ * 只处理 `anchorPoints`；派生段（bakedSegments）是"某段自动曲线的快照"，
+ * 抽稀它会永久损失保真度，不做。
+ *
+ * @param {number} [toleranceCents=8] 容差（音分）：偏离直线小于它的点被合并
+ * @returns {{kept:number, removed:number}}
+ */
+export function simplifyPitchCurve(toleranceCents = 8) {
+  const pc = getPitchCurve();
+  const pts = pc.anchorPoints;
+  if (!Array.isArray(pts) || pts.length < 3) return { kept: pts ? pts.length : 0, removed: 0 };
+
+  // 按时间排序后再抽稀（抽稀是几何操作，乱序输入没有意义），最后按原顺序回填
+  const order = pts.map((ap, i) => ({ ap, i })).sort((a, b) => a.ap.time - b.ap.time);
+  const tol = Math.max(0.5, Number(toleranceCents) || 8) / 100;
+  const keep = new Uint8Array(order.length);
+  keep[0] = 1;
+  keep[order.length - 1] = 1;
+  const stack = [[0, order.length - 1]];
+  while (stack.length > 0) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const t0 = order[a].ap.time;
+    const p0 = order[a].ap.pitch;
+    const dt = order[b].ap.time - t0;
+    const dp = order[b].ap.pitch - p0;
+    let maxDev = -1;
+    let maxIdx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const t = order[i].ap.time;
+      const p = order[i].ap.pitch;
+      const proj = dt > 0 ? p0 + (dp * (t - t0)) / dt : p0;
+      const dev = Math.abs(p - proj);
+      if (dev > maxDev) { maxDev = dev; maxIdx = i; }
+    }
+    if (maxDev > tol && maxIdx > 0) {
+      keep[maxIdx] = 1;
+      stack.push([a, maxIdx]);
+      stack.push([maxIdx, b]);
+    }
+  }
+
+  const removedSet = new Set();
+  for (let i = 0; i < order.length; i++) if (!keep[i]) removedSet.add(order[i].i);
+  if (removedSet.size === 0) return { kept: pts.length, removed: 0 };
+
+  pc.anchorPoints = pts.filter((_, i) => !removedSet.has(i));
+  invalidatePitchCurveCache();
+  return { kept: pc.anchorPoints.length, removed: removedSet.size };
+}
+
+/**
+ * 批量：平滑手动锚点（邻域三点加权，首尾不动）。
+ *
+ * 与"平滑度 smoothness"不是一回事：smoothness 是**段内缓动**（形状参数），
+ * 这里改的是锚点**数值**本身。用途是把手绘的锯齿抖动画顺，或把导入的
+ * 毛刺锚点压平 —— 之前只能一个一个拖。
+ *
+ * @param {number} [strength=50] 0..100，越大越接近邻域均值
+ * @param {number[]} [indices] 只平滑这些锚点（缺省全部；需按时间相邻才合理）
+ * @returns {number} 改动的锚点数
+ */
+export function smoothPitchCurve(strength = 50, indices) {
+  const pc = getPitchCurve();
+  const pts = pc.anchorPoints;
+  if (!Array.isArray(pts) || pts.length < 3) return 0;
+  const w = Math.max(0, Math.min(100, Number(strength) || 50)) / 100;
+  if (w <= 0) return 0;
+
+  const targets = Array.isArray(indices) && indices.length > 0 ? new Set(indices) : null;
+  const order = pts.map((ap, i) => i).sort((a, b) => pts[a].time - pts[b].time);
+  // 先算出全部新值再回写，避免"边平滑边读已被改过的邻居"（顺序依赖）
+  const next = new Map();
+  for (let k = 1; k < order.length - 1; k++) {
+    const i = order[k];
+    if (targets && !targets.has(i)) continue;
+    const prev = pts[order[k - 1]].pitch;
+    const cur = pts[i].pitch;
+    const nxt = pts[order[k + 1]].pitch;
+    const target = (prev + 2 * cur + nxt) / 4;
+    next.set(i, cur + (target - cur) * w);
+  }
+  for (const [i, v] of next) pts[i].pitch = Math.max(0, Math.min(127, v));
+  if (next.size > 0) invalidatePitchCurveCache();
+  return next.size;
+}
+
+/**
+ * 批量：把手动锚点/派生段吸附到最近的半音（"贴合到准音"）。
+ * @param {number} [grid=1] 量化步长（半音）
+ * @returns {number} 实际改动的点数
+ */
+export function quantizePitchCurve(grid = 1) {
+  const step = Number(grid) > 0 ? Number(grid) : 1;
+  const pc = getPitchCurve();
+  let changed = 0;
+  for (const ap of pc.anchorPoints) {
+    const q = Math.round(ap.pitch / step) * step;
+    if (Math.abs(q - ap.pitch) > 1e-6) { ap.pitch = q; changed++; }
+  }
+  for (const seg of pc.bakedSegments || []) {
+    for (const pt of seg.points) {
+      const q = Math.round(pt.pitch / step) * step;
+      if (Math.abs(q - pt.pitch) > 1e-6) { pt.pitch = q; changed++; }
+    }
+  }
+  if (changed > 0) {
+    invalidatePitchCurveCache();
+  }
+  return changed;
+}
+
+// 注意：批量操作函数故意**不**在这里触发自动保存。本模块不 import projectIO
+// （避免渲染模块与 I/O 模块互相牵制），保存由调用方（eventHandlers 的批量执行器）
+// 在提交 history 之后统一 scheduleAutoSave()。上轮这里曾用
+// `typeof scheduleAutoSave === 'function'` 兜底，但本模块从未声明过该标识符，
+// 判断恒为 false —— 批量操作改了数据却不保存，属于静默失效。
+
+/**
+ * 命中测试：点是否落在"自动曲线"上（用于拖动派生）。
+ * 只在 auto 生效、且该时刻**不在手动作用域内**时命中 —— 作用域内画的是灰线，
+ * 点它应该去操作已有的手动锚点，而不是再派生一份。
+ *
+ * @returns {{time:number, pitch:number}|null}
+ */
+export function hitAutoCurveAt(x, y) {
+  const autoCfg = getResolvedAuto();
+  if (!autoCfg || !autoCfg.enabled) return null;
+  const time = xToTime(x);
+  if (coverageAt(getManualCoverage(), time)) return null;
+  const pitch = getPitchAtTime(time);
+  if (pitch === null) return null;
+  if (Math.abs(y - pitchToY(pitch)) > 6) return null;
+  return { time, pitch };
+}
+
+/**
+ * 以当前自动曲线为模板创建一个派生段（拖动自动曲线的第一步）。
+ *
+ * 语义（设计方案 §3.3）：派生段是"当时的自动曲线"的**快照副本**，
+ * 生成后即为手动资产；原自动曲线不会被删除（它是参数化派生量），
+ * 只是在该段区间内转为灰色参考显示。
+ *
+ * @param {number} beat 光标所在拍
+ * @param {{stepBeats?:number}} [opts]
+ * @returns {object|null} bakedSegment
+ */
+export function createBakedSegmentAt(beat, opts = {}) {
+  const notes = getClippedNotes();
+  const note = findNoteAtBeatShared(notes, beat);
+  if (!note) return null;
+  const start = note.start;
+  const end = note.start + note.duration;
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const autoCfg = getResolvedAuto();
+  const pts = buildAutoCurve(
+    { sortedNotes: notes, auto: autoCfg, bpm, ranges: resolvePitchRanges(notes) },
+    start, end, opts.stepBeats ?? 0.05,
+  );
+  if (pts.length < 2) return null;
+  return {
+    id: `bk_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
+    start,
+    end,
+    origin: 'auto-drag',
+    autoPreset: autoCfg ? autoCfg.preset : null,
+    points: pts.map((p) => ({ time: p.time, pitch: p.pitch, strength: 100, smoothness: 0 })),
+  };
 }
 
 export function findAnchorPointAt(x, y) {
@@ -1618,11 +2003,181 @@ export function computeInitialScrollY() {
   return HEADER_HEIGHT + (127 - targetPitch) * NOTE_HEIGHT - centerY;
 }
 
-function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
+/** 外部音素带的固定高度。18px 刚好够放一行 8px 文字 + 上下留白。 */
+const EXT_PHONEME_BAND_HEIGHT = 18;
+/** 外部带与宿主音素条之间的间隔。 */
+const EXT_PHONEME_BAND_GAP = 3;
+
+/**
+ * 音素面板的纵向分区。
+ *
+ * 抽出来给渲染和命中检测共用：两处各算一遍是"点在带子上却选中了宿主音素"
+ * 这类 bug 的老来源。返回的 `barTop/barBottom` 是宿主音素条的范围，
+ * `extTop/extBottom` 是外部音素带（没有外部音素时退化成零高度）。
+ *
+ * @param {number} areaTop
+ * @param {number} areaBottom
+ */
+export function getPhonemeBarLayout(areaTop, areaBottom) {
   const barPadding = 6;
   const labelH = 16;
-  const barTop = areaTop + labelH;
-  const barBottom = areaBottom - barPadding;
+  const withExt = hasExternalPhonemes();
+  const extBottom = areaBottom - barPadding;
+  const extTop = withExt ? extBottom - EXT_PHONEME_BAND_HEIGHT : extBottom;
+  const barBottom = withExt ? extTop - EXT_PHONEME_BAND_GAP : extBottom;
+  return {
+    barTop: areaTop + labelH,
+    barBottom,
+    extTop,
+    extBottom,
+    hasExt: withExt,
+  };
+}
+
+// "这一分片里有没有外部音素"决定了面板要不要留出那条带子。逐帧扫全部 notes
+// 太浪费（长分片 5000 条），用 notes 版本号 + schema 引用做失效条件：
+// 两者都没变就说明扫描结果还成立。
+let _extScanCache = { notes: null, version: -1, schema: null, has: false };
+
+/** 当前分片是否存在"插件声明了音素"的音符。 */
+export function hasExternalPhonemes() {
+  const notes = getNotes();
+  const version = getNotesVersion();
+  const schema = getProjectExtSchema();
+  const c = _extScanCache;
+  if (c.notes === notes && c.version === version && c.schema === schema) return c.has;
+  let has = false;
+  if (schema) {
+    for (const n of notes) {
+      if (n && n.ext && readPhonemeField(n.ext, schema, 'note')) { has = true; break; }
+    }
+  }
+  _extScanCache = { notes, version, schema, has };
+  return has;
+}
+
+// 单个 note 的外部音素备忘录。键是 note 对象本身：note.ext 被替换（重新加载、
+// 撤销恢复）时引用会变，自然失效；schema 只在工程级变化，一并比对。
+const _extPhonemeCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+/**
+ * 取一条 note 的**外部**音素（插件给的、宿主只读呈现的那一份）。
+ *
+ * 与 `getPhonemeAdjustments` 是两个世界：那个是宿主按歌词推导、可编辑、参与合成；
+ * 这个是别人家的坐标系，只用来对照显示。
+ *
+ * @returns {{pluginId:string, phonemes:object[], editable:boolean, truncated:boolean}|null}
+ */
+export function getExternalPhonemes(note) {
+  const schema = getProjectExtSchema();
+  if (!schema || !note || !note.ext) return null;
+  if (_extPhonemeCache) {
+    const hit = _extPhonemeCache.get(note);
+    if (hit && hit.ext === note.ext && hit.schema === schema) return hit.value;
+  }
+  const value = readPhonemeField(note.ext, schema, 'note');
+  if (_extPhonemeCache) _extPhonemeCache.set(note, { ext: note.ext, schema, value });
+  return value;
+}
+
+/**
+ * 画外部音素带。
+ *
+ * 视觉上刻意与宿主音素条分开：宿主条是彩色半透明 + 音量包络曲线，
+ * 外部带是灰底小方块、没有曲线、没有选中态 —— 用户一眼能看出"这条不是我能改的"。
+ * 宿主不认识的名字（不在 `en_/jp_/zh_/yue_` 命名空间）额外画虚线边框。
+ */
+function _drawExternalPhonemeBand(ctx, w, c, layout, visibleNotes) {
+  const { extTop, extBottom } = layout;
+  if (extBottom - extTop < 6) return;
+  const bandH = extBottom - extTop;
+
+  ctx.fillStyle = c.bgElevated;
+  ctx.fillRect(0, extTop, w, bandH);
+  ctx.strokeStyle = c.gridLineMinor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, extTop + 0.5);
+  ctx.lineTo(w, extTop + 0.5);
+  ctx.stroke();
+
+  let anyLabel = null;
+
+  for (const note of visibleNotes) {
+    const ext = getExternalPhonemes(note);
+    if (!ext) continue;
+    const noteStartX = timeToX(note.start);
+    const noteWidth = note.duration * BEAT_WIDTH * getZoomX();
+    if (noteWidth < 8 || noteStartX + noteWidth < 0 || noteStartX > w) continue;
+
+    const list = ext.phonemes;
+    const cellW = noteWidth / list.length;
+    const top = extTop + 2;
+    const h = bandH - 4;
+
+    for (let i = 0; i < list.length; i++) {
+      const ph = list[i];
+      const x = noteStartX + i * cellW;
+      const cw = cellW;
+      // 视口裁剪：整格在画布外就不画（长分片 + 小缩放时省下大量 fill）
+      if (x + cw < 0 || x > w) continue;
+
+      if (ph.host) {
+        // 宿主认识的：浅灰实心块
+        ctx.fillStyle = c.fgDisabled;
+        ctx.globalAlpha = 0.22;
+        ctx.fillRect(x + 0.5, top, Math.max(1, cw - 1), h);
+        ctx.globalAlpha = 1.0;
+      } else {
+        // 宿主不认识的：只有虚线框，明显更"虚"
+        ctx.strokeStyle = c.fgDisabled;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(x + 0.5, top + 0.5, Math.max(1, cw - 1), h - 1);
+        ctx.setLineDash([]);
+      }
+
+      if (cw > 14) {
+        ctx.fillStyle = c.fgMuted;
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // 单格放不下就截断加省略号 —— 小缩放时宁可看不全，也不要压到邻居上
+        let label = ph.display || ph.name;
+        const maxW = cw - 4;
+        if (ctx.measureText(label).width > maxW) {
+          while (label.length > 1 && ctx.measureText(`${label}…`).width > maxW) {
+            label = label.slice(0, -1);
+          }
+          label = `${label}…`;
+        }
+        ctx.fillText(label, x + cw / 2, top + h / 2);
+      }
+    }
+
+    if (!anyLabel) anyLabel = ext.pluginId;
+  }
+
+  // 带子右端标注来源。只在有外部音素时出现，避免空带子还挂个说明。
+  if (anyLabel) {
+    const text = `外部 · ${anyLabel}`;
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(text).width;
+    ctx.fillStyle = c.bgElevated;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(w - tw - 8, extTop + 1, tw + 8, bandH - 2);
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = c.fgMuted;
+    ctx.fillText(text, w - 4, extTop + bandH / 2);
+  }
+}
+
+function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
+  const layout = getPhonemeBarLayout(areaTop, areaBottom);
+  const barTop = layout.barTop;
+  const barBottom = layout.barBottom;
   const barHeight = barBottom - barTop;
 
   ctx.fillStyle = c.bgElevated;
@@ -1635,10 +2190,17 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
   ctx.lineTo(w, areaTop);
   ctx.stroke();
 
+  // 标题左对齐：右侧让给"外部音素 · 来源"的说明（见 _drawExternalPhonemeBand）。
   ctx.fillStyle = c.fgDisabled;
   ctx.font = '10px sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText('Phoneme', w - 4, areaTop + 12);
+  ctx.textAlign = 'left';
+  ctx.fillText('Phoneme', 4, areaTop + 12);
+  if (layout.hasExt) {
+    ctx.textAlign = 'right';
+    ctx.font = '9px sans-serif';
+    ctx.fillStyle = c.fgMuted;
+    ctx.fillText('外部音素只读', w - 4, areaTop + 12);
+  }
 
   for (let v = 0; v <= 1; v += 0.25) {
     const y = barBottom - barHeight * v;
@@ -1783,6 +2345,10 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
       x = phEnd;
     }
   }
+
+  // 外部音素带画在宿主音素条之下：同一 x 轴对齐，用户能逐音对照，
+  // 但视觉上是两条互不从属的东西（一条能改、一条只能看）。
+  if (layout.hasExt) _drawExternalPhonemeBand(ctx, w, c, layout, visibleNotes);
 }
 
 function renderPianoKeys(c) {
@@ -1809,13 +2375,84 @@ function renderPianoKeys(c) {
     pianoKeysCtx.strokeRect(0, y, w, keyH);
 
     if (keyH >= 10) {
-      pianoKeysCtx.fillStyle = isBlack ? '#cccccc' : '#2a2a3d';
-      pianoKeysCtx.font = '10px sans-serif';
+      // 走查里"顶部 F#9 出现两次"其实是读错了 10px 下的 "#"：
+      // 黑键标签用 #cccccc 画在黑键上、白键标签用 #2a2a3d 画在白键上，
+      // 缩放后 "#" 先糊掉，F#9 就退化成 F9，与下一行的 F9 看着一模一样。
+      // 这里抬高对比度并把字号提到 11px（键高 16px 仍装得下），
+      // 数据本身没有重复——midiToNoteName 是按 midi % 12 取名的。
+      pianoKeysCtx.fillStyle = isBlack ? '#f2f3f7' : '#1d1f2b';
+      pianoKeysCtx.font = '600 11px -apple-system, "Segoe UI", sans-serif';
       pianoKeysCtx.textAlign = 'right';
       pianoKeysCtx.textBaseline = 'middle';
       pianoKeysCtx.fillText(midiToNoteName(p), w - 4, y + keyH / 2);
     }
   }
+}
+
+// 音高曲线采样时刻的跨帧缓存。
+// renderPitchCurve 在播放 / 悬停 / 滚动时每帧执行，而采样网格只由可见窗、
+// 画布宽度与曲线版本决定；不缓存时每帧都要重排 + 去重（锚点多时为数万点）。
+// 缩放会改变可见窗 → 自然 miss；minAnchorSpacing 把锚点并入量压到像素级，
+// 保证 miss 的那一帧也不会被 F0 导入的密集锚点拖慢。
+//
+// 契约（必须遵守）：每一条修改锚点/笔刷/bakedSegments 的路径都要让
+// getPitchCurveVersion() 递增（state.js 的 bumpPitchCurveVersion 已覆盖
+// revision 变更、undo/redo、粘贴、导入等入口）。否则缓存键不变，画布会
+// 继续用旧采样点渲染出"改了却没反应"的假象。新增修改路径时先确认这一点。
+let _pitchSampleTimesCache = null;
+
+function _getPitchCurveSampleTimes(startBeat, endBeat, w, pitchCurve) {
+  const key = `${startBeat}|${endBeat}|${w}|${getPitchCurveVersion()}`;
+  if (_pitchSampleTimesCache && _pitchSampleTimesCache.key === key) {
+    return _pitchSampleTimesCache.times;
+  }
+  const beatsPerPixel = Math.max(1e-9, (endBeat - startBeat) / Math.max(1, w));
+  const times = buildPitchCurveSampleTimes({
+    startBeat,
+    endBeat,
+    width: w,
+    interval: PITCH_CURVE_SAMPLE_INTERVAL,
+    sortedAnchors: getSortedAnchorPoints(),
+    bakedSegments: pitchCurve.bakedSegments || [],
+    // 半像素内的多个锚点在画布上是同一竖线，只保留第一个即可。
+    minAnchorSpacing: beatsPerPixel * 0.5,
+  });
+  _pitchSampleTimesCache = { key, times };
+  return times;
+}
+
+// ---- 实际 F0 叠画（阶段 3）----
+// 主曲线仍按锚点求值（编辑语义），这里叠一条"模型真正收到的 F0"：
+// 统一求值入口 buildPitchCurveF0Data（含后处理 / 抖动 / 自动颤音）的逐帧
+// 结果 Hz → MIDI 半音，细半透明线。渲染循环只画缓存数组，绝不逐帧求值。
+// 缓存键 = pitchCurveVersion | notesVersion | bpm | timbreVersion(后处理)
+//          | sampleRate | fragment(id:duration)。任何输入变化都会失效。
+let _actualF0OverlayCache = null;
+let _actualF0DiffCents = 0;
+
+/** "仅显示与主曲线差异 > X 音分"开关：0 / 非正数 / 非有限值 = 显示全部。 */
+export function setActualF0DiffThreshold(cents) {
+  _actualF0DiffCents = Number.isFinite(cents) && cents > 0 ? cents : 0;
+}
+
+/** 取实际 F0 叠画缓存（导出供测试）：{ key, midi, beatPerFrame }，midi=null 表示无曲线。 */
+export function getActualF0Overlay() {
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const frag = getCurrentFragment();
+  const sampleRate = getSampleRate();
+  const key = `${getPitchCurveVersion()}|${getNotesVersion()}|${bpm}|${getTimbreVersion()}|${sampleRate}|${frag ? `${frag.id}:${frag.duration}` : ''}`;
+  if (_actualF0OverlayCache && _actualF0OverlayCache.key === key) return _actualF0OverlayCache;
+  const hzFrames = buildPitchCurveF0Data();
+  let midi = null;
+  if (hzFrames && hzFrames.length > 0) {
+    midi = new Float32Array(hzFrames.length);
+    for (let i = 0; i < hzFrames.length; i++) {
+      midi[i] = hzFrames[i] > 0 ? 69 + 12 * Math.log2(hzFrames[i] / 440) : 0;
+    }
+  }
+  const beatPerFrame = (480 / sampleRate) / (60 / bpm);
+  _actualF0OverlayCache = { key, midi, beatPerFrame };
+  return _actualF0OverlayCache;
 }
 
 function renderPitchCurve(c) {
@@ -1876,8 +2513,142 @@ function renderPitchCurve(c) {
     ctx.setLineDash([]);
   }
 
+  // ---- 自动音高曲线层（白=生效 / 灰=被手动覆盖）----
+  const autoCfg = getResolvedAuto();
+  const autoOn = !!(autoCfg && autoCfg.enabled);
+  const coverage = getManualCoverage();
+
+  // 手动区背景带：一眼看出"这一段是手动的"
+  if (coverage.length > 0) {
+    ctx.fillStyle = c.pitchManualRegion || 'rgba(91, 141, 239, 0.07)';
+    const h = ctx.canvas ? ctx.canvas.height : 0;
+    for (const r of coverage) {
+      const x0 = timeToX(r.start);
+      const x1 = timeToX(r.end);
+      if (x1 < 0 || x0 > w) continue;
+      ctx.fillRect(x0, 0, Math.max(1, x1 - x0), h);
+    }
+  }
+
+  /**
+   * 采样焦点在时间上是单调递增的（ts 升序，取相邻两点中点），
+   * 因此 coverage 的线性查找可以用「区间指针只前进」代替每次从头扫描。
+   */
+  function _makeCoverageColorAt() {
+    let idx = 0;
+    return function coverageColorAt(t) {
+      while (idx < coverage.length && t > coverage[idx].end) idx++;
+      const r = coverage[idx];
+      return r && t >= r.start ? c.pitchAutoMuted : c.pitchAutoActive;
+    };
+  }
+
+  /**
+   * 曲线采样时刻：可见窗内均匀采样 ∪ 可见窗内锚点/派生段端点，升序返回。
+   *
+   * 采样域固定为当前可见窗（两端各留 1 拍余量），**不随锚点数量或最远锚点
+   * 变化**。旧实现把「最远锚点 + 2」当作右端，于是增删锚点会整体重排采样
+   * 网格：锚点密集时视口内采样间隔被拉大，实线漏掉尖峰；网格相位一变，
+   * 前后段曲线的位置看起来就像被缩放或跳变。把锚点时间并入采样点后，
+   * 实线精确经过每个锚点，与锚点圆点严格对齐。
+   *
+   * 结果走模块级缓存：播放/悬停每帧都会重绘，同一视口只构建一次。
+   */
+  function curveSampleTimes() {
+    return _getPitchCurveSampleTimes(startBeat, endBeat, w, pitchCurve);
+  }
+
+  /**
+   * 绘制实际生效的自动曲线：作用域外白色实线、作用域内灰色虚线。
+   *
+   * 采样点 = 均匀采样 ∪ 锚点时间（F11）：旧实现只按等间隔采样，
+   * 缩小到全曲视口时每 8 个锚点才画 1 个 —— 界面上被抹平的噪声，
+   * 合成时一个不少地进入 F0（"看着干净、听着发抖"）。
+   */
+  function drawAutoCurve() {
+    if (!autoOn) return;
+    const ts = curveSampleTimes();
+    const coverageColorAt = _makeCoverageColorAt();
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    let color = null;
+    let started = false;
+    let lastX = 0;
+    let lastY = 0;
+    // 相邻采样段共享端点：上一段的 p1 就是下一段的 p0，直接复用，
+    // 采样求值次数约减半（t1===t0 的重复时刻也由这里兜住）。
+    let prevP = null;
+    for (let i = 0; i < ts.length - 1; i++) {
+      const t0 = ts[i];
+      const t1 = ts[i + 1];
+      if (t1 === t0) continue;
+      const p0 = prevP !== null ? prevP : getPitchAtTime(t0);
+      const p1 = getPitchAtTime(t1);
+      prevP = p1;
+      if (p0 === null || p1 === null) {
+        if (started) { ctx.stroke(); started = false; color = null; }
+        continue;
+      }
+      const col = coverageColorAt((t0 + t1) / 2);
+      if (col !== color) {
+        if (started) ctx.stroke();
+        ctx.strokeStyle = col;
+        ctx.setLineDash(col === c.pitchAutoMuted ? [4, 3] : []);
+        ctx.beginPath();
+        lastX = timeToX(t0);
+        lastY = pitchToY(p0);
+        ctx.moveTo(lastX, lastY);
+        color = col;
+        started = true;
+      }
+      lastX = timeToX(t1);
+      lastY = pitchToY(p1);
+      ctx.lineTo(lastX, lastY);
+    }
+    if (started) ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * 实际 F0 叠画：统一求值入口的逐帧结果（含后处理/抖动/颤音），细半透明线。
+   * 只画缓存数组；音符外（F0=0）断线不画，与"模型收到静音"一致。
+   * _actualF0DiffCents > 0 时仅画与主曲线差异超过阈值的帧段。
+   */
+  function drawActualF0Overlay() {
+    const ov = getActualF0Overlay();
+    if (!ov.midi) return;
+    const { midi, beatPerFrame } = ov;
+    const i0 = Math.max(0, Math.floor((startBeat - 1) / beatPerFrame));
+    const i1 = Math.min(midi.length - 1, Math.ceil((endBeat + 1) / beatPerFrame));
+    ctx.save();
+    ctx.strokeStyle = c.pitchActualF0 || 'rgba(255, 183, 77, 0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let drawing = false;
+    for (let i = i0; i <= i1; i++) {
+      const m = midi[i];
+      if (!(m > 0)) { drawing = false; continue; }
+      const beat = i * beatPerFrame;
+      if (_actualF0DiffCents > 0) {
+        const main = getPitchAtTime(beat);
+        if (main === null || Math.abs(m - main) * 100 <= _actualF0DiffCents) { drawing = false; continue; }
+      }
+      const px = timeToX(beat);
+      const py = pitchToY(m);
+      if (!drawing) { ctx.moveTo(px, py); drawing = true; }
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   if (!hasCustom) {
-    drawAutoPoints(c.pitchAutoPoint, 2, [6, 4]);
+    // 没有手动内容时：自动层就是唯一曲线，直接画真实曲线；auto 关闭则保留旧虚线
+    if (autoOn) drawAutoCurve();
+    else drawAutoPoints(c.pitchAutoPoint, 2, [6, 4]);
+    drawActualF0Overlay();
 
     for (const note of notes) {
       const startX = timeToX(note.start);
@@ -1911,7 +2682,10 @@ function renderPitchCurve(c) {
     return;
   }
 
-  drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
+  // 有手动内容时：先画自动层（灰/白），再由手动曲线与锚点覆盖其上
+  if (autoOn) drawAutoCurve();
+  else drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
+  drawActualF0Overlay();
 
   // autoPoints 现在只在 note 起始/末端有拟合点（breakAfter 阻止 note 内部插值），
   // drawAutoPoints 仅做 moveTo 不会画出线段，这里补画拟合点小圆点保持视觉参考。
@@ -1930,25 +2704,27 @@ function renderPitchCurve(c) {
   }
 
   if (pitchCurve.anchorPoints.length > 0) {
-    const sorted = getSortedAnchorPoints();
-    const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
-    // 采样密度按视口像素自适应：固定 0.02 拍间隔在缩小到 100+ 拍视口时每帧
-    // 产生 5000+ 次 getPitchAtTime 二分求值（拖拽时逐帧执行）。每个线段超过
-    // 1 像素没有视觉收益，因此取 [200, 视口像素宽] 与细间隔密度的较小值：
-    // 放大保持原 0.02 拍精度，缩小则降到约每像素一个线段。
-    const beatRange = maxTime - startBeat;
-    const denseSteps = Math.floor(beatRange / PITCH_CURVE_SAMPLE_INTERVAL);
-    const steps = Math.min(Math.max(200, w), denseSteps);
+    // 与自动层共用同一套采样时刻：可见窗固定 + 锚点时间并入。
+    // 旧实现按「最远锚点 + 2」等间隔采样，锚点数量一变，整条实线的采样
+    // 网格就重排（步长、相位同时变），密集锚点的尖峰被漏采，于是出现
+    // 整体缩放和前后段位置跳变。改为按时间逐点连接后，曲线精确经过
+    // 每个可见锚点，缩放与锚点数量都不再影响曲线形状。
+    const ts = curveSampleTimes();
 
     ctx.strokeStyle = c.pitchLine;
     ctx.lineWidth = 2;
     ctx.beginPath();
     let first = true;
-    for (let i = 0; i <= steps; i++) {
-      const t = startBeat + (i / steps) * (maxTime - startBeat);
-
-      const pitch = getPitchAtTime(t);
-      if (pitch === null) continue;
+    for (let i = 0; i < ts.length; i++) {
+      const t = ts[i];
+      // 一次求值同时拿到音高与「是否在激活音符内」，不再额外二分一次。
+      const { pitch, note: activeNote } = _getPitchStateAtTime(t);
+      // 音符外不画（与 F0=0 一致）：锚点曲线会在音符空隙内外推插值，
+      // 必须按音符覆盖断开路径，不能把空隙两侧连成直线。
+      if (pitch === null || !activeNote) {
+        if (!first) { ctx.stroke(); ctx.beginPath(); first = true; }
+        continue;
+      }
       const px = timeToX(t);
       const py = pitchToY(pitch);
       if (first) { ctx.moveTo(px, py); first = false; }
@@ -2078,7 +2854,7 @@ function renderTimbreLane(c, w, areaTop, areaBottom) {
   ctx.fillText(formatParamValue(paramId, min, t), 4, areaBottom - 4);
   ctx.textAlign = 'right';
   ctx.fillStyle = color;
-  ctx.fillText(`${def.unit || ''}`, w - 4, areaTop + 12);
+  ctx.fillText(paramUnitText(def, t), w - 4, areaTop + 12);
 
   const startBeat = xToTime(0);
   const endBeat = xToTime(w);
@@ -2230,6 +3006,95 @@ export function _drawAnchorDragHud(c, w, h) {
 }
 
 /**
+ * note 上插件曲线的解析缓存。
+ *
+ * 归一化要排序、要过滤非法点，每帧对每个可见音符重算是实打实的浪费。
+ * 缓存键取 `ext` 的**引用**而不是内容：编辑一个音符会重建它的 ext（或整条 note），
+ * 引用一变即失效；而 schema 换了（打开另一个工程）也要跟着失效。
+ */
+const _noteCurveCache = new WeakMap();
+
+function _noteCurves(note, schema) {
+  if (!note || !note.ext || typeof note.ext !== 'object' || !schema) return null;
+  const hit = _noteCurveCache.get(note);
+  if (hit && hit.ext === note.ext && hit.schema === schema) return hit.curves;
+  const curves = collectCurves(note.ext, schema, 'note').map((cv) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of cv.points) {
+      if (p.v < lo) lo = p.v;
+      if (p.v > hi) hi = p.v;
+    }
+    // 声明了 clamp 就用它做纵向标尺：插件说了"这条通道的合理范围是 0–1"，
+    // 按数据自身 min/max 拉伸会把"一直贴顶"和"波动很小"画成同一个样子。
+    if (cv.spec.clamp) {
+      lo = cv.spec.clamp[0];
+      hi = cv.spec.clamp[1];
+    }
+    if (!(hi > lo)) hi = lo + 1;
+    return { cv, lo, hi };
+  });
+  _noteCurveCache.set(note, { ext: note.ext, schema, curves });
+  return curves;
+}
+
+/**
+ * 在 note 内部叠加插件声明的曲线（`kind: 'curve'`）。
+ *
+ * 为什么画在 note 里、不画进参数 lane
+ * --------------------------------
+ * 宿主不知道这条曲线的量纲，也不知道它对应哪条参数。画到音高/音量 lane 上，
+ * 用户会以为那是可拖的宿主参数 —— 而拖了不会有任何效果，因为合成根本不读它。
+ * 画在 note 矩形内、按 note 自身高度归一，表达的是"这条数据属于这个音符"
+ * 这一件确定的事，不多也不少。
+ *
+ * 虚线 + 半透明的用意：它是**只读的旁证**，不是可以抓的东西。
+ */
+function _drawNoteExtCurves(ctx, c, notes, beatToPixel, scrollX, w) {
+  const schema = getProjectExtSchema();
+  if (!schema || !Array.isArray(notes) || notes.length === 0) return;
+  let started = false;
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 2]);
+  ctx.strokeStyle = c.fgMuted || c.fgSecondary;
+  ctx.globalAlpha = 0.8;
+  for (const note of notes) {
+    const curves = _noteCurves(note, schema);
+    if (!curves || curves.length === 0) continue;
+    const x = note.start * beatToPixel - scrollX;
+    const nw = note.duration * beatToPixel;
+    if (x + nw < 0 || x > w || nw < 10) continue;
+    const y = pitchToY(note.pitch);
+    const top = y + 2;
+    const bottom = y + NOTE_HEIGHT - 2;
+    const hh = bottom - top;
+    if (hh <= 2) continue;
+    for (const { cv, lo, hi } of curves) {
+      // 采样密度按像素宽自适应，上限 24 段：再宽的音符也只是一条示意线，
+      // 而每多一段就多一次二分求值（拖动时逐帧执行）。
+      const steps = Math.max(2, Math.min(24, Math.floor(nw / 4)));
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const mixed = sampleCurve(cv.points, t, cv.spec.interp);
+        if (mixed === null) continue;
+        const v = applyCurveSpec(mixed, cv.spec);
+        const norm = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+        const px = x + 1 + t * (nw - 2);
+        const py = bottom - norm * hh;
+        if (i === 0 || !started) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+        started = true;
+      }
+      ctx.stroke();
+      started = false;
+    }
+  }
+  ctx.restore();
+}
+
+/**
  * 在 note 上叠加颤音 / 渐入渐出的视觉指示，让用户一眼看出哪些 note 启用了效果。
  * - 渐入/渐出：在 note 左/右边缘画半透明三角形（从 0 → 1 / 1 → 0 的增益包络示意）。
  * - 颤音：在 note 左上角画一个小正弦波标记（≈），仅在 note 宽度足够时显示。
@@ -2310,23 +3175,45 @@ export function render() {
 
 /**
  * U3：把当前画布状态写成一句读屏可播报的摘要。
- * 只在音符数量 / 选中数量变化时才播报（announce 内部还会再节流一次），
- * 所以拖拽缩放之类的高频渲染不会刷屏。
+ *
+ * 这里只缓存「计数 → 文本」的映射，避免每帧重新拼串；`announce` 仍然每帧调用，
+ * 由它自己的 500ms 节流决定是否写入/重播 —— 不改变“相同文本在节流窗口结束后
+ * 仍可重播”的既有语义。
  */
+let _lastA11yText = { key: '', text: '' };
 function _announceCanvasState() {
   const notes = getNotes();
   const sel = getSelectedNoteIds();
   const selCount = sel ? (sel.size ?? sel.length) : 0;
-  const text = selCount > 0
-    ? `共 ${notes.length} 个音符，已选中 ${selCount} 个`
-    : `共 ${notes.length} 个音符`;
-  announce('piano-roll-a11y-status', text);
+  const key = `${notes.length}|${selCount}`;
+  if (_lastA11yText.key !== key) {
+    _lastA11yText = {
+      key,
+      text: selCount > 0
+        ? `共 ${notes.length} 个音符，已选中 ${selCount} 个`
+        : `共 ${notes.length} 个音符`,
+    };
+  }
+  announce('piano-roll-a11y-status', _lastA11yText.text);
 }
 
 // Static layer cache (background + grid lines)
+//
+// 关键：缓存不按精确的 scrollX 键控。分页跟随动画在 ~220–420ms 内连续改写
+// scrollX（约 0.7 视口），若把 scrollX 放进键，每帧都要重建静态层（实测重建
+// 2.85ms vs 命中 2.07ms）。改为世界坐标锚定：缓存一条覆盖 2 个视口宽的网格带，
+// 锚点量化到视口边界；横向滚动停留在同一页内时键命中，只做带偏移的 drawImage。
 let _staticCacheCanvas = null;
 let _staticCacheKey = '';
 let _staticCacheDirty = true;
+const STATIC_STRIP_VIEWPORTS = 2;
+
+/** 静态层锚点：按视口宽量化到页边界（世界 x，≥0）。 */
+function _staticAnchorX(scrollX, viewportW) {
+  if (!(viewportW > 0)) return 0;
+  const x = Number.isFinite(scrollX) && scrollX > 0 ? scrollX : 0;
+  return Math.floor(x / viewportW) * viewportW;
+}
 
 export function invalidateStaticCache() {
   _staticCacheDirty = true;
@@ -2347,6 +3234,7 @@ function _doRender() {
   if (!canvas.parentElement) return;
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
+  _lastViewportWidth = w;
   // 缓存 clientHeight/Width 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
   _cachedParentHeight = h;
   _cachedParentWidth = w;
@@ -2366,37 +3254,42 @@ function _doRenderImpl(w, h) {
   const pixelH = Math.floor(h * dprVal);
 
   const currentProject = getCurrentProject();
-  const beatsPerMeasure = currentProject ? currentProject.timeSignature[0] : 4;
+  const beatsPerMeasure = beatsPerMeasureOf(currentProject && currentProject.timeSignature);
   const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
-  // Build cache key from state that affects the static layer
-  const staticCacheKey = `${w}|${h}|${dprVal}|${getScrollX()}|${getScrollY()}|${getZoomX()}|${beatsPerMeasure}|${showParamArea}|${pianoAreaBottom}|${c.bgElevated}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.gridLineMinor}|${c.timeText}`;
+  // 静态层按「视口量化的页锚点」键控，横向滚动在页内不触发重建（见上方注释）。
+  const anchorX = _staticAnchorX(getScrollX(), w);
+  const stripW = w * STATIC_STRIP_VIEWPORTS;
+  const stripPixelW = Math.floor(stripW * dprVal);
+  // 世界 x → 缓存带内 x：worldPx - anchorX（BEAT_WIDTH*zoom 是世界像素/拍）。
+  const worldXToStrip = (beats) => beats * BEAT_WIDTH * getZoomX() - anchorX;
+  const staticCacheKey = `${w}|${h}|${dprVal}|${anchorX}|${getScrollY()}|${getZoomX()}|${beatsPerMeasure}|${showParamArea}|${pianoAreaBottom}|${c.bgElevated}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.gridLineMinor}|${c.timeText}`;
 
   if (_staticCacheDirty || _staticCacheKey !== staticCacheKey ||
-      !_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
-    // Rebuild static layer (background + grid lines)
-    if (!_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
+      !_staticCacheCanvas || _staticCacheCanvas.width !== stripPixelW || _staticCacheCanvas.height !== pixelH) {
+    // Rebuild static layer (background + grid lines) on a world-anchored strip.
+    if (!_staticCacheCanvas || _staticCacheCanvas.width !== stripPixelW || _staticCacheCanvas.height !== pixelH) {
       _staticCacheCanvas = document.createElement('canvas');
-      _staticCacheCanvas.width = pixelW;
+      _staticCacheCanvas.width = stripPixelW;
       _staticCacheCanvas.height = pixelH;
     }
     const cacheCtx = _staticCacheCanvas.getContext('2d');
     cacheCtx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
-    cacheCtx.clearRect(0, 0, w, h);
+    cacheCtx.clearRect(0, 0, stripW, h);
 
     // Background
     cacheCtx.fillStyle = c.bgElevated;
-    cacheCtx.fillRect(0, 0, w, h);
+    cacheCtx.fillRect(0, 0, stripW, h);
 
-    // Vertical grid lines (beats)
-    const startBeat = xToTime(0);
-    const endBeat = xToTime(w);
+    // Vertical grid lines (beats) — world coords, offset into the strip.
+    const startBeat = anchorX / (BEAT_WIDTH * getZoomX());
+    const endBeat = (anchorX + stripW) / (BEAT_WIDTH * getZoomX());
     cacheCtx.lineWidth = 0.5;
     for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
-      const x = timeToX(b);
-      if (x < 0) continue;
-      const isMeasure = (b % beatsPerMeasure === 0);
+      const x = worldXToStrip(b);
+      if (x < 0 || x > stripW) continue;
+      const isMeasure = isMeasureBoundary(b, beatsPerMeasure);
       cacheCtx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
       cacheCtx.beginPath();
       cacheCtx.moveTo(x, HEADER_HEIGHT);
@@ -2406,11 +3299,11 @@ function _doRenderImpl(w, h) {
         cacheCtx.fillStyle = c.timeText;
         cacheCtx.font = '11px sans-serif';
         cacheCtx.textAlign = 'center';
-        cacheCtx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
+        cacheCtx.fillText(String(measureNumberAt(b, beatsPerMeasure)), x, HEADER_HEIGHT - 6);
       }
     }
 
-    // Horizontal grid lines (pitches)
+    // Horizontal grid lines (pitches) — span the full strip.
     const startPitch = yToPitch(h);
     const endPitch = yToPitch(HEADER_HEIGHT);
     for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
@@ -2419,7 +3312,7 @@ function _doRenderImpl(w, h) {
       cacheCtx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
       cacheCtx.beginPath();
       cacheCtx.moveTo(0, y);
-      cacheCtx.lineTo(w, y);
+      cacheCtx.lineTo(stripW, y);
       cacheCtx.stroke();
     }
 
@@ -2427,10 +3320,11 @@ function _doRenderImpl(w, h) {
     _staticCacheDirty = false;
   }
 
-  // Draw cached static layer
+  // Draw cached static layer：从锚定带里取当前视口那一屏（带偏移的 blit）。
   ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  ctx.drawImage(_staticCacheCanvas, 0, 0, w, h);
+  const srcX = (getScrollX() - anchorX) * dprVal;
+  ctx.drawImage(_staticCacheCanvas, srcX, 0, pixelW, pixelH, 0, 0, w, h);
 
   const currentParamMode = getCurrentParamMode();
 
@@ -2597,6 +3491,9 @@ function _doRenderImpl(w, h) {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
 
+  // 插件声明的曲线（kind: 'curve'）：画在 note 内部，只读旁证
+  _drawNoteExtCurves(ctx, c, visibleNotes, beatToPixel, scrollX, w);
+
   // 鼠标悬停在警告 note 上时显示提示（重叠未激活 / 音高超范围）
   const hoveredId = getHoveredNoteId();
   if (hoveredId !== null && (inactiveNoteIds.has(hoveredId) || oobNoteIds.has(hoveredId))) {
@@ -2649,7 +3546,7 @@ function _doRenderImpl(w, h) {
   // Draw kanji group brackets and labels above kana notes
   _drawKanjiGroups(ctx, c);
 
-  if (currentParamMode === 'Pitch') {
+  if (currentParamMode === 'Pitch' && !isScorePitchMode()) {
     renderPitchCurve(c);
   }
 
@@ -2896,26 +3793,38 @@ function drawPlayhead(ctxToUse, w, h, c) {
   ctxToUse.restore();
 }
 
+/**
+ * inline 编辑框相对容器的偏移：只在布局变化（resizeCanvases /
+ * invalidateLayoutCache）后需要重新读 rect。
+ */
+function _getInlineGeometry() {
+  if (!_inlineGeomCache) {
+    const container = canvas.parentElement;
+    const containerRect = container.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    _inlineGeomCache = {
+      offsetX: canvasRect.left - containerRect.left,
+      offsetY: canvasRect.top - containerRect.top,
+    };
+  }
+  return _inlineGeomCache;
+}
+
 function updateInlineInputPosition() {
   const activeInlineInput = getActiveInlineInput();
   const activeInlineEditNote = getActiveInlineEditNote();
   if (!activeInlineInput || !activeInlineEditNote) return;
 
   const note = activeInlineEditNote;
-  const container = canvas.parentElement;
-  const containerRect = container.getBoundingClientRect();
-  const canvasRect = canvas.getBoundingClientRect();
-
-  const offsetX = canvasRect.left - containerRect.left;
-  const offsetY = canvasRect.top - containerRect.top;
+  const { offsetX, offsetY } = _getInlineGeometry();
 
   const nx = timeToX(note.start);
   const ny = pitchToY(note.pitch);
   const nw = note.duration * BEAT_WIDTH * getZoomX();
   const nh = NOTE_HEIGHT;
 
-  const visible = nx + nw >= 0 && nx <= container.clientWidth &&
-                  ny + nh >= HEADER_HEIGHT && ny <= container.clientHeight;
+  const visible = nx + nw >= 0 && nx <= _getParentWidth() &&
+                  ny + nh >= HEADER_HEIGHT && ny <= _getParentHeight();
 
   if (visible) {
     activeInlineInput.style.display = '';

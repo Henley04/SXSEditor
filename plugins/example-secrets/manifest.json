@@ -1,0 +1,65 @@
+{
+  "apiVersion": 2,
+  "id": "example-secrets",
+  "name": "Example: Plugin Secrets",
+  "version": "1.0.0",
+  "description": "插件密钥（permissions.secrets）的最小示例：写入、读取、删除自己的密钥，并观察本机是否真的在加密。复制这个目录改名即可开工。",
+  "author": "SXSEditor Dev",
+  "main": "main.js",
+  "engines": {
+    "app": ">=2.0.0"
+  },
+  "permissions": {
+    "secrets": [
+      "read",
+      "write"
+    ],
+    "automation": [
+      "expose"
+    ],
+    "ui": [
+      "menu"
+    ]
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "save",
+        "title": {
+          "en": "Store a token",
+          "zh-CN": "存一个令牌"
+        },
+        "description": "把参数 value 写进插件自己的密钥文件；不传就生成一个带时间戳的假令牌。"
+      },
+      {
+        "id": "reveal",
+        "title": {
+          "en": "Show stored token",
+          "zh-CN": "读出已存的令牌"
+        },
+        "description": "读回令牌、列出所有密钥名，并报告本机是否启用了系统密钥环。"
+      },
+      {
+        "id": "clear",
+        "title": {
+          "en": "Forget the token",
+          "zh-CN": "删掉这个令牌"
+        },
+        "description": "删除示例密钥；用于验证删除确实落盘。"
+      }
+    ],
+    "menus": [
+      {
+        "path": "plugins/example",
+        "command": "save"
+      }
+    ],
+    "automation": {
+      "methods": [
+        "save",
+        "reveal",
+        "clear"
+      ]
+    }
+  }
+}

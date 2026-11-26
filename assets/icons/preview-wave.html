@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SXSEditor 新图标 · 橙黄声波</title>
+<style>
+  :root{
+    --bg:#eef1f7; --card:#fff; --fg:#141a2e; --muted:#68728c;
+    --line:rgba(20,26,46,.10); --accent:#F07A22;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0 auto; padding:52px 40px 88px; max-width:1060px;
+    font:14.5px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+    background:var(--bg); color:var(--fg); -webkit-font-smoothing:antialiased;
+  }
+  .eyebrow{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); font-weight:700}
+  h1{font-size:29px; line-height:1.25; margin:10px 0 10px; letter-spacing:-.01em}
+  .lede{color:var(--muted); max-width:72ch; margin:0; font-size:15px}
+  h2{font-size:12px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--muted);
+     margin:52px 0 16px; display:flex; align-items:center; gap:12px}
+  h2::after{content:""; flex:1; height:1px; background:var(--line)}
+
+  .hero{display:flex; gap:44px; align-items:center; flex-wrap:wrap; margin-top:28px}
+  .hero .big{width:230px; height:230px; background:#fff; border-radius:52px;
+             box-shadow:0 28px 60px -24px rgba(20,26,46,.45), 0 0 0 1px rgba(20,26,46,.06)}
+  .hero .copy{flex:1; min-width:300px}
+  .hero .copy p{margin:0 0 12px}
+  .hero .copy .dim{color:var(--muted); font-size:13.5px}
+
+  .ladder{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:8px 26px 18px}
+  .ladder .row{display:flex; flex-wrap:wrap; align-items:flex-end; gap:22px; padding:16px 0;
+               border-bottom:1px dashed var(--line)}
+  .ladder .row:last-child{border-bottom:none}
+  .ladder .tag{width:84px; flex:none; font-size:12px; color:var(--muted); letter-spacing:.06em}
+  .ladder img{flex:none; display:block}
+  .cap{font-size:11.5px; color:var(--muted); text-align:right; margin-top:6px}
+
+  .scenes{display:grid; grid-template-columns:repeat(2,1fr); gap:20px; grid-auto-rows:1fr}
+  @media (max-width:820px){ .scenes{grid-template-columns:1fr} }
+  .scene{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px;
+         display:flex; flex-direction:column; gap:16px; justify-content:flex-start; min-height:186px}
+  .scene .label{font-size:11.5px; color:var(--muted); letter-spacing:.06em}
+  .win{border-radius:10px; overflow:hidden; border:1px solid rgba(0,0,0,.09); box-shadow:0 10px 26px -14px rgba(20,26,46,.4)}
+  .win .tb{display:flex; align-items:center; gap:9px; height:34px; padding:0 12px; background:#f7f8fb;
+           border-bottom:1px solid rgba(0,0,0,.07); font-size:12.5px; color:#2a3350}
+  .win .tb img{width:16px; height:16px}
+  .win .body{height:110px; background:linear-gradient(180deg,#fbfcfe,#eef2f8)}
+  .scene .taskbar,.scene .dock{align-self:flex-start}
+  .taskbar{display:inline-flex; align-items:center; gap:6px; background:#1b1e26; border-radius:9px; padding:7px 10px;
+           box-shadow:0 12px 26px -14px rgba(0,0,0,.6)}
+  .taskbar .app{width:36px; height:36px; border-radius:8px; display:grid; place-items:center}
+  .taskbar .app.on{background:rgba(255,255,255,.12)}
+  .taskbar .app.ph{background:rgba(255,255,255,.07)}
+  .taskbar .app img{width:22px; height:22px}
+  .dock{display:inline-flex; gap:12px; align-items:center; padding:9px 13px; border-radius:20px;
+        background:rgba(255,255,255,.55); border:1px solid rgba(255,255,255,.8); backdrop-filter:blur(16px);
+        box-shadow:0 14px 34px -16px rgba(20,26,46,.45)}
+  .dock img{width:50px; height:50px; border-radius:11px}
+  .dock .ph{width:50px; height:50px; border-radius:11px; background:#e2e7ef}
+
+  .compare{display:flex; gap:40px; align-items:center; flex-wrap:wrap;
+           background:var(--card); border:1px solid var(--line); border-radius:16px; padding:26px 30px}
+  .compare figure{margin:0; text-align:center}
+  .compare img{width:112px; height:112px; display:block; border-radius:24px}
+  .compare figcaption{font-size:12px; color:var(--muted); margin-top:10px}
+  .arrow{color:var(--muted); font-size:20px}
+
+  .note{background:#fff; border:1px solid var(--line); border-left:3px solid var(--accent);
+        border-radius:12px; padding:16px 20px; margin-top:24px; font-size:13.5px}
+  code{background:rgba(20,26,46,.06); padding:1px 6px; border-radius:5px; font-size:12.5px}
+  footer{margin-top:56px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="eyebrow">Icon · applied</div>
+<h1>橙黄声波，装进圆角卡片</h1>
+<p class="lede">
+  设计没有动：橙色圆盘、七根奶油白声波柱、两侧溢出的小段，全部沿用原稿的实测几何。
+  只做了两件事——把图片外框的四个角改成圆角，导出四角透明；把内容整体放大到占满横向空间，
+  原稿圆盘只占画布 56%，放进卡片后上下会空出一大块。
+</p>
+
+<div class="hero">
+  <img class="big" src="wave/sxseditor-512.png" alt="新图标">
+  <div class="copy">
+    <p><b>几何直接量自原稿，不重画。</b>圆盘直径 706、圆心 (626.5, 607.5)；七根条的中心距 80，宽度 49–57、高度 112 / 199 / 263 / 386 / 262 / 172 / 108；内胶囊 48×118 距圆边 22，外胶囊 71×56 距内胶囊 20。整体缩放到 95% 后居中。</p>
+    <p class="dim">圆角用的是 4.2 次超椭圆，和 Windows 11 / macOS 图标的曲率接近。导出的每一档都是独立渲染的矢量，不是缩放位图，所以 16px 也不会糊成一团。</p>
+  </div>
+</div>
+
+<h2>真实尺寸</h2>
+<div class="ladder">
+  <div class="row">
+    <div class="tag">原尺寸</div>
+    <img src="wave/sxseditor-16.png" width="16" height="16" alt="16">
+    <img src="wave/sxseditor-20.png" width="20" height="20" alt="20">
+    <img src="wave/sxseditor-24.png" width="24" height="24" alt="24">
+    <img src="wave/sxseditor-32.png" width="32" height="32" alt="32">
+    <img src="wave/sxseditor-40.png" width="40" height="40" alt="40">
+    <img src="wave/sxseditor-48.png" width="48" height="48" alt="48">
+    <img src="wave/sxseditor-64.png" width="64" height="64" alt="64">
+    <img src="wave/sxseditor-96.png" width="96" height="96" alt="96">
+    <img src="wave/sxseditor-128.png" width="128" height="128" alt="128">
+  </div>
+  <div class="cap">把浏览器缩放放到 100% 再看这一行，才是屏幕上的真实大小</div>
+</div>
+
+<h2>放进界面</h2>
+<div class="scenes">
+  <div class="scene">
+    <div class="label">窗口标题栏 · 16px</div>
+    <div class="win">
+      <div class="tb"><img src="wave/sxseditor-32.png" alt=""><span>SXSEditor — 未命名工程</span></div>
+      <div class="body"></div>
+    </div>
+  </div>
+  <div class="scene">
+    <div class="label">Windows 任务栏 · 24px</div>
+    <div class="taskbar">
+      <span class="app ph"></span>
+      <span class="app on"><img src="wave/sxseditor-64.png" alt=""></span>
+      <span class="app ph"></span>
+      <span class="app ph"></span>
+    </div>
+  </div>
+  <div class="scene">
+    <div class="label">macOS Dock · 50px</div>
+    <div class="dock">
+      <span class="ph"></span>
+      <img src="wave/sxseditor-256.png" alt="">
+      <span class="ph"></span>
+    </div>
+  </div>
+  <div class="scene">
+    <div class="label">大图 · 256px</div>
+    <img src="wave/sxseditor-256.png" width="128" height="128" alt="" style="border-radius:28px">
+  </div>
+</div>
+
+<h2>与上一版对比</h2>
+<div class="compare">
+  <figure>
+    <img src="legacy/SXS-original.png" alt="旧图标">
+    <figcaption>原来的灰底 SX_S</figcaption>
+  </figure>
+  <span class="arrow">→</span>
+  <figure>
+    <img src="wave/sxseditor-256.png" alt="新图标">
+    <figcaption>现在的橙黄声波</figcaption>
+  </figure>
+</div>
+
+<div class="note">
+  <b>已经替换并提交。</b><code>assets/SXS.png</code>（2000px）、<code>assets/SXS.ico</code>（7 档）、
+  <code>assets/SXS.icns</code>（macOS）、<code>docs/images/icon.png</code> 全部换成新图。
+  <code>npm run check:assets</code> 通过，18 个必需资源齐全。下次 <code>npm run make</code> 打出来的安装包就是这张图。
+</div>
+
+<footer>SXSEditor · 生成脚本 assets/icons/generate_wave_icon.py</footer>
+
+</body>
+</html>

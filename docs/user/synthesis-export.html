@@ -80,8 +80,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX model files</strong> in total. The model operates internally at <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. Playback now defaults to <strong>48000 Hz</strong> — the 24 kHz model output is linearly upsampled for playback. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
-          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型文件</strong>。模型内部以 <strong>24000 Hz</strong> 运行，hop size 为 <strong>480</strong>。播放默认采样率现在为 <strong>48000 Hz</strong>——24 kHz 模型输出经线性上采样后播放。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
+          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX models</strong> in total. At FP32/FP16/INT8 precision these expand to <strong>16 files</strong> (seven models ship external .onnx.data weight files); at INT8-NPU they are 9 self-contained files. The first-launch download covers 19 required files in all (adding the RMVPE pitch model and the Basic Pitch MIDI model; 12 at INT8-NPU). The model operates internally at <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. Playback now defaults to <strong>48000 Hz</strong> — the 24 kHz model output is resampled with a band-limited Kaiser-windowed sinc interpolator for playback. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
+          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型</strong>。在 FP32/FP16/INT8 精度下它们展开为 <strong>16 个文件</strong>（其中 7 个模型附带 .onnx.data 外部权重文件）；INT8-NPU 精度下为 9 个自包含文件。首次启动下载共覆盖 19 个必需文件（另含 RMVPE 音高模型与 Basic Pitch MIDI 模型；INT8-NPU 为 12 个）。模型内部以 <strong>24000 Hz</strong> 运行，hop size 为 <strong>480</strong>。播放默认采样率现在为 <strong>48000 Hz</strong>——24 kHz 模型输出经 Kaiser 窗带限 sinc 重采样后播放。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
         </div>
       </div>
 
@@ -92,19 +92,24 @@
       <ul>
         <li><span data-lang="en"><strong>▶ Play</strong>: Start synthesis and playback. On first play, the SVS pipeline initializes (loads models into GPU).</span><span data-lang="zh"><strong>▶ Play</strong>：开始合成与播放。首次播放时，SVS 管线会初始化（将模型加载到 GPU）。</span></li>
         <li><span data-lang="en"><strong>⏸ Pause</strong>: Pause playback. Resume from the paused position.</span><span data-lang="zh"><strong>⏸ Pause</strong>：暂停播放。从暂停位置继续。</span></li>
-        <li><span data-lang="en"><strong>⏹ Stop</strong>: Stop playback and reset to the beginning.</span><span data-lang="zh"><strong>⏹ Stop</strong>：停止播放并重置到开头。</span></li>
+        <li><span data-lang="en"><strong>⏹ Stop</strong>: Stop playback and reset to the beginning. The rendered audio is kept, so pressing Play again resumes immediately instead of re-running inference. It is only discarded when synthesis itself is cancelled.</span><span data-lang="zh"><strong>⏹ Stop</strong>：停止播放并重置到开头。已渲染的音频会被保留，再按 Play 直接续播，不必重跑推理；只有「合成过程被取消」时才会丢弃。</span></li>
+        <li><span data-lang="en"><strong>⟳ Retake</strong>: Re-render the current performance with the same settings and play the new take. Unlike editing a parameter, this deliberately bypasses cached results, so repeated retakes produce different results from the same input.</span><span data-lang="zh"><strong>⟳ 重新合成</strong>：用当前参数重新渲染一版演奏并播放。它有意绕过缓存，因此不改任何参数、连续点几次也能得到不同结果。</span></li>
       </ul>
+      <p>
+        <span data-lang="en">The playback cache is keyed on the inputs that actually change the vocal audio: notes, pitch curves, singer voice files, reference audio, tempo, diffusion settings, and <strong>model precision</strong>. Switching between FP32 / FP16 / INT8 therefore triggers a fresh synthesis instead of replaying the previous precision's result.</span>
+        <span data-lang="zh">播放缓存以「真正会改变人声音频的输入」为键：音符、音高曲线、歌手音色文件、参考音频、速度、扩散参数，以及<strong>模型精度</strong>。因此在 FP32 / FP16 / INT8 之间切换会触发重新合成，而不是继续播放上一精度的结果。</span>
+      </p>
       <h3>
         <span data-lang="en">Fragment-Level Playback</span>
         <span data-lang="zh">片段级播放</span>
       </h3>
-      <p data-lang="en">In the Fragment Editor, <strong>▶ Play</strong> synthesizes and plays only the current fragment. This is useful for quick previews while editing. It uses the "Preview Inference Parameters" from Settings (fewer diffusion steps = faster response).</p>
-      <p data-lang="zh">在片段编辑器中，<strong>▶ Play</strong> 仅合成并播放当前片段。便于编辑时快速预览。它使用设置中的"预览推理参数"（扩散步数更少 = 响应更快）。</p>
+          <p data-lang="en">In the Fragment Editor, <strong>▶ Play</strong> synthesizes and plays only the current fragment, using the preview inference parameters from Settings.</p>
+          <p data-lang="zh">在片段编辑器中，<strong>▶ Play</strong> 仅合成并播放当前片段，使用设置中的预览推理参数。</p>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Synthesis Cancellation</strong> — a cancel button appears during synthesis (both preview and export). Cancellation is <em>cooperative</em>: GPU inference exits at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach. The cancellation is near-instant for Euler/Heun samplers and completes at the next sub-stage for STORK-2.</p>
-          <p data-lang="zh"><strong>取消合成</strong>——合成过程中（预览和导出均支持）会出现取消按钮。取消为<em>协作式</em>：GPU 推理在扩散步之间的安全检查点退出，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。Euler/Heun 求解器下取消近乎即时，STORK-2 则在下一个 sub-stage 完成后退出。</p>
+          <p data-lang="en"><strong>Cancelling synthesis.</strong> Preview playback can be stopped at any time: while the model loads and during synthesis, the Play button becomes <strong>Cancel synthesis</strong> (Stop also works). Cancellation takes effect immediately with the Euler and Heun solvers; with STORK-2 it completes after the current sub-stage. <strong>Export behaves differently:</strong> once an export starts, its Cancel button is disabled and closing the dialog does not stop it; the export continues in the background and writes the WAV file.</p>
+          <p data-lang="zh"><strong>取消合成。</strong>预览播放可随时停止：模型加载与合成期间，播放按钮会变为<strong>取消合成</strong>（Stop 同样可用）。Euler 与 Heun 求解器下立即生效，STORK-2 则在当前子阶段完成后生效。<strong>导出不同：</strong>导出开始后其 Cancel 按钮被禁用，关闭对话框也不会中断导出，导出会在后台继续并写出 WAV 文件。</p>
         </div>
       </div>
 
@@ -155,13 +160,13 @@
         <span data-lang="en">Diffusion Sampler</span>
         <span data-lang="zh">扩散求解器</span>
       </h2>
-      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; the preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
-      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
+      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; <strong>Euler</strong> is the default, matching the official sampling contract. The preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
+      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器，默认使用对齐官方采样合约的 <strong>Euler</strong>；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
       <ul>
-        <li><span data-lang="en"><strong>Euler</strong> (default) — 1 NFE/step. First-order explicit, midpoint time evaluation. Fastest, the original baseline.</span><span data-lang="zh"><strong>Euler</strong>（默认）— 每步 1 次推理。一阶显式，中点时间评估。最快，原始基线。</span></li>
+        <li><span data-lang="en"><strong>Euler</strong> — 1 NFE/step. First-order explicit, midpoint time evaluation. Fastest, the original baseline.</span><span data-lang="zh"><strong>Euler</strong> — 每步 1 次推理。一阶显式，中点时间评估。最快，原始基线。</span></li>
         <li><span data-lang="en"><strong>Heun</strong> — 2 NFE/step. Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Final step falls back to Euler to avoid <code>t &gt; 1</code>.</span><span data-lang="zh"><strong>Heun</strong> — 每步 2 次推理。二阶改进欧拉（梯形公式）。精度更高，推理时间约 2 倍。末步退化为 Euler 以避免 <code>t &gt; 1</code> 越界。</span></li>
         <li><span data-lang="en"><strong>Extrapolated Euler</strong> — 1 NFE/step. Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation; not the full stabilized RK formulation. Best when the velocity field changes smoothly; falls back to Euler when extrapolation is unsafe.</span><span data-lang="zh"><strong>Extrapolated Euler</strong> — 每步 1 次推理。受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度做线性外推；非论文完整 stabilized RK 格式。速度场缓变时效果最佳；外推不安全时退化为 Euler。</span></li>
-        <li><span data-lang="en"><strong>STORK-2</strong> — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong> — 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
+        <li><span data-lang="en"><strong>STORK-2</strong> — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong>— 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
       </ul>
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -178,8 +183,8 @@
       <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram. The number of steps controls the trade-off between quality and speed:</p>
       <p data-lang="zh">扩散模型会迭代地对梅尔频谱图去噪。步数控制质量与速度的权衡：</p>
       <ul>
-        <li><span data-lang="en"><strong>More steps</strong> = higher quality, slower inference. Recommended for export: 32 steps.</span><span data-lang="zh"><strong>更多步数</strong> = 更高音质，推理更慢。导出推荐：32 步。</span></li>
-        <li><span data-lang="en"><strong>Fewer steps</strong> = faster inference, lower quality. Recommended for preview: 8–16 steps.</span><span data-lang="zh"><strong>更少步数</strong> = 推理更快，音质略低。预览推荐：8–16 步。</span></li>
+        <li><span data-lang="en"><strong>More steps</strong> raise quality and slow inference down. Recommended for export: 32 steps.</span><span data-lang="zh"><strong>更多步数</strong>可提高音质，推理更慢。导出推荐 32 步。</span></li>
+        <li><span data-lang="en"><strong>Fewer steps</strong> speed inference up at some cost in quality. Recommended for preview: 8–16 steps.</span><span data-lang="zh"><strong>更少步数</strong>可加快推理，音质略有下降。预览推荐 8–16 步。</span></li>
         <li><span data-lang="en">Range: 4–64 steps.</span><span data-lang="zh">范围：4–64 步。</span></li>
       </ul>
 
@@ -201,6 +206,142 @@
       </h2>
       <p data-lang="en">The CFG rescale coefficient mitigates over-guidance artifacts caused by high CFG strength. Recommended: 0.5–0.9. Range: 0–1.</p>
       <p data-lang="zh">CFG rescale 系数用于缓解高 CFG 强度造成的过度引导伪影。推荐：0.5–0.9。范围：0–1。</p>
+
+      <h2 id="postprocess-options">
+        <span data-lang="en">Post-Processing &amp; Quality Options</span>
+        <span data-lang="zh">后处理与音质选项</span>
+      </h2>
+      <p data-lang="en">Options that change how the sound is rendered after the model runs are grouped as post-processing, but they act at three different stages. The stage determines which options can be used together:</p>
+      <p data-lang="zh">改变"模型运行之后"声音的选项统称为后处理，但它们作用在三个不同阶段。阶段决定了哪些选项可以同时开启：</p>
+      <ol>
+        <li><span data-lang="en"><strong>Inside the diffusion loop</strong> — dynamic thresholding, CFG schedule, Q-Drift, the initial noise seed, SDEdit repair. They change what the model converges to, so they are the strongest and the most likely to conflict.</span><span data-lang="zh"><strong>扩散循环内部</strong>——动态阈值、CFG 调度、Q-Drift、初始噪声种子、SDEdit 修复。它们改变模型最终收敛到哪条轨迹，影响最大，也最容易互相冲突。</span></li>
+        <li><span data-lang="en"><strong>On the mel spectrogram, before the vocoder</strong> — the Timbre lane curves (spectral interpolation, time/freq Gaussian smoothing). They reshape the spectrum the vocoder sees.</span><span data-lang="zh"><strong>Mel 频谱上、vocoder 之前</strong>——音色 lane 的曲线（频谱插值、时频高斯平滑）。它们改变 vocoder 看到的频谱形状。</span></li>
+        <li><span data-lang="en"><strong>On the waveform, after the vocoder</strong> — vocoder chunk overlap, peak normalization, EBU R128 loudness, resampling and bit depth. They only touch level and seams, never pitch or timbre.</span><span data-lang="zh"><strong>波形上、vocoder 之后</strong>——vocoder 分块重叠、峰值归一化、EBU R128 响度、重采样与位深。它们只处理电平与接缝，不改变音高与音色。</span></li>
+      </ol>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Option</span><span data-lang="zh">选项</span></th>
+            <th><span data-lang="en">Stage</span><span data-lang="zh">阶段</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+            <th><span data-lang="en">What it does / side effect</span><span data-lang="zh">作用与副作用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Dynamic thresholding<br><span class="badge">mel percentile clip</span></span><span data-lang="zh">动态阈值截断<br><span class="badge">mel 分位截断</span></span></td>
+            <td><span data-lang="en">Diffusion, after CFG merge</span><span data-lang="zh">扩散，CFG 合并后</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+            <td><span data-lang="en">Per frame, measures the distribution of |mel|, takes the given percentile as a threshold and compresses everything above it back by the standard deviation (Imagen, arXiv:2205.11487). Suppresses the "over-exposed" sound of high CFG — spiky highs, crackle, sibilance that pops. Too low a percentile dulls consonants and kills breath.</span><span data-lang="zh">逐帧统计 |mel| 的分布，取给定分位点为阈值，把超过阈值的部分按标准差压回（Imagen, arXiv:2205.11487）。压掉高 CFG 的"过曝"——尖锐高频、爆音、齿音发炸。分位取得太低会让辅音发闷、气声消失。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Threshold percentile</span><span data-lang="zh">截断分位数</span></td>
+            <td><span data-lang="en">Diffusion</span><span data-lang="zh">扩散</span></td>
+            <td>0.995</td>
+            <td><span data-lang="en">0.900–0.999. 0.995 clips only the most extreme 0.5% of each frame; 0.99 is already audible, 0.90 sounds muffled. Try 0.99 when CFG is above 4.</span><span data-lang="zh">0.900–0.999。0.995 只压掉每帧最极端的 0.5%；0.99 已能听出变化，0.90 会明显发闷。CFG 高于 4 时可试 0.99。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">CFG schedule</span><span data-lang="zh">CFG 调度</span></td>
+            <td><span data-lang="en">Diffusion</span><span data-lang="zh">扩散</span></td>
+            <td><span data-lang="en">Constant</span><span data-lang="zh">恒定</span></td>
+            <td><span data-lang="en">Lets CFG strength drift across steps (start low → end high) instead of a fixed value. A low start leaves the model more freedom in the first, structure-forming steps; the tail re-tightens pronunciation. Overrides the fixed CFG value.</span><span data-lang="zh">让 CFG 强度在步间变化（起始低 → 结尾高），而不是恒定值。低起点给模型在最初的结构成形步更多自由，尾段再收紧发音。会覆盖固定 CFG 值。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Q-Drift correction</span><span data-lang="zh">Q-Drift 漂移校正</span></td>
+            <td><span data-lang="en">Diffusion (FP16 / INT8 only)</span><span data-lang="zh">扩散（仅 FP16 / INT8）</span></td>
+            <td><span data-lang="en">On for FP16</span><span data-lang="zh">FP16 下开启</span></td>
+            <td><span data-lang="en">Per-channel scaling of the velocity field, calibrated against FP32, to cancel the quantization error that accumulates over 32 steps. No effect on FP32. Enabling it <strong>locks</strong> the sampler to Euler @ 32 / CFG 3.0 / rescale 0.7 and disables CFG scheduling, dynamic thresholding and SDEdit. Upstream has no equivalent, so turn it off when comparing against the official FP16.</span><span data-lang="zh">按通道缩放速度场（用与 FP32 的配对校准测得的因子），抵消 32 步采样中累积的量化误差。FP32 下不生效。开启后会<strong>锁定</strong> Euler @ 32 步 / CFG 3.0 / rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit。官方没有对应实现，想和官方 FP16 对照时请关掉。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Noise seed</span><span data-lang="zh">噪声种子</span></td>
+            <td><span data-lang="en">Diffusion start</span><span data-lang="zh">扩散起点</span></td>
+            <td><span data-lang="en">Random</span><span data-lang="zh">随机</span></td>
+            <td><span data-lang="en">Diffusion starts from Gaussian noise; the seed picks <em>which</em> noise, not how much. This is not an "add noise" knob — the noise level is fixed by the model schedule. Fixing the seed makes renders reproducible (±3 dB phrase-level level variation between seeds is normal and all outputs are valid takes).</span><span data-lang="zh">扩散从高斯噪声起步，种子决定抽<em>哪一条</em>噪声，而不是噪声有多强。它<strong>不是</strong>"加噪"旋钮——噪声强度由模型调度固定。固定种子可复现合成结果（不同种子之间乐句响度有 ±3 dB 波动，都是合法演绎）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">SDEdit repair</span><span data-lang="zh">SDEdit 局部修复</span></td>
+            <td><span data-lang="en">Diffusion, after the loop</span><span data-lang="zh">扩散，循环之后</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+            <td><span data-lang="en">Finds frames that are NaN or whose energy exceeds 5× the median, re-noises them at t=0.3 and re-draws only those regions with 5 STORK-2 steps. A debugging aid: it changes timbre and phase locally, so leave it off for normal material.</span><span data-lang="zh">找出 NaN 或能量超过中位数 5 倍的帧，注入 t=0.3 的浅噪声，只用 5 步 STORK-2 重画这些片段。属于排障工具：会局部改变音色与相位，正常素材不要开。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Timbre lane curves</span><span data-lang="zh">音色 lane 曲线</span></td>
+            <td><span data-lang="en">Mel, before vocoder</span><span data-lang="zh">Mel，vocoder 前</span></td>
+            <td><span data-lang="en">All off</span><span data-lang="zh">全部关闭</span></td>
+            <td><span data-lang="en">Spectral interpolation across note/phoneme boundaries plus Gaussian smoothing along time and frequency. Removes clicks at note changes and diffusion grit; too much blurs consonants. Details in <a href="fragment-editor.html#f0-and-spectral-postprocess">Fragment Editor &gt; F0 &amp; spectral post-processing</a>.</span><span data-lang="zh">音符/音素边界处的频谱插值，以及沿时间、频率的高斯平滑。消除换音咔哒与扩散毛刺；过大会糊掉辅音。详见<a href="fragment-editor.html#f0-and-spectral-postprocess">分片编辑器 &gt; F0 平滑与频谱后处理</a>。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Vocoder overlap</span><span data-lang="zh">Vocoder 重叠帧</span></td>
+            <td><span data-lang="en">Waveform, chunk seams</span><span data-lang="zh">波形，分块接缝</span></td>
+            <td><span data-lang="en">32 frames</span><span data-lang="zh">32 帧</span></td>
+            <td><span data-lang="en">Adjacent vocoder chunks are cross-faded with a Hann window over this many mel frames (32 × 20 ms ≈ 0.64 s). Larger = smoother seams, slower. At 0, long renders can click or show a phase discontinuity at every chunk boundary.</span><span data-lang="zh">相邻 vocoder 分块按这个 mel 帧数做 Hann 窗交叉淡化（32 帧 × 20 ms ≈ 0.64 s）。越大接缝越平滑、越慢。设为 0 时，长音频在每个分块边界可能出现"咔"声或相位断层。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">EBU R128 loudness</span><span data-lang="zh">EBU R128 响度归一化</span></td>
+            <td><span data-lang="en">Waveform, final</span><span data-lang="zh">波形，最终</span></td>
+            <td><span data-lang="en">On (export)</span><span data-lang="zh">开启（导出）</span></td>
+            <td><span data-lang="en">Two-pass measurement, linear gain to −14 LUFS, then a true-peak limiter at −1 dBTP. −14 LUFS is the streaming target (Spotify / YouTube / Bilibili), so an upload will not be turned down again. It also flattens deliberate dynamics — for classical-style material, turn it off and master yourself.</span><span data-lang="zh">两遍测量，先线性增益到 −14 LUFS，再用 true-peak 限制器压住 −1 dBTP。−14 LUFS 是流媒体（Spotify / YouTube / B 站）的通用目标，上传后不会被二次压。它也会抹平刻意的强弱对比——动态大的作品建议关掉自行母带。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Peak normalization</span><span data-lang="zh">峰值归一化</span></td>
+            <td><span data-lang="en">Waveform, final</span><span data-lang="zh">波形，最终</span></td>
+            <td><span data-lang="en">Automatic</span><span data-lang="zh">自动</span></td>
+            <td><span data-lang="en">Only lowers a peak above 0.95; never boosts. Protects the DAC from clipping after mixing several fragments. It cannot make a quiet render louder — that is EBU R128's job.</span><span data-lang="zh">只在峰值超过 0.95 时下调，从不提升。防止多分片混合后削波。它不会把安静的渲染变响——那是 EBU R128 的职责。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Q-Drift wins over everything else in the diffusion stage.</strong> While it is active, the sampler, step count, CFG, rescale, CFG schedule, dynamic thresholding and SDEdit are all forced to the calibration contract (Euler / 32 / 3.0 / 0.7) — the export dialog greys them out and the console lists every override. On FP16 this is the default, so if a custom CFG schedule "does nothing", check Q-Drift first.</p>
+          <p data-lang="zh"><strong>Q-Drift 会压过扩散阶段的其他所有选项。</strong>它生效时，求解器、步数、CFG、rescale、CFG 调度、动态阈值与 SDEdit 都会被强制到校准合约（Euler / 32 / 3.0 / 0.7）——导出对话框会把它们置灰，控制台会逐条列出被覆盖的项。FP16 下这是默认状态，所以如果发现"CFG 调度没反应"，先看 Q-Drift。</p>
+        </div>
+      </div>
+
+      <h3 id="precision">
+        <span data-lang="en">Model precision</span>
+        <span data-lang="zh">模型精度</span>
+      </h3>
+      <p data-lang="en">The precision switch chooses which set of ONNX weights to load; it does not change any sampling parameter. Four variants are supported:</p>
+      <p data-lang="zh">精度开关决定加载哪一套 ONNX 权重，不改变任何采样参数。支持四种变体：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Precision</span><span data-lang="zh">精度</span></th>
+            <th><span data-lang="en">Weights / activations</span><span data-lang="zh">权重 / 激活</span></th>
+            <th><span data-lang="en">VRAM &amp; speed</span><span data-lang="zh">显存与速度</span></th>
+            <th><span data-lang="en">Use it when</span><span data-lang="zh">适用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>FP32</td>
+            <td>fp32 / fp32</td>
+            <td><span data-lang="en">1× / 1× (baseline)</span><span data-lang="zh">1× / 1×（基线）</span></td>
+            <td><span data-lang="en">Masters, A/B reference, anything you intend to publish.</span><span data-lang="zh">母带、A/B 参照、准备发布的作品。</span></td>
+          </tr>
+          <tr>
+            <td>FP16</td>
+            <td><span data-lang="en">fp16 / fp16 (TrueFP16); vocoder W16A32</span><span data-lang="zh">fp16 / fp16（TrueFP16）；vocoder 为 W16A32</span></td>
+            <td><span data-lang="en">Lower VRAM / hardware-dependent</span><span data-lang="zh">显存更低 / 速度取决于硬件</span></td>
+            <td><span data-lang="en">Optional faster preview; Q-Drift defaults on.</span><span data-lang="zh">可选加速预览；Q-Drift 默认开启。</span></td>
+          </tr>
+          <tr>
+            <td>INT8</td>
+            <td><span data-lang="en">W8A32 (INT8 / FP32 activations)</span><span data-lang="zh">W8A32（INT8 权重 / FP32 激活）</span></td>
+            <td><span data-lang="en">Smaller weights / hardware-dependent</span><span data-lang="zh">权重更小 / 速度取决于硬件</span></td>
+            <td><span data-lang="en">Low VRAM; Q-Drift opt-in.</span><span data-lang="zh">低显存；Q-Drift 需手动开启。</span></td>
+          </tr>
+          <tr>
+            <td>INT8-NPU</td>
+            <td><span data-lang="en">int8 / static shapes</span><span data-lang="zh">int8 / 静态 shape</span></td>
+            <td><span data-lang="en">NPU only</span><span data-lang="zh">仅 NPU</span></td>
+            <td><span data-lang="en">Machines with an NPU; fixed 2048/… sequence length.</span><span data-lang="zh">带 NPU 的机器；序列长度固定。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en"><strong>FP32 is the default.</strong> FP16 is TrueFP16 (FP16 weights and activations); only the vocoder uses W16A32 (FP16 weights, FP32 activations). When Q-Drift is not explicitly configured, it defaults on for FP16, off for INT8 and FP32; an explicit user choice takes precedence. INT8 has its own calibration table, but measured W8A32 benefit is negligible, so keep it opt-in. Use FP32 for masters and quality comparisons.</p>
+      <p data-lang="zh"><strong>FP32 为默认精度。</strong>FP16 为 TrueFP16（权重与激活均为 FP16），只有 vocoder 采用 W16A32（FP16 权重、FP32 激活）。未显式配置 Q-Drift 时，FP16 默认开启，INT8 与 FP32 默认关闭；用户显式选择优先。INT8 虽有独立校正表，但 W8A32 实测收益可忽略，建议保持手动开启。母带与音质对比请使用 FP32。</p>
 
       <h2>
         <span data-lang="en">Exporting to WAV</span>
@@ -231,6 +372,28 @@
         <li><span data-lang="en">A file save dialog appears. Choose a save location.</span><span data-lang="zh">弹出文件保存对话框。选择保存位置。</span></li>
         <li><span data-lang="en">The mixed WAV file is saved at the selected export sample rate (default 48 kHz, selectable: 24 / 44.1 / 48 / 96 kHz) and bit depth (default 32-bit float, selectable: 16 / 24 / 32-bit). Accompaniment audio tracks are mixed into the export.</span><span data-lang="zh">混合后的 WAV 文件按所选导出采样率（默认 48 kHz，可选：24 / 44.1 / 48 / 96 kHz）与位深度（默认 32-bit float，可选：16 / 24 / 32 位）保存。伴奏音轨会混入导出。</span></li>
       </ol>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The <strong>export scope</strong> is chosen in the export dialog: <em>Mixed</em> (default, as above), <em>Voice only</em> or <em>Accompaniment only</em>. Voice-only export does not mix the accompaniment and is not extended by its tail; accompaniment-only export skips synthesis entirely, so no model is loaded. Track mute and solo states apply consistently to playback, audio export and MIDI — soloing a voice track also mutes the accompaniment.</p>
+          <p data-lang="zh">导出范围在导出对话框中选择：<em>混合</em>（默认，如上）、<em>仅人声</em>或<em>仅伴奏</em>。仅人声不混入伴奏，也不会被伴奏的尾长拉长；仅伴奏不执行合成，因此不会加载模型。轨道的静音与独奏状态在播放、音频导出与 MIDI 中一致生效——独奏某条人声轨时伴奏一并静音。</p>
+        </div>
+      </div>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>8192-frame limit and very long fragments.</strong> The diff_step model accepts at most <strong>8192 mel frames per call</strong> (50 fps, about <strong>163.8 seconds</strong>), including the reference prompt. Export currently renders the whole target in one pass and does not split automatically: if the input exceeds the limit, the reference prompt is trimmed first, and the target is clamped only if it still exceeds the limit. Automatic smart segmented export is planned for a future release. Until then, avoid making a single fragment excessively long — especially a continuous note or rest-free passage near the limit — and split long songs into shorter fragments. Chunked preview is enabled by default, so this limit mainly concerns export.</p>
+          <p data-lang="zh"><strong>8192 帧上限与超长分片。</strong>diff_step 模型单次调用最多接受 <strong>8192 个梅尔帧</strong>（50 fps，约 <strong>163.8 秒</strong>），其中包含参考 prompt。当前导出仍是整段推理，不会自动分块：输入超过上限时会先截短参考 prompt，若目标本身仍超限才截断目标。后续版本将实现自动智能分片导出；在此之前，请避免把单个分片做得过长——尤其是接近上限的单个连续音符或没有休止间隔的长段——并尽量把长歌曲拆成多个较短的分片。预览已默认启用分块，因此该上限主要影响导出。</p>
+        </div>
+      </div>
+
+      <h3>
+        <span data-lang="en">Exporting the Project as MIDI</span>
+        <span data-lang="zh">导出项目为 MIDI</span>
+      </h3>
+      <p data-lang="en"><em>File → Export Project as MIDI…</em> writes a Standard MIDI File (format 1) without running synthesis. Track 0 is a conductor track with tempo and meter; each audible singer then gets its own track. Accompaniment tracks carry no pitch information and produce no MIDI track, and muted tracks are omitted. Only notes, timing, pitch and lyrics are written — singer timbres have no MIDI equivalent and must be chosen again in the receiving synthesizer.</p>
+      <p data-lang="zh"><em>文件 → 导出项目为 MIDI…</em> 生成标准 MIDI 文件（format 1），不执行合成。第 0 轨为指挥轨，记录速度与拍号；之后每位可听歌手一条轨道。伴奏轨不含音高信息，不产生 MIDI 轨，被静音的轨道也会省略。文件只写入音符、时值、音高与歌词——歌手音色在 MIDI 中没有对应物，导入其他歌声合成器时需重新选择。</p>
+
       <h3>
         <span data-lang="en">Export Progress</span>
         <span data-lang="zh">导出进度</span>
@@ -296,7 +459,7 @@
         <tbody>
           <tr>
             <td><span data-lang="en">Format</span><span data-lang="zh">格式</span></td>
-            <td><span data-lang="en">WAV (PCM)</span><span data-lang="zh">WAV（PCM）</span></td>
+            <td><span data-lang="en">WAV (32-bit IEEE float by default; 16/24-bit integer PCM)</span><span data-lang="zh">WAV（默认 32-bit IEEE float；16/24 位为整型 PCM）</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Model Internal Rate</span><span data-lang="zh">模型内部采样率</span></td>
@@ -304,7 +467,7 @@
           </tr>
           <tr>
             <td><span data-lang="en">Playback Sample Rate</span><span data-lang="zh">播放采样率</span></td>
-            <td><span data-lang="en">48000 Hz (default). 24 kHz model output is linearly upsampled.</span><span data-lang="zh">48000 Hz（默认）。24 kHz 模型输出经线性上采样。</span></td>
+            <td><span data-lang="en">48000 Hz (default). Model output is resampled from 24 kHz automatically.</span><span data-lang="zh">48000 Hz（默认）。模型输出由 24 kHz 自动重采样。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Bit Depth (export)</span><span data-lang="zh">位深度（导出）</span></td>
@@ -312,11 +475,11 @@
           </tr>
           <tr>
             <td><span data-lang="en">Export Sample Rate (selectable)</span><span data-lang="zh">导出采样率（可选）</span></td>
-            <td><span data-lang="en">24000, 44100, 48000 (default), 96000 Hz. Linear upsampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000（默认）、96000 Hz。从 24 kHz 模型率线性上采样。</span></td>
+            <td><span data-lang="en">24000, 44100, 48000 (default), 96000 Hz, resampled from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000（默认）、96000 Hz，由 24 kHz 模型采样率转换。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Accompaniment Mixing</span><span data-lang="zh">伴奏混入</span></td>
-            <td><span data-lang="en">Accompaniment tracks are mixed into the final export alongside vocal fragments.</span><span data-lang="zh">伴奏音轨与人声片段一起混入最终导出。</span></td>
+            <td><span data-lang="en">Accompaniment tracks are mixed into the final export alongside vocal fragments. The export scope can be switched to voice only or accompaniment only; solo also mutes the accompaniment.</span><span data-lang="zh">伴奏音轨与人声片段一起混入最终导出；导出范围可切换为仅人声或仅伴奏，独奏时伴奏一并静音。</span></td>
           </tr>
         </tbody>
       </table>
@@ -338,7 +501,7 @@
         <li><span data-lang="en"><strong>Set CFG Strength to 0</strong> to skip unconditional prediction, roughly doubling speed.</span><span data-lang="zh"><strong>将 CFG Strength 设为 0</strong> 可跳过无条件预测，速度约提升一倍。</span></li>
         <li><span data-lang="en"><strong>Update GPU drivers</strong> to the latest version for best DirectML performance.</span><span data-lang="zh"><strong>更新显卡驱动</strong> 到最新版本以获得最佳 DirectML 性能。</span></li>
         <li><span data-lang="en"><strong>Use FP16 precision</strong> instead of FP32 for lower VRAM usage and faster inference on most GPUs.</span><span data-lang="zh">在大多数显卡上 <strong>使用 FP16 精度</strong> 代替 FP32 可降低显存占用并加快推理。</span></li>
-        <li><span data-lang="en">The first synthesis is always slower — subsequent syntheses reuse the loaded pipeline.</span><span data-lang="zh">首次合成总是较慢——之后的合成会复用已加载的管线。</span></li>
+        <li><span data-lang="en">The first synthesis is slower because the pipeline is loading; later syntheses reuse it.</span><span data-lang="zh">首次合成因管线加载而较慢，之后会复用已加载的管线。</span></li>
       </ul>
 
       <div class="callout warn">

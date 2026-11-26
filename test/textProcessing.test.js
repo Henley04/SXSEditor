@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { TextProcessing } = require('../src/inference/pipeline/textProcessing');
+const { JP_HIRAGANA_MAP } = require('../src/shared/jpPhonemeMap');
 
 describe('inference/pipeline/textProcessing - G2P', () => {
   // tpJp: JP LoRA mode (jp_ phonemes) — preserves original behavior
@@ -95,6 +96,65 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       // both should resolve; tone override changes the syllable
       expect(out1[0].name.startsWith('zh_')).to.be.true;
       expect(out2[0].name.startsWith('zh_')).to.be.true;
+    });
+
+    describe('phoneme vocabulary gaps', () => {
+      // 词表只有 1201 个中文音节，是训练语料里出现过的组合，覆盖不到全部
+      // 400x5 个拼音；ü 在词表里写的是 u: 而不是 v。
+
+      it('should keep the upstream model ordering', () => {
+        // 前 2820 条与上游 soulxsinger/utils/phoneme/phone_set.json 逐条一致，
+        // 之后是 180 个 <UNUSED_*> 占位和 33 个 jp_ 音素（JP LoRA）。
+        // ID 就是模型 embedding 的行号，改顺序等于让整首歌的音素错位。
+        expect(tpEn.phone2idx['<PAD>']).to.equal(0);
+        expect(tpEn.phone2idx['<UNK>']).to.equal(3);
+        expect(tpEn.phone2idx['zh_a1']).to.equal(1609);
+        expect(tpEn.phone2idx['zh_lu:4']).to.equal(2155);
+        expect(tpEn._vocabSize).to.equal(3033);
+      });
+
+      it('should not invent syllables the model was never trained on', () => {
+        // 上游官方词表就没有 shui2（"谁"只收 shéi）。往这里塞条目会让后面
+        // 所有 ID 平移，只能靠 G2P 回退，不能补词表。
+        expect(tpEn.phone2idx['zh_shui2']).to.equal(undefined);
+        expect(tpEn.phone2idx['zh_lv4']).to.equal(undefined);
+        // zh_lu4 存在，但那是"路"；ü 走的是 zh_lu:4
+        expect(tpEn.phone2idx['zh_lu4']).to.not.equal(tpEn.phone2idx['zh_lu:4']);
+      });
+      it('should spell ü as u: to match the vocabulary', () => {
+        expect(tpEn.resolveLyricToPhonemes('绿')[0].name).to.equal('zh_lu:4');
+        expect(tpEn.resolveLyricToPhonemes('吕')[0].name).to.equal('zh_lu:3');
+        expect(tpEn.resolveLyricToPhonemes('女')[0].name).to.equal('zh_nu:3');
+        expect(tpEn.resolveLyricToPhonemes('略')[0].name).to.equal('zh_lu:e4');
+      });
+
+      it('should use another reading when the common one is missing', () => {
+        // 谁 shuí 不在词表（只有 shui3/shui4），但第二个读音 shéi 在
+        expect(tpEn.resolveLyricToPhonemes('谁')[0].name).to.equal('zh_shei2');
+      });
+
+      it('should fall back to the same syllable with another tone', () => {
+        expect(tpEn._charToZhPhoneme('水2')).to.equal('zh_shui3');
+        expect(tpEn._lookupPhonemeId('zh_shui2')).to.equal(tpEn.phone2idx['zh_shui3']);
+      });
+
+      it('should ignore noise after the first Han character', () => {
+        expect(tpEn._charToZhPhoneme('璋?')).to.equal('zh_zhang1');
+        expect(tpEn._charToZhPhoneme('谁\uFFFD')).to.equal('zh_shei2');
+      });
+
+      it('should never emit a key that is absent from the vocabulary', () => {
+        for (const ch of ['谁', '绿', '吕', '女', '略', '嗯', '呣', '乥', '鿿']) {
+          const name = tpEn._charToZhPhoneme(ch);
+          if (name !== null) {
+            expect(tpEn.phone2idx[name], `${ch} -> ${name}`).to.not.equal(undefined);
+          }
+        }
+      });
+
+      it('should map the syllabic nasal ng to a real syllable', () => {
+        expect(tpEn._charToZhPhoneme('嗯')).to.equal('zh_en4');
+      });
     });
   });
 
@@ -237,13 +297,79 @@ describe('inference/pipeline/textProcessing - G2P', () => {
         'い': 'en_IY1', // i → IY1
         'う': 'en_UW1', // u → UW1
         'え': 'en_EH1', // e → EH1
-        'お': 'en_OW1', // o → OW1
+        'お': 'en_AO1', // o → AO1（纯元音；OW 是双元音，会把日语「お」唱成 ow）
       };
       for (const [kana, expected] of Object.entries(vowelMap)) {
         const out = tpEn.resolveLyricToPhonemes(kana);
         expect(out).to.have.lengthOf(1);
         expect(out[0].name).to.equal(expected);
       }
+    });
+
+    it('should default to en-phonemes mode when no option is given', () => {
+      const tpDefault = new TextProcessing();
+      expect(tpDefault.japaneseVocalization).to.equal('en-phonemes');
+    });
+
+    it('should collapse い-row palatalized kana to one onset + one vowel (no extra Y)', () => {
+      // に/ひ/み/り/び/ぴ/ぎ 在假名表里是 ny/hy/my/ry/by/py/gy，一个 mora 只能
+      // 有一个 onset；再叠 Y 会把一拍撑成 "n-yi" 两拍。
+      const cases = {
+        'に': ['en_N', 'en_IY1'],
+        'ひ': ['en_HH', 'en_IY1'],
+        'み': ['en_M', 'en_IY1'],
+        'り': ['en_L', 'en_IY1'],
+        'び': ['en_B', 'en_IY1'],
+        'ぴ': ['en_P', 'en_IY1'],
+        'ぎ': ['en_G', 'en_IY1'],
+      };
+      for (const [kana, expected] of Object.entries(cases)) {
+        expect(tpEn.resolveLyricToPhonemes(kana).map(p => p.name)).to.deep.equal(expected);
+      }
+    });
+
+    it('should keep Y for 拗音 (きゃ/りょ) where the glide is real', () => {
+      expect(tpEn.resolveLyricToPhonemes('きゃ').map(p => p.name))
+        .to.deep.equal(['en_K', 'en_Y', 'en_AA1']);
+      expect(tpEn.resolveLyricToPhonemes('りょ').map(p => p.name))
+        .to.deep.equal(['en_L', 'en_Y', 'en_AO1']);
+    });
+
+    it('should assimilate ん to m/ng/n by the following consonant', () => {
+      // さんぽ → [m]（p 前）, まんが → [ŋ]（g 前）, しんぶん → 结尾仍为 n
+      expect(tpEn.resolveLyricToPhonemes('さんぽ').map(p => p.name))
+        .to.deep.equal(['en_S', 'en_AA1', 'en_M', 'en_P', 'en_AO1']);
+      expect(tpEn.resolveLyricToPhonemes('まんが').map(p => p.name))
+        .to.deep.equal(['en_M', 'en_AA1', 'en_NG', 'en_G', 'en_AA1']);
+      expect(tpEn.resolveLyricToPhonemes('しんぶん').map(p => p.name))
+        .to.deep.equal(['en_SH', 'en_IY1', 'en_M', 'en_B', 'en_UW1', 'en_N']);
+    });
+
+    it('should assimilate a standalone ん using the next note lyric (one mora per note)', () => {
+      // 工程里一个 note 只放一个假名，ん 在自己的 note 上看不到后接音，
+      // 推理侧会把下一个 note 的歌词作为 nextKana 传进来。
+      expect(tpEn._japaneseToEnglishPhonemes('ん', 'ぽ').map(p => p.name)).to.deep.equal(['en_M']);
+      expect(tpEn._japaneseToEnglishPhonemes('ん', 'が').map(p => p.name)).to.deep.equal(['en_NG']);
+      expect(tpEn._japaneseToEnglishPhonemes('ん', 'た').map(p => p.name)).to.deep.equal(['en_N']);
+      expect(tpEn._japaneseToEnglishPhonemes('ん').map(p => p.name)).to.deep.equal(['en_N']);
+    });
+
+    it('should assimilate っ (gemination) to the following consonant, not always T', () => {
+      // っ 是延长后接辅音：れっしゃ 应是 "res-sha"（SH+SH），不是 "re-t-sha"。
+      expect(tpEn.resolveLyricToPhonemes('れっしゃ').map(p => p.name))
+        .to.deep.equal(['en_L', 'en_EH1', 'en_SH', 'en_SH', 'en_AA1']);
+      expect(tpEn.resolveLyricToPhonemes('がっこう').map(p => p.name))
+        .to.deep.equal(['en_G', 'en_AA1', 'en_K', 'en_K', 'en_AO1', 'en_UW1']);
+      expect(tpEn.resolveLyricToPhonemes('きっと').map(p => p.name))
+        .to.deep.equal(['en_K', 'en_IY1', 'en_T', 'en_T', 'en_AO1']);
+    });
+
+    it('should assimilate a standalone っ using the next note lyric', () => {
+      expect(tpEn._japaneseToEnglishPhonemes('っ', 'しゃ').map(p => p.name)).to.deep.equal(['en_SH']);
+      expect(tpEn._japaneseToEnglishPhonemes('っ', 'き').map(p => p.name)).to.deep.equal(['en_K']);
+      expect(tpEn._japaneseToEnglishPhonemes('っ', 'と').map(p => p.name)).to.deep.equal(['en_T']);
+      // 无后接上下文时退化为 T（保持既有行为）
+      expect(tpEn._japaneseToEnglishPhonemes('っ').map(p => p.name)).to.deep.equal(['en_T']);
     });
 
     it('should map Japanese consonants to nearest ARPAbet', () => {
@@ -254,7 +380,7 @@ describe('inference/pipeline/textProcessing - G2P', () => {
         'な': 'en_N',   // n → N
         'は': 'en_HH',  // h → HH
         'ま': 'en_M',   // m → M
-        'ら': 'en_R',   // r → R
+        'ら': 'en_L',   // r → L（日语弹音 /ɾ/；英语 R 会让ら行变成美音）
         'が': 'en_G',   // g → G
         'ざ': 'en_Z',   // z → Z
         'だ': 'en_D',   // d → D
@@ -296,6 +422,86 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       const out = tpEn.resolveLyricToPhonemes('ふ');
       const names = out.map(p => p.name);
       expect(names).to.include('en_F');
+    });
+
+    it('should resolve every single katakana identically to its hiragana', () => {
+      // 回归：片假名表由平假名码位 +0x60 派生，旧实现只转首码位，拗音条目
+      // （きゃ…）派生出 キ→"ky o" 这类单字键并覆盖正常 キ→"k i"，13 个单字误读。
+      for (const hira of Object.keys(JP_HIRAGANA_MAP)) {
+        if (hira.length !== 1) continue;
+        const kata = String.fromCharCode(hira.charCodeAt(0) + 0x60);
+        expect(tpEn.resolveLyricToPhonemes(kata).map(p => p.name))
+          .to.deep.equal(tpEn.resolveLyricToPhonemes(hira).map(p => p.name), `katakana ${kata}`);
+      }
+    });
+
+    it('should resolve katakana yōon identically to hiragana', () => {
+      // 回归：旧派生丢掉拗音第二码位（ゃ/ゅ/ょ），片假名拗音整体缺失。
+      for (const hira of Object.keys(JP_HIRAGANA_MAP)) {
+        if (hira.length !== 2) continue;
+        const kata = [...hira].map(c => String.fromCharCode(c.charCodeAt(0) + 0x60)).join('');
+        expect(tpEn.resolveLyricToPhonemes(kata).map(p => p.name))
+          .to.deep.equal(tpEn.resolveLyricToPhonemes(hira).map(p => p.name), `katakana ${kata}`);
+      }
+    });
+
+    it('should resolve previously-corrupted katakana singles and yōon correctly', () => {
+      const cases = {
+        'キ': ['en_K', 'en_IY1'],
+        'シ': ['en_SH', 'en_IY1'],
+        'チ': ['en_CH', 'en_IY1'],
+        'テ': ['en_T', 'en_EH1'],
+        'ニ': ['en_N', 'en_IY1'],
+        'ヒ': ['en_HH', 'en_IY1'],
+        'ミ': ['en_M', 'en_IY1'],
+        'リ': ['en_L', 'en_IY1'],
+        'ギ': ['en_G', 'en_IY1'],
+        'ジ': ['en_JH', 'en_IY1'],
+        'デ': ['en_D', 'en_EH1'],
+        'ビ': ['en_B', 'en_IY1'],
+        'ピ': ['en_P', 'en_IY1'],
+        'キャ': ['en_K', 'en_Y', 'en_AA1'],
+        'シャ': ['en_SH', 'en_AA1'],
+        'ギュ': ['en_G', 'en_Y', 'en_UW1'],
+      };
+      for (const [kana, expected] of Object.entries(cases)) {
+        expect(tpEn.resolveLyricToPhonemes(kana).map(p => p.name)).to.deep.equal(expected, kana);
+      }
+    });
+
+    it('should resolve loanword katakana combos (ファ/ヴィ/ティ/シェ/ウィ/ツァ)', () => {
+      const cases = {
+        'ファ': ['en_F', 'en_AA1'],
+        'フィ': ['en_F', 'en_IY1'],
+        'フェ': ['en_F', 'en_EH1'],
+        'フォ': ['en_F', 'en_AO1'],
+        'ヴィ': ['en_B', 'en_IY1'],
+        'ヴァ': ['en_B', 'en_AA1'],
+        'ティ': ['en_T', 'en_IY1'],
+        'トゥ': ['en_T', 'en_UW1'],
+        'ディ': ['en_D', 'en_IY1'],
+        'シェ': ['en_SH', 'en_EH1'],
+        'ジェ': ['en_JH', 'en_EH1'],
+        'チェ': ['en_CH', 'en_EH1'],
+        'ウィ': ['en_W', 'en_IY1'],
+        'ウェ': ['en_W', 'en_EH1'],
+        'ウォ': ['en_W', 'en_AO1'],
+        'ツァ': ['en_T', 'en_S', 'en_AA1'],
+      };
+      for (const [kana, expected] of Object.entries(cases)) {
+        expect(tpEn.resolveLyricToPhonemes(kana).map(p => p.name)).to.deep.equal(expected, kana);
+      }
+    });
+
+    it('should map loanword katakana using only existing jp-lora phonemes (no new inventory)', () => {
+      // 外来语假名复用现有 JP 音素库存，jp-lora 路径不能出现词表外音素。
+      for (const kana of ['ファ', 'フィ', 'ヴィ', 'ヴァ', 'ティ', 'トゥ', 'シェ', 'ジェ', 'ウィ', 'ツァ']) {
+        for (const p of tpJp.resolveLyricToPhonemes(kana)) {
+          if (p.name.startsWith('jp_')) {
+            expect(tpJp.phone2idx[p.name], `${kana} -> ${p.name}`).to.not.equal(undefined);
+          }
+        }
+      }
     });
   });
 
@@ -374,21 +580,21 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(out.slice(4)).to.deep.equal(['yue_do1', 'en_UW1']);
     });
 
-    it('should differ from en-phonemes for ら (Cantonese yue_laa1 vs en_R + en_AA1)', () => {
+    it('should differ from en-phonemes for ら (Cantonese yue_laa1 vs en_L + en_AA1)', () => {
       const hybridOut = tpHybrid.resolveLyricToPhonemes('ら');
       const enOut = tpEn.resolveLyricToPhonemes('ら');
       const hybridNames = hybridOut.map(p => p.name);
       const enNames = enOut.map(p => p.name);
-      // hybrid uses Cantonese syllable-level yue_laa1, en-phonemes uses ARPAbet R + AA1
+      // hybrid uses Cantonese syllable-level yue_laa1, en-phonemes uses ARPAbet L + AA1
       expect(hybridNames).to.deep.equal(['yue_laa1']);
-      expect(enNames).to.deep.equal(['en_R', 'en_AA1']);
+      expect(enNames).to.deep.equal(['en_L', 'en_AA1']);
     });
 
-    it('should differ from en-phonemes for お (Cantonese yue_o1 vs en_OW1)', () => {
+    it('should differ from en-phonemes for お (Cantonese yue_o1 vs en_AO1)', () => {
       const hybridOut = tpHybrid.resolveLyricToPhonemes('お');
       const enOut = tpEn.resolveLyricToPhonemes('お');
       expect(hybridOut[0].name).to.equal('yue_o1');
-      expect(enOut[0].name).to.equal('en_OW1');
+      expect(enOut[0].name).to.equal('en_AO1');
     });
 
     it('should attach duration weights to mapped phonemes (incl. yue_)', () => {
@@ -618,7 +824,7 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       const out = tpEn.resolveLyricToPhonemes('か').map(p => p.name);
       expect(out).to.deep.equal(['en_K', 'en_AA1']);
       const raOut = tpEn.resolveLyricToPhonemes('ら').map(p => p.name);
-      expect(raOut).to.deep.equal(['en_R', 'en_AA1']);
+      expect(raOut).to.deep.equal(['en_L', 'en_AA1']);
     });
 
     it('should not affect jp-lora mode (still uses jp_ phonemes)', () => {

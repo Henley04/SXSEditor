@@ -558,6 +558,10 @@ function _resampleOneSample(s, i) {
     return weightSum > 1e-8 ? sum / weightSum : 0;
 }
 
+/**
+ * 名称沿用历史命名，实现为 Kaiser 窗带限 sinc 重采样（并非线性插值）。
+ * 同步版本；异步分块版本见 resampleLinearAsync。
+ */
 function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
     const ratio = srcSampleRate / dstSampleRate;
@@ -582,6 +586,7 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
 }
 
 /**
+ * 名称沿用历史命名，实现为 Kaiser 窗带限 sinc 重采样（并非线性插值）。
  * 异步分块版 resampleLinear：每 RESAMPLE_YIELD_EVERY 个样本 setImmediate yield 一次，
  * 避免长音频（分钟级）同步阻塞主线程导致 UI 无响应。
  * 与 resampleLinear 共用同一套 LUT 与单样本核，仅在外层循环插入 yield 点。
@@ -741,9 +746,14 @@ function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength
         }
     }
 
-    const window = new Float32Array(winLength);
-    for (let i = 0; i < winLength; i++) {
-        window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (winLength - 1)));
+    // 复用预计算的 Hann 窗（constants.HANN_WINDOW 长度 = N_FFT）；仅当窗长
+    // 与 N_FFT 不一致时才按需自建，避免每次重建都分配一份 Float32Array。
+    let window = HANN_WINDOW;
+    if (winLength !== HANN_WINDOW.length) {
+        window = new Float32Array(winLength);
+        for (let i = 0; i < winLength; i++) {
+            window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (winLength - 1)));
+        }
     }
 
     const outputLength = (numFrames - 1) * hopLength + winLength;
@@ -1075,6 +1085,38 @@ function _melTransformInputRank(session, inputName) {
 }
 
 /**
+ * 读取某个会话输入声明的浮点类型（'float16' | 'float32'）。
+ *
+ * 为什么不能直接用全局 isFP16：FP16 精度下 mel_transform 本身就是 FP32 图
+ * （fp16 子目录里放的是根目录同一份文件，对齐官方 `model.half(); model.mel.float()`），
+ * 此时全局 isFP16=true 但该会话要的是 float32；老版本下载的 fp16 图则是 float16，
+ * 由 pipeline/index.js 的 legacy 检测换到 CPU EP。
+ * 以会话自己的 inputMetadata 为准，两种情况都不会构造错张量。
+ *
+ * @param {Object} session
+ * @param {string} inputName
+ * @param {boolean} fallbackIsFP16 metadata 不可用时的回退（沿用全局精度）
+ * @returns {'float16'|'float32'}
+ */
+function _sessionInputFloatType(session, inputName, fallbackIsFP16) {
+    try {
+        const meta = session && session.inputMetadata;
+        let entry = null;
+        if (Array.isArray(meta)) {
+            entry = meta.find((m) => m && m.name === inputName) || null;
+        } else if (meta && typeof meta === 'object') {
+            entry = meta[inputName] || null;
+        }
+        const t = entry && entry.type;
+        if (typeof t === 'string') {
+            if (t.includes('float16')) return 'float16';
+            if (t.includes('float')) return 'float32';
+        }
+    } catch (_) { /* 元数据不可用 → 回退全局精度 */ }
+    return fallbackIsFP16 ? 'float16' : 'float32';
+}
+
+/**
  * 统计数组中的 NaN / Inf 数量。
  * @param {Float32Array} arr
  * @returns {{nan: number, inf: number}}
@@ -1181,10 +1223,11 @@ class Postprocessing {
         if (_melTransformBroken.has(melSession)) {
             throw new Error(`mel_transform session previously failed ("${_melTransformLastError}"), skipping to JS fallback`);
         }
-        const floatType = isFP16 ? 'float16' : 'float32';
         // 动态获取输入/输出名（不同导出版本名称不同）
         const melInputName = melSession.inputNames[0];   // 'waveform' | 'audio'
         const melOutputName = melSession.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
+        // 精度按会话自身的输入声明取（FP16 精度下该会话可能是根目录的 FP32 版本）
+        const floatType = _sessionInputFloatType(melSession, melInputName, isFP16);
         const inputRank = _melTransformInputRank(melSession, melInputName);
         const buildWaveform = (data) => createFloatTensor(
             floatType, data,
@@ -1235,7 +1278,7 @@ class Postprocessing {
      *        chunkInfo = { chunkIndex, sampleOffset, sampleEnd, audio: Float32Array, totalSamples, isLast }
      *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0, overlapFramesOverride = 0) {
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, _sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0, overlapFramesOverride = 0) {
         const _vocoderStartMs = performance.now();
         if (!sessions || !sessions.vocoder) {
             console.error(`[VocoderDiag] CRITICAL: sessions.vocoder is ${sessions ? (sessions.vocoder === undefined ? 'undefined' : 'null') : 'sessions is null'}! Vocoder will throw. sessionEPs=${JSON.stringify(sessions ? Object.keys(sessions) : [])}`);
@@ -1277,7 +1320,14 @@ class Postprocessing {
         const _baseOverlapFrames = (Number.isFinite(overlapFramesOverride) && overlapFramesOverride >= 8 && overlapFramesOverride <= 96)
             ? Math.floor(overlapFramesOverride)
             : VOCODER_OVERLAP_FRAMES;
-        const overlapFrames = _baseOverlapFrames * SIFIGAN_UPSAMPLE_RATIO;
+        let overlapFrames = _baseOverlapFrames * SIFIGAN_UPSAMPLE_RATIO;
+        // 防死循环：overlap 必须小于 chunkSize，否则 framePos = chunkEnd 后
+        // 下一块 chunkStart = framePos - overlapFrames 无法前进（姊妹实现
+        // diffusion.js 的 _planChunks 有同样的钳制）。最坏情况 overlap 取
+        // chunkSize/2，保证每块至少前进 chunkSize/2 ≥ 1 帧。
+        if (overlapFrames >= chunkSize) {
+            overlapFrames = Math.floor(chunkSize / 2);
+        }
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
         const totalSamples = effectiveTotalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
@@ -1454,14 +1504,14 @@ class Postprocessing {
                 const hopSamples = vocoderHopSize; // 1 mel frame = hopSamples audio samples
                 const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
                 const parts = [];
-                let totalAbs = 0;
+                let _totalAbs = 0;
                 for (let f = 0; f < diagFrames; f++) {
                     let s = 0;
                     const s0 = f * hopSamples;
                     const s1 = Math.min(s0 + hopSamples, waveform.length);
                     for (let i = s0; i < s1; i++) s += waveform[i] * waveform[i];
                     const rms = Math.sqrt(s / Math.max(1, s1 - s0));
-                    totalAbs += rms;
+                    _totalAbs += rms;
                     parts.push(`f${f}=${rms.toFixed(5)}`);
                 }
                 // 同时统计 mel 开头能量（前 5 帧）
@@ -1618,10 +1668,9 @@ class Postprocessing {
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             results = null;
-            // chunk 间 GPU 排空：非末尾 chunk 时使用自适应排空（正常 setImmediate yield，
-            // OOM 后 200ms 长等待）。自适应排空由 utils.gpuDrainAdaptive 实现，OOM 标志由
-            // pipeline/index.js 的 OOM catch 通过 markGpuOom() 设置。
-            // 旧版固定 50ms gpuDrain 在无 OOM 压力下浪费累积时间，已替换为自适应版本。
+            // chunk 间 GPU 排空：非末尾 chunk 时调用自适应排空（实际仅 setImmediate
+            // 让出一轮事件循环，不做墙钟等待）。OOM 标志由 pipeline/index.js 的
+            // OOM catch 通过 markGpuOom() 设置，下一次调用仅消费标志、不延长等待。
             if (i < totalChunkCount - 1) {
                 await gpuDrainAdaptive();
             } else {
@@ -1837,7 +1886,7 @@ class Postprocessing {
                 }
             }
             return notePitches.length > 0 ? notePitches : null;
-        } catch (e) {
+        } catch (_e) {
             return null;
         }
     }
@@ -1860,7 +1909,7 @@ class Postprocessing {
                 }
             }
             return notePitches.length > 0 ? notePitches : null;
-        } catch (e) {
+        } catch (_e) {
             return null;
         }
     }
@@ -1948,6 +1997,7 @@ module.exports = {
     __test: {
         countNonFinite: _countNonFinite,
         melTransformInputRank: _melTransformInputRank,
+        sessionInputFloatType: _sessionInputFloatType,
         autocorrBestLag: _autocorrBestLag,
         // 抗混叠管线 / 流式共享增益：供单测直接验证增益与跨段连续性
         oversample2xAntiAlias: _oversample2xAntiAlias,

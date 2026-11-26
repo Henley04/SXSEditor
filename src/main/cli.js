@@ -24,19 +24,48 @@
  *                         --from <sec> --to <sec> --duration <sec> --singer <x.sxssinger>
  *                         --precision fp32|fp16|int8 --steps <N> --sampler <name>
  *                         --cfg <n> --cfg-rescale <n>
- *                         --cfg-schedule constant|linear|cosine --qdrift --seed <N> --dry-run
+ *                         --cfg-schedule constant|linear|cosine --qdrift --seed <N>
+ *                         --pitch-control score|manual --dry-run
  *   qdrift-conds    从一个或多个 .sxsproj 导出 Q-Drift 标定条件（prompt mel + cond），
  *                   默认写入 qdrift/conds_proj
  *                   可选：--file <project.sxsproj>（可重复，必需）--fragment <N> --out <dir>
  *                         --max-items-per-frag <N> --min-sec <s> --max-sec <s>
  *                         --max-prompt-frames <N> --full-prompt-items <N> --force --dry-run
+ *   plugin list     列出已安装插件（磁盘状态）与运行实例里真正暴露的方法
+ *   plugin methods  列出可被自动化调用的方法（--plugin <id> 过滤）
+ *   plugin call     调用一个插件方法：plugin call <pluginId>.<commandId>
+ *                   可选：--params <json|-> --json --local
+ *   plugin automation  开关某插件的外部调用：plugin automation <id> on|off
  *
  * 退出码：0=成功，1=运行时错误，2=参数错误
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app } = require('electron');
+
+/**
+ * 惰性取 electron 的 app。
+ *
+ * ⚠️ 不要改回模块顶部的 `const { app } = require('electron')`：
+ * `node_modules/electron/index.js` 在缺二进制时会**自动下载** 100MB+ 安装包
+ * （见其 getElectronPath → downloadElectron）。cli.js 被单测直接 require
+ * （test/cliPlugin.test.js 只需要 parseArgs），顶部 require 会让整个测试套件
+ * 在纯 Node 环境下为了一个 `app` 去下载 Electron；CI 上那次 GitHub Releases
+ * 连续 504，直接把整个 test job 崩在 "Electron failed to install correctly"。
+ * 只有 cmdInfo() 真正需要 app，而它只在 `electron . --cli info` 下被调用。
+ *
+ * @returns {object|null} 不可用时返回 null（纯 Node 测试环境）
+ */
+let _electronApp;
+function getElectronApp() {
+  if (_electronApp !== undefined) return _electronApp;
+  try {
+    _electronApp = require('electron').app || null;
+  } catch (_) {
+    _electronApp = null;
+  }
+  return _electronApp;
+}
 
 const HELP_TEXT = `SXSEditor CLI (agent debug helper)
 
@@ -72,7 +101,34 @@ Commands:
                            --qdrift                  enable Q-Drift
                            --seed <N>                fix initial noise (required
                                                      for any precision comparison)
+                           --pitch-control score|manual  pitch conditioning mode
+                                                     (score=model generates F0,
+                                                     manual=follow curve; default manual)
                            --dry-run                 only print the parsed plan
+  plugin          Work with plugin-provided automation methods.
+                  plugin list           installed plugins + methods the app exposes
+                  plugin methods        callable methods (--plugin <id> to filter)
+                  plugin call <pluginId>.<commandId> [--params <json|->] [--json]
+                                        invoke one method (defaults to the running app)
+                  plugin automation <id> on|off
+                                        allow/block external calls (after reload)
+                  plugin trust [list|add <pem>|remove <keyId>]
+                                        manage signing keys (--name for a label)
+                  plugin policy [require|allow]
+                                        require packages to be signed
+                  plugin verify <pluginId>
+                                        re-check an installed plugin against its
+                                        recorded checksums
+                  plugin market [sources|add <url>|remove <id>]
+                                        list/add/remove plugin index sources
+                  plugin market search [query] [--source <id>]
+                                        search configured sources
+                  plugin market preview <pluginId>
+                                        download + verify, show signature and
+                                        permissions before installing
+                  plugin market install <pluginId> --yes
+                                        install after the same preview
+                  Add --local to use a temporary instance instead of the running app.
   qdrift-conds    Export calibration conditions (prompt mel + cond) from one or
                   more .sxsproj projects for Q-Drift recalibration.
                   Writes <item>_prompt.bin / <item>_cond.bin / <item>.json plus
@@ -133,29 +189,43 @@ function cmdHelp() {
 }
 
 function cmdVersion() {
-  // webpack 打包后 build-info.json 被 CopyPlugin 复制到 .webpack/main/build-info.json
-  // （与 main bundle 同目录），所以用 __dirname 直接定位
-  const buildInfoPath = path.join(__dirname, 'build-info.json');
-  const buildInfo = readJsonSafe(buildInfoPath, {});
+  // R23: 复用 updateChecker._readBuildInfo 的双候选（打包后 main 目录 /
+  // 源码运行的 src 目录），避免只读单一路径在源码运行时拿不到 build-info。
+  let buildInfo = null;
+  try {
+    buildInfo = require('./updateChecker')._readBuildInfo();
+  } catch (_) { /* 加载失败时退回单路径读取 */ }
+  if (!buildInfo) {
+    // webpack 打包后 build-info.json 被 CopyPlugin 复制到 .webpack/main/build-info.json
+    // （与 main bundle 同目录），所以用 __dirname 直接定位
+    buildInfo = readJsonSafe(path.join(__dirname, 'build-info.json'), {});
+  }
   section('Build Info');
   log(JSON.stringify(buildInfo, null, 2));
   return 0;
 }
 
 function cmdInfo() {
+  const app = getElectronApp();
   section('App');
   log(`productName : SXSEditor`);
-  log(`isPackaged  : ${app.isPackaged}`);
-  log(`appPath     : ${app.getAppPath()}`);
-  log(`version     : ${app.getVersion()}`);
+  if (!app) {
+    // 纯 Node 下跑（单测 / 直接 node src/main/cli.js）—— 这些字段只有 Electron 知道
+    log('isPackaged  : n/a (not running under Electron)');
+  } else {
+    log(`isPackaged  : ${app.isPackaged}`);
+    log(`appPath     : ${app.getAppPath()}`);
+    log(`version     : ${app.getVersion()}`);
+  }
 
   section('Runtime');
   log(`node        : ${process.versions.node}`);
-  log(`electron    : ${process.versions.electron}`);
+  log(`electron    : ${process.versions.electron || 'n/a'}`);
   log(`platform    : ${process.platform}`);
   log(`arch        : ${process.arch}`);
   log(`pid         : ${process.pid}`);
 
+  if (!app) return 0;
   section('Paths');
   log(`userData    : ${app.getPath('userData')}`);
   log(`logs        : ${app.getPath('logs')}`);
@@ -486,7 +556,7 @@ async function cmdSynthProject(opts) {
   // ---- 歌手参考（工程自带；缺失就退化为纯音符合成）----
   const singerMeta = (proj.singers || []).find(s => s.id === frag.singerId) || null;
   const singerPath = opts.singer || (singerMeta && singerMeta.singerFilePath) || null;
-  let refAudioWavBuffer = null, refF0Data = null, refMidiNotes = null;
+  let refAudioWavBuffer = null, refF0Data = null, refMidiNotes = null, refSingerData = null;
   let singerName = null, singerLanguage = null;
   if (singerPath && fs.existsSync(singerPath)) {
     const sj = JSON.parse(fs.readFileSync(singerPath, 'utf-8'));
@@ -495,6 +565,7 @@ async function cmdSynthProject(opts) {
     if (sj.wavBase64) refAudioWavBuffer = Buffer.from(sj.wavBase64, 'base64');
     refF0Data = Array.isArray(sj.f0Data) ? sj.f0Data : null;
     refMidiNotes = Array.isArray(sj.midiNotes) ? sj.midiNotes : null;
+    refSingerData = sj.singerData && typeof sj.singerData === 'object' ? sj.singerData : null;
     log(`singer     : ${singerName} lang=${singerLanguage} ref=${refAudioWavBuffer ? fmtBytes(refAudioWavBuffer.length) : 'none'} f0=${refF0Data ? refF0Data.length : 0} midi=${refMidiNotes ? refMidiNotes.length : 0}`);
   } else {
     log(`singer     : none (${singerPath || 'no singerFilePath'}) → 无参考音色，只反映音符层面的误差`);
@@ -535,15 +606,21 @@ async function cmdSynthProject(opts) {
   // 会静默退化成 DML——那样跑出来的就不是 WinML-TRT-RTX 的数字了。
   globalThis.__SXS_SETTINGS_SNAPSHOT__ = { ...settings };
   if (opts.winmlEp) {
+    // 支持 `--winml-ep OpenVINOExecutionProvider:npu`（也接受 `|`）指定同一
+    // EP 的具体硬件，与设置页的 winmlPreferredEp/winmlPreferredDevice 一致。
+    const [epName, epDevice] = String(opts.winmlEp).split(/[|:]/);
     globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = true;
     globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'winml';
-    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredEp = opts.winmlEp;
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredEp = epName.trim();
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredDevice = ['gpu', 'cpu', 'npu'].includes(String(epDevice || '').toLowerCase())
+      ? String(epDevice).toLowerCase()
+      : '';
   }
   if (opts.noWinml) {
     globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = false;
     globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'dml';
   }
-  log(`[ep] 请求: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(智能) NV TRT-RTX 优先'}`);
+  log(`[ep] requested: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(auto) NV TRT-RTX preferred'}${!opts.winmlEp && settings.winmlPreferredDevice ? '|' + settings.winmlPreferredDevice : ''}`);
 
   const pipeline = new OnnxSVSPipeline(modelDir, {
     deviceId: settings.preferredDeviceId ?? settings.deviceId ?? undefined,
@@ -551,12 +628,12 @@ async function cmdSynthProject(opts) {
     preferredDeviceType: settings.preferredDeviceType || undefined,
     modelDeviceMapping: settings.modelDeviceMapping || undefined,
     modelPrecision: precision,
-    japaneseVocalization: settings.japaneseVocalization || 'hybrid',
+    japaneseVocalization: settings.japaneseVocalization || 'en-phonemes',
     inferenceProvider: settings.inferenceProvider || 'ortnode',
   });
 
   try {
-    const tInit = Date.now();
+    const _tInit = Date.now();
     await pipeline.init();
     let eps = pipeline.sessionEPs || {};
     log(`[ep] diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
@@ -566,6 +643,7 @@ async function cmdSynthProject(opts) {
       refAudioWavBuffer,
       refF0Data,
       refMidiNotes,
+      refSingerData,
       singerId: frag.singerId || null,
       onProgress: (p) => { if (p % 25 === 0) log(`[progress] ${p}%`); },
     };
@@ -587,7 +665,11 @@ async function cmdSynthProject(opts) {
     }
     if (Number.isInteger(opts.seed)) {
         synthOpts.seed = opts.seed;
-        log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
+        log(`seed       : ${opts.seed} (fixed initial noise, for precision/EP comparison)`);
+    }
+    if (opts.pitchControl === 'score' || opts.pitchControl === 'manual') {
+        synthOpts.pitchControl = opts.pitchControl;
+        log(`pitchCtrl  : ${opts.pitchControl} (score=model-generated F0, manual=follow curve; default manual)`);
     }
 
     const tSynth = Date.now();
@@ -603,7 +685,7 @@ async function cmdSynthProject(opts) {
     const durationSec = audio.length / SAMPLE_RATE;
     log(`\n[OK] ${synthMs}ms  samples=${audio.length}  ${durationSec.toFixed(3)}s @${SAMPLE_RATE}Hz  peak=${peak.toFixed(4)}  mean=${(sum / audio.length).toFixed(6)}`);
     eps = pipeline.sessionEPs || {};
-    log(`[ep] 实际使用: diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
+    log(`[ep] actually used: diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
 
     if (opts.out) {
       const { encodeWav } = require('../audio/wavEncoder');
@@ -721,7 +803,7 @@ async function cmdQdriftConds(opts) {
     preferredDeviceType: settings.preferredDeviceType || undefined,
     modelDeviceMapping: settings.modelDeviceMapping || undefined,
     modelPrecision: 'fp32',
-    japaneseVocalization: settings.japaneseVocalization || 'hybrid',
+    japaneseVocalization: settings.japaneseVocalization || 'en-phonemes',
     inferenceProvider: settings.inferenceProvider || 'ortnode',
   });
 
@@ -902,9 +984,20 @@ function parseArgs(argv) {
   if (rest.length === 0) return { command: 'help', opts: {} };
 
   const command = rest[0];
-  const opts = {};
+  const opts = { _: [] };
   for (let i = 1; i < rest.length; i++) {
     const a = rest[i];
+    // ---- plugin：位置参数（子命令与方法名）与它自己的开关 ----
+    if (a === '--plugin') { opts.plugin = rest[++i]; continue; }
+    if (a === '--params') { opts.params = rest[++i]; continue; }
+    if (a === '--json') { opts.json = true; continue; }
+    if (a === '--local') { opts.local = true; continue; }
+    if (a === '--name') { opts.name = rest[++i]; continue; }
+    // 市场：源 id / 排序 / 安装确认。`--yes` 单独存在，是为了让 `install`
+    // 在不带它时只打印预览 —— 装插件是改用户目录的动作，不该被一次回车完成。
+    if (a === '--source') { opts.source = rest[++i]; continue; }
+    if (a === '--sort') { opts.sort = rest[++i]; continue; }
+    if (a === '--yes' || a === '-y') { opts.yes = true; continue; }
     if (a === '--out') { opts.out = rest[++i]; continue; }
     if (a === '--out-f32') { opts.outF32 = rest[++i]; continue; }
     if (a === '--steps') { opts.steps = parseInt(rest[++i], 10); continue; }
@@ -938,9 +1031,9 @@ function parseArgs(argv) {
     if (a === '--qdrift') { opts.qdrift = true; continue; }
     if (a === '--no-qdrift') { opts.qdrift = false; continue; }
     if (a === '--seed') { opts.seed = parseInt(rest[++i], 10); continue; }
+    if (a === '--pitch-control') { opts.pitchControl = rest[++i]; continue; }
     if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
     if (a === '--no-winml') { opts.noWinml = true; continue; }
-    if (a === '--max-prompt-frames') { opts.maxPromptFrames = parseInt(rest[++i], 10); continue; }
     if (a === '--diffstep-chunk') {
       opts.diffStepChunk = true;
       const v = parseInt(rest[i + 1], 10);
@@ -954,6 +1047,9 @@ function parseArgs(argv) {
       catch (e) { throw new Error(`Invalid --notes JSON: ${e.message}`); }
       continue;
     }
+    // 位置参数（plugin call 的方法名、plugin automation 的 id 与 on/off）。
+    // 已知开关的值都在上面用 ++i 消费掉了，走到这里的一定是真的位置参数。
+    if (!a.startsWith('--')) { opts._.push(a); continue; }
     // 未知参数忽略
   }
   return { command, opts };
@@ -986,6 +1082,12 @@ async function runCli(argv) {
       case 'synth': return await cmdSynth(opts);
       case 'synth-project': return await cmdSynthProject(opts);
       case 'qdrift-conds': return await cmdQdriftConds(opts);
+      case 'plugin': {
+        // 插件子命令放在独立模块里：它要处理"运行实例 vs 临时实例"两条路径，
+        // 塞进这个已经 1000 行的文件会让两条路径的差异更难被看见。
+        const { runPluginCommand } = require('./cliPlugin');
+        return await runPluginCommand(opts._ || [], opts);
+      }
       default:
         logErr(`Unknown command: ${command}\n`);
         logErr(HELP_TEXT);
@@ -997,4 +1099,4 @@ async function runCli(argv) {
   }
 }
 
-module.exports = { runCli, HELP_TEXT };
+module.exports = { runCli, HELP_TEXT, parseArgs };

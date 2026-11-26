@@ -1,5 +1,5 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT, BPM } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, getF0AreaHeight, BPM } from './constants.js';
 import { t } from '../i18n/index.js';
 import { mergePhoneme } from '../utils/mergePhoneme.js';
 import { tokenizeLyric } from '../utils/cjkUtils.js';
@@ -39,6 +39,9 @@ export function updateMidiInfo() {
   if (state.pianoRoll) {
     const noteCount = state.pianoRoll.notes.length;
     dom.midiInfoEl.textContent = noteCount > 0 ? t('preprocess.noteCount', { count: noteCount }) : t('preprocess.waitingForExtraction');
+    // MIDI 空态与音符数联动：有音符就撤掉提示，清空（如重新灌数据）再显示。
+    const midiEmpty = document.getElementById('midi-empty');
+    if (midiEmpty) midiEmpty.hidden = noteCount > 0;
   }
 }
 
@@ -185,7 +188,7 @@ export function updateInlineInputPosition(roll) {
   const nh = NOTE_HEIGHT * roll.zoomY;
 
   const visible = nx + nw >= PIANO_KEY_WIDTH && nx <= roll.width &&
-                  ny + nh >= HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT && ny <= roll.height;
+                  ny + nh >= HEADER_HEIGHT + getF0AreaHeight() && ny <= roll.height;
 
   if (visible) {
     state.activeInlineInput.style.display = '';
@@ -409,11 +412,17 @@ export async function saveSingerData() {
 
   // 始终根据当前pianoRoll音符和F0数据重新构建singerData，确保编辑后的变更被保存
   const fields = buildSingerFields(currentNotes);
+  // 音频可能被裁掉前导静音（audioLoader.trimLeadingSilence），保存时把偏移补回，
+  // 保证 singerData 的时间轴与原始音频一致。
+  const trimOffsetMs = Math.floor((state.trimOffsetSec || 0) * 1000);
+  // 音符时值是 beat，换算秒使用钢琴卷轴当前的 BPM（与提取/试听同源）。
+  const saveBpm = (state.pianoRoll && state.pianoRoll.bpm) || BPM;
   state.singerData = {
     index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
     language: 'Mandarin',
-    time: [0, Math.floor(state.wavDuration * 1000)],
-    duration: currentNotes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+    time: [trimOffsetMs, trimOffsetMs + Math.floor(state.wavDuration * 1000)],
+    trimOffsetSec: state.trimOffsetSec || 0,
+    duration: currentNotes.map((n) => (n.duration * (60 / saveBpm)).toFixed(2)).join(' '),
     text: fields.text,
     phoneme: fields.phoneme,
     note_pitch: currentNotes.map((n) => n.pitch).join(' '),
@@ -429,6 +438,38 @@ export async function saveSingerData() {
       f0Data: state.f0Data,
       midiNotes: state.pianoRoll ? state.pianoRoll.notes : [],
     };
+
+    // ===== 歌手编辑模式：直接写回原 .sxssinger，并通知主窗口就地刷新 =====
+    if (state.editFilePath) {
+      if (!window.electronAPI || typeof window.electronAPI.saveSingerFile !== 'function') {
+        showAlertDialog(t('preprocess.saveFailed') + ': saveSingerFile unavailable');
+        return;
+      }
+      const result = await window.electronAPI.saveSingerFile({
+        singerName: state.singerName,
+        color: state.singerColor,
+        avatarImageData: state.avatarImageData || null,
+        avatarImageName: state.avatarImageName || null,
+        wavBuffer: state.wavFileBuffer,
+        wavFileName: state.wavFileName,
+        duration: state.wavDuration,
+        isPreprocessed: true,
+        preprocessResult,
+        filePath: state.editFilePath,
+        // 不新建歌手条目，只按 filePath 更新已加载的那一条
+        notifyMainWindow: false,
+        notifyMainWindowUpdate: true,
+      });
+      if (result && result.success) {
+        showAlertDialog(t('preprocess.editSaved'), () => {
+          stopPlayback();
+          window.close();
+        });
+      } else {
+        showAlertDialog(t('preprocess.saveFailed') + ': ' + ((result && result.error) || ''));
+      }
+      return;
+    }
 
     await window.electronAPI.sendPreprocessData(preprocessResult);
 

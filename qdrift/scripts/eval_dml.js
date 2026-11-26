@@ -15,6 +15,10 @@
  *   node qdrift/scripts/eval_dml.js [--precision fp16|int8]
  *        [--items nat_000,nat_001] [--data-dir qdrift/conds_bin|qdrift/conds_proj]
  *        [--seed 1234] [--no-wav]
+ *        [--quant-model <path>] [--voc-model <path>] [--calib-prefix <prefix>]
+ *
+ * --quant-model / --voc-model 用于评测"待发布"的量化模型（例如从 ModelScope
+ * 下载的 int8 v2 目录），默认仍指向仓库内的 onnx_models/<precision>/。
  */
 const fs = require('fs');
 const path = require('path');
@@ -152,13 +156,17 @@ async function main() {
     const seed = parseInt(getArg('seed', '1234'), 10);
     const noWav = args.includes('--no-wav');
 
-    const quantDiff = precision === 'fp16'
+    const quantDiff = getArg('quant-model', precision === 'fp16'
         ? path.join(ROOT, 'onnx_models', 'fp16', 'diff_step_dml.onnx')
-        : path.join(ROOT, 'onnx_models', 'int8', 'diff_step_dml.onnx');
+        : path.join(ROOT, 'onnx_models', 'int8', 'diff_step_dml.onnx'));
     const corrPrefix = getArg('calib-prefix',
         precision === 'fp16' ? path.join('qdrift', 'calib', 'qdrift') : path.join('qdrift', 'calib_int8', 'qdrift'));
     const corrPath = path.isAbsolute(corrPrefix) ? corrPrefix + '_c.bin' : path.join(ROOT, corrPrefix + '_c.bin');
     const correction = new Float32Array(fs.readFileSync(corrPath).buffer);
+    // --voc-model：量化侧 vocoder 覆盖。本机 onnx_models/int8/ 里的 vocoder 未量化，
+    // 要评"待发布的 int8 链路"必须能指向下载下来的那份 W8A32 vocoder。
+    // A（参考音）永远走 FP32 vocoder，否则 B/C 的差异会混入声码器本身的变化。
+    const vocQuantOverride = getArg('voc-model', null);
 
     fs.mkdirSync(OUT_MEL, { recursive: true });
     fs.mkdirSync(OUT_WAV, { recursive: true });
@@ -192,13 +200,21 @@ async function main() {
     // fp16：B/C 用 FP16 vocoder，另出 D（FP32 vocoder）隔离声码器影响。
     // int8：没有 INT8 vocoder，三条全部走 FP32 vocoder（DiT 贡献不被 vocoder 混淆）。
     const passes = [];
-    let voc32 = null, voc16 = null;
+    let voc32 = null, voc16 = null, vocOverrideSess = null;
     if (!noWav) {
         console.log('[Eval] Phase 2/3: 声码器合成 ...');
-        voc32 = await makeVocoderSession(path.join(ROOT, 'onnx_models', 'vocoder_dml.onnx'));
+        const voc32 = await makeVocoderSession(path.join(ROOT, 'onnx_models', 'vocoder_dml.onnx'));
         if (precision === 'fp16') voc16 = await makeVocoderSession(path.join(ROOT, 'onnx_models', 'fp16', 'vocoder_dml.onnx'));
-        const quantVoc = precision === 'fp16' ? voc16 : voc32;
-        passes.push(['A', voc32], ['B', quantVoc], ['C', quantVoc]);
+        const baseQuantVoc = precision === 'fp16' ? voc16 : voc32;
+        // 覆盖时按需新建会话（不与 baseQuantVoc 复用，避免 release 顺序歧义）
+        let vocQuant = baseQuantVoc;
+        if (vocQuantOverride) {
+            vocOverrideSess = await makeVocoderSession(path.isAbsolute(vocQuantOverride)
+                ? vocQuantOverride : path.join(ROOT, vocQuantOverride));
+            vocQuant = vocOverrideSess;
+            console.log(`[Eval] 量化侧 vocoder 覆盖: ${path.relative(ROOT, path.isAbsolute(vocQuantOverride) ? vocQuantOverride : path.join(ROOT, vocQuantOverride))}`);
+        }
+        passes.push(['A', voc32], ['B', vocQuant], ['C', vocQuant]);
         if (precision === 'fp16') passes.push(['D', voc32]);
     }
     const wavs = {};
@@ -213,11 +229,21 @@ async function main() {
         }
         if (passes.length) console.log(`  ${item}: wav passes=${passes.map(p => p[0]).join('')}`);
     }
-    try { if (voc32 && voc32.release) voc32.release(); if (voc16 && voc16.release) voc16.release(); } catch (_) { /* noop */ }
+    try {
+        if (voc32 && voc32.release) voc32.release();
+        if (voc16 && voc16.release) voc16.release();
+        if (vocOverrideSess && vocOverrideSess.release) vocOverrideSess.release();
+    } catch (_) { /* noop */ }
 
     // ---- Phase 3: 指标 ----
     console.log('[Eval] Phase 3/3: 指标 ...');
-    const report = { precision, seed, n_steps: N_STEPS, correction: path.relative(ROOT, corrPath), items: {} };
+    const report = {
+        precision, seed, n_steps: N_STEPS,
+        correction: path.relative(ROOT, corrPath),
+        quant_model: path.relative(ROOT, quantDiff),
+        quant_vocoder: vocQuantOverride ? path.relative(ROOT, path.isAbsolute(vocQuantOverride) ? vocQuantOverride : path.join(ROOT, vocQuantOverride)) : null,
+        items: {},
+    };
     for (const item of items) {
         const d = resolveItem(item);
         const A = mels[item].A, B = mels[item].B, C = mels[item].C;

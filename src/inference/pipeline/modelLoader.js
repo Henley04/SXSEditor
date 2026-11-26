@@ -17,19 +17,35 @@ if (_ORT_DEBUG_ENABLED) {
 
 const path = require('node:path');
 const fs = require('node:fs');
-const ort = require('onnxruntime-node');
-// Set logLevel on the real module (ort.env is from the external onnxruntime-node's onnxruntime-common)
-if (!_IS_TEST_ENV) {
-    ort.env.logLevel = _ORT_DEBUG_ENABLED ? 'verbose' : 'warning';
-    ort.env.debug = _ORT_DEBUG_ENABLED;
+// 惰性 ORT：native addon 的加载推迟到首次真正访问 ort.* 时（见 ortRuntime.js）。
+// 此前这里是顶层 require —— 它位于 SVS 管线的必经路径上，冷启动时只要 require 了
+// pipeline 就等于把 ORT 及其 DML/WinML 依赖 DLL 全部拉起。
+const { lazyOrt: ort, getOrt } = require('../ortRuntime.js');
+
+// ORT 日志级别只能设在**真实模块**上（ort.env 来自 external 的 onnxruntime-node
+// 的 onnxruntime-common），而惰性化之后模块在这一刻还没加载。
+// 因此改为"首次真正建 session 之前"再设置，由 ensureOrtEnv() 保证只做一次。
+let _ortEnvConfigured = false;
+function ensureOrtEnv() {
+    const realOrt = getOrt();
+    if (_ortEnvConfigured) return realOrt;
+    _ortEnvConfigured = true;
+    if (!_IS_TEST_ENV) {
+        realOrt.env.logLevel = _ORT_DEBUG_ENABLED ? 'verbose' : 'warning';
+        realOrt.env.debug = _ORT_DEBUG_ENABLED;
+    }
+    return realOrt;
 }
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
 const { EMBED_DIM, MEL_DIM, COND_DIM, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { buildSessionOptions } = require('../shared/ortOptions');
+const { isCpuOnlyBackend } = require('../shared/epPolicy');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
+// 跨进程重启的 dummy 校验结果缓存（EP + 模型 + 模型版本为判定依据）。
+const sessionValidationCache = require('./sessionValidationCache');
 
 // Flush ORT debug buffer to console after model loading
 function flushOrtDebugLogs() {
@@ -246,14 +262,6 @@ function _rebuildDummyForSession(session, baseDummy, nonZero = false, dynamicSeq
     }
 }
 
-/** @deprecated Using classifyDevice 替代 */
-function isDiscreteGPUByName(name) {
-    const dt = classifyDevice(name, 0, undefined);
-    if (dt === 'discrete-gpu') return true;
-    if (dt === 'integrated-gpu' || dt === 'npu') return false;
-    return undefined;
-}
-
 function gpuCacheToDevices(controllers) {
     const devices = [];
     for (let i = 0; i < controllers.length; i++) {
@@ -316,7 +324,7 @@ async function enumerateDMLDevicesInProcess(modelDir) {
     // DxgiVideoMemory 所在的那一行，显存检测反而失效 —— 宁可多收一点。
     // ------------------------------------------------------------------
     if (_stderrCaptureActive) {
-        console.warn('[OnnxSVSPipeline] DML 设备探测已在进行中，跳过并发调用（避免 stderr 劫持重入）');
+        console.warn('[OnnxSVSPipeline] DML device detection already in progress, skipping concurrent call (avoid stderr hijack reentry)');
         return [];
     }
     _stderrCaptureActive = true;
@@ -609,8 +617,79 @@ const WINML_ELIGIBLE_KEYS = new Set([
   'preflow', 'condEmb', 'diffStep', 'vocoder', 'sifigan',
 ]);
 
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
+// TRT-RTX 例外名单：这些模型**仍留在上面那份 WinML 白名单里**（主模型身份、
+// EP 上报与回退策略都不变），但不为它们创建 NvTensorRTRTX 会话，固定交给
+// DML。preflow 的理由：输入长度等于歌词 token 数，几乎每次合成都落在引擎
+// 编译 profile 之外（日志里可见 setInputShape / enqueue 失败后回落），而模型
+// 只有 8MB，TRT 的 engine 编译与校验开销远大于它本身的推理耗时。
+// 注意：只排除 NvTensorRTRTX —— 用户手动指定的其它 WinML EP（OpenVINO/NPU）
+// 仍然生效，别把它写成"整条 WinML 分支跳过"。
+const TRT_RTX_EXCLUDED_KEYS = new Set([
+  'preflow',
+]);
+
+/**
+ * INT8：GPU 是否应当独占给 DiT(diffStep) / Vocos(vocoder) 走 TRT-RTX。
+ *
+ * 背景（实测）：NvTensorRTRTX 与 DmlExecutionProvider 在**同一进程共存**时，
+ * TRT 的 execution context 会稳定报 `enqueue failed`（diff_step / cond_emb 的
+ * warmup 必失败，node hash 恒为 ..._7780293478357352456_0_0）；而完全不建 DML
+ * 会话时，同一模型同一形状（seq=512/548/2048/2100/2300）全部通过且 nan=0。
+ *
+ * 小模型（encoders / preflow / cond_emb / mel_transform）计算量很小 —— 实测
+ * CPU EP：encoder 1-6ms、cond_emb 78ms、mel_transform 110ms、preflow 788ms
+ * @2048 帧（真实歌词 token 数远小于 2048，通常 100-200ms），每次合成只跑一次。
+ * 相比"DiT 落回 DML 导致 24 段 × 38s"，让出 GPU 是明显更优的取舍。
+ *
+ * 只在 winmlEnabled 且真的存在 NvTensorRTRTX 设备时生效；TRT 不可用时保持
+ * 原来的 DML 优先行为（DML 对小模型更快）。
+ */
+async function _trtGpuAvailable() {
+  try {
+    const provider = require('../winml/winmlProvider');
+    if (!provider.isWinmlEnabled()) return false;
+    if (typeof provider.getWinmlCandidates !== 'function') return false;
+    // 复用 WinML 的完整候选链（EP 注册 / canLoadLibrary 过滤 / runtime blocklist）。
+    // 不要自己只注册 NV：实测单独 registerEp 一个 EP 后，TRT 会话虽然能创建，
+    // 但输出回传会报 `device-to-host output copy failed`；走完整 chain 才正常。
+    const chain = await provider.getWinmlCandidates(true, false);
+    return Array.isArray(chain)
+      && chain.some((c) => String((c && c.epName) || '').includes('NvTensorRTRTX'));
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * 创建 session 并（必要时）跑一次 dummy 推理校验。
+ *
+ * 返回值 warmedUp 表示"该 session 已完成校验"：本次实际执行了 dummy，或命中
+ * 持久化记录（上一次启动时同一 EP + 同一运行时 + 同一模型已校验通过）。
+ * 调用方据此判断是否还需要额外预热；它不是"本次是否真的跑了推理"。
+ */
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true, options = {}) {
+    // 所有 session 都在这里创建：这是设置 ORT 日志级别最晚且最早的可靠时机
+    // （必须在 session 建立前，又不能早到模块加载期）。
+    ensureOrtEnv();
+    // 「CPU（全部模型）」是用户显式选择的全局强制开关，而不是 DML 失败后的兜底：
+    // 所有主模型 session 在这里统一短路，不进入下面 WinML / 静态形状 / DML /
+    // _dml.onnx 的任何分支。调用方只解构 { session, ep }，返回结构与之兼容。
+    if (isCpuOnlyBackend()) {
+        const cpuSession = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
+        return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
     const modelName = path.basename(modelPath);
+    // GPU 只给 DiT/Vocos：这两个是唯一需要 TRT INT8 tensor core 的模型。
+    const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
+    // cpuOnly：跳过 WinML/DML 选择，直接用 CPU EP。
+    // 目前只有 mel_transform 的 float16 图会用到——DML 上 STFT 的 fp16 kernel 会退化成
+    // 常量输出（见 scripts/fp16_aimet_analysis.py 的实测：SQNR -9.4 dB），CPU EP 反而正确。
+    if (options.cpuOnly) {
+        const session = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
+        return { session, ep: 'cpu', warmedUp: false };
+    }
     // Validation/warmup is a once-per-process action for each concrete model
     // file. Session recreation after VRAM release, language swaps, or model
     // offloading must not run an extra dummy inference.
@@ -621,10 +700,31 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         ? DUMMY_TEST_INPUTS_NPU[sessionKey]
         : (isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey]));
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
+    // dummy 校验结果持久化：同一 EP + 同一模型（路径/session/形状）+ 同一模型版本
+    // 之前成功过，就直接复用，不再跑一次 dummy 推理。精度切换会落到不同目录，
+    // 切回原精度时仍命中原记录；EP 或模型版本变化则自然失配、重新校验。
+    // TRT 这类"每次启动重新编译 engine"的 EP 还会并入运行时指纹（见 winml 分支）。
+    const _cachedValidation = (epKey) => sessionValidationCache.getValidationRecord({
+        epKey, modelPath, sessionKey, useStaticShapes: useStaticShapes === true,
+    }).catch(() => null);
+    const _rememberValidation = (epKey, detail) => sessionValidationCache.recordValidation({
+        epKey, modelPath, sessionKey, useStaticShapes: useStaticShapes === true, detail,
+    }).catch(() => false);
 
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath,
             buildSessionOptions({ executionProviders: ['cpu'] }));
+        return { session, ep: 'cpu', warmedUp: false };
+    }
+
+    // === INT8：GPU 独占给 DiT/Vocos（TRT-RTX），小模型固定 CPU EP ===
+    // 建任何一个 DML 会话都会让同进程的 NvTensorRTRTX enqueue 失败（见
+    // _trtGpuAvailable 的实测记录），而 INT8 的价值恰恰在 TRT 的 INT8 kernel。
+    // 因此 useStaticShapes（int8 / int8-npu）下，非 diffStep/vocoder 一律 CPU。
+    if (useStaticShapes && !isDiffStepOrVocoder && await _trtGpuAvailable()) {
+        const session = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (INT8: GPU reserved for DiT/Vocos via TRT-RTX)`);
         return { session, ep: 'cpu', warmedUp: false };
     }
 
@@ -636,7 +736,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     const _isTypeMismatchErr = (err) => {
         const msg = err && err.message ? err.message : '';
         // 例: "Unexpected input data type. Actual: (tensor(float16)) , expected: (tensor(float))"
-        return msg.includes('Unexpected input data type') && msg.includes('tensor(float');
+        // 必须精确区分 tensor(float) 与 tensor(float16)：用 includes('tensor(float')
+        // 会同时命中 tensor(float16)，把非精度错误也当成精度不匹配去重试。
+        if (!msg.includes('Unexpected input data type')) return false;
+        const types = msg.match(/tensor\((float16|float)\)/g);
+        return !!types && new Set(types).size > 1;
     };
     const _getAlternateDummy = () => {
         if (overrideDummyInputs || useStaticShapes) return null;
@@ -673,18 +777,41 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     // OpenVINO 属“其他 EP”，仅 diffstep/vocoder 允许尝试；其余 WinML 模型只走 NV，
     // NV 不可用/失败时，diffstep/vocoder 回退 DML，其余直接回退 CPU。
     const winmlEligible = WINML_ELIGIBLE_KEYS.has(sessionKey);
-    const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
+    // isDiffStepOrVocoder 已在函数开头定义（INT8 GPU 独占判断也用它）
+    // 白名单内但被排除在 TRT-RTX 之外的模型：照常走 WinML 分支（其它 EP 仍可
+    // 生效），只是候选链里没有 NvTensorRTRTX；随后必须保留 DML 回退。
+    const trtRtxExcluded = TRT_RTX_EXCLUDED_KEYS.has(sessionKey);
     if (winmlEligible) {
         try {
             const winmlProvider = require('../winml/winmlProvider');
             if (winmlProvider.isWinmlEnabled()) {
-                const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes, isDiffStepOrVocoder);
+                if (trtRtxExcluded) {
+                    console.log(`[Model][select] name=${modelName} winml=yes trt-rtx=excluded (whitelisted, other WinML EPs still allowed, DML fallback kept)`);
+                }
+                const winmlRes = await winmlProvider.tryCreateWinMLSession(
+                    modelPath, useStaticShapes, isDiffStepOrVocoder, { excludeTrtRtx: trtRtxExcluded });
                 if (winmlRes && winmlRes.session) {
                     const wsession = winmlRes.session;
                     const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
                     // Every newly created TRT session must validate itself. A model-level
                     // process cache cannot prove that a recreated engine is healthy.
-                    const shouldValidate = isTRT || runValidation;
+                    // 但"上一次启动、同一套运行时已校验成功"的持久化记录可以：
+                    // 缓存键除 EP/GPU/模型版本外还并入 TRT 运行时指纹（EP 包 MSIX
+                    // 版本 + provider DLL 文件版本），TRT 一升级就失配、强制重新校验；
+                    // 版本不变时重编译出坏 engine 的概率极低，复用是安全的。
+                    // 注意 GPU 用名称而非 deviceId：换卡后索引可能仍是 0。
+                    const trtRuntime = isTRT
+                        ? await winmlProvider.getTrtRuntimeFingerprint()
+                        : null;
+                    const winmlEpKey = sessionValidationCache.buildValidationEpKey({
+                        provider: winmlRes.ep,
+                        device: gpuDeviceName || 'auto',
+                        runtime: trtRuntime,
+                    });
+                    const persistedValidation = (isTRT || runValidation)
+                        ? await _cachedValidation(winmlEpKey)
+                        : null;
+                    const shouldValidate = (isTRT || runValidation) && !persistedValidation;
                     try {
                         if (shouldValidate) {
                             // For TRT sessions, use non-zero dummy inputs. All-zero
@@ -712,7 +839,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                                 validateTRTOutput(outputs, expected);
                             }
                             _validatedSessionModels.add(validationKey);
+                            await _rememberValidation(winmlEpKey, winmlRes.ep);
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=ok${isTRT ? ' (non-zero TRT output verified)' : ''}`);
+                        } else if (persistedValidation) {
+                            _validatedSessionModels.add(validationKey);
+                            console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=persistent-cache(${new Date(persistedValidation.validatedAt || 0).toISOString()})`);
                         } else {
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=skip reason=reload`);
                         }
@@ -731,11 +862,18 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                                 console.warn('[DIAG] peer attach failed:', (e.message || '').split('\n')[0]);
                             }
                         }
-                        return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate };
+                        return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate || !!persistedValidation };
                     } catch (werr) {
                         const wr = (werr.message || '').split('\n')[0].slice(0, 120);
                         console.warn(`[Model][fallback] name=${modelName} from=winml to=dml/cpu stage=warmup error=${wr}`);
                         try { wsession.release(); } catch (_) {}
+                        // warmup 失败说明该 EP 连能力探测都过不了（静态 2048 引擎在
+                        // 512 seq 上必然失败）。不拉黑的话，每次重建都会重新选中它、
+                        // 再失败、再回退，日志里就是反复的 select→fail→fallback。
+                        try {
+                            const { reportRuntimeFailure } = require('../winml/winmlProvider');
+                            reportRuntimeFailure(modelPath, `warmup failed: ${wr}`);
+                        } catch (_) {}
                     }
                 }
             }
@@ -757,33 +895,40 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         // 现模型（FP16 权重版）已在真实校准数据上实测 DML 输出与 CPU 一致
         // （fp16-vs-cpu cos≈0.99996，fp32-vs-cpu cos=1.0）且约 2.3x 提速，
         // 故放开 diffStep 走 DML 优先，失败仍自动回退 CPU。
-        const tryDml = true;
         let npuDmlSession = null;
-        if (tryDml) {
-            try {
-                const dmlOpts = typeof dmlDeviceId === 'number'
-                    ? { name: 'dml', deviceId: dmlDeviceId }
-                    : 'dml';
-                npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
-                if (runValidation) {
-                    await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
-                    _validatedSessionModels.add(validationKey);
-                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
-                } else {
-                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
-                }
-                return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
-            } catch (dmlErr) {
-                if (npuDmlSession) {
-                    try { npuDmlSession.release(); } catch (e) {
-                        console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
-                    }
-                }
-                const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
-                    ? 'DML 不支持该静态形状算子'
-                    : dmlErr.message.substring(0, 60).split('\n')[0];
-                console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
+        try {
+            const dmlOpts = typeof dmlDeviceId === 'number'
+                ? { name: 'dml', deviceId: dmlDeviceId }
+                : 'dml';
+            npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
+            const npuDmlEpKey = sessionValidationCache.buildValidationEpKey({
+                provider: 'dml',
+                // 形状模式已由 buildModelKey 记为 static；这里只标识硬件身份。
+                device: gpuDeviceName || (typeof dmlDeviceId === 'number' ? String(dmlDeviceId) : 'auto'),
+            });
+            const npuCached = runValidation ? await _cachedValidation(npuDmlEpKey) : null;
+            if (runValidation && !npuCached) {
+                await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
+                _validatedSessionModels.add(validationKey);
+                await _rememberValidation(npuDmlEpKey, 'dml-static');
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
+            } else if (npuCached) {
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation=persistent-cache)`);
+            } else {
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
             }
+            return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation || !!npuCached };
+        } catch (dmlErr) {
+            if (npuDmlSession) {
+                try { npuDmlSession.release(); } catch (e) {
+                    console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
+                }
+            }
+            const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
+                ? 'DML 不支持该静态形状算子'
+                : dmlErr.message.substring(0, 60).split('\n')[0];
+            console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
         }
         // DML 不适用或失败 → 回退 CPU（保持原有行为：跳过推导验证以加快大模型加载）
         const cpuSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts(['cpu']));
@@ -792,8 +937,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     }
 
     // 回退策略：diffstep/vocoder 走 DML；其余 WinML 模型(DML 无加速收益)直接回退 CPU。
+    // 例外：TRT_RTX_EXCLUDED_KEYS 里的模型（preflow）虽然还在白名单内，但既然
+    // 不再尝试 TRT，就必须保留 DML 回退 —— 否则会被上面这条"白名单模型直接
+    // CPU"的规则顺手拖到 CPU 上，比 WinML 之前的行为还慢。
     let dmlSession = null;
-    if (!(winmlEligible && !isDiffStepOrVocoder)) {
+    if (!winmlEligible || isDiffStepOrVocoder || trtRtxExcluded) {
         try {
             const dmlOpts = typeof dmlDeviceId === 'number'
                 ? { name: 'dml', deviceId: dmlDeviceId }
@@ -806,15 +954,26 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             });
             console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
             dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
-            if (runValidation) {
+            // GPU 用名称而不是 deviceId：deviceId 只是枚举索引，换卡后仍是 0，
+            // 会让新卡误命中旧卡的校验记录。名称为空时退回索引（与旧键兼容）。
+            const dmlEpKey = sessionValidationCache.buildValidationEpKey({
+                provider: 'dml',
+                device: gpuDeviceName || (typeof dmlDeviceId === 'number' ? String(dmlDeviceId) : 'auto'),
+            });
+            const dmlCached = runValidation ? await _cachedValidation(dmlEpKey) : null;
+            if (runValidation && !dmlCached) {
                 console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
                 await _runWithPrecisionFallback(dmlSession, 'DML');
                 _validatedSessionModels.add(validationKey);
+                await _rememberValidation(dmlEpKey, 'dml');
                 console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+            } else if (dmlCached) {
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (validation=persistent-cache)`);
             } else {
                 console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
             }
-            return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
+            return { session: dmlSession, ep: 'dml', warmedUp: runValidation || !!dmlCached };
         } catch (dmlErr) {
             if (dmlSession) {
                 try { dmlSession.release(); } catch (e) {
@@ -839,7 +998,14 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             try {
                 const dmlModelSession = await ort.InferenceSession.create(dmlModelPath,
                     buildSessionOptions({ executionProviders: ['cpu'] }));
-                if (runValidation) {
+                const dmlOptimizedEpKey = sessionValidationCache.buildValidationEpKey({
+                    provider: 'cpu',
+                    device: 'dml-optimized',
+                });
+                const dmlOptimizedCached = runValidation
+                    ? await _cachedValidation(dmlOptimizedEpKey)
+                    : null;
+                if (runValidation && !dmlOptimizedCached) {
                     try {
                         await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
                     } catch (runErr) {
@@ -847,8 +1013,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                         throw runErr;
                     }
                     _validatedSessionModels.add(validationKey);
+                    await _rememberValidation(dmlOptimizedEpKey, 'dml-optimized');
+                } else if (dmlOptimizedCached) {
+                    _validatedSessionModels.add(validationKey);
                 }
-                return { session: dmlModelSession, ep: 'cpu', warmedUp: runValidation };
+                return { session: dmlModelSession, ep: 'cpu', warmedUp: runValidation || !!dmlOptimizedCached };
             } catch (dmlModelErr) {
                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML-optimized model load failed: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
             }
@@ -861,13 +1030,20 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (reload, validation skipped)`);
         return { session: cpuSession, ep: 'cpu', warmedUp: false };
     }
+    const cpuEpKey = sessionValidationCache.buildValidationEpKey({ provider: 'cpu' });
+    const cpuCached = await _cachedValidation(cpuEpKey);
+    if (cpuCached) {
+        _validatedSessionModels.add(validationKey);
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (validation=persistent-cache)`);
+        return { session: cpuSession, ep: 'cpu', warmedUp: true };
+    }
     try {
         await _runWithPrecisionFallback(cpuSession, 'CPU');
     } catch (runErr) {
         // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状不匹配。常见情况：
         //   1. *_dml.onnx 静态形状模型（diff_step seq_len=2048, vocoder seq_len=500）
         //      与动态 dummy（seq_len=3）不匹配 → "invalid dimensions"
-        //   2. mel_transform.onnx 形状为静态 [1,24000]，dummy 也是 [1,1440] → "invalid dimensions"
+        //   2. mel_transform.onnx 形状为静态 [1,24000]（SAMPLE_RATE），dummy 也是 [1,24000] → "invalid dimensions"
         // 模型已成功加载（create 成功），验证失败仅因 dummy 不匹配，
         // 跳过验证直接返回会话，首次实际推理时自然验证。动态形状的 fp16 模型不受影响。
         // 注：FP16/FP32 类型不匹配已由 _runWithPrecisionFallback 自动重试，到达此处说明
@@ -884,6 +1060,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         throw runErr;
     }
     _validatedSessionModels.add(validationKey);
+    await _rememberValidation(cpuEpKey, 'cpu');
     console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (inference verified)`);
     return { session: cpuSession, ep: 'cpu', warmedUp: true };
 }
@@ -947,7 +1124,6 @@ class WebNNSessionProxy {
 module.exports = {
     getMainWindowWebContents,
     classifyDevice,
-    isDiscreteGPUByName,
     gpuCacheToDevices,
     enumerateGPUsViaNodeGpuInfo,
     enumerateDMLDevicesInProcess,
@@ -957,6 +1133,7 @@ module.exports = {
     buildModelDeviceMapping,
     detectBestDevice,
     createSessionWithValidation,
+    ensureOrtEnv,
     WebNNSessionProxy,
     DUMMY_TEST_INPUTS_FP32,
     DUMMY_TEST_INPUTS_FP16,

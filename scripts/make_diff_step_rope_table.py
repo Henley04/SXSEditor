@@ -13,11 +13,16 @@
 #   is computed inside the engine can be trusted for absolute positions.
 #
 # Fix: precompute cos/sin for positions 0..ROPE_TABLE_MAX-1 offline (fp64 math,
-#   fp32-phase emulation, fp16 storage — same rounding as the original graph's
-#   Cast(FLOAT->FLOAT16)), store as initializers [1,ROPE_TABLE_MAX,64], and at
+#   fp32-phase emulation), store as initializers [1,ROPE_TABLE_MAX,64], and at
 #   runtime Slice to [1,seq_len,64]. The engine only performs a data slice —
 #   no absolute-position arithmetic exists anywhere inside TRT anymore, so the
 #   bug is unreachable by construction. Model I/O contract is unchanged.
+#
+# Works for both diff_step exports:
+#   - fp16 graph: chain ends in Cast(FLOAT->FLOAT16) (_to_copy_3/_to_copy_4),
+#     so the tables are stored as fp16 — same rounding as the original graph.
+#   - fp32 graph: the chain feeds Unsqueeze directly (cos_1/sin_1), so the
+#     tables are stored as fp32.
 #
 # Usage:
 #   python scripts/make_diff_step_rope_table.py --input in.onnx --output out.onnx
@@ -39,12 +44,33 @@ g = m.graph
 nodes_by_name = {n.name: n for n in g.node}
 init_by_name = {i.name: i for i in g.initializer}
 
-CHAIN = [
+CHAIN_FP16 = [
     'node_arange_1', 'node_unsqueeze_2', 'node_view', 'node_unsqueeze_7',
     'node__to_copy_2', 'node_matmul', 'node_transpose', 'node_cat_1',
     'node_cos_1', 'node_sin_1', 'node__to_copy_3', 'node__to_copy_4',
 ]
-REWIRES = {'_to_copy_3': 'rope_cos_slice', '_to_copy_4': 'rope_sin_slice'}
+CHAIN_FP32 = [
+    'node_arange_1', 'node_unsqueeze_2', 'node_view', 'node_unsqueeze_7',
+    'node__to_copy_1', 'node_matmul', 'node_transpose', 'node_cat_1',
+    'node_cos_1', 'node_sin_1',
+]
+
+# The consumer of the rope table tells us which export we are looking at.
+unsq9 = nodes_by_name.get('node_unsqueeze_9')
+unsq10 = nodes_by_name.get('node_unsqueeze_10')
+if unsq9 is None or unsq10 is None:
+    raise SystemExit('expected node missing: node_unsqueeze_9/node_unsqueeze_10')
+src_cos, src_sin = unsq9.input[0], unsq10.input[0]
+if (src_cos, src_sin) == ('_to_copy_3', '_to_copy_4'):
+    VARIANT, CHAIN, TABLE_DTYPE = 'fp16', CHAIN_FP16, np.float16
+    REWIRES = {'_to_copy_3': 'rope_cos_slice', '_to_copy_4': 'rope_sin_slice'}
+elif (src_cos, src_sin) == ('cos_1', 'sin_1'):
+    VARIANT, CHAIN, TABLE_DTYPE = 'fp32', CHAIN_FP32, np.float32
+    REWIRES = {'cos_1': 'rope_cos_slice', 'sin_1': 'rope_sin_slice'}
+else:
+    raise SystemExit(
+        f'unrecognized rope chain: node_unsqueeze_9 <- {src_cos}, '
+        f'node_unsqueeze_10 <- {src_sin}')
 
 for name in CHAIN:
     if name not in nodes_by_name:
@@ -56,26 +82,27 @@ if 'sym_size_int_5' not in {o for n in g.node for o in n.output}:
 
 # sanity: chain tensors have exactly the consumers we expect, so removal is safe
 producers = {o: n for n in g.node for o in n.output}
-expected_consumers = {
-    'arange_1': 1, 'unsqueeze_2': 1, 'view': 1, 'unsqueeze_7': 1,
-    '_to_copy_2': 1, 'matmul': 1, 'transpose': 1, 'cat_1': 2,
-    'cos_1': 1, 'sin_1': 1, '_to_copy_3': 1, '_to_copy_4': 1,
-}
+expected_consumers = {}
+for name in CHAIN:
+    for out in nodes_by_name[name].output:
+        # cat_1 feeds cos_1 and sin_1; every other chain tensor has one consumer
+        expected_consumers[out] = 2 if out == 'cat_1' else 1
 for tensor, want in expected_consumers.items():
     got = sum(1 for n in g.node if tensor in n.input and n is not producers.get(tensor))
     if got != want:
         raise SystemExit(f'{tensor}: expected {want} consumer(s), found {got}')
 
-# ---- generate the rope tables (fp64 math, fp32 storage phase, fp16 storage) ----
+# ---- generate the rope tables (fp64 math, fp32-phase emulation) ----
 inv32 = onnx.numpy_helper.to_array(init_by_name['expand_1']).ravel().astype(np.float32)  # [32]
 pos = np.arange(ROPE_TABLE_MAX, dtype=np.float32)
 phase32 = np.outer(pos, inv32)                                   # fp32 product like the fp32 MatMul
 cos32 = np.cos(phase32.astype(np.float64)).astype(np.float32)    # fp32-accurate cos
 sin32 = np.sin(phase32.astype(np.float64)).astype(np.float32)
 # cat_1 duplicated the phases, so the original cos_1/sin_1 have 64 dims with the
-# 32 channels repeated; reproduce that layout exactly.
-cos64 = np.concatenate([cos32, cos32], axis=1).astype(np.float16)  # [MAX,64]
-sin64 = np.concatenate([sin32, sin32], axis=1).astype(np.float16)
+# 32 channels repeated; reproduce that layout exactly. fp16 graphs then had an
+# explicit Cast(FLOAT->FLOAT16); fp32 graphs keep the fp32 values.
+cos64 = np.concatenate([cos32, cos32], axis=1).astype(TABLE_DTYPE)  # [MAX,64]
+sin64 = np.concatenate([sin32, sin32], axis=1).astype(TABLE_DTYPE)
 cos_table = numpy_helper.from_array(cos64.reshape(1, ROPE_TABLE_MAX, 64), 'rope_cos_table')
 sin_table = numpy_helper.from_array(sin64.reshape(1, ROPE_TABLE_MAX, 64), 'rope_sin_table')
 
@@ -114,19 +141,23 @@ for n in g.node:
 
 # drop stale value_info for removed tensors
 vi_by_name = {vi.name: vi for vi in g.value_info}
-for gone in ['arange_1', 'unsqueeze_2', 'view', 'unsqueeze_7', '_to_copy_2',
-             'matmul', 'transpose', 'cat_1', 'cos_1', 'sin_1', '_to_copy_3', '_to_copy_4']:
+for gone in [o for name in CHAIN for o in nodes_by_name[name].output]:
     if gone in vi_by_name:
         g.value_info.remove(vi_by_name[gone])
 
 # drop initializers that only served the removed chain (avoids ORT
 # CleanUnusedInitializersAndNodeArgs warnings on every load)
+STALE_INITS = {
+    'fp16': ['val_26', 'val_27', 'expand_1'],
+    'fp32': ['val_25', 'val_26', 'expand_1'],
+}
 init_names = {i.name for i in g.initializer}
-for gone in ['val_26', 'val_27', 'expand_1']:
+for gone in STALE_INITS[VARIANT]:
     if gone in init_names:
         still_used = any(gone in n.input for n in g.node)
         if not still_used:
             g.initializer.remove(init_by_name[gone])
 
 onnx.save(m, args.output)
-print(f'wrote {args.output}: removed {removed} nodes, added rope tables [{1}x{ROPE_TABLE_MAX}x64] fp16 x2 + 4 glue nodes')
+print(f'wrote {args.output}: {VARIANT} model, removed {removed} nodes, '
+      f'added rope tables [{1}x{ROPE_TABLE_MAX}x64] {np.dtype(TABLE_DTYPE).name} x2 + 4 glue nodes')

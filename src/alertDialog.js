@@ -124,8 +124,23 @@ export function showAlertDialog(message, onClose) {
  * @param {string} message - 要显示的消息
  * @returns {Promise<boolean>} 用户是否点击了确认
  */
-export function showConfirmDialog(message) {
+/**
+ * 显示非阻塞的确认对话框
+ *
+ * @param {string} message
+ * @param {object} [options]
+ * @param {string} [options.okText]     确认按钮文案（默认「确定」）
+ * @param {string} [options.cancelText] 取消按钮文案（默认「取消」）
+ * @param {boolean} [options.danger]    确认按钮是否用危险色（默认 true）。
+ *                                      语义不是"删除"的时候传 false，用主色。
+ * @returns {Promise<boolean>}
+ */
+export function showConfirmDialog(message, options = {}) {
   return new Promise((resolve) => {
+    const okText = options.okText || tOr('common.confirm', 'OK');
+    const cancelText = options.cancelText || tOr('common.cancel', 'Cancel');
+    const danger = options.danger !== false;
+
     const overlay = document.createElement('div');
     overlay.className = 'confirm-dialog-overlay';
     overlay.style.cssText = `
@@ -175,10 +190,10 @@ export function showConfirmDialog(message) {
                       color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
                       box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
                       transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
-        ">${tOr('common.cancel', 'Cancel')}</button>
+        ">${escapeHtml(cancelText)}</button>
         <button class="confirm-ok-btn" style="
           padding: 6px 20px;
-          background: var(--bg-button-danger);
+          background: ${danger ? 'var(--bg-button-danger)' : 'var(--bg-button-primary)'};
           border: none;
           border-radius: 6px;
           clip-path: var(--clip-button, none);
@@ -188,7 +203,7 @@ export function showConfirmDialog(message) {
           transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
                       box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
                       transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
-        ">${tOr('common.confirm', 'OK')}</button>
+        ">${escapeHtml(okText)}</button>
       </div>
     `;
 

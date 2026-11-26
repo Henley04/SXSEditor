@@ -1,21 +1,32 @@
-import { state, dom, trackManager, history } from './state.js';
+import { state, dom, trackManager, history, setTimeDisplay } from './state.js';
 import {
   SINGER_ROW_HEIGHT,
   HEADER_HEIGHT,
+  SAMPLE_RATE,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { setLabel } from '../icons/iconHelper.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, resynthesizePlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
+import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt, markPlayheadFollowActivity, markPlayheadFollowViewportGesture, setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown, markUserViewActivity, pauseFollow, resetFollowAnchor, getMaxFragmentScrollX } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
+import { exportProjectMidi } from './midiExport.js';
+import { showMcpSetupDialog } from './mcpSetupDialog.js';
+import { showEnvCheckDialog } from './envCheckDialog.js';
+import { appendPluginContextItems, pluginContextItems } from './plugins/contributionContextMenu.js';
 
 // Click-vs-drag tracking for fragment selection
 let _clickStartPos = null;
 const CLICK_THRESHOLD = 3;
+
+// 拖拽期间同步分片边界给编辑器的节流间隔。每个 rAF 都 invoke 一次
+// updateFragmentBounds 会带来持续的跨进程开销；30Hz 足够让编辑器跟随，
+// mouseup 时 finishDrag 再做一次精确同步。
+const BOUNDS_SYNC_INTERVAL_MS = 32;
+let _lastBoundsSyncAt = -Infinity;
 
 // Playhead drag state — 拖拽进度条时记录是否在拖拽 playhead
 let _isPlayheadDragging = false;
@@ -24,6 +35,10 @@ let _isPlayheadDragging = false;
 let _wasPlayingBeforeDrag = false;
 // Playhead tooltip 元素（懒创建）
 let _playheadTooltip = null;
+// 非拖拽悬停 mousemove 的 rAF 合并：只保留最新一次坐标，
+// 每帧最多更新一次 tooltip / cursor，避免高频事件里反复做命中测试与样式写。
+let _hoverRaf = 0;
+let _hoverPending = null;
 
 // fragmentContainer 的 bounding rect 缓存。mousemove / wheel 是高频路径，
 // 每次都 getBoundingClientRect() 会强制同步 layout（reflow），造成明显掉帧。
@@ -51,6 +66,17 @@ export function _invalidateContainerRect() {
 // _playheadDragPendingSeconds 记录最新一次 mousemove 计算出的秒数，供 rAF 回调读取。
 let _playheadDragRaf = 0;
 let _playheadDragPendingSeconds = 0;
+
+// 拖动播放头到视口边缘时按距离加速自动滚屏（DAW 行为）。
+const EDGE_SCROLL_ZONE_PX = 32;
+const EDGE_SCROLL_MAX_SPEED_PX_S = 1500;
+const EDGE_SCROLL_MAX_DT_S = 0.05;
+let _edgeScrollRaf = 0;
+let _edgeScrollLastTs = 0;
+// P3: 滚到边界后循环会停；只有指针曾回到中间区再进入边缘才重启，避免边界处每帧空转。
+let _edgeScrollWasCentered = true;
+// 最近一次拖拽指针位置（clientX），供边缘滚屏每帧重算世界坐标。
+let _dragClientX = 0;
 
 function _ensurePlayheadTooltip() {
   if (_playheadTooltip && document.body.contains(_playheadTooltip)) return _playheadTooltip;
@@ -96,6 +122,32 @@ function _getCurrentPlayheadX() {
 }
 
 /**
+ * 非拖拽悬停的合并刷新：读取最新一次 mousemove 坐标，更新光标 / tooltip。
+ * 拖拽或 playhead 拖拽开始后直接丢弃，避免与拖拽路径抢状态。
+ */
+function _processHoverMove() {
+  _hoverRaf = 0;
+  const pending = _hoverPending;
+  _hoverPending = null;
+  if (!pending || _isPlayheadDragging || state.dragState) return;
+
+  const x = _mouseToCanvasX(pending);
+  const y = _mouseToCanvasY(pending);
+  const playheadX = _getCurrentPlayheadX();
+  // 空工程 / 0 秒 / 未播放时播放头同样可见可拖（DAW 契约），不再用音频/位置前置条件。
+  const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
+  const onHeader = y <= HEADER_HEIGHT;
+  if (onPlayhead || onHeader) {
+    dom.fragmentCanvas.style.cursor = 'ew-resize';
+    const tipSeconds = _canvasXToClampedSeconds(x);
+    _showPlayheadTooltip(pending.clientX, pending.clientY, tipSeconds);
+  } else {
+    dom.fragmentCanvas.style.cursor = 'default';
+    _hidePlayheadTooltip();
+  }
+}
+
+/**
  * 把鼠标事件的 clientX 转换为 fragment canvas 内部 X 坐标。
  * Canvas is viewport-sized, so convert viewport coordinates back to the
  * virtual timeline by adding the current scroll offset.
@@ -121,7 +173,7 @@ function _canvasXToClampedSeconds(x) {
   if (!audioData || audioData.length === 0) {
     return Math.max(0, seconds);
   }
-  const duration = audioData.length / 24000; // SAMPLE_RATE
+  const duration = audioData.length / SAMPLE_RATE;
   // 短音频 fallback：若音频本身不足 100ms，余量缩减到 duration / 2
   const margin = duration > 0.1 ? 0.05 : duration * 0.5;
   return Math.max(0, Math.min(duration - margin, seconds));
@@ -136,7 +188,7 @@ function _canvasXToClampedSeconds(x) {
  */
 function _updatePlayheadVisual(seconds) {
   state.playbackPauseOffset = seconds;
-  dom.timeDisplay.textContent = formatTime(seconds);
+  setTimeDisplay(formatTime(seconds));
   _playheadDragPendingSeconds = seconds;
   if (!_playheadDragRaf) {
     _playheadDragRaf = requestAnimationFrame(() => {
@@ -153,6 +205,7 @@ function _updatePlayheadVisual(seconds) {
 function _endPlayheadDrag() {
   if (!_isPlayheadDragging) return;
   _isPlayheadDragging = false;
+  _stopEdgeScroll();
   _detachPlayheadDragWindowListeners();
   _hidePlayheadTooltip();
   if (_playheadDragRaf) {
@@ -160,10 +213,97 @@ function _endPlayheadDrag() {
     _playheadDragRaf = 0;
   }
   drawPausedPlayheadAt(state.playbackPauseOffset);
+  // 松手：以新视口/新播放头位置重建跟随锚点，避免下一帧立即跳页。
+  resetFollowAnchor();
   if (_wasPlayingBeforeDrag) {
     _wasPlayingBeforeDrag = false;
-    startAudioPlayback(state.playbackPauseOffset);
+    if (state.isSynthesizing) {
+      // 流式推理进行中拖拽播放头：此刻没有任何可复用的整段音频（chunk 是边合成
+      // 边播、播完即丢的），startAudioPlayback 会因 currentAudioData 为空而静默
+      // return —— 界面就卡在"暂停"：播放头停在新位置，按 Play 也没反应
+      // （playAll 的 isSynthesizing 重入保护把点击吞掉），只能等推理自己跑完。
+      // 这里直接放弃这一轮、从拖拽位置重来：主进程的分段缓存让已经推理过的
+      // 分段几乎瞬时命中，不会再从零算一遍。
+      // 注意不能看 getTransportState()：pausePlayback 已经把传输条改成 PAUSED，
+      // 这里只能靠 state.isSynthesizing 判断"还有一轮推理在跑"。
+      void playAll();
+    } else if (hasReusablePlaybackAudio()) {
+      // 与 btnPlay 同一套判定：输入已经变了的话，续播旧 buffer 就是播错声音，
+      // 此时走 playAll 重新合成（主进程分段缓存让已算过的部分几乎瞬时命中）。
+      startAudioPlayback(state.playbackPauseOffset);
+    } else {
+      void playAll();
+    }
   }
+}
+
+// 边缘自动滚屏：以 fragmentContainer 的视口为边界，指针距边缘越近滚动越快。
+// 与「分页跟随」互斥——拖拽开始已 pauseFollow()，tickPlayheadFollow 在拖拽态直接 return。
+function _applyEdgeScrollAtPointer() {
+  const rect = _getFragmentContainerRect();
+  const left = rect.left;
+  const right = rect.right;
+  // 距离越深速度越大：边缘处为 0，Zone 边界处为 MAX（近边缘慢、越往里越快）
+  let dir = 0;
+  let speed = 0;
+  if (_dragClientX < left + EDGE_SCROLL_ZONE_PX) {
+    const depth = Math.max(0, Math.min(EDGE_SCROLL_ZONE_PX, (left + EDGE_SCROLL_ZONE_PX) - _dragClientX));
+    dir = -1;
+    speed = (depth / EDGE_SCROLL_ZONE_PX) * EDGE_SCROLL_MAX_SPEED_PX_S;
+  } else if (_dragClientX > right - EDGE_SCROLL_ZONE_PX) {
+    const depth = Math.max(0, Math.min(EDGE_SCROLL_ZONE_PX, _dragClientX - (right - EDGE_SCROLL_ZONE_PX)));
+    dir = 1;
+    speed = (depth / EDGE_SCROLL_ZONE_PX) * EDGE_SCROLL_MAX_SPEED_PX_S;
+  }
+  return { dir, speed };
+}
+
+function _edgeScrollTick(ts) {
+  if (!_isPlayheadDragging) { _edgeScrollRaf = 0; return; }
+  // dt 上限：窗口挂起后第一帧可能间隔很久，钳住避免一次跳一大段。
+  const dt = _edgeScrollLastTs
+    ? Math.min(EDGE_SCROLL_MAX_DT_S, Math.max(0, (ts - _edgeScrollLastTs) / 1000))
+    : 0;
+  _edgeScrollLastTs = ts;
+
+  const { dir, speed } = _applyEdgeScrollAtPointer();
+  if (dir !== 0 && speed > 0 && dt > 0) {
+    const prevScroll = state.fragmentScrollX;
+    const maxScroll = getMaxFragmentScrollX();
+    const nextScroll = Math.max(0, Math.min(maxScroll, prevScroll + dir * speed * dt));
+    if (nextScroll !== prevScroll) {
+      state.fragmentScrollX = nextScroll;
+      // 关键顺序：先用最新指针位置 + 新 scrollX 算出时间、更新 playbackPauseOffset 与
+      // _lastPlayheadSeconds（drawPausedPlayheadAt 内部会写），再重绘时间轴。
+      // 若先 render 再更新，会用旧位置画一帧播放头，产生跳动。
+      const x = _dragClientX - _getFragmentCanvasRect().left + state.fragmentScrollX;
+      _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+      // 立即同步绘制一次，确保边缘滚屏时播放头始终跟手（不等下一次 rAF）。
+      state.playbackPauseOffset = _playheadDragPendingSeconds;
+      drawPausedPlayheadAt(state.playbackPauseOffset);
+      renderFragmentTimeline();
+    }
+    // 到达滚动上限且无法继续：停止循环（方向被 clamp 掉）
+    if (nextScroll === prevScroll && (dir < 0 ? prevScroll <= 0 : prevScroll >= maxScroll)) {
+      _edgeScrollRaf = 0;
+      return;
+    }
+  }
+  _edgeScrollRaf = requestAnimationFrame(_edgeScrollTick);
+}
+
+function _startEdgeScroll() {
+  if (_edgeScrollRaf) return;
+  _edgeScrollLastTs = 0;
+  _edgeScrollRaf = requestAnimationFrame(_edgeScrollTick);
+}
+
+function _stopEdgeScroll() {
+  if (_edgeScrollRaf) {
+    cancelAnimationFrame(_edgeScrollRaf);
+    _edgeScrollRaf = 0;
+  }
+  _edgeScrollLastTs = 0;
 }
 
 // Window 级拖拽跟踪：playhead 拖拽期间把 mousemove/mouseup 挂到 window，
@@ -174,8 +314,18 @@ function _endPlayheadDrag() {
 // 速度），造成归零残留约 0.08~0.13s。
 function _onWindowPlayheadDragMove(e) {
   if (!_isPlayheadDragging) return;
+  _dragClientX = e.clientX;
   const x = _mouseToCanvasX(e);
   _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+  // P3: 滚到边界后循环已停（_edgeScrollRaf=0）。若指针回到中间区再进入边缘，
+  // 重启滚屏循环；仅在中间区重置标志，避免停在边界时每帧启停空转。
+  const { dir } = _applyEdgeScrollAtPointer();
+  if (dir === 0) {
+    _edgeScrollWasCentered = true;
+  } else if (_edgeScrollWasCentered && !_edgeScrollRaf) {
+    _edgeScrollWasCentered = false;
+    _startEdgeScroll();
+  }
 }
 function _onWindowPlayheadDragUp() {
   _endPlayheadDrag();
@@ -185,11 +335,14 @@ function _attachPlayheadDragWindowListeners() {
   window.addEventListener('mouseup', _onWindowPlayheadDragUp);
   // 兜底：拖拽中窗口失焦（如 Alt+Tab）时收尾，避免拖拽状态卡死
   window.addEventListener('blur', _onWindowPlayheadDragUp);
+  // pointercancel：触控/笔被系统取消时同样收尾并停掉边缘滚屏
+  window.addEventListener('pointercancel', _onWindowPlayheadDragUp);
 }
 function _detachPlayheadDragWindowListeners() {
   window.removeEventListener('mousemove', _onWindowPlayheadDragMove);
   window.removeEventListener('mouseup', _onWindowPlayheadDragUp);
   window.removeEventListener('blur', _onWindowPlayheadDragUp);
+  window.removeEventListener('pointercancel', _onWindowPlayheadDragUp);
 }
 
 // BPM and time signature inputs
@@ -207,19 +360,46 @@ dom.timeSigDen.addEventListener('change', () => {
 });
 
 // Transport controls
+//
+// 三个按钮的语义严格分工（状态派生见 renderer/transport.js）：
+//   Play  —— idle/paused：合成并播放、或从暂停位置继续；合成中：**取消**
+//   Pause —— 仅播放中可用
+//   Stop  —— 任何有音频/有任务的状态可用，回到起点
+// 此前 Pause 在暂停态还兼了一份"继续播放"的职责，与 Play 完全重复，
+// 视觉上表现为并排两个播放图标，因此这里删掉了那个分支。
 dom.btnPlay.addEventListener('click', async () => {
+  const st = getTransportState();
+  // 合成/加载模型期间，Play 是"取消"（按钮本身保持可点，不再 disabled ——
+  // 否则用户在数秒的等待里没有任何出口）。
+  if (st === TRANSPORT.SYNTHESIZING || st === TRANSPORT.LOADING) {
+    stopPlayback();
+    return;
+  }
+  if (st === TRANSPORT.PLAYING) return; // 播放中由 Pause 接管
+
   const fragments = trackManager.getFragments();
-  if (fragments.length === 0) {
+  // 仅伴奏轨、无分片的工程也必须能播放（playAll 已支持纯伴奏路径）。
+  const hasAccompaniment = trackManager.getSingers().some(s => s.type === 'accompaniment');
+  if (fragments.length === 0 && !hasAccompaniment) {
     const { showAlertDialog } = await import('../alertDialog.js');
     showAlertDialog(t('main.noFragmentsToPlay'));
     return;
   }
-  if (state.isPlaying || state.isSynthesizing) {
+  // 还有一轮推理在跑（流式播放中被拖拽/暂停后传输条已是 PAUSED，不再是
+  // SYNTHESIZING，上面的"取消"分支拦不住）：Play 必须放弃旧会话、从当前起点
+  // 重来。不能走下面的"有缓存就续播"——currentAudioData 要么为空（首轮流式），
+  // 要么是上一轮的旧混音，与正在推理的内容不一致。
+  if (state.isSynthesizing) {
+    await playAll();
     return;
   }
-  // 已有缓存的合成音频：从暂停位置恢复播放（无需重新合成）。
-  // stopPlayback / 自然结束时 currentAudioData 会被置 null，下次点击 Play 会重新合成。
-  if (state.currentAudioData && state.currentAudioData.length > 0) {
+  // 已有缓存、且缓存对应的输入就是当前输入：从暂停位置恢复播放（无需重新合成）。
+  // 只看 currentAudioData 非空是不够的 —— 分片被拖到别的歌手轨道、音符/音高
+  // 曲线/音色文件改过之后，这份音频仍然是"改动前"的，直接续播就是播错声音。
+  // 判定交给 hasReusablePlaybackAudio()（签名对比，见 renderer/audioSignature.js）。
+  // 停止只复位播放位置，不再丢弃渲染结果 —— 再按 Play 会直接续播；输入改过
+  // 时签名失配，仍会重新合成。想在同输入下再要一版，用 Retake。
+  if (hasReusablePlaybackAudio()) {
     await startAudioPlayback(state.playbackPauseOffset);
   } else {
     await playAll();
@@ -227,17 +407,19 @@ dom.btnPlay.addEventListener('click', async () => {
 });
 
 dom.btnPause.addEventListener('click', async () => {
-  if (state.isPlaying) {
-    pausePlayback();
-  } else if (state.currentAudioData && state.currentAudioData.length > 0) {
-    await startAudioPlayback(state.playbackPauseOffset || 0);
-    setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
-  }
+  if (state.isPlaying) pausePlayback();
 });
 
 dom.btnStop.addEventListener('click', () => {
   stopPlayback();
-  dom.timeDisplay.textContent = formatTime(0);
+  setTimeDisplay(formatTime(0));
+});
+
+// 重新合成（AI Retake）：同输入重跑一遍，拿不同噪声下的另一版演唱。
+// 与 Stop + Play 的区别在于它主动丢弃缓存，不依赖运行期随机性 —— 否则
+// 主进程 mel 缓存会直接命中，用户点十次也听不到任何变化。
+dom.btnRetake.addEventListener('click', () => {
+  void resynthesizePlayback();
 });
 
 // Project save/load/export
@@ -248,11 +430,16 @@ dom.btnLoad.addEventListener('click', async () => {
 });
 
 dom.btnExport.addEventListener('click', async () => {
+  // 空工程时按钮已置灰（title 说明原因），这里只是兜底，避免快捷键/脚本绕过
+  if (!isExportAvailable()) return;
   await exportAll();
 });
 
 if (dom.btnExportLrc) {
-  dom.btnExportLrc.addEventListener('click', exportProjectLrc);
+  dom.btnExportLrc.addEventListener('click', () => {
+    if (!isExportAvailable()) return;
+    exportProjectLrc();
+  });
 }
 
 // Add singer
@@ -275,11 +462,9 @@ dom.btnOpenSingerMarket.addEventListener('click', () => {
   }
 });
 
-// Audio to MIDI
-dom.btnAudioToMidi.addEventListener('click', handleAudioToMidi);
-
-// Import MIDI file (multi-track → one singer per track)
-dom.btnImportMidi.addEventListener('click', handleImportMidi);
+// 「导入 MIDI」「音频转 MIDI」由 Electron 原生「文件」菜单发信号触发，
+// 注册见下方 onMainMenuImportMidiRequest / onMainMenuAudioToMidiRequest，
+// 不再有横向工具栏按钮的点击绑定。
 
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {
@@ -301,8 +486,8 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   // 拖拽期间只更新视觉（不重启 source），mouseup 时若之前在播放则恢复播放。
   if (e.button === 0) {
     const playheadX = _getCurrentPlayheadX();
-    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
-      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+    // 与悬停命中一致：0 秒 / 空工程也能点击 header 定位、拖动播放头。
+    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
     const onHeader = y <= HEADER_HEIGHT;
     if (onPlayhead || onHeader) {
       const newSeconds = _canvasXToClampedSeconds(x);
@@ -313,7 +498,12 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
         _wasPlayingBeforeDrag = false;
       }
       _isPlayheadDragging = true;
+      _dragClientX = e.clientX;
+      // 拖拽期间暂停分页跟随，启动边缘自动滚屏；松手时 resetFollowAnchor() 重建锚点。
+      pauseFollow();
+      _edgeScrollWasCentered = true;
       _attachPlayheadDragWindowListeners();
+      _startEdgeScroll();
       _updatePlayheadVisual(newSeconds);
       _hidePlayheadTooltip();
       return;
@@ -373,23 +563,9 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
   if (_isPlayheadDragging) return;
 
   if (!state.dragState) {
-    // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
-    // 虚拟坐标系（与 mousedown/绘制侧一致），漏加 scrollX 会导致滚动后命中错位
-    const x = _mouseToCanvasX(e);
-    const y = _mouseToCanvasY(e);
-    const playheadX = _getCurrentPlayheadX();
-    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
-      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
-    const onHeader = y <= HEADER_HEIGHT;
-    if (onPlayhead || onHeader) {
-      dom.fragmentCanvas.style.cursor = 'ew-resize';
-      const tipSeconds = _canvasXToClampedSeconds(x);
-      _showPlayheadTooltip(e.clientX, e.clientY, tipSeconds);
-      return;
-    } else {
-      dom.fragmentCanvas.style.cursor = 'default';
-      _hidePlayheadTooltip();
-    }
+    // 非拖拽悬停：合并到下一帧统一处理，只保留最新坐标。
+    _hoverPending = { clientX: e.clientX, clientY: e.clientY };
+    if (!_hoverRaf) _hoverRaf = requestAnimationFrame(_processHoverMove);
     return;
   }
 
@@ -446,12 +622,18 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
         }
       }
       renderFragmentTimeline();
+      // 跨进程同步降频：拖拽期间每 ~32ms 一次，mouseup 的 finishDrag
+      // 仍会做最终精确同步（含换轨路由），编辑器跟随观感不受影响。
       if (window.electronAPI?.updateFragmentBounds && state.dragState?.fragment) {
-        const frag = state.dragState.fragment;
-        window.electronAPI.updateFragmentBounds(frag.id, {
-          startTime: frag.startTime,
-          duration: frag.duration,
-        });
+        const now = performance.now();
+        if (now - _lastBoundsSyncAt >= BOUNDS_SYNC_INTERVAL_MS) {
+          _lastBoundsSyncAt = now;
+          const frag = state.dragState.fragment;
+          window.electronAPI.updateFragmentBounds(frag.id, {
+            startTime: frag.startTime,
+            duration: frag.duration,
+          });
+        }
       }
       state.renderPending = false;
     });
@@ -503,6 +685,12 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
   finishDrag();
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
+  // 丢弃尚未执行的悬停刷新，避免鼠标已离开后又被 rAF 重新弹出 tooltip。
+  if (_hoverRaf) {
+    cancelAnimationFrame(_hoverRaf);
+    _hoverRaf = 0;
+  }
+  _hoverPending = null;
   if (state.dragState?.type === 'move-accompaniment') {
     markDirty();
     state.dragState = null;
@@ -575,7 +763,22 @@ dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
       }
     }
   }
+
+  // 空白处右击：宿主没有内置菜单，但插件可能声明了 canvas 区域的项。
+  // 没有插件项时什么都不做（不弹一个空菜单）。
+  showPluginContextMenu(e.clientX, e.clientY, 'canvas', { hasSelection: false });
 });
+
+// 歌手列表右键：插件可以在某个歌手行上提供"用它做点什么"的入口。
+// 用事件委托而不是给每一行挂监听 —— 列表每次 refreshAll 都会重建。
+dom.singerListEl.addEventListener('contextmenu', (e) => {
+  const row = e.target && e.target.closest ? e.target.closest('.singer-item[data-singer-id]') : null;
+  if (!row) return;
+  if (!pluginContextItems('singer', { hasSelection: true }).length) return;
+  e.preventDefault();
+  showPluginContextMenu(e.clientX, e.clientY, 'singer', { hasSelection: true });
+});
+
 
 // Wheel events: rAF-coalesced to avoid layout thrash on high-frequency trackpad scroll.
 // 关键：同一帧内的多个 wheel 事件必须「累加」delta —— 若只保留最后一个，
@@ -648,6 +851,53 @@ dom.fragmentContainer.addEventListener('wheel', (e) => _pushWheel(e, dom.fragmen
 
 dom.singerListEl.addEventListener('wheel', (e) => _pushWheel(e, dom.singerListEl), { passive: false });
 
+// ==================== 播放头分页跟随的用户活动门控 ====================
+// 跟随的规则是"用户前 3s 内无操作才许动视口"，所以窗口侧必须能回答两个问题：
+//   1) 用户最后一次操作是什么时候？
+//   2) 指针是否正按着（拖音符 / 拖播放头 / 拖区间 >3s 也不能被拽走）？
+//
+// 用 window 捕获阶段监听：捕获先于各元素自己的 handler 触发，事件被
+// stopPropagation 也不会漏。这里只观察，不改事件流、不 preventDefault。
+(function _installPlayheadFollowActivityTracking() {
+  // 只有真正作用于时间轴/画布的操作才算"动视口"（会立刻终止在途动画）；
+  // 点按钮、按键只算"用户在场"，同样等 3s。
+  const isViewportTarget = (target) => {
+    if (!target) return false;
+    if (target === dom.fragmentCanvas) return true;
+    return !!(dom.fragmentContainer && dom.fragmentContainer.contains(target));
+  };
+
+  window.addEventListener('pointerdown', (e) => {
+    markPlayheadFollowActivity();
+    setPlayheadFollowPointerDown(true);
+    if (isViewportTarget(e.target)) markPlayheadFollowViewportGesture();
+  }, true);
+
+  const release = () => setPlayheadFollowPointerDown(false);
+  window.addEventListener('pointerup', release, true);
+  window.addEventListener('pointercancel', release, true);
+  // 焦点被原生窗口/对话框抢走时 pointerup 可能永远不到：失焦即视为松手。
+  window.addEventListener('blur', () => clearPlayheadFollowPointerDown());
+
+  // 自愈：左键已不在按下状态却收到移动（pointerup 丢失）。**不能**走
+  // setPointerDown(false) —— 那会把"光标在窗口里晃"记成用户操作，
+  // 于是一直晃就一直不跟随。clearPointerDown 不碰空闲计时。
+  window.addEventListener('mousemove', (e) => {
+    if (e.buttons === 0) clearPlayheadFollowPointerDown();
+  }, true);
+
+  window.addEventListener('wheel', (e) => {
+    if (isViewportTarget(e.target)) {
+      // 滚轮/缩放：进入状态机的计时抑制窗口，并终止在途分页动画。
+      markUserViewActivity();
+    } else {
+      markPlayheadFollowActivity();
+    }
+  }, { capture: true, passive: true });
+
+  window.addEventListener('keydown', () => markPlayheadFollowActivity(), true);
+})();
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -711,6 +961,34 @@ if (window.electronAPI?.onMainMenuSaveAsRequest) {
   const off2 = window.electronAPI.onMainMenuSaveAsRequest(() => { saveProjectAs(); });
   if (state._ipcCleanups) state._ipcCleanups.push(off2);
 }
+// 文件菜单 → 导出项目为 MIDI（每歌手一轨）。与"导出 LRC"并列，都是把
+// 工程里的**音符**交给别的软件，只是格式不同。
+if (window.electronAPI?.onMainMenuExportMidiRequest) {
+  const off3 = window.electronAPI.onMainMenuExportMidiRequest(() => { void exportProjectMidi(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(off3);
+}
+// 文件菜单 → 导入 MIDI / 音频转 MIDI。原先这两个低频动作收在横向工具栏的
+// ⋯ 弹出层里，现改为原生菜单常驻；处理函数与旧按钮完全相同，只是入口变了。
+if (window.electronAPI?.onMainMenuImportMidiRequest) {
+  const offImportMidi = window.electronAPI.onMainMenuImportMidiRequest(() => { void handleImportMidi(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offImportMidi);
+}
+if (window.electronAPI?.onMainMenuAudioToMidiRequest) {
+  const offAudioToMidi = window.electronAPI.onMainMenuAudioToMidiRequest(() => { void handleAudioToMidi(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offAudioToMidi);
+}
+// 帮助菜单 → MCP 连接：主进程只发一个「请打开」事件，路径探测与 prompt 生成
+// 都在渲染层完成，避免在菜单点击的同步回调里做文件 IO。
+if (window.electronAPI?.onMainMenuMcpSetupRequest) {
+  const offMcpSetup = window.electronAPI.onMainMenuMcpSetupRequest(() => { void showMcpSetupDialog(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offMcpSetup);
+}
+// 帮助 → 环境检测：弹层自己 invoke 取快照与探测结果，菜单回调只负责「请打开」。
+// 系统信息读取放在异步 invoke 里，不占菜单点击的同步回调。
+if (window.electronAPI?.onMainMenuEnvCheckRequest) {
+  const offEnvCheck = window.electronAPI.onMainMenuEnvCheckRequest(() => { void showEnvCheckDialog(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(offEnvCheck);
+}
 
 // 模态设置窗口打开时自动暂停播放：模态窗口会禁用主窗口输入（无法点击
 // 暂停/停止），但 WebAudio 播放、流式推理与 underrun 恢复仍在后台继续，
@@ -719,7 +997,10 @@ if (window.electronAPI?.onMainMenuSaveAsRequest) {
 // 可点击"继续"从暂停点恢复；后台流式合成不受影响，完成后可正常续播。
 if (window.electronAPI?.onSettingsWindowOpened) {
   const offSettingsPause = window.electronAPI.onSettingsWindowOpened(() => {
-    if (state.isPlaying) pausePlayback();
+    // 无条件调用：pausePlayback 内部会兜底停掉可能残留的独占输出。
+    // 回执超时时 state.isPlaying 已经是 false，旧的 `if (state.isPlaying)`
+    // 守卫会让设置窗口打开时那路幽灵播放继续响。
+    pausePlayback();
   });
   if (state._ipcCleanups) state._ipcCleanups.push(offSettingsPause);
 }
@@ -732,6 +1013,36 @@ function hideFragmentContextMenu() {
     _fragmentCtxMenu.remove();
     _fragmentCtxMenu = null;
   }
+}
+
+/** 挂上菜单并装好"点外面关闭"。两个入口（分片 / 插件）共用，避免行为漂移。 */
+function mountContextMenu(menu) {
+  document.body.appendChild(menu);
+  _fragmentCtxMenu = menu;
+  const closeHandler = (e) => {
+    if (!menu.contains(e.target)) {
+      hideFragmentContextMenu();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  // 延迟到下一轮事件循环：否则本次 contextmenu 之后紧跟的 click 会立刻关掉它
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+/**
+ * 只含插件项的菜单（画布空白处 / 歌手行）。返回是否真的弹出了菜单 ——
+ * 没有插件项时调用方不应该 preventDefault，让系统默认菜单照常出现。
+ */
+function showPluginContextMenu(clientX, clientY, area, extraContext) {
+  if (!pluginContextItems(area, extraContext).length) return false;
+  hideFragmentContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'fragment-ctx-menu';
+  menu.style.left = clientX + 'px';
+  menu.style.top = clientY + 'px';
+  if (!appendPluginContextItems(menu, area, { extraContext })) return false;
+  mountContextMenu(menu);
+  return true;
 }
 
 function showFragmentContextMenu(clientX, clientY, fragment) {
@@ -753,17 +1064,9 @@ function showFragmentContextMenu(clientX, clientY, fragment) {
   });
 
   menu.appendChild(deleteItem);
-  document.body.appendChild(menu);
-  _fragmentCtxMenu = menu;
-
-  // Close on click outside
-  const closeHandler = (e) => {
-    if (!menu.contains(e.target)) {
-      hideFragmentContextMenu();
-      document.removeEventListener('click', closeHandler);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+  // 插件项接在宿主项之后：宿主自己的动作位置固定，插件多装几个也不会把"删除"挤走
+  appendPluginContextItems(menu, 'fragment', { extraContext: { hasSelection: true } });
+  mountContextMenu(menu);
 }
 
 // ---- Fragment deletion ----

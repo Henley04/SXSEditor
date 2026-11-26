@@ -20,9 +20,17 @@
 #bpm-input {
   width: 58px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--fg-bpm);
   border-color: var(--accent-soft);
   background: var(--accent-softer);
+}
+
+/* 上下箭头挤占数字宽度，BPM 又是三位数，去掉后三位才完整可见 */
+#bpm-input::-webkit-inner-spin-button,
+#bpm-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 #bpm-input:focus {
@@ -110,6 +118,12 @@
   background: var(--bg-button-active);
 }
 
+/* [hidden] 的 UA 规则是 display:none，但上面用 display:flex 覆盖掉了它。
+   空工程时要把 + 收起（主 CTA 是左栏的虚线框），这里显式补回。 */
+#btn-add-singer[hidden] {
+  display: none;
+}
+
 .singer-panel-actions {
   display: flex;
   align-items: center;
@@ -147,6 +161,13 @@
   color: var(--fg-muted);
 }
 
+/* 键盘焦点：空态是主 CTA，必须看得见焦点环（不发光，只用 1px 实线）。 */
+.singer-item-empty:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  color: var(--fg-primary);
+}
+
 .singer-avatar-empty {
   width: 44px;
   height: 44px;
@@ -175,7 +196,7 @@
 }
 
 .singer-item-empty:hover .singer-avatar-placeholder {
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 .singer-info-empty {
@@ -187,6 +208,35 @@
 .singer-empty-text {
   font-size: var(--font-base);
   color: inherit;
+}
+
+/* 空态第二行：说明点击后会打开什么（选音色 / 装新品 / 导入本地） */
+.singer-empty-hint {
+  margin-top: 2px;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+}
+
+/* 空工程：整个左栏只有这一个入口，把它放大并抬到正文色阶
+   （原来用 --fg-disabled，看起来像"不可用"，而它恰恰是唯一能点的东西） */
+.singer-list--empty .singer-item-empty {
+  padding: var(--space-9) 12px;
+  color: var(--fg-secondary);
+}
+
+.singer-list--empty .singer-avatar-empty {
+  width: 56px;
+  height: 56px;
+  border-color: var(--accent);
+}
+
+.singer-list--empty .singer-empty-text {
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+
+.singer-list--empty .singer-item-empty:hover {
+  color: var(--fg-primary);
 }
 
 .singer-item {
@@ -264,6 +314,23 @@
   text-overflow: ellipsis;
 }
 
+/* 双击歌手名替换歌手：可点的东西必须看起来可点（指针 + hover 变色 + 焦点环）。
+   下面一行 .singer-track-name 双击是重命名，两者作用对象不同，所以只给这一行加。 */
+.singer-singer-name--replaceable {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color var(--motion-fast) var(--ease-standard);
+}
+
+.singer-singer-name--replaceable:hover {
+  color: var(--accent);
+}
+
+.singer-singer-name--replaceable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .singer-config {
   font-size: 9px;
   color: var(--fg-disabled);
@@ -276,7 +343,7 @@
 
 .singer-file-missing-warning {
   font-size: var(--font-xs);
-  color: var(--danger);
+  color: var(--danger-fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -308,9 +375,14 @@
 
 /* 行内图标按钮：统一 24×24，扁平（无位移、无缩放、无发光） */
 .btn-fragment-add,
-.btn-singer-delete {
+.btn-singer-delete,
+.btn-track-flag {
   width: 24px;
   height: 24px;
+  /* 通用 button 规则带 padding:8px 20px，border-box 下会把 24px 撑成 42px：
+     四个按钮并排就是 180px，240px 的歌手栏里信息区直接被压到 0。
+     行内图标按钮靠 flex 居中，不需要内边距。 */
+  padding: 0;
   background: var(--bg-button);
   color: var(--fg-muted);
   border: 1px solid var(--button-secondary-border);
@@ -334,6 +406,53 @@
 
 .btn-fragment-add:active {
   background: var(--bg-button-active);
+}
+
+/* 轨道开关（M / S）：默认与 +/× 同一套扁平外观，开启时用语义色区分。
+   静音走警示色、独奏走强调色 —— 两者语义不同，不能共用一种高亮。
+   尺寸刻意压到 16px，且独占信息区底部一行：不占动作区的横向宽度。
+   若把它们放回 .singer-item-actions 与 +/× 并排，动作区会重新吃掉
+   信息区宽度，三行文字又会退化成一片省略号。 */
+.singer-track-flags {
+  display: flex;
+  gap: 3px;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.btn-track-flag {
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.btn-track-mute.is-on {
+  background: var(--warning-soft);
+  color: var(--warning-fg);
+  border-color: var(--warning-line);
+}
+
+.btn-track-solo.is-on {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+/* 关闭态给一点 hover 反馈，但不用 + 按钮那种实心强调色 —— 这是开关，不是主操作。
+   开启态故意不写 hover 规则：配色一变，用户会以为"再点一下要关掉"。 */
+.btn-track-flag:not(.is-on):hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+}
+
+/* 静音轨整行降权：M 亮起之外，还要一眼看出这条现在不响。
+   M / S 开关本身排除在外，否则"亮起的 M"会被一起压淡，反而读不出状态。 */
+.singer-item.is-muted .singer-avatar,
+.singer-item.is-muted .singer-info > *:not(.singer-track-flags) {
+  opacity: 0.5;
 }
 
 .btn-singer-delete:hover {
@@ -465,7 +584,7 @@
 }
 
 .fragment-ctx-danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 
 .fragment-ctx-danger:hover {
@@ -488,6 +607,85 @@
   overflow: hidden;
 }
 
+/* 顶栏的分组。这里不放任何阴影/发光：弹出层只靠边框与背景色分层，
+   与工程内其余浮层（右键菜单）保持同一套语言。 */
+.toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+
+.toolbar-toggle {
+  cursor: pointer;
+}
+
+.toolbar-popover-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* 4/4 控件：一个按钮，点开才编辑分子/分母 */
+#toolbar .toolbar-timesig {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+#toolbar .toolbar-timesig > .icon {
+  width: 12px;
+  height: 12px;
+  opacity: 0.6;
+}
+
+/* 弹出层：fixed 而不是 absolute —— #toolbar 是 overflow:hidden（窄窗口防溢出），
+   absolute 会被裁掉。坐标由 toolbarPopovers.js 在打开时算。 */
+.toolbar-popover {
+  position: fixed;
+  z-index: 70;
+  min-width: 168px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolbar-popover[hidden] {
+  display: none;
+}
+
+.toolbar-popover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+}
+
+.toolbar-popover-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#toolbar .toolbar-popover input[type="number"] {
+  width: 48px;
+  padding-inline: 4px;
+  text-align: center;
+}
+
+/* ⋯ 溢出层与收在其中的两个 MIDI 按钮已上移到原生「文件」菜单，
+   相关的恢复/触发器样式一并移除。 */
 #toolbar button > .icon {
   flex: 0 0 auto;
 }
@@ -528,15 +726,17 @@
     margin-right: 2px;
   }
   #toolbar input[type="number"] { width: 38px; }
-  #bpm-input { width: 44px; }
+  /* 44px 装不下三位数（BPM 100–999），末尾会被裁掉——用户读到的数字直接是错的。
+     数字输入框的上下箭头在窄屏下没有意义，隐藏后把宽度留给数字本身。 */
+  /* 选择器要带 #toolbar：#toolbar input[type="number"]（1 ID + 1 属性）比
+     裸 #bpm-input（1 ID）更具体，不加会一直吃到 38px。 */
+  #toolbar #bpm-input { width: 52px; font-variant-numeric: tabular-nums; }
   #time-display { min-width: 78px; letter-spacing: 0; }
 }
 
 @media (max-width: 980px) {
   /* Keep transport and project actions identifiable; collapse verbose labels. */
   #btn-export-lrc,
-  #btn-audio-to-midi,
-  #btn-import-midi,
   #btn-open-singer-market {
     width: 28px;
     min-width: 28px;
@@ -544,8 +744,6 @@
     font-size: 0;
   }
   #btn-export-lrc > .icon,
-  #btn-audio-to-midi > .icon,
-  #btn-import-midi > .icon,
   #btn-open-singer-market > .icon {
     width: 14px;
     height: 14px;
@@ -572,4 +770,564 @@
   #toolbar label { font-size: 0; }
   #toolbar label > input { font-size: var(--font-sm); }
   #time-display { min-width: 70px; font-size: var(--font-sm); }
+
+  /* 内置按钮收成纯图标可以被认出来（图标本身就是约定俗成的），插件按钮不行：
+     用户装了什么只有文字能说明，只剩一个音符等于没有信息。这里把字号还回去，
+     用更小的 max-width 让它优先被截断。选择器带 .toolbar-plugin-btn，比
+     `#toolbar button` 更具体，不会被上面的 font-size: 0 盖掉。 */
+  #toolbar .toolbar-plugin-btn {
+    width: auto;
+    min-width: 0;
+    padding-inline: 6px;
+    font-size: var(--font-sm);
+  }
+  #toolbar .toolbar-plugin-btn > .icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 2px;
+  }
+  #toolbar .toolbar-plugin-label { max-width: 72px; }
+}
+
+/* ==========================================================================
+   传输控件（播放/暂停/停止）：仅图标
+   --------------------------------------------------------------------------
+   三个按钮改成图标后每条省下约 30-40px，这部分宽度让给右侧的进度显示。
+   图标按钮固定 30×30，避免不同语言的标签长度影响工具栏布局。
+   ========================================================================== */
+/* 用 #toolbar 提升特异性：components.css 里的 `#toolbar button` 是 ID 选择器，
+   单靠 .transport-btn 会被它的 padding 覆盖（30px 宽塞不下 10px 内边距）。 */
+#toolbar .transport-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+/* 这四个按钮只有图标、没有文字：媒体查询里给「图标+文字」按钮准备的
+   margin-right 会被 flex 一起计入居中，图标因此整体偏左。这里对纯图标
+   按钮归零（选择器特异性高于 `#toolbar button > .icon`，无需 !important）。 */
+#toolbar .transport-btn > .icon {
+  margin-right: 0;
+}
+
+#toolbar .transport-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  /* 注意不要用 pointer-events: none —— 那会让禁用态连原生 title 都不弹，
+     而"为什么这个按钮不能点"恰恰是最需要提示的时候。 */
+}
+
+/* 导出按钮的"空工程"态：用 aria-disabled 而非 disabled，
+   否则 Chromium 不弹 title，用户只知道点不动、不知道为什么。
+   视觉上降到与 transport 禁用态一致（0.35），并禁用 hover 反馈。 */
+#toolbar button.is-unavailable {
+  opacity: 0.35;
+  cursor: default;
+}
+
+#toolbar button.is-unavailable:hover {
+  color: inherit;
+  background: transparent;
+  border-color: transparent;
+}
+
+/* 进度区：DAW 风格的常驻状态条。
+   --------------------------------------------------------------------------
+   始终占据固定宽度。旧实现在空闲时整块 display:none、等待推理时又把进度条
+   hidden 掉，于是两侧控件随文本出现/消失左右横跳 —— 也就是"位置自动更改"。
+   现在宽度固定，文本再长也只被省略号吃掉，进度条的轨道与位置都不动；
+   等待推理（百分比未知）时轨道继续显示、填充停在原处，不会缩回去。 */
+.transport-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  width: 176px;
+  padding-left: 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-muted);
+  /* 数字等宽，进度百分比跳动时不会左右抖 */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.transport-status-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  text-align: right;
+}
+
+.transport-progress {
+  flex: 0 0 auto;
+  width: 88px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-subtle);
+  overflow: hidden;
+}
+
+.transport-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* 工具栏收紧时同步压缩进度区，但绝不整块隐藏 —— 宽度变化只发生在窗口尺寸
+   变化时，不会因为"这次有没有任务在跑"而变化。 */
+@media (max-width: 1500px) {
+  .transport-status { width: 148px; }
+}
+
+@media (max-width: 1180px) {
+  .transport-status { width: 120px; gap: 6px; font-size: 10px; }
+  .transport-progress { width: 48px; }
+}
+
+/* ≤980px 工具栏已收成图标、文本标签全部折叠，再塞一块状态区会把按钮挤出去。
+   这是唯一隐藏它的条件：由窗口宽度决定，与运行状态无关。 */
+@media (max-width: 980px) {
+  .transport-status { display: none; }
+}
+
+/* 播放中：Play 被禁用但保持可见（视觉上表示"正在播放"），由 Pause 接管。
+   禁用态的 0.35 透明度会把"正在播放"这个状态也一起压暗，这里单独恢复。 */
+#toolbar .transport-btn.is-active {
+  opacity: 1;
+  color: var(--accent-fg);
+  border-color: var(--accent);
+  background: var(--accent-softer);
+}
+
+/* ==================== 插件界面贡献点（M2） ==================== */
+/* 视觉约束：只用边框/背景分层，不加阴影与发光，与工具栏弹出层保持一致。 */
+
+.plugin-toolbar-slot {
+  /* 插件按钮多起来时先压缩间距，而不是把 BPM / 导出挤出可视区 */
+  gap: var(--space-1);
+}
+
+.toolbar-plugin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-plugin-label {
+  /* 窄窗口下插件名比内置按钮长得多：截断并靠 title 补全，避免顶栏整体换行 */
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-overlay-layer {
+  position: absolute;
+  inset: 0;
+  /* 在分片画布之上、播放指针之下：z-index 只影响同层定位元素 */
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.plugin-overlay-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border: 0;
+  background: transparent;
+  display: block;
+}
+
+.plugin-toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.plugin-toast {
+  pointer-events: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+  line-height: 1.4;
+  animation: plugin-toast-in 140ms var(--ease-standard);
+}
+
+.plugin-toast.is-warn { border-color: var(--warning); }
+.plugin-toast.is-error { border-color: var(--danger); }
+
+.plugin-toast.is-leaving { opacity: 0; transition: opacity 160ms linear; }
+
+@keyframes plugin-toast-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: 24px;
+  min-height: 24px;
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.status-bar-slot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-bar-slot--right { justify-content: flex-end; }
+
+.status-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.status-bar-item { cursor: pointer; }
+button.status-bar-item:hover { color: var(--fg-primary); text-decoration: underline; }
+button.status-bar-item:disabled { cursor: default; opacity: 0.6; }
+
+.status-bar-text { overflow: hidden; text-overflow: ellipsis; }
+
+/* 小圆点表示"这一条来自插件"，与宿主自有的状态区分开；不额外占宽度 */
+.status-bar-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+/* 插件右键项：复用宿主的菜单外观，但语义是 <button>，需要抹掉浏览器默认按钮样式 */
+.fragment-ctx-divider {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-subtle);
+}
+
+button.fragment-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+}
+
+/* ==================== 模型调用确认窗 ==================== */
+/* 不用阴影/泛光分层：遮罩 + 边框 + 背景色，三种手段够了。 */
+.model-consent-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.model-consent-card {
+  width: min(540px, calc(100vw - 48px));
+  padding: 20px 22px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+}
+
+.model-consent-title {
+  font-size: var(--font-md);
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.model-consent-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0 0 12px;
+  font-size: var(--font-sm);
+}
+
+.model-consent-rows dt {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.model-consent-rows dd {
+  margin: 0;
+  color: var(--fg-primary);
+  word-break: break-all;
+}
+
+.model-consent-hint {
+  padding: 8px 10px;
+  margin-bottom: 16px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  line-height: 1.45;
+}
+
+.model-consent-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.model-consent-countdown {
+  margin-right: auto;
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== 欢迎页 ==================== */
+/* 盖住整个窗口的浮层。z-index 低于对话框层（components.css 的 9999/10000）：
+   「有未保存改动」这类确认框必须能压在欢迎页之上。 */
+.welcome-page {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  padding: var(--space-9) var(--space-10);
+  background: var(--bg-app);
+  overflow: auto;
+}
+
+/* display:flex 会盖掉 hidden 属性，不补这条欢迎页就永久可见 */
+.welcome-page[hidden] {
+  display: none;
+}
+
+/* 左上欢迎语 */
+.welcome-intro {
+  text-align: left;
+}
+
+.welcome-title {
+  margin: 0;
+  font-size: var(--font-2xl);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.welcome-subtitle {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-md);
+  color: var(--fg-muted);
+}
+
+/* 最近工程外框 */
+.welcome-recents {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  align-self: center;
+  width: 100%;
+  max-width: 1100px;
+  min-height: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+/* 框头三栏：左标题 / 中新建工程 / 右打开工程文件 */
+.welcome-recents-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-header-start);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.welcome-recents-title {
+  justify-self: start;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--fg-muted);
+}
+
+.welcome-head-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--font-base);
+  color: var(--fg-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease;
+}
+
+#welcome-btn-new {
+  justify-self: center;
+}
+
+#welcome-btn-open {
+  justify-self: end;
+}
+
+.welcome-head-btn:hover {
+  background: var(--bg-button-hover);
+  border-color: var(--border-strong);
+}
+
+.welcome-head-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.welcome-recents-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 三列：文件名 / 文件路径 / 上一次打开的时间 */
+.welcome-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(240px, 3fr) minmax(140px, auto);
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.welcome-row--head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-header-start);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--fg-muted);
+}
+
+.welcome-row--item {
+  cursor: pointer;
+  transition: background var(--motion-fast) ease;
+}
+
+.welcome-row--item:hover {
+  background: var(--bg-button-hover);
+}
+
+.welcome-row--item:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
+}
+
+.welcome-col {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.welcome-col--name {
+  font-size: var(--font-md);
+  color: var(--fg-primary);
+}
+
+.welcome-col--path {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+}
+
+.welcome-col--time {
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.welcome-empty {
+  margin: 0;
+  padding: var(--space-8) var(--space-5);
+  text-align: center;
+  font-size: var(--font-md);
+  color: var(--fg-muted);
+}
+
+.welcome-close {
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-5);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.welcome-close:hover {
+  color: var(--fg-primary);
+  background: var(--bg-button-hover);
+}
+
+.welcome-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }

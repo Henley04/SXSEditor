@@ -1,5 +1,6 @@
 import '../common.css';
 import '../index.css';
+import './plugins/pluginPanel.css';
 
 // Import state and DOM references (initializes trackManager, history, and DOM elements)
 import './state.js';
@@ -14,12 +15,21 @@ registerMcpAutomation();
 // Import and run initialization
 import { updateProjectSettings } from './projectManager.js';
 import { refreshAll, renderFragmentTimeline } from './timelineRenderer.js';
-import { state, dom } from './state.js';
+import { state, dom, trackManager } from './state.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
+import { TRANSPORT, setTransport } from './transport.js';
 import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
 import { installPluginPlaybackBridge } from './pluginBlockingOverlay.js';
+import { installOpenFromOs, consumePendingOpenFile } from './openFromOs.js';
+import { installPluginPanelHost } from './plugins/pluginPanelHost.js';
+import { installPluginHost } from './plugins/pluginHost.js';
+import { installProjectApplyBridge } from './plugins/projectApplyBridge.js';
+import { installModelConsent } from './plugins/modelConsent.js';
+import { installToolbarPopovers } from './toolbarPopovers.js';
+import { installRecentProjectTracking } from './recentProjects.js';
+import { installWelcomePage, showWelcome } from './welcomePage.js';
 
 // 首屏关键路径之外的工作（图标水合）延后到空闲帧执行，让主窗口更早呈现。
 // 首屏的 i18n 文本替换必须先跑，否则用户会先看到英文再闪成中文。
@@ -29,10 +39,19 @@ const deferIdle = (fn) => {
 };
 
 // Locale first, then icons. applyLocale must not erase hydrated SVG children.
+// i18n 只在这里初始化一次（ipcHandlers.js 不再重复调用）。
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  // 传输按钮的 title/aria-label 由状态机维护，而 applyLocale 会把它们重置成
+  // 静态 data-i18n-title。这里在语言应用后重新派生一次，保证 busy 态下的
+  // "取消推理"文案不会被覆盖回"播放"。
+  setTransport(TRANSPORT.IDLE);
   deferIdle(() => hydrateIcons(document));
+}).catch((err) => {
+  console.error('[Renderer] i18n initialization failed:', err);
+  // i18n 失败也要让传输控件可用，否则三个按钮永远是 disabled
+  setTransport(TRANSPORT.IDLE);
 });
 
 // 任何祖先容器滚动都会让缓存的 getBoundingClientRect 失效（捕获阶段监听，
@@ -58,6 +77,21 @@ initWindowTheme(state._ipcCleanups).then(() => {
   // here made a pristine new project prompt to save immediately on close.
   updateProjectSettings({ markDirty: false });
   refreshAll();
+  // 欢迎页与最近工程记录必须先挂上监听：下面 consumePendingOpenFile() 一旦
+  // 真的打开了文件，就会广播 PROJECT_APPLIED_EVENT，"记一笔历史"和"欢迎页
+  // 不要闪现"都靠它。
+  if (state._ipcCleanups) {
+    state._ipcCleanups.push(installRecentProjectTracking());
+    state._ipcCleanups.push(installWelcomePage());
+  }
+  // 界面就绪后再接管系统投递的文件：先挂监听（运行中被双击），再取一次
+  // （冷启动时文件已经躺在 pending 槽里了，不会走到"有文件"通知）。
+  installOpenFromOs();
+  // 没投递文件 = 常规启动（双击桌面图标 / 从开始菜单打开）→ 显示欢迎页。
+  // 投递的是歌手文件也算"通过文件打开"，同样不显示：用户的意图是打开东西。
+  consumePendingOpenFile().then((opened) => {
+    if (!opened) showWelcome();
+  });
 });
 
 // 插件播放侧接线：阻滞播放浮层 + progress / diagnostics 输出通道。
@@ -68,6 +102,37 @@ if (state._ipcCleanups) {
   state._ipcCleanups.push(installPluginPlaybackBridge({
     getTimeDisplay: () => dom.timeDisplay,
   }));
+}
+
+// 插件系统 v2：工程读写落地端 + iframe 面板宿主。
+// 两者都只挂监听、不主动拉数据 —— 没装插件时零开销（没有 IPC 往返、没有 DOM）。
+// 句柄同样交给 state._ipcCleanups，beforeunload 时统一摘除。
+if (state._ipcCleanups) {
+  state._ipcCleanups.push(installProjectApplyBridge());
+  state._ipcCleanups.push(installPluginPanelHost());
+  // M2 界面贡献点（工具栏 / 状态栏 / 浮层 / 右键菜单 / 快捷键）。
+  // 上下文按需计算：只有当某条贡献声明了 when 时才会被读到，没插件时零成本。
+  // 首次调用某模型端点时的确认窗。装在主窗口，因为插件与 MCP 的调用都发生在
+  // 这个窗口有焦点的时候；没有焦点时主进程直接按拒绝处理，不抢焦点弹框。
+  if (window.electronAPI?.models) {
+    state._ipcCleanups.push(installModelConsent(window.electronAPI.models));
+  }
+  state._ipcCleanups.push(installPluginHost({
+    getContext: () => ({
+      projectOpen: !!state.currentProjectFilePath,
+      hasFragments: trackManager.getFragments().length > 0,
+      hasSelection: !!state.selectedFragmentId,
+      playing: !!state.isPlaying,
+      idle: !state.isPlaying,
+    }),
+  }));
+}
+
+// 顶栏弹出层（拍号 4/4、⋯ 更多操作）。必须在 eventHandlers.js 之后安装：
+// 触发按钮的 click 只是开关弹层，真正的动作仍由各自的 id 监听器处理。
+{
+  const disposePopovers = installToolbarPopovers();
+  if (state._ipcCleanups) state._ipcCleanups.push(disposePopovers);
 }
 
 // Display app version.
@@ -81,7 +146,7 @@ if (state._ipcCleanups) {
     const version = await window.electronAPI.getAppVersion();
     if (dom.versionDisplay && version) dom.versionDisplay.textContent = `v${version}`;
   } catch (err) {
-    console.warn('[Renderer] 读取应用版本失败：', err && err.message ? err.message : err);
+    console.warn('[Renderer] Failed to read app version:', err && err.message ? err.message : err);
   }
 })();
 

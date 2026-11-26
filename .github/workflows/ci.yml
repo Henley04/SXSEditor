@@ -50,6 +50,54 @@ env:
 # ---------------------------------------------------------------------------
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # 跨平台：插件系统的"文件"这一层（解包、签名、市场索引）不依赖 Electron，
+  # 因此可以在三个系统上用纯 Node 跑。Windows 那份仍是主测试；这里多出来的
+  # 价值是"同一份代码在 POSIX 与 NTFS 上都成立"——路径分隔符、大小写、
+  # 换行符、保留设备名，这四类问题在单平台上永远测不出来。
+  # ---------------------------------------------------------------------------
+  plugin-cross-platform:
+    name: Plugin portability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies (no native build)
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+
+      - name: Plugin contract tests
+        run: >
+          npx mocha --require ./test/setup.js
+          test/pluginCore.test.js
+          test/pluginSignature.test.js
+          test/pluginMarket.test.js
+          test/pluginPortability.test.js
+          test/pluginLifecycle.test.js
+          test/pluginServices.test.js
+          test/pluginLongTasks.test.js
+          test/themeContrast.test.js
+          --timeout 30000 --reporter spec
+
+      - name: Theme contrast audit (fails on any < AA)
+        run: npm run audit:contrast
+
+      - name: IPC channel contract
+        run: npm run lint:ipc
+
+      - name: Package the example plugins (exercises the portable-name check)
+        run: node scripts/package-plugin.js plugins/example-clock -o build/plugins
+
   test:
     name: Test
     runs-on: windows-latest
@@ -61,7 +109,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -81,6 +129,9 @@ jobs:
 
       - name: IPC channel contract check
         run: npm run lint:ipc
+
+      - name: Inno Setup flag preflight
+        run: npm run check:inno
 
       - name: Lint
         run: npm run lint
@@ -105,7 +156,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Determine version and tag
@@ -116,10 +167,9 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE=$(date -u +%Y%m%d)
           if [ "$BRANCH" = "release" ]; then
-            # Tag is the semver X.Y.Z itself. Find the highest existing semver
-            # git tag and bump the patch component. Git tags are the source of
-            # truth (more reliable than the releases API which can be delayed,
-            # paginated, or silently fail on auth errors).
+            # A package.json version newer than the highest tag is an explicit
+            # release target (including major upgrades); otherwise bump patch.
+            # Tags remain the source of truth for already published versions.
             echo "[ci] Listing all semver tags..."
             git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 20
             LAST_VERSION=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
@@ -129,8 +179,13 @@ jobs:
             else
               echo "[ci] Last semver tag: $LAST_VERSION"
             fi
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
-            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            PACKAGE_VERSION=$(node -p "require('./package.json').version")
+            if node -e "const p=require('./package.json').version.split('.').map(Number),l='$LAST_VERSION'.split('.').map(Number);const gt=p[0]>l[0]||(p[0]===l[0]&&(p[1]>l[1]||(p[1]===l[1]&&p[2]>l[2])));process.exit(p.length===3&&p.every(Number.isInteger)&&gt?0:1)"; then
+              NEW_VERSION="$PACKAGE_VERSION"
+            else
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
+              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            fi
             BUILD_VERSION="$NEW_VERSION"
             TAG="$NEW_VERSION"
             PRERELEASE="false"
@@ -186,7 +241,11 @@ jobs:
         shell: pwsh
         run: |
           $electronExe = "node_modules\electron\dist\electron.exe"
-          $electronVersion = "42.4.1"
+          # Read from the installed electron package so this never drifts from
+          # package.json again (was previously hardcoded to 42.4.1, which broke
+          # the zip-cache download after the Electron 45 upgrade).
+          $electronVersion = node -p "require('electron/package.json').version"
+          Write-Host "Electron version (from installed package): $electronVersion"
           $cacheDir = "$env:LOCALAPPDATA\electron\Cache"
           $zipName = "electron-v$electronVersion-win32-x64.zip"
 
@@ -252,10 +311,31 @@ jobs:
         run: |
           $env:SKIP_ONNX_MODELS = "1"
           $env:DEBUG = "electron-forge:*"
-          Write-Host "=== Running electron-forge package ==="
-          & npm run package:lite 2>&1 | Tee-Object -FilePath build-output.log
-          $exitCode = $LASTEXITCODE
-          Write-Host "Build exit code: $exitCode"
+          # electron-forge 打包阶段会经 @electron/rebuild 联网下载 Electron headers。
+          # 上游源偶发返回 504 / 连接超时，这类瞬时故障重跑即可恢复；只对网络类
+          # 失败重试，编译或代码错误立即失败，避免把真实问题掩盖成"再试一次"。
+          $networkErrorPattern = 'Gateway Time-out|Response code 5[0-9][0-9]|ETIMEDOUT|ECONNRESET|socket hang up|ENOTFOUND|EAI_AGAIN|ECONNREFUSED'
+          $maxAttempts = 3
+          $exitCode = 1
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Write-Host "=== Running electron-forge package (attempt $attempt/$maxAttempts) ==="
+            # 清掉上一次的半成品，防止 out/ 残留让后续检查把失败误判为成功。
+            Remove-Item -Recurse -Force "out" -ErrorAction SilentlyContinue
+            & npm run package:lite 2>&1 | Tee-Object -FilePath build-output.log
+            $exitCode = $LASTEXITCODE
+            Write-Host "Build exit code: $exitCode"
+            if ($exitCode -eq 0) { break }
+            $log = if (Test-Path build-output.log) { Get-Content build-output.log -Raw } else { "" }
+            if ($log -notmatch $networkErrorPattern) {
+              Write-Host "Non-network failure detected; will not retry."
+              break
+            }
+            if ($attempt -lt $maxAttempts) {
+              $delay = 15 * $attempt
+              Write-Host "Transient network error on attempt $attempt; retrying in $delay s..."
+              Start-Sleep -Seconds $delay
+            }
+          }
           Write-Host "=== .webpack/ directory check ==="
           if (Test-Path ".webpack") {
             Get-ChildItem -Recurse ".webpack" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
@@ -280,6 +360,15 @@ jobs:
               Get-ChildItem -Path "." -Filter "SXSEditor.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize
             }
           }
+          # 以最终产物判定本步骤成败：forge 成功（或网络抖动后重试成功）必然生成
+          # exe；重试耗尽或出现真实编译/打包错误时 exe 缺失就主动报错，把失败明确
+          # 归因到打包这一步，而不是留给后面的步骤去间接发现。
+          $exe = "out\SXSEditor-win32-x64\SXSEditor.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "electron-forge package 失败：$maxAttempts 次尝试后仍未生成 $exe"
+            exit 1
+          }
+          Write-Host "Package verified: $exe"
 
       - name: Verify packaged native ORT bridge
         shell: pwsh
@@ -326,6 +415,12 @@ jobs:
           path: build-output.log
           retention-days: 7
 
+      - name: Inno Setup flag preflight
+        # Fail fast on cross-section Flags misuse (e.g. skipifdoesntexist in
+        # [Files]) before spending minutes packaging — ISCC reports it as an
+        # opaque "unknown flag" only at the very end of this job.
+        run: npm run check:inno
+
       - name: Install Inno Setup
         shell: pwsh
         run: |
@@ -335,6 +430,39 @@ jobs:
             return
           }
           choco install innosetup -y --no-progress --force
+
+      - name: Download VC++ 2015-2022 Redistributable (x64)
+        shell: pwsh
+        run: |
+          # 随安装包分发 VC++ 运行库：旧机器缺这套 DLL 时原生模块（onnxruntime.dll /
+          # ort_bridge.node）会在加载阶段失败，用户只看到 "binding not found"。
+          # 下载到 inno\ 供 ISCC 打包；aka.ms/vc14 是微软官方永久链接（最新版）。
+          # 二进制被 .gitignore(*.exe) 忽略，不入库，仅 CI 构建期获取。
+          $dest = "inno\vc_redist.x64.exe"
+          $urls = @(
+            "https://aka.ms/vc14/vc_redist.x64.exe",
+            "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            try {
+              Write-Host "Downloading VC++ redist from $u ..."
+              Invoke-WebRequest -Uri $u -OutFile $dest -UseBasicParsing -TimeoutSec 180
+              $size = (Get-Item $dest).Length
+              if ($size -gt 10MB) {
+                Write-Host "VC++ redist OK: $dest ($size bytes)"
+                $ok = $true
+                break
+              }
+              Write-Warning "Downloaded file too small ($size bytes); trying next URL"
+            } catch {
+              Write-Warning "Download from $u failed: $($_.Exception.Message)"
+            }
+          }
+          if (-not $ok) {
+            Write-Error "Failed to download vc_redist.x64.exe from all URLs"
+            exit 1
+          }
 
       - name: Compile installer with Inno Setup
         shell: pwsh

@@ -1,6 +1,10 @@
 /* ==================== App Shell ==================== */
 #app {
   display: grid;
+  /* 只有行定义时，隐式列是 auto = 取子项 max-content；画布带固定像素宽度时
+     这一列会撑到 1707px，窗口变窄也不收缩，右侧 inspector 被挤出屏幕。
+     minmax(0,1fr) 把列锁在容器宽度内。 */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto 22px;
   width: 100%;
   height: 100%;
@@ -42,6 +46,61 @@
   font-weight: 500;
 }
 
+.loading-elapsed {
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.2em;
+  text-align: center;
+}
+
+/* 进度条：纯色填充，不使用渐变/发光，深色主题下也不会有亮带 */
+.loading-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 260px;
+  max-width: 60vw;
+}
+
+.loading-progress-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-input, rgba(0, 0, 0, 0.15));
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width 0.25s var(--ease-standard);
+}
+
+.loading-progress-meta {
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.loading-background {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.loading-background:hover {
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+
 /* ==================== Toolbar ==================== */
 /* 工具栏容器与分隔线统一由 components.css 提供（扁平、无渐变、无重复定义） */
 
@@ -51,6 +110,56 @@
   gap: var(--space-2);
 }
 .toolbar-spacer { flex: 1; }
+
+/* 导出 ▾ 弹出层：与主窗口顶栏同一套做法——fixed 定位（#toolbar 是 overflow:hidden，
+   absolute 会被裁）、只靠边框与背景色分层，不加阴影/发光。 */
+.toolbar-popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.toolbar-popover {
+  position: fixed;
+  z-index: 70;
+  min-width: 160px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.toolbar-popover[hidden] { display: none; }
+
+.toolbar-popover button {
+  justify-content: flex-start;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolbar-popover button:hover {
+  background: var(--accent-softer);
+  border-color: var(--accent-line, var(--border-default));
+  color: var(--fg-primary);
+}
+
+/* 触发按钮右侧画一个纯文本三角（不用图标，避免和其他按钮的 icon 尺寸打架） */
+.btn-export-menu::after {
+  content: "▾";
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.75;
+}
 
 #toolbar button {
   background: var(--bg-button);
@@ -96,19 +205,96 @@
 }
 #toolbar .param-group { gap: 3px; }
 
-#toolbar .btn-pitch-tool {
+/* 音高来源：Manual（跟随曲线）/ Score（交给模型生成 F0）。
+   两个按钮合计约 120px，1000px 默认窗口下工具栏仍留有余量。 */
+#toolbar .pitch-mode-group { gap: 3px; }
+#toolbar .btn-pitch-mode {
   padding: 3px 8px;
   font-size: var(--font-sm);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  min-width: 54px;
 }
-#toolbar .btn-pitch-tool:hover {
+#toolbar .btn-pitch-mode.active {
+  background: var(--bg-button-primary);
+  color: var(--fg-on-accent);
+  border-color: var(--accent-pressed);
+}
+
+/* ---------- 音高曲线工具（inspector 分区内） ----------
+   原先这组控件挂在工具栏上：Pitch 模式一开就多出 8 个控件、合计约 500px，
+   而窗口默认 1000px，装不下只能压扁或折行。挪进右侧后改为竖排，
+   每行一个 field-row，控件拿满可用宽度，工具栏回到单行且不再溢出。 */
+#pitch-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#pitch-tools .field-row { margin-bottom: 0; }
+#pitch-tools .field-row .lbl {
+  flex: 0 0 30px;
+  min-width: 0;
+  cursor: pointer;
+}
+#pitch-tools .field-row .ctrl { min-width: 0; }
+#pitch-tools .auto-pitch-preset { flex: 1 1 auto; min-width: 0; }
+#pitch-tools input[type="checkbox"] { margin: 0; cursor: pointer; }
+#pitch-tools .brush-smoothing-slider {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.pitch-btn-row { gap: 6px; }
+.pitch-btn-row .btn-pitch-tool { flex: 1 1 0; }
+
+.btn-pitch-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  background: var(--bg-button);
+  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
+}
+/* 重置是破坏性操作，hover 走危险色；"参数"只是打开面板，别跟着变红 */
+#btn-pitch-reset:hover {
   background: var(--bg-button-danger);
   color: var(--fg-on-accent);
   border-color: var(--danger);
 }
-#toolbar .btn-pitch-tool.disabled-mode {
-  background: var(--bg-button);
+#btn-auto-pitch-params:hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+.btn-pitch-tool.disabled-mode {
   color: var(--fg-disabled);
   border-color: var(--button-secondary-border);
+}
+
+/* 手势说明：右侧只有 196px，必须允许换行 */
+.pitch-hint {
+  margin: 0;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--fg-muted);
+  user-select: none;
+}
+.pitch-smooth-value {
+  flex: 0 0 22px;
+  text-align: right;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
 }
 
 #toolbar .btn-shortcuts {
@@ -120,18 +306,6 @@
   align-items: center;
   justify-content: center;
 }
-
-.pitch-hint {
-  font-size: var(--font-xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  user-select: none;
-  padding: 2px 6px;
-  background: var(--accent-softer);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent-soft);
-}
-#toolbar .pitch-tools-group { gap: var(--space-4); }
 
 .brush-smoothing-slider {
   width: 60px;
@@ -175,9 +349,12 @@
 #main-content {
   flex: 1;
   display: grid;
-  grid-template-columns: 80px 1fr 4px 220px;
+  grid-template-columns: 80px 1fr 4px 300px;
   min-height: 0;
   overflow: hidden;
+  /* 作为 #app 网格的子项，默认 min-width:auto 会把画布的固定像素宽度当作下限，
+     窗口变窄时整块 1707px 不收缩，右侧 inspector（自然度自检）被挤出可视区。 */
+  min-width: 0;
 }
 
 /* ==================== Piano Keys ==================== */
@@ -210,11 +387,20 @@
   background: var(--bg-app);
   overflow: hidden;
   min-height: 0;
+  /* flex 项默认 min-width:auto = 内容宽度，canvas 上的固定像素宽度会把它顶住，
+     进而撑宽整个 #main-content，把右侧 inspector 挤出可视区。 */
+  min-width: 0;
 }
 #piano-roll {
   width: 100%;
   height: 100%;
   display: block;
+  /* resizeCanvases() 会把 style.width/height 写成具体像素（后备缓冲要对齐 dpr），
+     固定像素宽度会让 canvas 拒绝收缩：窗口变窄时 #main-content 的 1fr 列被撑住，
+     整个 grid 溢出，右侧 inspector（含自然度自检）被挤出可视区。
+     加 max-width/min-width 让 CSS 尺寸始终跟着容器走，实测值只影响后备缓冲。 */
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* ==================== Inspector Resize Handle ==================== */
@@ -260,6 +446,15 @@
   border-bottom: 1px solid var(--border-subtle);
   position: relative;
 }
+
+/* 标题单行省略、标签不被压缩：窄栏下标题换行会把右侧标签顶到上一行，
+   视觉上就成了"折叠箭头压在文字上"（走查 07 的 Naturalness Check 一栏）。 */
+.insp-head > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .insp-head::before {
   content: "";
   position: absolute;
@@ -269,6 +464,7 @@
 }
 .insp-head .tag {
   margin-left: auto;
+  flex: 0 0 auto;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 9px;
   color: var(--fg-muted);
@@ -316,25 +512,41 @@
   font-weight: 500;
 }
 
-/* Field rows */
+/* Field rows
+   ------------------------------------------------------------------
+   原来是 label 与控件同一行：label 固定 46px，右侧还要塞滑杆 + 数值徽章。
+   220px 宽的 inspector 里 "Outlier removal" / "Transition length" /
+   "Spectral interpolation" 全被裁成 "Outlier remova…"，用户只能靠猜。
+   改成两行（label 一行、控件一行），并把 inspector 默认宽度提到 300px。 */
 .field-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
 }
 .field-row:last-child { margin-bottom: 0; }
 .field-row .lbl {
   font-size: 10.5px;
   color: var(--fg-secondary);
-  min-width: 46px;
+  min-width: 0;
   letter-spacing: 0.3px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .field-row .ctrl {
-  flex: 1;
+  min-width: 0;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* 下拉/输入不得超出面板：窄栏下 select 默认按内容宽度撑开，会把右边缘顶出去
+   （截图里 "Manual" 只剩 "Manua"）。 */
+.field-row .ctrl select,
+.field-row .ctrl input {
+  min-width: 0;
+  max-width: 100%;
 }
 .field-row input[type="text"] {
   flex: 1;
@@ -577,8 +789,10 @@
   align-items: center;
   padding: 0 12px;
   background: var(--bg-elevated);
-  color: var(--fg-muted);
-  font-size: 10.5px;
+  /* 10.5px 的 --fg-muted 在浅色主题下对比度约 2.8:1，低于 WCAG AA 的 4.5:1。
+     状态栏文字都是"要读的信息"（采样率、hop、同步状态），不是装饰。 */
+  color: var(--fg-secondary);
+  font-size: 11.5px;
   gap: 14px;
   font-family: 'Consolas', 'Monaco', monospace;
 }
@@ -804,7 +1018,7 @@
 }
 
 .pitch-ctx-danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 .pitch-ctx-danger:hover {
   background: var(--danger-softer, rgba(220, 60, 60, 0.12));
@@ -883,6 +1097,25 @@
   font-weight: 600;
   color: var(--fg-secondary);
   padding: 2px 0;
+}
+
+/* "自动"来源标记：显示这些值来自自动音高曲线的派生，一动手就转成手动 */
+.note-ctx-src {
+  margin-left: auto;
+  margin-right: 8px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--fg-tertiary, var(--fg-secondary));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.16));
+  white-space: nowrap;
+}
+
+.note-ctx-src.manual {
+  color: var(--accent, #4ade80);
+  border-color: currentColor;
 }
 
 .note-ctx-params {
@@ -991,7 +1224,7 @@
   background: var(--bg-button-hover);
 }
 .note-ctx-danger {
-  color: var(--danger);
+  color: var(--danger-fg);
 }
 .note-ctx-danger:hover {
   background: var(--danger-softer, rgba(220, 60, 60, 0.12));
@@ -1266,3 +1499,159 @@
   border-top-color: color-mix(in srgb, var(--tooltip-fg, var(--fg-primary)) 14%, transparent);
   opacity: 0.9;
 }
+
+/* ---- 自动音高曲线控件（开关本身用 field-row + 原生 checkbox） ---- */
+.auto-pitch-preset {
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--bg-elevated, #2a2a3d);
+  color: var(--fg-primary, #f0f0ff);
+  border: 1px solid var(--border-default, #3a3a4e);
+}
+.auto-pitch-panel {
+  position: fixed;
+  top: 96px;
+  right: 16px;
+  z-index: 60;
+  width: 300px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 10px 12px 12px;
+  border-radius: 8px;
+  background: var(--bg-elevated, #232334);
+  border: 1px solid var(--border-strong, #3a3a52);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--fg-primary, #f0f0ff);
+  font-size: 12px;
+}
+.auto-pitch-panel[hidden] { display: none; }
+.auto-pitch-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.auto-pitch-close {
+  background: none;
+  border: none;
+  color: var(--fg-muted, #8888a8);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.auto-pitch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+}
+.auto-pitch-subhead {
+  margin: 10px 0 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary, #c8c8dd);
+}
+.auto-pitch-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--fg-muted, #a8a8c0);
+  font-size: 11px;
+}
+.auto-pitch-grid input,
+.auto-pitch-grid select {
+  width: 100%;
+  padding: 3px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-input, #1e1e2e);
+  color: var(--fg-primary, #f0f0ff);
+  font-size: 12px;
+}
+.auto-pitch-note {
+  margin-top: 8px;
+  color: var(--fg-muted, #8888a8);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* 右键菜单里的数值输入（F16：无形状库，但至少能精确输入） */
+.pitch-ctx-numeric {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 8px 6px;
+}
+.pitch-ctx-numeric input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-input, #1e1e2e);
+  color: var(--fg-primary, #f0f0ff);
+}
+.pitch-ctx-numeric button {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-elevated, #2a2a3d);
+  color: var(--fg-primary, #f0f0ff);
+  cursor: pointer;
+}
+.pitch-ctx-numeric button:hover { background: var(--accent, #5b8def); }
+
+/* ---- 自然度自检 ---- */
+.nat-actions {
+  display: flex;
+  align-items: center;
+  /* 窄栏下按钮与说明并排会把说明挤成 10 字宽的窄柱（走查 07 里就是三行断句），
+     允许换行后说明独占下一行。 */
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.nat-actions button {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default, #3a3a4e);
+  background: var(--bg-elevated, #2a2a3d);
+  color: var(--fg-primary, #f0f0ff);
+  cursor: pointer;
+}
+.nat-actions button:hover { background: var(--accent, #5b8def); }
+.nat-hint {
+  font-size: 10px;
+  color: var(--fg-muted, #8888a8);
+  line-height: 1.3;
+  /* 换行后独占整行，不再被按钮挤成窄柱 */
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.nat-rows { display: flex; flex-direction: column; gap: 3px; }
+.nat-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.nat-row .nat-label { color: var(--fg-secondary, #c8c8dc); }
+.nat-row .nat-value { font-variant-numeric: tabular-nums; color: var(--fg-primary, #f0f0ff); }
+.nat-row .nat-target { color: var(--fg-muted, #8888a8); font-size: 10px; }
+.nat-row.good { background: rgba(74, 222, 128, 0.08); }
+.nat-row.warn { background: rgba(250, 204, 21, 0.10); }
+.nat-row.bad  { background: rgba(248, 113, 113, 0.12); }
+.nat-row.good .nat-value { color: #4ade80; }
+.nat-row.warn .nat-value { color: #facc15; }
+.nat-row.bad  .nat-value { color: #f87171; }

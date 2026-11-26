@@ -149,9 +149,11 @@ describe('cfgSchedule - Task 11 CFG strength scheduling', () => {
             expect(r2).to.be.closeTo(end, 1e-10);
         });
 
-        it('should handle undefined mode (falls back to DEFAULT_MODE=linear)', () => {
+        it('should handle undefined mode (falls back to DEFAULT_MODE=constant)', () => {
+            // 官方 flow_matching 全程恒定 CFG、无调度：缺省 mode 直接返回 cfgStrength，
+            // 不再从 cfgStrengthStart 起跳。
             const r = resolveCfgAtStep({ cfgStrength: CFG, cfgStrengthStart: 1.0, cfgStrengthEnd: 3.0, step: 0, totalSteps: 32 });
-            expect(r).to.be.closeTo(1.0, 1e-10);
+            expect(r).to.be.closeTo(CFG, 1e-10);
         });
     });
 

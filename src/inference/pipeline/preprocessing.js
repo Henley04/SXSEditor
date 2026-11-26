@@ -1,7 +1,15 @@
-const ort = require('onnxruntime-node');
-const { SAMPLE_RATE, HOP_SIZE, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
+// 惰性 ORT：见 ortRuntime.js。
+const { lazyOrt: ort } = require('../ortRuntime.js');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
+const { isRestNote } = require('./audioSegmentation');
+const { resolveChineseContextReadings, CJK_SINGLE } = require('./zhG2pContext');
 const durationStats = require('./durationStats');
+
+// 清浊（UV）判定只保留官方那条：f0 <= 0（见 quantizeF0，与 f0_to_coarse 的
+// uv_mask = f0 <= 0 同构）。休止/换气音符整段 0、曲线自身的 0、音符外 0。
+// 不再按音素结构推导声母/辅音清音段 —— 那会把用户曲线在起音处强行切掉，
+// 与官方真实 F0 分布（擦音起音带短暂音高痕迹）不一致。
 
 /**
  * Pre-processing: note encoding, pitch encoding, F0 encoding, condition embedding
@@ -49,32 +57,13 @@ class Preprocessing {
     }
 
     /**
-     * Rest predicate — MUST stay consistent with
-     * AudioSegmentation._isRestNote() and index.js _silenceNonVocalRegions().
-     *
-     * Rests are: explicit noteType 1, empty lyric (non-slur), the <SP>
-     * silence token, or any non-aspiration note with pitch <= 0 (the kind
-     * fillNoteGaps() synthesizes for timeline gaps).
-     * Slur/continuation notes are never rests even with an empty lyric, and
-     * <AP> is an audible aspiration token (kept voiced as a sung note).
+     * Rest predicate — delegates to audioSegmentation.isRestNote(), the single
+     * shared definition used by AudioSegmentation (region splitting) and
+     * index.js _silenceNonVocalRegions(). Keeping one implementation prevents
+     * the three call sites from disagreeing.
      */
     isRestNote(note) {
-        if (!note) return false;
-        if (note.isSlur || note.isContinuation || note.noteType === 3) return false;
-        const lyric = String(note.lyric || '').trim();
-        // <AP> is an audible aspiration token, never a rest.
-        if (lyric === '<AP>') return false;
-        // A pitch <= 0 note is always a rest (fillNoteGaps synthesizes them
-        // with pitch 0). An explicit empty lyric is a rest too (piano-roll
-        // convention), but a note object without a lyric field is not
-        // considered resting solely because of the missing field.
-        const explicitEmpty = note.lyric !== undefined
-            && note.lyric !== null
-            && lyric.length === 0;
-        return note.noteType === 1
-            || lyric === '<SP>'
-            || explicitEmpty
-            || note.pitch <= 0;
+        return isRestNote(note);
     }
 
     /**
@@ -110,8 +99,15 @@ class Preprocessing {
 
     buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0) {
         if (notes.length === 0) return new Float32Array(0);
-        const lastNote = notes[notes.length - 1];
-        const totalBeats = lastNote.start + lastNote.duration;
+        // F2：总时长取 max(start+duration)，不再取 notes[notes.length-1]。
+        // 渲染层新建音符是 push 到数组末尾的，数组末元素未必是最晚结束的音符；
+        // 用它算 totalFrames 会让整段 F0 被截断（实测 150 帧 vs 应有 300 帧，
+        // 尾部 3 秒的音高 conditioning 全部变成 unvoiced）。
+        let totalBeats = 0;
+        for (const n of notes) {
+            const end = n.start + n.duration;
+            if (end > totalBeats) totalBeats = end;
+        }
         const totalSeconds = (totalBeats / bpm) * 60;
         const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / HOP_SIZE);
 
@@ -212,15 +208,48 @@ class Preprocessing {
 
         let durSum = 0;
 
+        // 整句上下文 G2P：把连续的中文单字歌词拼成句子一次性转写，对齐官方
+        // 预处理 g2pM(sent) 的多音字消歧。逐字 pinyin(char, multiple) 只能按
+        // 常用度取首读音，会把「银行」读成 yin2 xing2、「音乐」读成 yin1 le4。
+        // contextReadings 以 note 索引给出消歧后的读音；命中失败或非单字歌词
+        // 一律回退到 _lookupPhonemeId 的原有逐字 / 显式标注路径。
+        const contextReadings = resolveChineseContextReadings(
+            notes.map((n) => (n && n.lyric) || ''),
+        );
+        const lookupLyric = (phIdx, lyricText) => {
+            if (CJK_SINGLE.test(lyricText)) {
+                const syllable = contextReadings.get(phIdx);
+                if (syllable) {
+                    const ctxId = this.textProcessing._zhSyllableToPhonemeId(syllable);
+                    if (ctxId !== null && ctxId !== undefined) return ctxId;
+                }
+            }
+            return this.textProcessing._lookupPhonemeId(lyricText);
+        };
+
         for (let phIdx = 0; phIdx < notes.length; phIdx++) {
             const note = notes[phIdx];
-            const lyric = note.lyric || '';
+            const rawLyric = note.lyric || '';
+            // '-' 是"连音"标记，不是音素。
+            // 编辑器输入 '-' 会存成 lyric='' + isContinuation（见 fragmentEditor/
+            // eventHandlers.applyLyricEditorValue），但上游 midi_parser 的历史行为是
+            // "第一个音符就是 '-'，或前一个音符没有歌词时，把字面 '-' 原样当歌词存下来"。
+            // 这条路径上的 '-' 以前会直接送进词表 → `Unknown phoneme: "-"` → <UNK>，
+            // 模型于是在这个音节上唱一个未知音素。这里统一归一成空歌词（后续解析为
+            // <SP>），音符类型仍然靠下面的 slur 判定变成 3（不重新起音）。
+            const isSlurMarker = rawLyric.trim() === '-';
+            const lyric = isSlurMarker ? '' : rawLyric;
             const pitch = note.pitch;
             let noteType;
             // 注意: slur/continuation 检查必须优先于空歌词检查。slur 音符通常
             // 歌词为空（延续前一个音节的发音），若先判空歌词会把 slur 误分类
             // 为休止符（type 1），导致模型把连音当成静音处理。
-            if (note.isSlur || note.isContinuation) {
+            //
+            // 判定条件必须与 audioSegmentation.isRestNote() 对齐（那边是
+            // `noteType === 3 || isSlur || isContinuation`）：此前这里漏了
+            // noteType===3，MIDI 导入的连音音符（只带 noteType，没有 isSlur 标志）
+            // 会被当成普通音符**重新起音**唱一遍；歌词是 '-' 时还会变成 <UNK>。
+            if (note.isSlur || note.isContinuation || note.noteType === 3 || isSlurMarker) {
                 noteType = 3;
             } else if (this.isRestNote(note)) {
                 // 休止：空歌词、显式 <SP>、pitch<=0 或 noteType=1
@@ -261,10 +290,14 @@ class Preprocessing {
                 // In en-phonemes / hybrid mode, convert Japanese kana/kanji to English ARPAbet phonemes.
                 // The base multilingual model (not JP LoRA) is used, so English phonemes + SEP
                 // are the correct input format — consistent with how English lyrics are processed.
-                // hybrid mode uses an improved mapping table (L for ら行, AO for お段) but the
-                // token format (en_ prefix + SEP) is identical to en-phonemes.
+                // Both en-phonemes (default) and hybrid use the same ARPAbet mapping (L for ら行,
+                // AO1 for お段, い段 palatal collapse, ん place assimilation) and the same token
+                // format (en_ prefix + SEP). hybrid only differs by preferring yue_ syllables.
+                // nextKana 传入下一个音符的歌词，供末尾 ん 做部位同化（一个 note 只放一个假名）。
                 if (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid') {
-                    const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric);
+                    const nextNote = notes[phIdx + 1];
+                    const nextKana = nextNote && nextNote.lyric ? nextNote.lyric : null;
+                    const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric, nextKana);
                     const enPhIds = [];
                     // Collect mora-based weights from the phoneme objects (set by
                     // _attachJapaneseWeights). These are passed to _allocateByStats
@@ -309,7 +342,7 @@ class Preprocessing {
                             noteTypes.push(noteType);
                         }
                     } else {
-                        const phId = this.textProcessing._lookupPhonemeId(lyric);
+                        const phId = lookupLyric(phIdx, lyric);
                         phLocations.push([dur, 1, durationRatios, [phId]]);
                         newPhonemes.push(phId);
                         note2origin.push(phIdx);
@@ -334,7 +367,7 @@ class Preprocessing {
                         noteTypes.push(noteType);
                     }
                 } else {
-                    const phId = this.textProcessing._lookupPhonemeId(lyric);
+                    const phId = lookupLyric(phIdx, lyric);
                     phLocations.push([dur, 1, durationRatios, [phId]]);
                     newPhonemes.push(phId);
                     note2origin.push(phIdx);
@@ -363,7 +396,7 @@ class Preprocessing {
                     noteTypes.push(noteType);
                 }
             } else {
-                const phId = this.textProcessing._lookupPhonemeId(lyric);
+                const phId = lookupLyric(phIdx, lyric);
                 phLocations.push([dur, 1, durationRatios, [phId]]);
                 newPhonemes.push(phId);
                 note2origin.push(phIdx);
@@ -381,66 +414,68 @@ class Preprocessing {
 
         const mel2token = this._buildMel2token(phLocations, newPhonemes.length, totalFrames);
 
+        // ---- F0 逐帧序列 ----
+        // 帧基准统一为「累积时长后 round」，与 _buildMel2token 里 phLocations 的 dur
+        // （:258，对齐官方 data_processor.preprocess）完全一致。旧实现用
+        // frameOffset += round(单音符时长) 逐音符累加，误差单调累积：120BPM 八分音符
+        // （12.5 帧）每音符多 0.5 帧，60 音符后 F0 领先音素 30 帧（600ms）且尾部曲线
+        // 因越界被丢弃 —— 这是 manual 模式后半段糊掉的主因。
+        const fps = SAMPLE_RATE / HOP_SIZE;
+        const noteRanges = new Array(notes.length);
+        let durSumBefore = 0;
+        for (let i = 0; i < notes.length; i++) {
+            const durationSec = noteDurations[i];
+            const startFrame = Math.round(durSumBefore * fps);
+            const endFrame = Math.max(startFrame, Math.min(totalFrames, Math.round((durSumBefore + durationSec) * fps)));
+            noteRanges[i] = { startFrame, endFrame };
+            durSumBefore += durationSec;
+        }
+
+        const hasPitchCurve = !!(pitchCurveF0 && pitchCurveF0.length > 0);
+        const hasEnvelope = !!(f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0);
+        const srcData = hasPitchCurve
+            ? (pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0))
+            : null;
+
         const f0Hz = new Float32Array(totalFrames);
-        if (pitchCurveF0 && pitchCurveF0.length > 0) {
-            const srcData = pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0);
-            let frameOffset = 0;
-            for (let i = 0; i < notes.length; i++) {
-                const note = notes[i];
-                const noteDurationSec = noteDurations[i];
-                const noteFrames = Math.round(noteDurationSec * SAMPLE_RATE / HOP_SIZE);
-                const noteStartSec = (note.start / bpm) * 60;
-                // 休止/换气帧强制 f0=0（清音），即使音高曲线在空隙内带有
-                // 插值出的正值，否则模型会把休止段当成浊音唱出来。
-                const noteUnvoiced = this.isUnvoicedNote(note) || !(note.pitch > 0);
-                const noteFreq = noteUnvoiced ? 0 : this.midiToFreq(note.pitch);
-                for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
-                    if (noteUnvoiced) {
-                        f0Hz[frameOffset + f] = 0;
-                        continue;
-                    }
-                    // 多 segment 路径：segmentNotes.start 是相对 segStart，需要加
-                    // pitchCurveOffsetSec (= segStartBeat 对应秒数) 才能正确索引
-                    // 绝对时间的 pitchCurveF0。否则 f0 严重错位 → vocoder mel/f0
-                    // 不匹配 → 电流声。单 segment 路径 offset=0，行为不变。
-                    const absTimeSec = noteStartSec + pitchCurveOffsetSec + f * HOP_SIZE / SAMPLE_RATE;
-                    const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
-                    if (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0) {
-                        f0Hz[frameOffset + f] = srcData[srcFrame];
-                    } else {
-                        f0Hz[frameOffset + f] = noteFreq;
-                    }
-                }
-                frameOffset += noteFrames;
+        for (let i = 0; i < notes.length; i++) {
+            const note = notes[i];
+            const range = noteRanges[i];
+            let effectivePitch = note.pitch;
+            // envelope 是「无曲线」路径的半音偏移；有曲线时曲线优先，行为保持原样。
+            if (!hasPitchCurve && hasEnvelope) {
+                effectivePitch += this.interpolateEnvelope(f0Envelope, note.start + note.duration / 2);
             }
-        } else {
-            let frameOffset = 0;
-            for (let i = 0; i < notes.length; i++) {
-                const note = notes[i];
-                let effectivePitch = note.pitch;
-                if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
-                    const noteCenterBeat = note.start + note.duration / 2;
-                    const semitoneShift = this.interpolateEnvelope(f0Envelope, noteCenterBeat);
-                    effectivePitch = note.pitch + semitoneShift;
-                }
-                // 休止（<SP>/空歌词/pitch<=0）与 <AP> 换气为清音，f0=0
-                const noteUnvoiced = this.isUnvoicedNote(note) || !(effectivePitch > 0);
-                const freq = noteUnvoiced ? 0 : this.midiToFreq(effectivePitch);
-                const noteFrames = Math.round(noteDurations[i] * SAMPLE_RATE / HOP_SIZE);
-                for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
-                    f0Hz[frameOffset + f] = freq;
-                }
-                frameOffset += noteFrames;
+            // 休止 / <AP> 换气 / 无有效音高：整段清音
+            const noteUnvoiced = this.isUnvoicedNote(note) || !(effectivePitch > 0);
+            if (noteUnvoiced) continue; // f0Hz 保持 0（官方 UV 规则：f0 <= 0）
+
+            const noteFreq = this.midiToFreq(effectivePitch);
+            if (!hasPitchCurve) {
+                for (let f = range.startFrame; f < range.endFrame; f++) f0Hz[f] = noteFreq;
+                continue;
+            }
+
+            const noteStartSec = (note.start / bpm) * 60;
+            for (let f = range.startFrame; f < range.endFrame; f++) {
+                // 多 segment 路径：segmentNotes.start 相对 segStart，需加
+                // pitchCurveOffsetSec 才是 pitchCurveF0 的绝对时间轴。
+                const relFrame = f - range.startFrame;
+                const absTimeSec = noteStartSec + pitchCurveOffsetSec + relFrame * HOP_SIZE / SAMPLE_RATE;
+                const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
+                // 曲线里的 0 是清音，必须保留：f0-import 导入的真实 F0 自带 0。
+                // 旧实现在这里回退 noteFreq，把辅音/声母强制浊音化，同时堵死了
+                // 唯一能携带清音信息的入口。越界同样按清音处理，不再填平直音高。
+                f0Hz[f] = (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0)
+                    ? srcData[srcFrame]
+                    : 0;
             }
         }
 
-        // 对 f0Hz 应用 f0Shift（半音偏移）。
-        // f0Hz 同时用于：
-        //   1. quantizeF0 → f0Ids（diffusion 条件，已在 quantizeF0 内部偏移 bin）
+        // 对 f0Hz 应用 f0Shift（半音偏移）。f0Hz 同时用于：
+        //   1. quantizeF0 → f0Ids（diffusion 条件）
         //   2. SiFiGAN vocoder 的 f0 输入（_currentF0Hz → effectiveF0）
-        // 之前 f0Hz 未偏移导致 vocoder f0 与 diffusion mel（基于偏移后的音高）不匹配，
-        // autoShift 较大时产生口齿不清。现在统一在源头偏移 f0Hz，
-        // quantizeF0 的 bin 偏移改为基于已偏移的 f0Hz，避免双重偏移。
+        // 在源头统一偏移，quantizeF0 传 f0Shift=0，避免双重偏移。
         if (f0Shift !== 0) {
             const shiftFactor = Math.pow(2, f0Shift / 12);
             for (let i = 0; i < f0Hz.length; i++) {
@@ -840,25 +875,345 @@ class Preprocessing {
     }
 
     /**
+     * 从 .sxssinger 的 MIDI / 歌词 / F0 标注构建 prompt 段 token 序列，并把
+     * 参考 mel 裁剪到与 token 序列严格对齐的时间窗。
+     *
+     * 背景：仓库的官方对比脚本 scripts/verify_e2e_precision.py 会把 prompt token
+     * + target token 拼在一起送 encoder/preflow，prompt 段拿到的是参考片段真实
+     * 的 phoneme/pitch/type/F0。app 过去只编码 target，prompt 段 cond 全 0。
+     * 这里用歌手文件里已经强制保存的 singerData（歌词 + MIDI + F0）补齐。
+     *
+     * 时间轴：singerData / f0Data / midiNotes 都以"裁掉前导静音后的 0 点"为
+     * 原点，而参考 mel 是从原始 wav 提取的；因此统一加 trimOffsetSec 回到原始
+     * 时间轴，再按 50Hz 帧号对齐。
+     *
+     * @param {Object|null} refSingerData - singer.singerData
+     * @param {Array|null} refMidiNotes - singer.midiNotes（start/duration 单位是拍）
+     * @param {Array|null} refF0Data - singer.f0Data（[{time, f0}]，50Hz，相对裁剪后音频）
+     * @param {Float32Array|null} ptMelData - 完整参考音频的 mel
+     * @param {number} ptFrameCount - 参考 mel 帧数
+     * @param {{maxPromptFrames?: number, promptFramesCap?: number, f0Shift?: number}} [opts]
+     *        0/undefined = 使用完整参考音频；>0 = 从第 0 帧起截断到该帧数；
+     *        f0Shift = 与 target 相同的 note_pitch 半音偏移（prompt f0 不偏移）
+     * @returns {{promptSeq: Object|null, ptMelData: Float32Array|null, ptFrameCount: number}}
+     */
+    buildPromptSequence(refSingerData, refMidiNotes, refF0Data, ptMelData, ptFrameCount, opts = {}) {
+        const unchanged = { promptSeq: null, ptMelData, ptFrameCount };
+        if (!refSingerData || typeof refSingerData !== 'object') return unchanged;
+        if (!ptMelData || !(ptFrameCount > 0)) return unchanged;
+
+        const notes = this._promptNotesFromSingerData(refSingerData, refMidiNotes);
+        if (!notes || notes.length === 0) return unchanged;
+
+        const trimOffsetSec = Math.max(0,
+            this._finiteOr(refSingerData.trimOffsetSec, 0)
+            || (Array.isArray(refSingerData.time) ? this._finiteOr(refSingerData.time[0], 0) / 1000 : 0)
+        );
+
+        // 回到原始 wav 时间轴
+        for (const n of notes) {
+            n.startSec += trimOffsetSec;
+            n.endSec = n.startSec + n.durSec;
+        }
+
+        const f0Source = this._buildPromptF0Source(refSingerData, refF0Data);
+        const trimOffsetFrame = Math.round(trimOffsetSec * SAMPLE_RATE / HOP_SIZE);
+
+        // 参考音频长度行为保持原样：默认使用完整 prompt（上游 infer() 也是用
+        // 整段 prompt metadata；其 example prompt 约 10s）。只有显式
+        // maxPromptFrames > 0 时才截断，且与旧实现一样从第 0 帧开始截。
+        const capRaw = opts.promptFramesCap !== undefined ? opts.promptFramesCap : opts.maxPromptFrames;
+        const capFrames = Number.isFinite(capRaw) && capRaw > 0 ? Math.floor(capRaw) : 0;
+        const promptFrames = Math.min(
+            capFrames > 0 ? capFrames : ptFrameCount,
+            ptFrameCount,
+            Math.floor(ptMelData.length / MEL_DIM)
+        );
+        if (promptFrames <= 0) return unchanged;
+
+        const promptStartSec = 0;
+        const promptEndSec = promptFrames * HOP_SIZE / SAMPLE_RATE;
+
+        // notesToSequences 按 duration 累加打包，不读 start；必须把 [0, promptEndSec]
+        // 之间的空隙（含前导静音/尾静音）补成 <SP> rest，保证 token 时间轴与
+        // prompt mel 严格对齐。
+        const clipped = [];
+        let cursor = promptStartSec;
+        const sorted = notes
+            .filter(n => n.endSec > promptStartSec && n.startSec < promptEndSec)
+            .sort((a, b) => a.startSec - b.startSec);
+        for (const n of sorted) {
+            const s = Math.max(n.startSec, promptStartSec, cursor);
+            const e = Math.min(n.endSec, promptEndSec);
+            if (e <= s) continue;
+            if (s - cursor > 0.02) {
+                clipped.push({ lyric: '', pitch: 0, start: cursor - promptStartSec, duration: s - cursor, noteType: 1 });
+            }
+            clipped.push({
+                lyric: n.lyric,
+                pitch: n.pitch,
+                start: s - promptStartSec,
+                duration: e - s,
+                noteType: n.noteType,
+                isSlur: n.isSlur,
+                isContinuation: n.isContinuation,
+            });
+            cursor = e;
+        }
+        if (promptEndSec - cursor > 0.02) {
+            clipped.push({ lyric: '', pitch: 0, start: cursor - promptStartSec, duration: promptEndSec - cursor, noteType: 1 });
+        }
+        if (clipped.length === 0) return unchanged;
+        // 没有任何歌词（只有 <SP>/空 lyric）时，prompt token 会全部是休止，
+        // 与参考 mel 里的真实歌声矛盾；这种情况下退回旧的 cond=0 更安全。
+        const hasAnyLyric = clipped.some(n => {
+            const l = String(n.lyric || '').trim();
+            return l && l !== '<SP>';
+        });
+        if (!hasAnyLyric) return unchanged;
+
+        // bpm=60 → notesToSequences 的 beat 单位就是秒，mel2token 帧数 = 窗口时长 * 50
+        // 注意：这里用 f0Shift=0 生成基础序列，随后只偏移 note_pitch。上游
+        // infer() 对拼接后的 note_pitch 做 += f0_shift，但 prompt 的 f0_course
+        // 仍由未偏移的 pt_f0 量化；两者不能一起偏移。
+        const seq = this.notesToSequences(clipped, 60, null, null, 0, 0);
+        const f0Shift = Number.isFinite(opts.f0Shift) ? Math.round(opts.f0Shift) : 0;
+        const promptNotePitchSeq = new Int32Array(seq.notePitchSeq.length);
+        for (let i = 0; i < seq.notePitchSeq.length; i++) {
+            const p = seq.notePitchSeq[i];
+            promptNotePitchSeq[i] = p > 0 ? Math.max(0, Math.min(255, p + f0Shift)) : p;
+        }
+        // notesToSequences 对总时长做 floor，可能比 promptFrames 少 1 帧；以
+        // promptFrames 为准补齐/裁剪，保证与参考 mel 等长。
+        const mel2token = new Int32Array(promptFrames);
+        const copyLen = Math.min(promptFrames, seq.mel2token.length);
+        if (copyLen > 0) {
+            mel2token.set(seq.mel2token.subarray(0, copyLen));
+            if (copyLen < promptFrames) mel2token.fill(mel2token[copyLen - 1], copyLen);
+        }
+        let tokenCount = seq.tokenCount;
+        let maxToken = 0;
+        for (let i = 0; i < promptFrames; i++) {
+            if (mel2token[i] > maxToken) maxToken = mel2token[i];
+        }
+        tokenCount = Math.min(tokenCount, maxToken + 1);
+        if (tokenCount <= 1) return unchanged;
+
+        // prompt mel 从第 0 帧开始，长度与原始参考一致（或显式 maxPromptFrames）。
+        const croppedMel = ptMelData.subarray(0, promptFrames * MEL_DIM);
+
+        let f0Ids = null;
+        if (f0Source && f0Source.length > 0) {
+            const f0Hz = new Float32Array(promptFrames);
+            const srcStart = -trimOffsetFrame;
+            for (let i = 0; i < promptFrames; i++) {
+                const src = srcStart + i;
+                if (src >= 0 && src < f0Source.length) f0Hz[i] = f0Source[src];
+            }
+            const quantized = this.quantizeF0(f0Hz, 0);
+            let voiced = false;
+            for (let i = 0; i < quantized.length; i++) {
+                if (quantized[i] > 0) { voiced = true; break; }
+            }
+            if (voiced) f0Ids = quantized;
+        }
+        // 没有可用 F0 标注时退回 note pitch，至少保证 prompt 段不是全 unvoiced。
+        if (!f0Ids) {
+            f0Ids = this._padInt32(seq.f0Ids.subarray(0, Math.min(promptFrames, seq.f0Ids.length)), promptFrames);
+        }
+
+        const promptSeq = {
+            noteTextSeq: seq.noteTextSeq.subarray(0, tokenCount),
+            notePitchSeq: promptNotePitchSeq.subarray(0, tokenCount),
+            noteTypeSeq: seq.noteTypeSeq.subarray(0, tokenCount),
+            f0Ids: f0Ids.length === promptFrames ? f0Ids : this._padInt32(f0Ids, promptFrames),
+            mel2token,
+            tokenCount,
+        };
+        console.log(`[PromptCond] aligned prompt: ${promptFrames}f, ${promptSeq.tokenCount}tok, cap=${capFrames || 'none'}`);
+        return { promptSeq, ptMelData: croppedMel, ptFrameCount: promptFrames };
+    }
+
+    /**
+     * 把 promptSeq 裁到 frames 帧（静态形状/序列长度钳制后调用）。token 数组
+     * 也按最大被引用 token 收缩，避免 preflow 看到已不存在的尾部音符上下文。
+     */
+    slicePromptSeq(promptSeq, frames) {
+        if (!promptSeq) return null;
+        if (frames <= 0) return null;
+        if (frames >= promptSeq.mel2token.length) return promptSeq;
+        const mel2token = promptSeq.mel2token.subarray(0, frames);
+        let maxToken = 0;
+        for (let i = 0; i < frames; i++) {
+            if (mel2token[i] > maxToken) maxToken = mel2token[i];
+        }
+        const tokenCount = Math.min(promptSeq.tokenCount, maxToken + 1);
+        if (tokenCount <= 1) return null;
+        return {
+            noteTextSeq: promptSeq.noteTextSeq.subarray(0, tokenCount),
+            notePitchSeq: promptSeq.notePitchSeq.subarray(0, tokenCount),
+            noteTypeSeq: promptSeq.noteTypeSeq.subarray(0, tokenCount),
+            f0Ids: promptSeq.f0Ids.subarray(0, frames),
+            mel2token,
+            tokenCount,
+        };
+    }
+
+    /** 解析 .sxssinger 的标注为 {startSec, durSec, lyric, pitch, noteType, isSlur}。 */
+    _promptNotesFromSingerData(sd, refMidiNotes) {
+        const splitNums = (s) => (typeof s === 'string' && s.trim() ? s.trim().split(/\s+/).map(Number) : []);
+        const splitToks = (s) => (typeof s === 'string' && s.trim() ? s.trim().split(/\s+/) : []);
+        const sdDur = splitNums(sd.duration);
+        const sdText = splitToks(sd.text);
+        const sdPitch = splitNums(sd.note_pitch);
+        const sdType = splitNums(sd.note_type);
+        const midi = Array.isArray(refMidiNotes) ? refMidiNotes : [];
+        const notes = [];
+
+        if (midi.length > 0) {
+            // midiNotes 的 start/duration 是拍；singerData.duration 是秒。
+            // 两者必须一一对应，否则无法可靠换算出原始音频时间轴 —— 静默按
+            // bpm=120 猜会让 prompt token 和参考 mel 错位，宁可退回 cond=0。
+            if (sdDur.length !== midi.length) {
+                console.warn(`[PromptCond] singerData.duration (${sdDur.length}) != midiNotes (${midi.length}); skip prompt cond to avoid misalignment`);
+                return [];
+            }
+            const beats = midi.map(n => this._finiteOr(n && n.duration, 0));
+            let totalBeats = 0, totalSec = 0;
+            for (let i = 0; i < midi.length; i++) {
+                totalBeats += beats[i];
+                totalSec += sdDur[i];
+            }
+            const bpm = totalBeats > 0 && totalSec > 0 ? totalBeats * 60 / totalSec : 120;
+            for (let i = 0; i < midi.length; i++) {
+                const n = midi[i] || {};
+                const durSec = sdDur[i];
+                if (!(durSec > 0)) continue;
+                notes.push({
+                    startSec: this._finiteOr(n.start, 0) * 60 / bpm,
+                    durSec,
+                    lyric: String(n.lyric || (sdText.length === midi.length ? sdText[i] : '') || ''),
+                    pitch: this._finiteOr(n.pitch, sdPitch.length === midi.length ? sdPitch[i] : 0),
+                    noteType: this._finiteOr(n.noteType, sdType.length === midi.length ? sdType[i] : 0),
+                    isSlur: !!(n.isSlur || n.isContinuation || n.noteType === 3),
+                    isContinuation: !!n.isContinuation,
+                });
+            }
+        } else if (sdDur.length > 0) {
+            let t = 0;
+            for (let i = 0; i < sdDur.length; i++) {
+                const d = sdDur[i];
+                if (!(d > 0)) continue;
+                notes.push({
+                    startSec: t,
+                    durSec: d,
+                    lyric: sdText.length === sdDur.length ? String(sdText[i] || '') : '',
+                    pitch: sdPitch.length === sdDur.length ? this._finiteOr(sdPitch[i], 0) : 0,
+                    noteType: sdType.length === sdDur.length ? this._finiteOr(sdType[i], 0) : 0,
+                    isSlur: sdType.length === sdDur.length && sdType[i] === 3,
+                    isContinuation: false,
+                });
+                t += d;
+            }
+        }
+
+        notes.sort((a, b) => a.startSec - b.startSec);
+        return notes;
+    }
+
+    /** 参考 F0 优先取 f0Data（精确时间），其次 singerData.f0 字符串。 */
+    _buildPromptF0Source(sd, refF0Data) {
+        if (Array.isArray(refF0Data) && refF0Data.length > 0) {
+            const out = new Float32Array(refF0Data.length);
+            for (let i = 0; i < refF0Data.length; i++) {
+                out[i] = this._finiteOr(refF0Data[i] && refF0Data[i].f0, 0);
+            }
+            return out;
+        }
+        if (typeof sd.f0 === 'string' && sd.f0.trim()) {
+            const parts = sd.f0.trim().split(/\s+/);
+            const out = new Float32Array(parts.length);
+            for (let i = 0; i < parts.length; i++) out[i] = this._finiteOr(parts[i], 0);
+            return out;
+        }
+        return null;
+    }
+
+    _padInt32(src, len) {
+        if (!src || src.length === len) return src || new Int32Array(len);
+        const out = new Int32Array(len);
+        out.set(src.subarray(0, Math.min(src.length, len)));
+        return out;
+    }
+
+    _finiteOr(v, fallback) {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    }
+
+    /**
      * Run all encoders and produce the combined condition embedding
      */
-    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false) {
-        const phonemeIds = new BigInt64Array(tokenCount);
-        const pitchIds = new BigInt64Array(tokenCount);
-        const typeIds = new BigInt64Array(tokenCount);
-        const f0IdsArr = new BigInt64Array(totalFrames);
+    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false, scoreMode = false, promptSeq = null) {
+        // 静态形状的 4 个 encoder / preflow 固定 [1, NPU_STATIC_SEQ_LEN]。prompt
+        // token 与 target token 合起来放不下时，退回旧的 prompt cond 置零路径，
+        // 而不是把超长张量喂给静态引擎。
+        if (promptSeq && promptSeq.tokenCount > 0 && ptFrameCount > 0
+            && useStaticShapes && promptSeq.tokenCount + tokenCount > NPU_STATIC_SEQ_LEN) {
+            console.warn(`[Preprocessing] prompt ${promptSeq.tokenCount}tok + target ${tokenCount}tok > static ${NPU_STATIC_SEQ_LEN}; prompt cond will be zero-filled`);
+            promptSeq = null;
+        }
+        const hasPrompt = !!(promptSeq && promptSeq.tokenCount > 0 && ptFrameCount > 0);
+        const ptTokenCount = hasPrompt ? promptSeq.tokenCount : 0;
+        const combinedTokenCount = ptTokenCount + tokenCount;
+        const combinedFrames = ptFrameCount + totalFrames;
 
+        const phonemeIds = new BigInt64Array(combinedTokenCount);
+        const pitchIds = new BigInt64Array(combinedTokenCount);
+        const typeIds = new BigInt64Array(combinedTokenCount);
+        const f0IdsArr = new BigInt64Array(combinedFrames);
+
+        if (hasPrompt) {
+            for (let i = 0; i < ptTokenCount; i++) {
+                phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i]);
+                pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
+                typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
+            }
+        }
         for (let i = 0; i < tokenCount; i++) {
-            phonemeIds[i] = BigInt(sequences.noteTextSeq[i]);
-            pitchIds[i] = BigInt(sequences.notePitchSeq[i]);
-            typeIds[i] = BigInt(sequences.noteTypeSeq[i]);
+            const o = ptTokenCount + i;
+            phonemeIds[o] = BigInt(sequences.noteTextSeq[i]);
+            pitchIds[o] = BigInt(sequences.notePitchSeq[i]);
+            typeIds[o] = BigInt(sequences.noteTypeSeq[i]);
         }
-        for (let i = 0; i < totalFrames; i++) {
-            f0IdsArr[i] = BigInt(sequences.f0Ids[i]);
+        if (scoreMode) {
+            // score 模式：f0 条件整条置 0（bin 0 = unvoiced），与官方
+            // SoulXSinger.infer(control="score") 中 gt_f0/pt_f0 被 zeros_like
+            // 覆盖后的结果逐位一致。音高只由 note_pitch_encoder 提供，F0 曲线
+            // 交给 diffusion 自己生成。注意序列里的 f0Hz（真实频率）不能清 ——
+            // SiFiGAN vocoder 与分块边界选择都还要用它。
+            f0IdsArr.fill(0n);
+        } else {
+            // manual 对应官方 control="melody"：官方把 gt_note_pitch /
+            // pt_note_pitch 置 None（全 0），只保留 F0 条件；score 与 melody
+            // 两种音高条件互斥。此前这里无条件下发 note_pitch，导致 manual
+            // 变成 note_pitch + F0 双条件，偏离训练时的条件分布。
+            // 只清送入 note_pitch_encoder 的局部 pitchIds（含 prompt 段）；
+            // sequences.notePitchSeq 仍供 autoShift 参考中位数与分块边界
+            // F0 斜率统计使用，不能就地改写。
+            pitchIds.fill(0n);
+            if (hasPrompt) {
+                for (let i = 0; i < ptFrameCount; i++) {
+                    f0IdsArr[i] = BigInt(i < promptSeq.f0Ids.length ? promptSeq.f0Ids[i] : 0);
+                }
+            }
+            for (let i = 0; i < totalFrames; i++) {
+                f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+            }
         }
 
-        const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
-        const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+        const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
+        const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedFrames;
 
         const padInt64 = (src, len) => {
             if (src.length === len) return src;
@@ -879,12 +1234,30 @@ class Preprocessing {
         const typeInput = new ort.Tensor('int64', encType, [1, encSeqLen]);
         const f0Input = new ort.Tensor('int64', encF0, [1, encF0Len]);
 
-        const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
-            sessions.noteTextEncoder.run({ input_ids: textInput }),
-            sessions.notePitchEncoder.run({ input_ids: pitchInput }),
-            sessions.noteTypeEncoder.run({ input_ids: typeInput }),
-            sessions.f0Encoder.run({ input_ids: f0Input }),
-        ]);
+        // 使用 allSettled：任一分支 reject 时，先释放所有已产生的输入/输出张量，
+        // 再抛出第一个错误，避免成功分支的 GPU 张量泄漏（Promise.all 无此机会）。
+        const _encoderInputs = [textInput, pitchInput, typeInput, f0Input];
+        let settled;
+        try {
+            settled = await Promise.allSettled([
+                sessions.noteTextEncoder.run({ input_ids: textInput }),
+                sessions.notePitchEncoder.run({ input_ids: pitchInput }),
+                sessions.noteTypeEncoder.run({ input_ids: typeInput }),
+                sessions.f0Encoder.run({ input_ids: f0Input }),
+            ]);
+        } finally {
+            // run 已全部结束，输入张量无论成功/失败都可释放。
+            for (const t of _encoderInputs) disposeTensor(t);
+        }
+        const _failed = settled.find(s => s.status === 'rejected');
+        if (_failed) {
+            for (const s of settled) {
+                if (s.status !== 'fulfilled' || !s.value) continue;
+                for (const k of Object.keys(s.value)) disposeTensor(s.value[k]);
+            }
+            throw _failed.reason;
+        }
+        const [textResults, pitchResults, typeResults, f0Results] = settled.map(s => s.value);
 
         // 输出名自适应：optimized_npu 输出 'embeddings'，plain int8 量化模型输出重命名为
         // 'output'。按候选顺序取第一个存在的 key，避免硬编码只匹配一种命名。
@@ -899,22 +1272,19 @@ class Preprocessing {
         const pitchOut = pickOutput(pitchResults);
         const typeOut = pickOutput(typeResults);
         const f0Out = pickOutput(f0Results);
-        const textEmb = useStaticShapes ? outputToFloat32(textOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textOut);
-        const pitchEmb = useStaticShapes ? outputToFloat32(pitchOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchOut);
-        const typeEmb = useStaticShapes ? outputToFloat32(typeOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeOut);
-        const f0Emb = useStaticShapes ? outputToFloat32(f0Out).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Out);
-        // 释放 4 个 encoder 的输入和输出张量（outputToFloat32 已拷贝数据）
-        disposeTensor(textInput);
-        disposeTensor(pitchInput);
-        disposeTensor(typeInput);
-        disposeTensor(f0Input);
+        const textEmb = useStaticShapes ? outputToFloat32(textOut).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(textOut);
+        const pitchEmb = useStaticShapes ? outputToFloat32(pitchOut).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(pitchOut);
+        const typeEmb = useStaticShapes ? outputToFloat32(typeOut).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(typeOut);
+        const f0Emb = useStaticShapes ? outputToFloat32(f0Out).subarray(0, combinedFrames * EMBED_DIM) : outputToFloat32(f0Out);
+        // 释放 4 个 encoder 的输出张量（输入张量已在 finally 中释放；
+        // outputToFloat32 已拷贝数据）
         disposeTensor(textOut);
         disposeTensor(pitchOut);
         disposeTensor(typeOut);
         disposeTensor(f0Out);
 
-        const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
-        for (let t = 0; t < tokenCount; t++) {
+        const tokenEmb = new Float32Array(combinedTokenCount * EMBED_DIM);
+        for (let t = 0; t < combinedTokenCount; t++) {
             const tBase = t * EMBED_DIM;
             for (let d = 0; d < EMBED_DIM; d++) {
                 tokenEmb[tBase + d] = textEmb[tBase + d] + pitchEmb[tBase + d] + typeEmb[tBase + d];
@@ -922,30 +1292,41 @@ class Preprocessing {
         }
 
         const floatType = isFP16 ? 'float16' : 'float32';
-        const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
         const preflowTokenEmb = useStaticShapes ? (() => { const p = new Float32Array(preflowSeqLen * EMBED_DIM); p.set(tokenEmb); return p; })() : tokenEmb;
         const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
         const preflowOut = pickOutput(preflowResults, ['processed_features', 'output']);
-        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowOut);
+        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowOut).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(preflowOut);
         // 释放 preflow 输入和输出张量
         disposeTensor(featuresTensor);
         disposeTensor(preflowOut);
 
         // 长片段时在 preflow → expandedEmb 之间 yield 一次，避免连续 CPU 循环阻塞主线程
-        if (totalFrames > 256) {
+        if (combinedFrames > 256) {
             await new Promise(r => setImmediate(r));
         }
 
-        // mel2token 展开与 f0Emb 相加合并到同一个缓冲区：旧实现先分配
-        // expandedEmb 做 subarray.set（native memcpy），再分配 combinedFeatures
-        // 逐元素相加——一次全长分配（totalFrames×512×4B）+ 一遍全量遍历纯属
-        // 冗余（expandedEmb 再无其他消费者）。现在直接展开到 combinedFeatures，
-        // 然后就地加上 f0Emb。
+        // mel2token 展开：prompt 段用 promptSeq 自己的映射，target 段整体偏移
+        // ptTokenCount。没有 promptSeq 时 prompt 段保持全 0（旧行为，cond_emb
+        // 后是一个常数 bias），不会被 PAD/f0-bin0 的 embedding 意外污染。
         const mel2token = sequences.mel2token;
-        const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
+        const combinedMel2token = new Int32Array(combinedFrames);
+        if (hasPrompt) {
+            for (let f = 0; f < ptFrameCount; f++) {
+                const raw = f < promptSeq.mel2token.length ? (promptSeq.mel2token[f] | 0) : 0;
+                combinedMel2token[f] = Math.max(0, Math.min(ptTokenCount - 1, raw));
+            }
+        }
         for (let f = 0; f < totalFrames; f++) {
-            const tokenIdx = mel2token[f];
+            const raw = mel2token[f] | 0;
+            combinedMel2token[ptFrameCount + f] = ptTokenCount + Math.max(0, Math.min(tokenCount - 1, raw));
+        }
+
+        const combinedFeatures = new Float32Array(combinedFrames * EMBED_DIM);
+        const firstCondFrame = hasPrompt ? 0 : ptFrameCount;
+        for (let f = firstCondFrame; f < combinedFrames; f++) {
+            const tokenIdx = combinedMel2token[f];
             combinedFeatures.set(
                 processedTokenEmb.subarray(tokenIdx * EMBED_DIM, (tokenIdx + 1) * EMBED_DIM),
                 f * EMBED_DIM
@@ -953,29 +1334,20 @@ class Preprocessing {
         }
 
         // 展开 → f0 相加之间 yield
-        if (totalFrames > 256) {
+        if (combinedFrames > 256) {
             await new Promise(r => setImmediate(r));
         }
 
-        for (let i = 0; i < combinedFeatures.length; i++) {
+        for (let i = firstCondFrame * EMBED_DIM; i < combinedFeatures.length; i++) {
             combinedFeatures[i] += f0Emb[i];
         }
 
-        const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
-        const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-        // 单次 set 完成整段拷贝（源/目的连续），替代元素级双重循环
-        if (ptFrameCount === 0) {
-            condCodeData.set(combinedFeatures);
-        } else {
-            condCodeData.set(combinedFeatures, ptFrameCount * EMBED_DIM);
-        }
-
-        const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
-        const paddedCondCode = useStaticShapes ? (() => { const p = new Float32Array(condSeqLen * EMBED_DIM); p.set(condCodeData); return p; })() : condCodeData;
+        const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedFrames;
+        const paddedCondCode = useStaticShapes ? (() => { const p = new Float32Array(condSeqLen * EMBED_DIM); p.set(combinedFeatures); return p; })() : combinedFeatures;
         const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
         const condEmbResults = await sessions.condEmb.run({ cond_code: condCodeTensor });
         const condOut = pickOutput(condEmbResults, ['cond_embedding', 'output']);
-        const cond = useStaticShapes ? outputToFloat32(condOut).subarray(0, totalCondFrames * COND_DIM) : outputToFloat32(condOut);
+        const cond = useStaticShapes ? outputToFloat32(condOut).subarray(0, combinedFrames * COND_DIM) : outputToFloat32(condOut);
         // 释放 condEmb 输入和输出张量
         disposeTensor(condCodeTensor);
         disposeTensor(condOut);

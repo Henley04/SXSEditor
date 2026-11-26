@@ -1,7 +1,7 @@
 const { expect } = require('chai');
-const { describe, it, beforeEach, afterEach } = require('mocha');
+const { describe, it, before, beforeEach, afterEach } = require('mocha');
 const sinon = require('sinon');
-const path = require('node:path');
+const _path = require('node:path');
 
 // ---------------------------------------------------------------------------
 // Stub the native addon module BEFORE requiring anything that loads it.
@@ -16,7 +16,7 @@ const fakeAddon = {
         addonCalls.created.push({ modelPath, indices, providerOptions });
         return BigInt(fakeSessionCounter++);
     },
-    sessionInfo(id) {
+    sessionInfo(_id) {
         return {
             inputs: [
                 { name: 'xt_input', type: 'float16', dims: [1, -1, 128] },
@@ -200,6 +200,13 @@ describe('winml ortBridge', () => {
     });
 
     describe('WinMLSession', () => {
+        // WinML 只存在于 Windows：resolveOrtDllPath() 在非 win32 直接返回 null，
+        // ensureBridgeInit() 必然失败，这些用例根本走不到被测逻辑。
+        // 跳过而不是让它们在 Linux/macOS CI 上长期红着（那不是回归）。
+        before(function () {
+            if (process.platform !== 'win32') this.skip();
+        });
+
         it('exposes ORT-compatible metadata from bridge sessionInfo', async () => {
             const session = await ortBridge.createSessionWithEps('C:/fake/model.onnx', [0]);
             expect(session.inputNames).to.deep.equal(['xt_input', 't', 'cond', 'xt_mask']);

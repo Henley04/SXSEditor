@@ -87,8 +87,8 @@
         <span data-lang="zh">支持哪些平台？</span>
       </h3>
       <ul>
-        <li><span data-lang="en"><strong>Windows</strong>: Primary target with pre-built installers. Windows 10/11 64-bit required.</span><span data-lang="zh"><strong>Windows</strong>：主要平台，提供预构建安装包。需要 Windows 10/11 64 位。</span></li>
-        <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source using Electron Forge (CPU inference only — no DirectML/Windows ML; not covered by CI, no official binaries). See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建（仅 CPU 推理，不含 DirectML/Windows ML；无 CI 覆盖、无官方二进制）。详见开发者指南。</span></li>
+        <li><span data-lang="en"><strong>Windows</strong>: Primary target with pre-built installers. Windows 10/11 64-bit required. The installer also sets up the <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong>, which native inference requires.</span><span data-lang="zh"><strong>Windows</strong>：主要平台，提供预构建安装包。需要 Windows 10/11 64 位。安装包还会一并安装原生推理所需的 <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong>。</span></li>
+        <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source with Electron Forge; CPU inference only, without DirectML or Windows ML. No official binaries are provided. See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建，仅支持 CPU 推理，不支持 DirectML / Windows ML，官方不提供预编译二进制。详见开发者指南。</span></li>
       </ul>
 
       <h3>
@@ -105,7 +105,7 @@
         <tbody>
           <tr><td><span data-lang="en">Chinese (Mandarin)</span><span data-lang="zh">中文（普通话）</span></td><td><span data-lang="en">Supported — Chinese characters with optional tone digit (1–5)</span><span data-lang="zh">支持——汉字，可附加声调数字（1–5）</span></td></tr>
           <tr><td><span data-lang="en">English</span><span data-lang="zh">英语</span></td><td><span data-lang="en">Supported — English words, auto-converted to phonemes</span><span data-lang="zh">支持——英文单词，自动转换为音素</span></td></tr>
-          <tr><td><span data-lang="en">Japanese</span><span data-lang="zh">日语</span></td><td><span data-lang="en">Supported — hiragana/katakana, auto-converted to phonemes via Hybrid Phonemes (default, per-kana ARPAbet/Cantonese selection) or English Phoneme Migration; JP LoRA model in development</span><span data-lang="zh">支持——平假名/片假名，通过混合音素（默认，按假名在 ARPAbet/粤语间挑选）或英语音素迁移自动转换为音素；日语 LoRA 模型开发中</span></td></tr>
+          <tr><td><span data-lang="en">Japanese</span><span data-lang="zh">日语</span></td><td><span data-lang="en">Supported — hiragana/katakana, auto-converted to phonemes via English Phoneme Migration (default) or Hybrid Phonemes (same ARPAbet mapping, but prefers a Cantonese yue_ syllable where one is closer); jp-lora mode requires the optional JP model pack</span><span data-lang="zh">支持——平假名/片假名，通过英语音素迁移（默认）或混合音素（同一套 ARPAbet 映射，但在更接近时改用粤语 yue_ 音节）自动转换为音素；jp-lora 模式需下载可选 JP 模型包</span></td></tr>
         </tbody>
       </table>
 
@@ -118,8 +118,8 @@
         <span data-lang="en">What models do I need?</span>
         <span data-lang="zh">需要哪些模型？</span>
       </h3>
-      <p data-lang="en">SXSEditor requires 9 ONNX model files for the SVS synthesis pipeline, plus optional models for pitch detection (RMVPE) and MIDI extraction (Basic Pitch). On first launch, the Model Download window opens automatically to download them.</p>
-      <p data-lang="zh">SXSEditor 的 SVS 合成管线需要 9 个 ONNX 模型文件，外加可选的音高检测（RMVPE）和 MIDI 提取（Basic Pitch）模型。首次启动时，模型下载窗口会自动打开进行下载。</p>
+      <p data-lang="en">SXSEditor requires 9 ONNX models for the SVS synthesis pipeline — 16 files in total at FP32/FP16/INT8 precision (seven of the models ship external .onnx.data weight files), or 9 self-contained files at INT8-NPU. Pitch detection (RMVPE) and MIDI extraction (Basic Pitch) models are downloaded in the same first-launch flow, for 19 required files in all (12 at INT8-NPU). On first launch, the Model Download window opens automatically to download them.</p>
+      <p data-lang="zh">SXSEditor 的 SVS 合成管线需要 9 个 ONNX 模型——在 FP32/FP16/INT8 精度下共 16 个文件（其中 7 个模型附带 .onnx.data 外部权重文件），INT8-NPU 精度下为 9 个自包含文件。音高检测（RMVPE）与 MIDI 提取（Basic Pitch）模型在同一首次启动流程中一并下载，总计 19 个必需文件（INT8-NPU 为 12 个）。首次启动时，模型下载窗口会自动打开进行下载。</p>
 
       <h3>
         <span data-lang="en">How much disk space do models need?</span>
@@ -130,8 +130,8 @@
         <li><span data-lang="en">FP16: Medium (~1.5 GB)</span><span data-lang="zh">FP16：中等（约 1.5 GB）</span></li>
         <li><span data-lang="en">INT8: Smallest (~1 GB)</span><span data-lang="zh">INT8：最小（约 1 GB）</span></li>
       </ul>
-      <p data-lang="en">Multiple precisions can coexist — each has its own subdirectory.</p>
-      <p data-lang="zh">多种精度可共存——每种精度有独立子目录。</p>
+      <p data-lang="en">Multiple precisions can coexist, each in its own subdirectory.</p>
+      <p data-lang="zh">多种精度可共存，每种精度使用独立子目录。</p>
 
       <h3>
         <span data-lang="en">Which model precision should I choose?</span>
@@ -250,8 +250,8 @@
         <span data-lang="en">What is a slur note?</span>
         <span data-lang="zh">什么是连音音符？</span>
       </h3>
-      <p data-lang="en">A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash <code>-</code> as the note's lyric. The note continues the phoneme of the previous note. <strong>An empty lyric is not a slur</strong> — an empty lyric is a rest and always sings as silence, whether or not the note has a pitch. See <a href="fragment-editor.html#note-types-notetype">Note Types</a>.</p>
-      <p data-lang="zh">连音（延续）音符延续前一个音符的声音而不重新起音。创建方法是在该音符的歌词位置输入半角连字符 <code>-</code>，该音符会延续前一个音符的音素。<strong>空歌词不是连音</strong>——空歌词表示休止，无论音符有无音高都按静音处理。详见<a href="fragment-editor.html#note-types-notetype">音符类型</a>。</p>
+      <p data-lang="en">A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash <code>-</code> as the note's lyric. The note continues the phoneme of the previous note. <strong>An empty lyric is not a slur</strong> — an empty lyric is a rest and always sings as silence, whether or not the note has a pitch. See <a href="fragment-editor.html#lyrics-and-articulation">Lyrics and How They Are Sung</a>.</p>
+      <p data-lang="zh">连音（延续）音符延续前一个音符的声音而不重新起音。创建方法是在该音符的歌词位置输入半角连字符 <code>-</code>，该音符会延续前一个音符的音素。<strong>空歌词不是连音</strong>——空歌词表示休止，无论音符有无音高都按静音处理。详见<a href="fragment-editor.html#lyrics-and-articulation">歌词与发声方式</a>。</p>
 
       <h3>
         <span data-lang="en">How do I draw pitch curves?</span>
@@ -284,7 +284,7 @@
         <span data-lang="zh">合成速度很慢</span>
       </h3>
       <ul>
-        <li><span data-lang="en"><strong>First synthesis is always slower</strong> — the pipeline must load 9 ONNX models into GPU memory. Subsequent syntheses are faster.</span><span data-lang="zh"><strong>首次合成总是较慢</strong>——管线需要将 9 个 ONNX 模型加载到 GPU 显存。之后的合成会更快。</span></li>
+        <li><span data-lang="en"><strong>First synthesis is always slower</strong> — the pipeline must load the 9 ONNX models (16 files at standard precision) into GPU memory. Subsequent syntheses are faster.</span><span data-lang="zh"><strong>首次合成总是较慢</strong>——管线需要将 9 个 ONNX 模型（标准精度下 16 个文件）加载到 GPU 显存。之后的合成会更快。</span></li>
         <li><span data-lang="en"><strong>Use a discrete GPU</strong> if available. CPU inference is significantly slower.</span><span data-lang="zh">如有 <strong>独立显卡</strong> 请使用。CPU 推理明显较慢。</span></li>
         <li><span data-lang="en"><strong>Reduce diffusion steps</strong> in Settings &gt; Preview Inference Parameters. Default is 16; try 8 for faster preview.</span><span data-lang="zh">在设置 &gt; 预览推理参数中 <strong>减少扩散步数</strong>。默认 16；可尝试 8 以加快预览。</span></li>
         <li><span data-lang="en"><strong>Set CFG Strength to 0</strong> to skip unconditional prediction, roughly doubling speed.</span><span data-lang="zh"><strong>将 CFG Strength 设为 0</strong> 可跳过无条件预测，速度约提升一倍。</span></li>
@@ -350,22 +350,22 @@
       </h3>
       <ul>
         <li><span data-lang="en"><strong>Shared Mode</strong> (WASAPI Shared): Standard Windows audio. Other apps can play audio simultaneously. Default mode.</span><span data-lang="zh"><strong>共享模式</strong>（WASAPI Shared）：标准 Windows 音频。其他应用可同时播放。默认模式。</span></li>
-        <li><span data-lang="en"><strong>Exclusive Mode</strong> (WASAPI Exclusive): Direct hardware access with lower latency (1–3ms). Blocks other apps from using the audio device. Falls back to shared mode if the device doesn't support the selected settings.</span><span data-lang="zh"><strong>独占模式</strong>（WASAPI Exclusive）：直接硬件访问，延迟更低（1–3ms）。会阻止其他应用使用音频设备。如设备不支持所选设置，则回退到共享模式。</span></li>
+        <li><span data-lang="en"><strong>Exclusive Mode</strong> (WASAPI Exclusive): Selectable in Settings for future support, but not implemented in the current version — the decibri backend ignores the exclusive-mode flag and always opens the device in shared mode, so the low-latency / bit-perfect behaviour does not apply.</span><span data-lang="zh"><strong>独占模式</strong>（WASAPI Exclusive）：在设置中可选，但为将来支持保留，当前版本未实现——decibri 后端会忽略独占标志，始终以共享模式打开设备，因此低延迟 / 位完美特性不会生效。</span></li>
       </ul>
 
       <h3>
         <span data-lang="en">What is the output sample rate?</span>
         <span data-lang="zh">输出采样率是多少？</span>
       </h3>
-      <p data-lang="en">Synthesis runs at 24 kHz internally (model rate). The default playback sample rate is now 48 kHz. Export sample rate is selectable (24 / 44.1 / 48 / 96 kHz) with linear upsampling from the model rate. In exclusive mode, the device must support the selected rate.</p>
-      <p data-lang="zh">合成内部以 24kHz（模型速率）运行。默认播放采样率现为 48kHz。导出采样率可选（24 / 44.1 / 48 / 96 kHz），从模型采样率线性上采样。独占模式下设备必须支持所选采样率。</p>
+      <p data-lang="en">Synthesis runs at 24 kHz internally (model rate). The default playback sample rate is now 48 kHz. Export sample rate is selectable (24 / 44.1 / 48 / 96 kHz) with band-limited Kaiser-windowed sinc resampling from the model rate. Playback always runs in shared mode, so the app resamples the audio itself.</p>
+      <p data-lang="zh">合成内部以 24kHz（模型速率）运行。默认播放采样率现为 48kHz。导出采样率可选（24 / 44.1 / 48 / 96 kHz），从模型采样率做 Kaiser 窗带限 sinc 重采样。播放始终使用共享模式，重采样由应用自行完成。</p>
 
       <h3>
         <span data-lang="en">What format is the exported WAV?</span>
         <span data-lang="zh">导出的 WAV 是什么格式？</span>
       </h3>
-      <p data-lang="en">48 kHz, 32-bit IEEE float WAV by default (the model runs at 24 kHz internally, with linear upsampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz, and bit depth 16 / 24 / 32-bit in the Export dialog.</p>
-      <p data-lang="zh">默认为 48kHz、32-bit IEEE float WAV（模型内部以 24kHz 运行，线性上采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz，位深度可在导出对话框中选择 16 / 24 / 32 位。</p>
+      <p data-lang="en">48 kHz, 32-bit IEEE float WAV by default (the model runs at 24 kHz internally, with band-limited Kaiser-windowed sinc resampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz, and bit depth 16 / 24 / 32-bit in the Export dialog.</p>
+      <p data-lang="zh">默认为 48kHz、32-bit IEEE float WAV（模型内部以 24kHz 运行，以 Kaiser 窗带限 sinc 重采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz，位深度可在导出对话框中选择 16 / 24 / 32 位。</p>
 
       <h2>
         <span data-lang="en">Audio to MIDI</span>
@@ -386,7 +386,7 @@
       <ul>
         <li><span data-lang="en"><strong>FCPE</strong> (default, recommended): ONNX-based pitch detector with a configurable post-processing pipeline (loudness normalization, silence gating, median smoothing, note quantization). Best extraction quality.</span><span data-lang="zh"><strong>FCPE</strong>（默认，推荐）：基于 ONNX 的音高检测器，配有可配置的后处理流水线（响度归一化、静音门控、中值平滑、音符量化）。提取质量最佳。</span></li>
         <li><span data-lang="en"><strong>Basic Pitch</strong>: Neural network-based, stable results for most scenarios.</span><span data-lang="zh"><strong>Basic Pitch</strong>：基于神经网络，大多数场景结果稳定。</span></li>
-        <li><span data-lang="en"><strong>RMVPE</strong>: Converts F0 pitch curve to notes. Experimental, results may be suboptimal.</span><span data-lang="zh"><strong>RMVPE</strong>：将 F0 音高曲线转为音符。实验性，结果可能不理想。</span></li>
+        <li><span data-lang="en"><strong>RMVPE</strong>: Converts an F0 pitch curve to notes, then extracts notes from it. It works again as of <strong>model v3</strong> — every earlier build shipped a model whose F0 output was read incorrectly, pinning the whole curve at 30 Hz, so results were unusable. Make sure the model has been updated before relying on it.</span><span data-lang="zh"><strong>RMVPE</strong>：将 F0 音高曲线转为音符，再从中提取音符。<strong>模型 v3</strong> 起已恢复可用——此前所有版本都因为 F0 输出被错误解析而把整条曲线锁死在 30 Hz，结果不可用。使用前请确认模型已更新。</span></li>
       </ul>
       <p data-lang="en">Change this in Settings &gt; Audio &gt; MIDI Extraction Tool.</p>
       <p data-lang="zh">在设置 &gt; 音频 &gt; MIDI 提取工具中更改。</p>
@@ -397,6 +397,28 @@
       </h3>
       <p data-lang="en">Yes. When using Audio to MIDI, choose "Extract Pitch (RMVPE)" to also extract an F0 pitch curve that is applied to the fragment.</p>
       <p data-lang="zh">可以。使用音频转 MIDI 时，选择 "Extract Pitch (RMVPE)" 可同时提取 F0 音高曲线并应用到片段。</p>
+
+      <h3>
+        <span data-lang="en">Why is the detected BPM sometimes exactly double or half?</span>
+        <span data-lang="zh">自动检测出的 BPM 为什么有时正好是一倍或一半？</span>
+      </h3>
+      <p data-lang="en">A track whose accents land every two beats at 84 BPM is <em>physically identical</em> to 168 BPM, so no detector can tell them apart from the audio alone. SXSEditor picks the interpretation whose beat period matches the strongest onset periodicity, and only prefers the faster reading when the mid-beat position genuinely carries an onset; a pure two-beat pattern stays at the slower value. If the result is still not what you want, type the BPM into the field manually — it is remembered and used for every later extraction. Detection is accurate to 0.1 BPM now; the old build rounded to whole numbers, which drifted several seconds over a long take.</p>
+      <p data-lang="zh">如果一首歌的重音每两拍落一次（84 BPM），它与 168 BPM 在物理上<strong>完全等价</strong>，任何算法都无法只凭音频区分。SXSEditor 会选择"拍周期与最强起音周期性一致"的那种解释，只有当半拍位置<strong>确实</strong>有起音时才取快的一倍；纯粹的两拍循环会保持慢的那侧。如果结果仍不合意，直接在 BPM 输入框里手动改即可——它会被记住，并用于之后的所有提取。检测精度现在到 0.1 BPM；旧版四舍五入到整数，长一点的曲子末尾会漂好几秒。</p>
+
+      <h3>
+        <span data-lang="en">The extracted notes do not line up with the waveform</span>
+        <span data-lang="zh">提取出来的音符和波形对不齐</span>
+      </h3>
+      <p data-lang="en">Fixed in v3.0.0: the waveform, playhead, notes, pitch curve and grid now share one BPM, and a change applies immediately. Earlier builds used different time bases in these layers, which made notes drift away from the waveform.</p>
+      <p data-lang="zh">v3.0.0 起，波形、播放头、音符、音高曲线与网格共用同一 BPM，修改后立即生效。此前这四层使用不同的时间基准，会导致音符与波形错位；升级后打开旧工程即可恢复正常。</p>
+
+      <h3>
+        <span data-lang="en">The progress bar runs slightly ahead of the sound</span>
+        <span data-lang="zh">进度条比声音快一点点</span>
+      </h3>
+      <p data-lang="en">Fixed in v3.0.0 for the audio-preprocessing window; the main window and the fragment editor already had this since v2.0.3. The playhead is a UI element and Web Audio's <code>currentTime</code> marks where the <em>renderer</em> is, not where the speaker is — the sound still has to travel through the output buffer, which costs 20–120 ms on Windows. A playhead driven by the raw render clock therefore leads the audio by exactly that much, and it looks like the picture is running away from the music. SXSEditor now subtracts <code>AudioContext.outputLatency</code> (falling back to <code>baseLatency</code>, then to no compensation) for anything that describes position — playhead, timecode, seek position — while sample scheduling keeps using the raw clock, because mixing the two would make the audio itself land off the timeline. If you use WASAPI exclusive output, the compensation is estimated from one device buffer, since no context latency is available on that path.</p>
+      <p data-lang="zh">v3.0.0 已修复音频预处理窗口；主窗口与分片编辑器自 v2.0.3 起就是这样。播放头是界面元素，而 Web Audio 的 <code>currentTime</code> 表示<strong>渲染线程</strong>的进度，并非扬声器实际输出的位置：声音还需经过输出缓冲，Windows 上为 20–120 ms。用渲染时钟直接驱动播放头，就正好会领先声音这么多，看起来就是"画面在甩开音乐"。现在凡描述位置的量（播放头、时间码、跳转位置）都扣除 <code>AudioContext.outputLatency</code>（没有则退到 <code>baseLatency</code>，再没有就不补偿），而采样调度仍用原始时钟——两者混用会让音频本身偏离时间轴。如果你用的是 WASAPI 独占输出，这条路径拿不到 context 的延迟值，补偿量按一个设备缓冲估算。</p>
+
 
       <h2>
         <span data-lang="en">Projects</span>
@@ -445,6 +467,18 @@
         <span data-lang="en">Troubleshooting</span>
         <span data-lang="zh">故障排查</span>
       </h2>
+
+      <h3>
+        <span data-lang="en">Synthesis fails with "native module not found" / "binding not found"</span>
+        <span data-lang="zh">合成失败，提示 "native module not found" / "binding 未找到"</span>
+      </h3>
+      <p data-lang="en">This almost always means the <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong> is missing or outdated — ONNX Runtime and the native inference bridge are MSVC-built and need <code>vcruntime140.dll</code>, <code>vcruntime140_1.dll</code> and <code>msvcp140.dll</code>. Stripped-down or long-unupdated Windows installs may lack these, and the loader reports a generic "binding not found" instead of the real cause.</p>
+      <p data-lang="zh">这几乎总是因为缺少或过旧的 <strong>Microsoft Visual C++ Redistributable 2015-2022 (x64)</strong>——ONNX Runtime 与原生推理桥接由 MSVC 编译，需要 <code>vcruntime140.dll</code>、<code>vcruntime140_1.dll</code> 和 <code>msvcp140.dll</code>。精简版或长期未更新的 Windows 可能没有这些 DLL，加载器只会笼统报 "binding 未找到"，掩盖真实原因。</p>
+      <ol>
+        <li><span data-lang="en">Install the redistributable from <a href="https://aka.ms/vc14/vc_redist.x64.exe">aka.ms/vc14/vc_redist.x64.exe</a> and restart the app.</span><span data-lang="zh">从 <a href="https://aka.ms/vc14/vc_redist.x64.exe">aka.ms/vc14/vc_redist.x64.exe</a> 安装运行库后重启应用。</span></li>
+        <li><span data-lang="en">Open <strong>Help → Environment Check</strong> and check the <em>Visual C++ runtime</em> row: it shows "MISSING" with the exact DLL names when the runtime is incomplete.</span><span data-lang="zh">打开<strong>帮助 → 环境检测</strong>，查看 <em>Visual C++ 运行库</em> 一行：运行库不完整时会显示 "MISSING" 并列出缺失的 DLL 名称。</span></li>
+        <li><span data-lang="en">Re-run the latest installer, which bundles and auto-installs the redistributable.</span><span data-lang="zh">重新运行最新版安装包，它会自带并自动安装该运行库。</span></li>
+      </ol>
 
       <h3>
         <span data-lang="en">The app crashes on startup</span>

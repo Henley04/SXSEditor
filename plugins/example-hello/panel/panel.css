@@ -1,0 +1,88 @@
+/* 面板自带样式：面板跑在 opaque origin 的 iframe 里，拿不到宿主的 CSS 变量，
+   所以这里有一套自己的默认配色（暗色）。想跟随宿主就把 theme 事件里的颜色
+   写到下面这几个 --host-* 上 —— panel.js 里的 applyTheme() 已经这么做了。 */
+
+:root {
+  --host-bg: #17171f;
+  --host-panel: #101018;
+  --host-fg: #c9c9d4;
+  --host-fg-muted: #8b8b99;
+  --host-accent: #6ea8fe;
+  --host-border: #33333f;
+  color-scheme: dark;
+}
+
+:root[data-mode='light'] {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--host-bg);
+  color: var(--host-fg);
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--host-fg);
+}
+
+.hint {
+  margin: 0 0 14px;
+  color: var(--host-fg-muted);
+  font-size: 12px;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--host-border);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+button {
+  appearance: none;
+  border: 1px solid var(--host-border);
+  background: var(--host-panel);
+  color: var(--host-fg);
+  border-radius: 6px;
+  padding: 6px 11px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--host-accent);
+  color: var(--host-accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+pre {
+  margin: 0;
+  padding: 10px;
+  background: var(--host-panel);
+  border: 1px solid var(--host-border);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 45vh;
+  overflow: auto;
+}

@@ -362,6 +362,8 @@ async function ensureGPUInfo(waitComplete = false) {
         memoryTotal: c.memoryTotal || c.vram || 0,
         memoryUsed: c.memoryUsed || 0,
         vendor: c.vendor || '',
+        // 驱动版本：环境检测需要展示，此前这里把 systeminformation 的该字段丢了。
+        driverVersion: c.driverVersion || '',
         deviceType,
         isDiscrete: deviceType === 'discrete-gpu',
       };
@@ -381,6 +383,32 @@ async function ensureGPUInfo(waitComplete = false) {
  */
 function getGPUPhase() {
   return _gpuPhase;
+}
+
+/**
+ * 只读 GPU 快照：不 await 任何 pending 探测，供环境检测在毫秒级返回。
+ *
+ * `_gpuInfoCache`（systeminformation 完整数据）优先，`_gpuInfoFast`（WMI）兜底。
+ * 调用方必须自己看 `phase`：fast 阶段的 AdapterRAM 是 uint32，>4GB 会截断，
+ * 不能当真实显存展示。
+ *
+ * @returns {{phase:'none'|'fast'|'full', controllers:Array, pending:boolean}}
+ */
+function getGPUInfoSnapshot() {
+  return {
+    phase: _gpuPhase,
+    controllers: _gpuInfoCache || _gpuInfoFast || [],
+    pending: !!_gpuInfoPending,
+  };
+}
+
+/**
+ * 只读 NPU 快照：同样不触发探测。非 Windows 上 detectNPUCached() 会 spawn
+ * PowerShell，环境检测首屏不能付这个代价。
+ * @returns {{value:object|null, pending:boolean}}
+ */
+function getNPUInfoSnapshot() {
+  return { value: _npuCache, pending: !!_npuPending };
 }
 
 /**
@@ -501,6 +529,8 @@ module.exports = {
   startGPUPreload,
   ensureGPUInfo,
   getGPUPhase,
+  getGPUInfoSnapshot,
+  getNPUInfoSnapshot,
   detectAllHardware,
   detectNPUCached,
   detectNPUByPnp,

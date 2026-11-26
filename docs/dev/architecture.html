@@ -242,23 +242,23 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           </tr>
           <tr>
             <td><span data-lang="en">Locale</span><span data-lang="zh">语言</span></td>
-            <td><code>save-locale</code>, <code>get-locale</code>, <code>locale-changed</code></td>
-            <td><code>main.js</code></td>
+            <td><code>get-locale</code> (early, <code>main.js</code>), <code>save-locale</code>, <code>locale-changed</code></td>
+            <td><code>main.js</code> + <code>main/settingsIpc.js</code></td>
           </tr>
           <tr>
             <td><span data-lang="en">Singer Market</span><span data-lang="zh">歌手市场</span></td>
-            <td><code>singer-market:fetch</code>, <code>singer-market:download</code></td>
+            <td><code>singer-market:list</code>, <code>singer-market:file-detail</code>, <code>singer-market:licenses</code>, <code>singer-market:download</code></td>
             <td><code>main/singerMarketIpc.js</code></td>
           </tr>
           <tr>
             <td><span data-lang="en">Accompaniment</span><span data-lang="zh">伴奏</span></td>
-            <td><code>accompaniment:import</code>, <code>accompaniment:export-mix</code></td>
-            <td><code>main/audioIpc.js</code></td>
+            <td><code>dialog:showOpenDialog</code>, <code>file:readFileBuffer</code> <span data-lang="en">(shared channels — no dedicated accompaniment IPC; import is renderer-side)</span><span data-lang="zh">（共享通道——没有专用伴奏 IPC；导入在渲染进程侧完成）</span></td>
+            <td><code>renderer/projectManager.js</code></td>
           </tr>
           <tr>
             <td><span data-lang="en">Lyrics / LRC</span><span data-lang="zh">歌词 / LRC</span></td>
-            <td><code>lrc:export</code></td>
-            <td><code>main/svsIpc.js</code></td>
+            <td><code>dialog:showSaveDialog</code>, <code>file:saveFile</code> <span data-lang="en">(shared channels — export is renderer-side)</span><span data-lang="zh">（共享通道——导出在渲染进程侧完成）</span></td>
+            <td><code>renderer/lrcExport.js</code></td>
           </tr>
         </tbody>
       </table>
@@ -320,7 +320,7 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           <tr>
             <td><code>audio_preprocess_window</code></td>
             <td><code>src/audioPreprocess/index.js</code></td>
-            <td><span data-lang="en">F0 (RMVPE) and MIDI (Basic Pitch) extraction UI.</span><span data-lang="zh">F0（RMVPE）与 MIDI（Basic Pitch）提取界面。</span></td>
+            <td><span data-lang="en">F0 (RMVPE) and MIDI extraction UI (FCPE by default; Basic Pitch / RMVPE optional).</span><span data-lang="zh">F0（RMVPE）与 MIDI 提取界面（MIDI 默认使用 FCPE；Basic Pitch / RMVPE 可选）。</span></td>
           </tr>
           <tr>
             <td><code>settings_window</code></td>
@@ -352,7 +352,7 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
       <ol>
         <li><span class="step-num">1</span><span data-lang="en"><code>src/main.js</code> sets <code>WebMachineLearningNeuralNetwork</code> feature flag, registers the <code>onnx://</code> protocol scheme, and applies CSP headers.</span><span data-lang="zh"><code>src/main.js</code> 设置 <code>WebMachineLearningNeuralNetwork</code> 特性开关，注册 <code>onnx://</code> 协议 scheme，并应用 CSP 头。</span></li>
         <li><span class="step-num">2</span><span data-lang="en">In packaged builds the splash window is created first; in dev mode the main window is created with <code>show: false</code>.</span><span data-lang="zh">打包构建时先创建启动画面窗口；开发模式下以 <code>show: false</code> 创建主窗口。</span></li>
-        <li><span class="step-num">3</span><span data-lang="en">All IPC registrars modules (<code>registerWindowIpc</code>, <code>registerSvsIpc</code>, ...) are called <em>before</em> <code>app.whenReady()</code> resolves, so handlers exist when renderers load.</span><span data-lang="zh">所有 IPC 注册模块（<code>registerWindowIpc</code>、<code>registerSvsIpc</code> 等）在 <code>app.whenReady()</code> 完成前就被调用，确保渲染进程加载时处理器已就绪。</span></li>
+        <li><span class="step-num">3</span><span data-lang="en">Inside <code>app.whenReady()</code>, the <strong>light</strong> IPC handlers are registered first (STEP 1.5: window, dialog, theme, singer, singer market, WebNN, MCP reply, plus the early <code>app:getVersion</code> / <code>get-locale</code> / <code>app:waitForHeavyIpc</code> registrations). The <strong>heavy</strong> handlers (settings, SVS, pitch/MIDI, resource manager, audio, model download, update) are registered later in STEP 4 — after the main window is created and revealed — and any renderer call that needs them awaits <code>app:waitForHeavyIpc</code>.</span><span data-lang="zh">在 <code>app.whenReady()</code> 内部，先注册<strong>轻量</strong> IPC 处理器（STEP 1.5：窗口、对话框、主题、歌手、歌手市场、WebNN、MCP 回复，以及提前注册的 <code>app:getVersion</code> / <code>get-locale</code> / <code>app:waitForHeavyIpc</code>）。<strong>重型</strong>处理器（设置、SVS、音高/MIDI、资源管理器、音频、模型下载、更新）在 STEP 4 注册——即在主窗口创建并显示之后——渲染进程中需要它们的调用会等待 <code>app:waitForHeavyIpc</code>。</span></li>
         <li><span class="step-num">4</span><span data-lang="en">On <code>did-finish-load</code> the main window is revealed (immediately in dev, after splash paint in packaged mode).</span><span data-lang="zh">在 <code>did-finish-load</code> 时显示主窗口（开发模式立即显示，打包模式等待启动画面绘制后再显示）。</span></li>
         <li><span class="step-num">5</span><span data-lang="en">Background hardware detection (<code>startGPUPreload</code> + <code>detectAllHardware</code> + <code>enumerateDMLDevices</code>) runs once and caches results — it never blocks window reveal.</span><span data-lang="zh">后台硬件检测（<code>startGPUPreload</code> + <code>detectAllHardware</code> + <code>enumerateDMLDevices</code>）一次性执行并缓存结果——绝不阻塞窗口显示。</span></li>
         <li><span class="step-num">6</span><span data-lang="en"><code>checkAndDownloadModels()</code> fires next, prompting the user to download missing models on first launch.</span><span data-lang="zh">随后触发 <code>checkAndDownloadModels()</code>，首次启动时提示用户下载缺失的模型。</span></li>

@@ -46,7 +46,7 @@ body {
 .update-section h2 {
   font-size: var(--font-md);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-fg);
   margin: 0 0 var(--space-4) 0;
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border-default);
@@ -126,7 +126,7 @@ body {
 .release-notes-structured .rn-section-title {
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-fg);
   margin: var(--space-3) 0 var(--space-2) 0;
   padding-bottom: var(--space-1);
   border-bottom: 1px solid var(--border-default);
@@ -192,7 +192,7 @@ body {
 }
 
 .release-notes-structured a {
-  color: var(--accent);
+  color: var(--accent-fg);
   text-decoration: none;
 }
 
@@ -201,7 +201,7 @@ body {
 }
 
 .release-notes-link {
-  color: var(--accent);
+  color: var(--accent-fg);
   text-decoration: none;
   font-size: var(--font-sm);
   cursor: pointer;

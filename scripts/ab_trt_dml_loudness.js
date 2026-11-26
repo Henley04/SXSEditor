@@ -95,7 +95,7 @@ function frameLoudnessDb(mel, frames) {
     return out;
 }
 
-function frameRms(mel, frames) {
+function _frameRms(mel, frames) {
     const out = new Float64Array(frames);
     for (let f = 0; f < frames; f++) {
         let s = 0;

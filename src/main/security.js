@@ -16,6 +16,34 @@ const ALLOWED_SAVE_DIRS = [
 
 const dialogAuthorizedPaths = new Set();
 
+// Session-scoped directory grants (MCP automation). Unlike dialogAuthorizedPaths
+// these are prefix-matched, because an automation client that grants a project
+// folder expects to read/write files anywhere beneath it. Grants are explicit:
+// only session.grantRoot adds one, they are validated against the system /
+// sensitive path checks first, and they disappear when the app exits.
+const sessionRoots = new Set();
+
+function grantSessionRoot(dirPath) {
+  const canonical = _canonicalize(dirPath);
+  sessionRoots.add(_normalizeSep(canonical));
+  return canonical;
+}
+
+function listSessionRoots() {
+  return [...sessionRoots];
+}
+
+function revokeSessionRoots(dirPath) {
+  if (!dirPath) {
+    const n = sessionRoots.size;
+    sessionRoots.clear();
+    return { revoked: n, roots: [] };
+  }
+  const normalized = _normalizeSep(_canonicalize(dirPath));
+  const had = sessionRoots.delete(normalized);
+  return { revoked: had ? 1 : 0, roots: [...sessionRoots] };
+}
+
 function authorizePath(filePath) {
   if (typeof filePath === 'string' && filePath.length > 0) {
     const canonical = _canonicalize(filePath);
@@ -103,6 +131,10 @@ function isPathAllowed(filePath) {
     if (dialogAuthorizedPaths.has(resolved)) return true;
     if (dialogAuthorizedPaths.has(path.dirname(resolved))) return true;
     const normalizedCanonical = _normalizeSep(canonical);
+    // Only the canonical path may match a session grant: falling back to the
+    // unresolved path would let a symlink inside a granted tree point anywhere.
+    const underSessionRoot = (p) => [...sessionRoots].some((root) => p === root || p.startsWith(root + '/'));
+    if (underSessionRoot(normalizedCanonical)) return true;
     const normalizedResolved = _normalizeSep(resolved);
     return ALLOWED_SAVE_DIRS.some(dirFn => {
       try {
@@ -154,6 +186,20 @@ function isSystemPath(dirPath) {
   );
   if (isWindowsSystemPath) return true;
 
+  // 反向也要成立：宿主是 Windows 时要能认出 POSIX 系统目录。理由与上面那条
+  // 相同 —— 判定不应依赖宿主 OS。否则同一个请求（从 /etc 安装插件）在 Linux
+  // 上报 FORBIDDEN、在 Windows 上退化成 NOT_FOUND，CI 的跨平台矩阵就会一边
+  // 过一边红，而"拒绝"这个结论其实应当是平台无关的。
+  // 列表与 getForbiddenPrefixes() 的 POSIX 分支保持一致；只匹配根路径本身，
+  // 不会误伤 macOS 的 ~/Library（归一化后是 /users/<name>/library）。
+  const posixSystemPrefixes = [
+    '/etc', '/root', '/sys', '/proc', '/dev', '/boot', '/system', '/library',
+  ];
+  const isPosixSystemPath = posixSystemPrefixes.some(prefix =>
+    normalized === prefix || normalized.startsWith(prefix + '/')
+  );
+  if (isPosixSystemPath) return true;
+
   const resolvedPath = path.resolve(dirPath);
   const forbiddenPrefixes = getForbiddenPrefixes();
   return forbiddenPrefixes.some(prefix => resolvedPath.startsWith(prefix + path.sep) || resolvedPath === prefix);
@@ -162,6 +208,9 @@ function isSystemPath(dirPath) {
 module.exports = {
   authorizePath,
   authorizePathExact,
+  grantSessionRoot,
+  listSessionRoots,
+  revokeSessionRoots,
   isAuthorizedAncestor,
   isPathAllowed,
   isSystemPath,

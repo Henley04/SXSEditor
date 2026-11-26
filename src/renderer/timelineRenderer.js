@@ -1,11 +1,12 @@
 import { state, dom, trackManager, history } from './state.js';
+import { setTrackBaseGain, applyAudibility } from './trackGainMixer.js';
 import {
   FRAGMENT_HEIGHT,
   SINGER_ROW_HEIGHT,
   HEADER_HEIGHT,
   FRAGMENT_BASE_BEAT_WIDTH,
 } from './constants.js';
-import { t } from '../i18n/index.js';
+import { t, getLocale } from '../i18n/index.js';
 // U3: 分片时间轴是 canvas，DOM 里没有可读节点 —— 渲染时把摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
@@ -15,6 +16,9 @@ import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFil
 import { createIcon } from '../icons/iconHelper.js';
 import { describeTrackBackend, ensurePluginCatalog, hasPluginCatalog } from './pluginBackend.js';
 import { isPluginTrack } from '../editor/trackManager.js';
+import { pitchCurveBadgeKind, PITCH_BADGE_MIXED } from '../shared/pitchControl.js';
+import { beatsPerMeasureOf, isMeasureBoundary, measureNumberAt } from '../shared/timeSignature.js';
+import { createPlayheadFollower } from '../shared/playheadFollow.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
@@ -30,8 +34,75 @@ function formatAccompanimentDuration(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Grid is rendered directly into the viewport-sized canvas.
-export function invalidateGridCache() {}
+// 网格层离屏缓存：网格只依赖 zoom / 主题配色 / 视口尺寸 / 拍号与 DPR。
+//
+// 关键：缓存**不按精确的 scrollX 键控**。分页跟随动画会在 ~220–420ms 内连续
+// 改写 scrollX（约 0.7 个视口），若把 scrollX 放进键，18 帧就会重建 18 次整张
+// 网格（实测重建 1.06ms vs 命中 0.21ms，是跟随掉帧的主因）。
+// 改为「世界坐标锚定 + 按视口量化的页」：缓存一条覆盖 2 个视口宽的网格带，
+// 锚点量化到视口边界。动画期间 scrollX 大多停留在同一页内 → 键命中 → 每帧
+// 只做一次带偏移的 drawImage；跨页时最多重建一次。
+let _gridCache = null;
+// 缓存带宽度 = 视口宽 × 此系数。页宽 = 1 视口，因此任意 scrollX 都能在
+// [anchor, anchor + 2×视口] 内取到完整的 [scrollX, scrollX + 视口] 视窗。
+const GRID_STRIP_VIEWPORTS = 2;
+
+export function invalidateGridCache() {
+  _gridCache = null;
+}
+
+/** 网格带锚点：按视口宽度量化到页边界（世界 x，≥0）。 */
+function _gridAnchorX(scrollX, viewportWidth) {
+  if (!(viewportWidth > 0)) return 0;
+  const x = Number.isFinite(scrollX) && scrollX > 0 ? scrollX : 0;
+  return Math.floor(x / viewportWidth) * viewportWidth;
+}
+
+function _gridLayerKey(beatWidth, totalBeats, viewportWidth, viewportHeight, dpr, beatsPerMeasure, colors, anchorX) {
+  return [
+    beatWidth, totalBeats, viewportWidth, viewportHeight, dpr, beatsPerMeasure,
+    // 只按页锚点 + 垂直滚动键控：横向滚动在页内不触发重建（见上方注释）。
+    anchorX, state.fragmentScrollY,
+    colors.bgApp, colors.gridLineMeasure, colors.gridLineMajor, colors.timeText,
+  ].join('|');
+}
+
+function _buildGridLayer(key, view) {
+  // 复用同一张离屏 canvas（跨页导致键变化时只重绘，不重新分配）。
+  const canvas = _gridCache?.canvas || document.createElement('canvas');
+  const pixelW = Math.max(1, Math.round(view.stripWidth * view.dpr));
+  const pixelH = Math.max(1, Math.round(view.viewportHeight * view.dpr));
+  if (canvas.width !== pixelW) canvas.width = pixelW;
+  if (canvas.height !== pixelH) canvas.height = pixelH;
+  const g = canvas.getContext('2d');
+  if (!g) return { canvas, key };
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, pixelW, pixelH);
+  g.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  g.translate(-view.anchorX, -view.viewTop);
+
+  g.fillStyle = view.colors.bgApp;
+  g.fillRect(view.anchorX, view.viewTop, view.stripWidth, view.viewportHeight);
+  g.lineWidth = 1;
+  const firstBeat = Math.max(0, Math.floor(view.anchorX / view.beatWidth));
+  const lastBeat = Math.min(view.totalBeats, Math.ceil((view.anchorX + view.stripWidth) / view.beatWidth));
+  for (let i = firstBeat; i <= lastBeat; i++) {
+    const x = i * view.beatWidth;
+    const isMeasureLine = isMeasureBoundary(i, view.beatsPerMeasure);
+    g.strokeStyle = isMeasureLine ? view.colors.gridLineMeasure : view.colors.gridLineMajor;
+    g.beginPath();
+    g.moveTo(x, view.viewTop);
+    g.lineTo(x, view.viewBottom);
+    g.stroke();
+    if (isMeasureLine && HEADER_HEIGHT >= view.viewTop) {
+      const measureNum = measureNumberAt(i, view.beatsPerMeasure);
+      g.fillStyle = view.colors.timeText;
+      g.font = '10px sans-serif';
+      g.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
+    }
+  }
+  return { canvas, key };
+}
 
 // ---------------------------------------------------------------------------
 // 渲染期复用缓存
@@ -82,37 +153,82 @@ function _getFragmentPitchRange(notes, fragDuration) {
 // 较低（每像素覆盖 ≥ 一桶）时直接取桶；放大到每像素样本数少于桶大小时按像素
 // 直接扫描（本就便宜）。WeakMap 以 singer 对象为 key，轨道删除即随之回收；
 // audioBuffer 引用变化（重新加载音频）时自动失效重建。
+//
+// 初始化不再"一口气"同步扫完整个 PCM：一首 4 分钟 48kHz 伴奏约 1150 万样本，
+// 同步构建会让打开工程/首次绘制明显卡住。现在按片（约 26 万样本/片）在空闲
+// 回调里增量构建；构建完成前，未就绪的桶用跨步采样给出近似峰值（视觉上与精确
+// 值几乎无差），全部就绪后自动替换为精确值并补一帧重绘。
 const WAVEFORM_BUCKET_SIZE = 512;
+const WAVEFORM_BUILD_BUCKETS_PER_SLICE = 512; // 512 桶 × 512 样本 ≈ 26 万样本/片
 const _waveformPeakCache = new WeakMap();
+
+function _scheduleWaveformBuild(entry) {
+  if (entry.scheduled) return;
+  entry.scheduled = true;
+  const run = () => {
+    entry.scheduled = false;
+    _buildWaveformPeakSlice(entry);
+  };
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 120 });
+  } else {
+    const timer = setTimeout(run, 16);
+    // Node/jsdom 环境下别让增量构建的定时器拖住进程退出（浏览器返回 number，无 unref）
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  }
+}
+
+function _buildWaveformPeakSlice(entry) {
+  const { buf, peaks, bucketSize } = entry;
+  const bucketCount = peaks.length;
+  const end = Math.min(bucketCount, entry.builtBuckets + WAVEFORM_BUILD_BUCKETS_PER_SLICE);
+  const peakArr = peaks;
+  for (let b = entry.builtBuckets; b < end; b++) {
+    const start = b * bucketSize;
+    const stop = Math.min(start + bucketSize, buf.length);
+    let peak = 0;
+    for (let i = start; i < stop; i++) {
+      const v = buf[i] < 0 ? -buf[i] : buf[i];
+      if (v > peak) peak = v;
+    }
+    peakArr[b] = peak;
+  }
+  entry.builtBuckets = end;
+  if (end < bucketCount) {
+    _scheduleWaveformBuild(entry);
+    return;
+  }
+  // 精确峰值全部就绪：补一帧，把构建期间的近似波形换成真实波形。
+  try { renderFragmentTimeline(); } catch (_) { /* 时间线可能已销毁 */ }
+}
 
 function _getWaveformPeaks(singer) {
   const buf = singer.audioBuffer;
   if (!buf || buf.length === 0) return null;
   let entry = _waveformPeakCache.get(singer);
-  if (entry && entry.buf === buf) return entry;
-  const bucketCount = Math.ceil(buf.length / WAVEFORM_BUCKET_SIZE);
-  const peaks = new Float32Array(bucketCount);
-  for (let b = 0; b < bucketCount; b++) {
-    const start = b * WAVEFORM_BUCKET_SIZE;
-    const end = Math.min(start + WAVEFORM_BUCKET_SIZE, buf.length);
-    let peak = 0;
-    for (let i = start; i < end; i++) {
-      const v = buf[i] < 0 ? -buf[i] : buf[i];
-      if (v > peak) peak = v;
-    }
-    peaks[b] = peak;
+  if (entry && entry.buf === buf) {
+    if (entry.builtBuckets < entry.peaks.length) _scheduleWaveformBuild(entry);
+    return entry;
   }
-  entry = { buf, bucketSize: WAVEFORM_BUCKET_SIZE, peaks };
+  const bucketCount = Math.ceil(buf.length / WAVEFORM_BUCKET_SIZE);
+  entry = {
+    buf,
+    bucketSize: WAVEFORM_BUCKET_SIZE,
+    peaks: new Float32Array(bucketCount),
+    builtBuckets: 0,
+    scheduled: false,
+  };
   _waveformPeakCache.set(singer, entry);
+  _scheduleWaveformBuild(entry);
   return entry;
 }
 
-/** 取 [sampleStart, sampleEnd) 范围峰值：整桶查表，首尾残桶直接扫描。 */
+/** 取 [sampleStart, sampleEnd) 范围峰值：整桶查表，首尾残桶与未构建桶直接扫描。 */
 function _peakInRange(entry, buf, sampleStart, sampleEnd) {
   const { peaks, bucketSize } = entry;
   let peak = 0;
-  const scan = (from, to) => {
-    for (let i = from; i < to; i++) {
+  const scan = (from, to, stride = 1) => {
+    for (let i = from; i < to; i += stride) {
       const v = buf[i] < 0 ? -buf[i] : buf[i];
       if (v > peak) peak = v;
     }
@@ -125,8 +241,14 @@ function _peakInRange(entry, buf, sampleStart, sampleEnd) {
     return peak;
   }
   scan(sampleStart, (firstBucket + 1) * bucketSize);
+  // 未构建的桶：跨步采样给近似峰值（构建完成后同一位置会变成精确值）。
+  const approxStride = Math.max(8, bucketSize >> 4);
   for (let b = firstBucket + 1; b < lastBucket; b++) {
-    if (peaks[b] > peak) peak = peaks[b];
+    if (b < entry.builtBuckets) {
+      if (peaks[b] > peak) peak = peaks[b];
+    } else {
+      scan(b * bucketSize, (b + 1) * bucketSize, approxStride);
+    }
   }
   scan(lastBucket * bucketSize, sampleEnd);
   return peak;
@@ -315,35 +437,67 @@ function drawClippedText(ctx, text, x, y, maxWidth, clipRect) {
   ctx.restore();
 }
 
-export function syncFragmentScroll() {
-  const singers = trackManager.getSingers();
-  const fragments = trackManager.getFragments();
-  const beatWidth = getBeatWidth();
+// 时间轴尺寸的唯一计算入口：syncFragmentScroll 与 renderFragmentTimeline
+// 都需要 totalBeats / 虚拟宽度 / 内容高度，抽一次避免两处重复遍历与漂移。
+function _computeTimelineMetrics(singers, fragments, beatWidth, bpm = state.project ? state.project.bpm : 120) {
   const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
   const accompanimentMaxBeat = singers.reduce((max, singer) => {
     if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
     const endBeat = (singer.accompanimentStartTime || 0)
-      + singer.audioDuration / 60 * state.project.bpm;
+      + singer.audioDuration / 60 * bpm;
     return Math.max(max, endBeat);
   }, 0);
   const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
-  const canvasWidth = totalBeats * beatWidth;
-  const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-  const containerW = dom.fragmentContainer.clientWidth;
-  const containerH = dom.fragmentContainer.clientHeight;
+  return {
+    beatWidth,
+    bpm,
+    totalBeats,
+    canvasWidth: totalBeats * beatWidth,
+    contentHeight: singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT,
+  };
+}
 
-  state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, canvasWidth - containerW));
-  state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, canvasHeight - containerH));
+let _lastCanvasTransform = '';
+// 最近一次渲染时的视口宽度（px）。播放头的分页跟随每帧都要它，而
+// `dom.fragmentContainer.clientWidth` 会触发同步 layout —— 缓存下来只在渲染时刷新。
+let _lastViewportWidth = 0;
+// 最近一次渲染算出的时间轴 metrics。分页跟随的 _getMaxScrollX 会在跳转规划时
+// 读取滚动上限；内容尺寸只在渲染时变化，没必要每次重新遍历全部片段/歌手。
+let _lastTimelineMetrics = null;
+
+export function syncFragmentScroll(metrics) {
+  let m = metrics;
+  if (!m) {
+    const singers = trackManager.getSingers();
+    const fragments = trackManager.getFragments();
+    m = _computeTimelineMetrics(singers, fragments, getBeatWidth());
+    _lastTimelineMetrics = m;
+  }
+  const containerW = m.viewportWidth ?? dom.fragmentContainer.clientWidth;
+  const containerH = m.viewportHeight ?? dom.fragmentContainer.clientHeight;
+
+  state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, m.canvasWidth - containerW));
+  state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, m.contentHeight - containerH));
 
   // fragment canvas 应用 translate 变换以实现滚动；
   // playhead canvas 不再应用 translate，改为固定覆盖可视区域，
   // 绘制时由 drawPlayheadLine 自行减去 scrollX（避免大 canvas clearRect 卡顿）。
   // Canvas is viewport-sized. Scrolling is applied to the drawing transform,
   // never by moving or enlarging the backing store.
-  dom.fragmentCanvas.style.transform = 'none';
+  // 仅在值变化时写 style，避免每帧触发无意义的样式失效。
+  if (_lastCanvasTransform !== 'none') {
+    dom.fragmentCanvas.style.transform = 'none';
+    _lastCanvasTransform = 'none';
+  }
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
+
+// 读屏摘要的文案只由片段/歌手数量与语言决定：缓存拼好的字符串，
+// 避免拖拽/缩放的高频渲染每帧都做 i18n 查询与模板构造。
+// 注意仍要每帧调用 announce —— 它内部依赖"同文案 + 节流窗口"的重复播报语义
+// （见 shared 的零宽哨兵实现），这里只跳过字符串构造，不改变播报行为。
+let _lastA11yText = { key: '', text: '' };
 
 export function renderFragmentTimeline() {
   const ctx = dom.fragmentCanvas.getContext('2d');
@@ -352,25 +506,29 @@ export function renderFragmentTimeline() {
   const dpr = window.devicePixelRatio || 1;
 
   // U3：读屏播报（内容相同/过频时 announce 内部自动跳过）
-  announce('fragment-canvas-a11y-status', t('main.a11yFragmentTimelineStatus', {
-    fragments: fragments.length,
-    singers: singers.length,
-  }));
+  const a11yKey = `${fragments.length}|${singers.length}|${getLocale()}`;
+  if (_lastA11yText.key !== a11yKey) {
+    _lastA11yText = {
+      key: a11yKey,
+      text: t('main.a11yFragmentTimelineStatus', {
+        fragments: fragments.length,
+        singers: singers.length,
+      }),
+    };
+  }
+  announce('fragment-canvas-a11y-status', _lastA11yText.text);
 
   const beatWidth = getBeatWidth();
-  const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const accompanimentMaxBeat = singers.reduce((max, singer) => {
-    if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
-    const endBeat = (singer.accompanimentStartTime || 0)
-      + singer.audioDuration / 60 * state.project.bpm;
-    return Math.max(max, endBeat);
-  }, 0);
-  const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
-  const virtualWidth = totalBeats * beatWidth;
-  const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+  const metrics = _computeTimelineMetrics(singers, fragments, beatWidth);
+  _lastTimelineMetrics = metrics;
+  const totalBeats = metrics.totalBeats;
+  const virtualWidth = metrics.canvasWidth;
+  const contentHeight = metrics.contentHeight;
   const viewportWidth = Math.max(1, dom.fragmentContainer.clientWidth || 1);
   const viewportHeight = Math.max(1, dom.fragmentContainer.clientHeight || contentHeight || 1);
+  // 供播放头的分页跟随复用（它每帧都要视口宽度）：clientWidth 是同步 layout 读取，
+  // 在播放循环里每帧读一次会平白多一次强制重排。渲染时记下来，跟随只读缓存。
+  _lastViewportWidth = viewportWidth;
 
   // Keep the backing stores bounded by the viewport. Long MIDI projects only
   // increase virtualWidth, not canvas.width, avoiding Chromium's canvas limit.
@@ -379,7 +537,7 @@ export function renderFragmentTimeline() {
 
   state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, virtualWidth - viewportWidth));
   state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, contentHeight - viewportHeight));
-  syncFragmentScroll();
+  syncFragmentScroll({ ...metrics, viewportWidth, viewportHeight });
 
   // Clear in device-independent viewport coordinates, then translate the
   // world timeline into the viewport. Existing fragment drawing remains in
@@ -389,34 +547,39 @@ export function renderFragmentTimeline() {
   ctx.translate(-state.fragmentScrollX, -state.fragmentScrollY);
 
   const c = getCanvasColors();
-  const beatsPerMeasure = state.project.timeSignature ? state.project.timeSignature[0] : 4;
+  const beatsPerMeasure = beatsPerMeasureOf(state.project.timeSignature);
   const _viewLeft = state.fragmentScrollX;
   const _viewRight = state.fragmentScrollX + viewportWidth;
   const _viewTop = state.fragmentScrollY;
   const _viewBottom = state.fragmentScrollY + viewportHeight;
 
-  // Draw only the visible grid. A full-width offscreen cache would recreate
-  // the same oversized-canvas failure as the main canvas.
-  ctx.fillStyle = c.bgApp;
-  ctx.fillRect(_viewLeft, _viewTop, viewportWidth, viewportHeight);
-  ctx.lineWidth = 1;
-  const firstBeat = Math.max(0, Math.floor(_viewLeft / beatWidth));
-  const lastBeat = Math.min(totalBeats, Math.ceil(_viewRight / beatWidth));
-  for (let i = firstBeat; i <= lastBeat; i++) {
-    const x = i * beatWidth;
-    const isMeasureLine = (i % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
-    ctx.beginPath();
-    ctx.moveTo(x, _viewTop);
-    ctx.lineTo(x, _viewBottom);
-    ctx.stroke();
-    if (isMeasureLine && HEADER_HEIGHT >= _viewTop) {
-      const measureNum = Math.floor(i / beatsPerMeasure) + 1;
-      ctx.fillStyle = c.timeText;
-      ctx.font = '10px sans-serif';
-      ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
-    }
+  // 网格层走离屏缓存（键见 _gridLayerKey）：命中时只 blit 一次，
+  // 不再逐帧重画所有可见分割线。缓存按世界坐标锚定、覆盖 2 个视口宽，
+  // 因此分页动画在页内滚动时键不变 → 只做带偏移的 drawImage，不重建。
+  const anchorX = _gridAnchorX(state.fragmentScrollX, viewportWidth);
+  const stripWidth = viewportWidth * GRID_STRIP_VIEWPORTS;
+  const gridKey = _gridLayerKey(beatWidth, totalBeats, viewportWidth, viewportHeight, dpr, beatsPerMeasure, c, anchorX);
+  if (!_gridCache || _gridCache.key !== gridKey) {
+    _gridCache = _buildGridLayer(gridKey, {
+      colors: c,
+      beatWidth,
+      totalBeats,
+      beatsPerMeasure,
+      viewportWidth,
+      viewportHeight,
+      stripWidth,
+      dpr,
+      anchorX,
+      viewTop: _viewTop,
+      viewBottom: _viewBottom,
+    });
   }
+  // 源矩形取缓存带里对应当前 scrollX 的那一屏，目标始终是视口原点。
+  // 注意 ctx 已 translate(-scrollX,-scrollY)，故目标用世界坐标 _viewLeft/_viewTop。
+  const srcX = (_viewLeft - anchorX) * dpr;
+  const srcW = viewportWidth * dpr;
+  const srcH = viewportHeight * dpr;
+  ctx.drawImage(_gridCache.canvas, srcX, 0, srcW, srcH, _viewLeft, _viewTop, viewportWidth, viewportHeight);
 
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
@@ -429,6 +592,25 @@ export function renderFragmentTimeline() {
     ctx.lineTo(_viewRight, y + SINGER_ROW_HEIGHT - 2);
     ctx.stroke();
   });
+
+  // Draw vertical measure lines through track rows. These sit above track
+  // backgrounds (so they remain visible when a track row is filled) but below
+  // fragments (so fragments still cover them). Only measure boundaries are
+  // drawn — minor beat lines would be too noisy inside dense tracks.
+  const _firstBeat = Math.max(0, Math.floor(_viewLeft / beatWidth));
+  const _lastBeat = Math.min(totalBeats, Math.ceil(_viewRight / beatWidth));
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.lineWidth = 1;
+  for (let i = _firstBeat; i <= _lastBeat; i++) {
+    if (!isMeasureBoundary(i, beatsPerMeasure)) continue;
+    const x = i * beatWidth;
+    ctx.beginPath();
+    ctx.moveTo(x, HEADER_HEIGHT);
+    ctx.lineTo(x, _viewBottom);
+    ctx.stroke();
+  }
+  ctx.restore();
 
   // Draw dynamic content (fragments) on top of cached grid
   // Visible bounds were computed above; skip offscreen dynamic content.
@@ -484,8 +666,10 @@ export function renderFragmentTimeline() {
 
           // 放大状态下每像素只覆盖少量样本，直接扫描即可；缩小状态下使用
           // 预计算的桶峰值，避免每帧全量遍历 PCM。
+          // 不管当前是否用到桶都先触发一次增量构建（幂等）：等用户第一次
+          // 缩小到全曲视图时，峰值表通常已经建好，不再有初始化卡顿。
           const useBuckets = samplesPerPixel > WAVEFORM_BUCKET_SIZE;
-          const peakEntry = useBuckets ? _getWaveformPeaks(singer) : null;
+          const peakEntry = _getWaveformPeaks(singer);
 
           ctx.strokeStyle = c.fragmentText || '#fff';
           ctx.lineWidth = 1;
@@ -502,7 +686,7 @@ export function renderFragmentTimeline() {
             const sampleStart = Math.floor(px * samplesPerPixel);
             const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
             let peak;
-            if (peakEntry) {
+            if (peakEntry && useBuckets) {
               peak = _peakInRange(peakEntry, buf, sampleStart, sampleEnd);
             } else {
               peak = 0;
@@ -636,11 +820,16 @@ export function renderFragmentTimeline() {
         labelClipRect,
       );
 
+      // 自动/手动徽标：让"这段有没有自动曲线、有没有被手动改过"在主窗口一眼可见
+      // （不需要打开分片编辑器才能发现）。
+      _drawPitchCurveBadge(ctx, fragment, fragX + labelInsetX, y + 4, labelMaxWidth, c);
+
       ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
-      const bps = state.project.timeSignature ? state.project.timeSignature[0] : 4;
-      const measStart = Math.floor(fragment.startTime / bps) + 1;
-      const measEnd = Math.floor((fragment.startTime + fragment.duration - 0.001) / bps) + 1;
+      // 每小节的拍数要按拍号换算（MIDI 的 beat 是四分音符）：6/8 是 3 拍而不是 6 拍。
+      const beatsPerBar = beatsPerMeasureOf(state.project.timeSignature);
+      const measStart = measureNumberAt(fragment.startTime, beatsPerBar);
+      const measEnd = measureNumberAt(fragment.startTime + fragment.duration - 0.001, beatsPerBar);
       drawClippedText(
         ctx,
         t('main.measureRange', { start: measStart, end: measEnd }),
@@ -671,23 +860,48 @@ export function renderFragmentTimeline() {
       }
     });
 
-    if (singerFragments.length === 0) {
+    if (!isAccompaniment && singerFragments.length === 0) {
       ctx.fillStyle = c.fgDisabled;
       ctx.font = '11px sans-serif';
       ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
     }
   });
 
-  // 调整 playhead canvas 大小会清空其内容；非播放态时立即重绘 playhead，
-  // 避免缩放/滚动后 playhead 消失（播放态由 rAF 循环自动刷新）。
-  // playhead canvas 只覆盖 container 大小，重绘成本很低。
-  if (!state.isPlaying && (state.playbackPauseOffset > 0 || state.currentAudioData)) {
-    drawPausedPlayheadAt(state.playbackPauseOffset);
+  // 重绘播放头。
+  //
+  // 旧实现只在"未播放"时补画（`!state.isPlaying`），于是播放中（以及等推理
+  // 期间 isPlaying 仍为 true、rAF 已被取消）做缩放或横向滚动时，画布上的
+  // 播放头既不重画也不清空 —— 它停在缩放前那个**屏幕坐标**上，看起来像被
+  // 钉死不动，而时间轴已经在它下面滚过去了。
+  //
+  // 现在只要画布上应该有播放头，就用"最后一次画到的位置"补画：
+  //   · 播放中 / 等推理：沿用 rAF 最后给出的位置（等推理时位置本来就不动）；
+  //   · 暂停：用 playbackPauseOffset（用户拖到哪就停在哪）。
+  // 位置永远由时间轴推导（playbackTimeToX - scrollX），视图变化时它跟着内容走。
+  // 空闲工程也必须在 0 秒画播放头（DAW 契约：打开即可见的位置指示器）。
+  // 不再用 `playbackPauseOffset > 0 || currentAudioData` 前置条件——空工程、
+  // 0 秒、未播放时播放头同样存在，用户才能在 header 上点击定位/拖动。
+  const playheadSeconds = state.isPlaying
+    ? (_lastPlayheadSeconds != null ? _lastPlayheadSeconds : (state.playbackPauseOffset || 0))
+    : (state.playbackPauseOffset || 0);
+  if (playheadSeconds != null) {
+    if (state.isPlaying) drawPlayheadLine(playheadSeconds);
+    else drawPausedPlayheadAt(playheadSeconds);
   }
 }
 
 // 播放头拖拽 hit-test 容差（像素）
 export const PLAYHEAD_HIT_WIDTH = 12;
+
+/**
+ * 最后一次真正画到画布上的播放位置（秒）。
+ *
+ * 为什么需要记这个：播放中的位置由 rAF 每帧推进，而缩放/横向滚动会触发一次
+ * 重绘（renderFragmentTimeline）。等推理期间 rAF 已被取消、位置不再推进，
+ * 此时重绘必须用"停在哪儿就画在哪儿"的位置，而不是重新从头算一个值 ——
+ * 否则等待期间一缩放，播放头就会自己跳位置。
+ */
+let _lastPlayheadSeconds = null;
 
 /**
  * 把秒数转换为 fragment canvas 内部的 X 坐标（含 zoom，不含 scroll，
@@ -711,15 +925,209 @@ export function xToPlaybackTime(x) {
   return (beat * 60) / (state.project?.bpm || 120);
 }
 
+// ==================== 播放头分页跟随 ====================
+// 逻辑本体在 shared/playheadFollow.js（与分片编辑器同一套），这里只做"窗口侧接线"：
+// 提供滚动读写、滚动上限、视口宽度，并在跟随真的改写了 scrollX 时重画时间轴。
+//
+// 与历史 bug 的区别（曾经"播放头钉在屏幕上"）：那条路径是**每帧**把 scrollX 对齐到
+// 播放头（连续跟随），播放头相对视口永远不动。这里是分页：只在播放头到临界、且用户
+// 3s 内没操作时，用一段短动画把视口往前挪一页，播放头在视口里照常前进。
+let _follow = null;
+
+function _getMaxScrollX() {
+  const w = _lastViewportWidth || (dom.fragmentContainer ? dom.fragmentContainer.clientWidth : 0);
+  if (!(w > 0)) return 0;
+  // 与 renderFragmentTimeline 的 clamp 同源：虚拟宽度 - 视口宽度。
+  // 虚拟宽度自带 256 拍 padding，播放头永远能走到锚点位置，不会卡在末尾。
+  // 复用最近一次渲染的 metrics：跟随只读，内容尺寸在渲染时已更新。
+  // 但不能假设"一定先渲染过"：若 zoom/bpm 已变而新的渲染还没发生，缓存的
+  // canvasWidth 就是旧值，这里校验同源输入并回退到实时计算。
+  const bpm = state.project ? state.project.bpm : 120;
+  let metrics = _lastTimelineMetrics;
+  if (!metrics || metrics.beatWidth !== getBeatWidth() || metrics.bpm !== bpm) {
+    metrics = _computeTimelineMetrics(
+      trackManager.getSingers(), trackManager.getFragments(), getBeatWidth(), bpm);
+  }
+  return Math.max(0, metrics.canvasWidth - w);
+}
+
+/** 供 eventHandlers 的边缘自动滚屏 clamp 使用（与跟随器同一上限）。 */
+export function getMaxFragmentScrollX() {
+  return _getMaxScrollX();
+}
+
+function _ensureFollow() {
+  if (_follow) return _follow;
+  _follow = createPlayheadFollower({
+    getScrollX: () => state.fragmentScrollX,
+    setScrollX: (v) => { state.fragmentScrollX = v; },
+    getMaxScrollX: _getMaxScrollX,
+  });
+  return _follow;
+}
+
+/**
+ * 播放循环每帧调用：按需把视口分页前移，让播放头始终落在可见范围内。
+ *
+ * 必须在 `drawPlayheadLine(elapsed)` **之前**调用：播放头的屏幕 x 是
+ * `playbackTimeToX(t) - scrollX`，先改滚动再画，播放头与内容才是同一帧的同一位置。
+ *
+ * @param {number} elapsedSeconds 可听域播放位置（与时间码同源）
+ * @returns {boolean} 是否改写了滚动位置（改了就重画了整条时间轴）
+ */
+export function tickPlayheadFollow(elapsedSeconds) {
+  if (!Number.isFinite(elapsedSeconds)) return false;
+  const w = _lastViewportWidth;
+  if (!(w > 0)) return false;
+  // 状态机门控：用户滚轮/缩放（SUPPRESSED）或拖动播放头（SUSPENDED_BY_DRAG）
+  // 期间一律不推进分页跟随；其余状态交给核心算法（它自己还有 idleMs + 播放态门控）。
+  // in-flight 动画的收尾仍交给核心 tick（传 isPlaying=false 让它只推进/结束动画）。
+  if (!isFollowing()) {
+    return _ensureFollow().tick(playbackTimeToX(elapsedSeconds), w, false);
+  }
+  const changed = _ensureFollow().tick(playbackTimeToX(elapsedSeconds), w);
+  if (changed) renderFragmentTimeline();
+  return changed;
+}
+
+/** 起播 / seek：清掉在途动画；reveal=true 时若播放头在视口外会立即回填到 1/5。 */
+export function resetPlayheadFollow(options) {
+  _ensureFollow().reset(options);
+}
+
+/** 暂停/停止：在途动画直接落到终点（停在半程会像"卡住"）。 */
+export function settlePlayheadFollow() {
+  if (!_follow) return false;
+  const changed = _follow.settle();
+  if (changed) renderFragmentTimeline();
+  return changed;
+}
+
+/** 任意用户操作（点击/按键）：清零 3s 空闲计时。 */
+export function markPlayheadFollowActivity() {
+  _ensureFollow().markActivity();
+}
+
+/** 用户直接操作视口（滚轮/缩放/画布拖拽）：清零计时并立即终止在途动画。 */
+export function markPlayheadFollowViewportGesture() {
+  _ensureFollow().markViewportGesture();
+}
+
+/** 指针按住状态（拖拽期间禁止跟随）。 */
+export function setPlayheadFollowPointerDown(down) {
+  _ensureFollow().setPointerDown(down);
+}
+
+/** 兜底解除按住状态（不动空闲计时，见 follower.clearPointerDown）。 */
+export function clearPlayheadFollowPointerDown() {
+  if (_follow) _follow.clearPointerDown();
+}
+
+/**
+ * ==================== 跟随状态机（4.13）====================
+ * 在 playheadFollow.js 的分页算法外面包一层显式状态，协调"分页跟随"与
+ * 用户手动操作（滚轮/缩放/拖拽播放头）以及传输态（Stop/自然结束/切工程）。
+ * 不改动核心算法，只决定这一帧是否把世界坐标喂给 tick。
+ *
+ *   FOLLOWING ──(滚轮/缩放)──→ SUPPRESSED(计时) ──(超时)──→ FOLLOWING
+ *   FOLLOWING ──(开始拖播放头)──→ SUSPENDED_BY_DRAG ──(松手)──→ FOLLOWING(重建锚点)
+ *   FOLLOWING ──(Stop/切工程/自然结束)──→ RESET(锚点复位) ──→ FOLLOWING / IDLE
+ *   任何状态 ──(进入 IDLE/PAUSED)──→ 不推进跟随，保留当前视口
+ */
+
+// 用户手动操作（滚轮/缩放）后的抑制时长：与 playheadFollow 的 idleMs 对齐。
+const FOLLOW_SUPPRESS_MS = 3000;
+
+export const FOLLOW_STATE = Object.freeze({
+  FOLLOWING: 'FOLLOWING',
+  SUPPRESSED: 'SUPPRESSED',
+  SUSPENDED_BY_DRAG: 'SUSPENDED_BY_DRAG',
+  RESET: 'RESET',
+});
+
+let _followState = FOLLOW_STATE.FOLLOWING;
+let _suppressUntil = 0;
+
+function _nowMs() {
+  return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now() : Date.now();
+}
+
+/** 当前是否允许推进分页跟随（测试与 tick 的门控）。 */
+export function isFollowing() {
+  if (_followState === FOLLOW_STATE.SUPPRESSED && _nowMs() >= _suppressUntil) {
+    _followState = FOLLOW_STATE.FOLLOWING;
+  }
+  return _followState === FOLLOW_STATE.FOLLOWING;
+}
+
+export function getFollowState() {
+  if (_followState === FOLLOW_STATE.SUPPRESSED && _nowMs() >= _suppressUntil) {
+    _followState = FOLLOW_STATE.FOLLOWING;
+  }
+  return _followState;
+}
+
+/**
+ * 用户滚轮/缩放：进入计时抑制，并立刻终止在途分页动画（别和用户抢视口）。
+ * 抑制窗口内播放头继续前进，但 fragmentScrollX 不变。
+ */
+export function markUserViewActivity() {
+  _followState = FOLLOW_STATE.SUPPRESSED;
+  _suppressUntil = _nowMs() + FOLLOW_SUPPRESS_MS;
+  markPlayheadFollowViewportGesture();
+}
+
+/** 开始拖动播放头：显式暂停跟随（拖拽期间不允许 90%→20% 跳页）。 */
+export function pauseFollow() {
+  _followState = FOLLOW_STATE.SUSPENDED_BY_DRAG;
+  setPlayheadFollowPointerDown(true);
+}
+
+/**
+ * 松手 / Stop / 切工程 / 自然结束：把当前 fragmentScrollX 与当前播放头位置
+ * 作为新锚点。reset() 清掉在途动画与速度样本并重建锚点，因此下一帧不会因
+ * 播放头仍在 90% 附近立即跳页；这里不启用计时抑制（抑制由用户滚轮/缩放的
+ * markUserViewActivity 负责），松手后立即恢复跟随。
+ */
+export function resetFollowAnchor() {
+  _followState = FOLLOW_STATE.RESET;
+  _suppressUntil = _nowMs() + FOLLOW_SUPPRESS_MS;
+  if (_follow) _follow.reset({ reveal: false });
+  // P3: 只解除按住态、不记用户活动。setPointerDown(false) 会把 now() 写进
+  // follower 的 lastActivityAt，让后续用例（尤其 stub 了时钟的测试）被空闲门控卡住。
+  if (_follow) _follow.clearPointerDown();
+  // reset() 已经清掉在途动画/速度样本并重置锚点（lastSample），所以松手后
+  // 下一帧不会因播放头仍在 90% 附近立即跳页——这里直接回到 FOLLOWING 是安全的。
+  // _suppressUntil 在此不再起"计时抑制"作用（那是 markUserViewActivity 的职责）；
+  // 保留赋值只是防御性，真正的"避免立即跳页"由 reset() 重建锚点完成。
+  _followState = FOLLOW_STATE.FOLLOWING;
+}
+
+/** 诊断/测试用。 */
+export function getPlayheadFollowSnapshot() {
+  return _follow ? _follow.snapshot() : null;
+}
+
+/** 测试隔离用：恢复时钟后彻底重置跟随状态（含被 stub 污染的时间戳）。 */
+export function resetFollowForTest() {
+  _followState = FOLLOW_STATE.FOLLOWING;
+  _suppressUntil = 0;
+  if (_follow) _follow.resetAllForTest();
+}
+
 export function drawPlayheadLine(elapsedSeconds, options = {}) {
   if (!dom.fragmentPlayheadCanvas) return;
+  // 记下位置：等待推理/暂停时若发生缩放或横向滚动，重绘要画在同一个时间点上
+  if (Number.isFinite(elapsedSeconds)) _lastPlayheadSeconds = elapsedSeconds;
   const ctx = dom.fragmentPlayheadCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = dom.fragmentPlayheadCanvas.width / dpr;
   const h = dom.fragmentPlayheadCanvas.height / dpr;
 
-  // The playhead is positioned solely by timeline time. Playback must not
-  // mutate scrollX, otherwise the indicator appears pinned to the viewport.
+  // 播放头的位置只由时间决定，绘制时减去 scrollX。滚动本身是"分页跟随"改的
+  // （见 tickPlayheadFollow / shared/playheadFollow.js），不是这里逐帧对齐 ——
+  // 逐帧对齐会让指示器看起来钉死在视口上。
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -776,6 +1184,7 @@ export function drawPausedPlayheadAt(offsetSeconds) {
 
 export function clearPlayheadLine() {
   if (!dom.fragmentPlayheadCanvas) return;
+  _lastPlayheadSeconds = null;
   const ctx = dom.fragmentPlayheadCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = dom.fragmentPlayheadCanvas.width / dpr;
@@ -801,6 +1210,50 @@ function commitTrackNameEdit(singer, newName) {
     });
     markDirty();
   }
+}
+
+/**
+ * 轨道开关按钮（静音 M / 独奏 S）。
+ *
+ * 为什么不做成"点一下只改样式"：可听性会同时影响播放、导出与播放缓存签名。
+ * 这里只改工程数据（trackManager）+ 记一步撤销 + 标脏，其余由各消费方按
+ * shared/trackAudibility.js 的规则自然生效 —— 静音后按 Play 会因为签名变化
+ * 重新合成（见 renderer/audioSignature.js），不需要在这里单独清缓存。
+ *
+ * @param {object} singer 轨道
+ * @param {'mute'|'solo'} kind
+ * @returns {HTMLButtonElement}
+ */
+function _createTrackFlag(singer, kind) {
+  const isMute = kind === 'mute';
+  const label = isMute ? t('main.muteTrack') : t('main.soloTrack');
+  const active = singer[kind] === true;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = `btn-track-flag btn-track-${kind}${active ? ' is-on' : ''}`;
+  btn.textContent = isMute ? 'M' : 'S';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  // aria-pressed 表达"开关当前是开的"，读屏才分得清启用与未启用
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  btn.dataset.singerId = singer.id;
+
+  btn.addEventListener('click', (e) => {
+    // 行本身有 click（选中轨道），开关不能顺带把轨道选中
+    e.stopPropagation();
+    const singerId = singer.id;
+    const next = !(singer[kind] === true);
+    trackManager.updateSinger(singerId, { [kind]: next });
+    history.push({
+      undo() { trackManager.updateSinger(singerId, { [kind]: !next }); refreshAll(); },
+      redo() { trackManager.updateSinger(singerId, { [kind]: next }); refreshAll(); },
+    });
+    markDirty();
+    refreshAll();
+  });
+
+  return btn;
 }
 
 /**
@@ -840,7 +1293,9 @@ export function renderSingerList() {
     const s = singers[i];
     // color/avatarPath 参与缓存键：换色或换头像后列表 UI 必须重建，
     // 否则用户改完看不到变化（功能性 bug）。
-    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}`;
+    // mute/solo 必须进缓存键：它们是行内的可见状态（M/S 高亮 + 整行降权），
+    // 不进键的话点击后 refreshAll 会因为"列表没变"直接早退，按钮看起来点不动。
+    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}~${s.mute ? 1 : 0}${s.solo ? 1 : 0}`;
     const backend = s.backend;
     key += `~${backend ? backend.type : 'sxs'}${backend && backend.pluginId ? backend.pluginId : ''}${backend && backend.kindId ? backend.kindId : ''}${backend && backend.voiceId ? backend.voiceId : ''}${s.backendMissing ? 1 : 0}`;
   }
@@ -849,6 +1304,11 @@ export function renderSingerList() {
   renderSingerList._cacheKey = cacheKey;
 
   dom.singerListEl.innerHTML = '';
+  // 空工程时左栏只有一个入口：把虚线 CTA 放大，同时收起标题栏的 +。
+  // 两个按钮做同一件事却并排放着，用户要先判断"点哪个"，而这时根本没有内容
+  // 需要管理，多出来的入口只增加决策成本。有歌手后 + 自动回来。
+  dom.singerListEl.classList.toggle('singer-list--empty', singers.length === 0);
+  if (dom.btnAddSinger) dom.btnAddSinger.hidden = singers.length === 0;
 
   const spacer = document.createElement('div');
   spacer.className = 'singer-row-spacer';
@@ -857,7 +1317,6 @@ export function renderSingerList() {
   if (singers.length === 0) {
     const emptyItem = document.createElement('div');
     emptyItem.className = 'singer-item-empty';
-    emptyItem.setAttribute('role', 'listitem');
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'singer-avatar-empty';
     const placeholder = document.createElement('span');
@@ -870,10 +1329,27 @@ export function renderSingerList() {
     textDiv.className = 'singer-empty-text';
     textDiv.textContent = t('main.clickToAddSinger');
     infoDiv.appendChild(textDiv);
+    // 第二行说明"点了会发生什么"：选已有音色 / 装新品 / 导入本地文件都在这个
+    // 对话框里。原来只有一句 Click to Add Singer，用户得点开才知道有这些路。
+    const hintDiv = document.createElement('div');
+    hintDiv.className = 'singer-empty-hint';
+    hintDiv.textContent = t('main.emptySingerHint');
+    infoDiv.appendChild(hintDiv);
     emptyItem.appendChild(avatarDiv);
     emptyItem.appendChild(infoDiv);
-    emptyItem.addEventListener('click', () => {
-      showSingerSelectDialog(null);
+
+    // 空工程时这是**主 CTA**，必须能 Tab 到、能回车触发。
+    // 原先只有 click 监听：键盘用户在这个页面上没有任何入口（时间轴 canvas
+    // 的 aria 说明里写着方向键，但添加歌手只能靠鼠标或顶栏的 +）。
+    emptyItem.tabIndex = 0;
+    emptyItem.setAttribute('role', 'button');
+    emptyItem.setAttribute('aria-label', t('main.addSinger'));
+    const openPicker = () => showSingerSelectDialog(null);
+    emptyItem.addEventListener('click', openPicker);
+    emptyItem.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      openPicker();
     });
     dom.singerListEl.appendChild(emptyItem);
     return;
@@ -968,15 +1444,45 @@ export function renderSingerList() {
       const singerNameDiv = document.createElement('div');
       singerNameDiv.className = 'singer-singer-name';
       if (isAccompaniment) {
-        // Show audio file name and duration for accompaniment tracks
+        // Show audio file name and duration for accompaniment tracks.
+        // Avoid duplicating the file name: when trackName equals audioFileName
+        // (track not renamed), show file name + duration on the first line and
+        // leave the second line empty (the "音频伴奏" label is rendered below
+        // via singer-config). If the user renamed the track, show the custom
+        // name on the first line and file name + duration here.
         const fileName = singer.audioFileName || t('main.accompanimentTrack');
         const duration = singer.audioDuration ? ` (${formatAccompanimentDuration(singer.audioDuration)})` : '';
-        singerNameDiv.textContent = fileName + duration;
+        if (singer.trackName === fileName) {
+          trackNameDiv.textContent = fileName + duration;
+          singerNameDiv.textContent = '';
+        } else {
+          singerNameDiv.textContent = fileName + duration;
+        }
       } else {
         singerNameDiv.textContent = singer.singerName;
       }
       infoDiv.appendChild(singerNameDiv);
 
+      if (!isAccompaniment) {
+        // 双击歌手名 = 替换歌手。轨道名（上面那行）双击是重命名，两者作用对象
+        // 不同：轨道名是标签，歌手名是音色，所以入口分开。
+        // 键盘也要能用：dblclick-only 的入口对键盘用户等于不存在，补 Enter/Space。
+        singerNameDiv.classList.add('singer-singer-name--replaceable');
+        singerNameDiv.title = t('main.replaceSinger');
+        singerNameDiv.setAttribute('role', 'button');
+        singerNameDiv.setAttribute('aria-label', t('main.replaceSinger'));
+        singerNameDiv.tabIndex = 0;
+        const openReplace = (e) => {
+          e.stopPropagation();
+          showSingerSelectDialog(singer.id, { mode: 'replace' });
+        };
+        singerNameDiv.addEventListener('dblclick', openReplace);
+        singerNameDiv.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          openReplace(e);
+        });
+      }
       if (isAccompaniment) {
         if (singer.audioFileMissing) {
           const warningDiv = document.createElement('div');
@@ -1018,7 +1524,7 @@ export function renderSingerList() {
           volumeWrap.className = 'accompaniment-volume-control';
           const volumeText = document.createElement('span');
           const currentVolume = Number.isFinite(singer.accompanimentVolume) ? singer.accompanimentVolume : 1;
-          volumeText.textContent = `Vol ${Math.round(currentVolume * 100)}%`;
+          volumeText.textContent = t('main.accompanimentVolumeShort', { volume: Math.round(currentVolume * 100) });
           const volumeInput = document.createElement('input');
           volumeInput.type = 'range';
           volumeInput.min = '0';
@@ -1029,7 +1535,10 @@ export function renderSingerList() {
             e.stopPropagation();
             const value = Math.max(0, Math.min(2, Number(volumeInput.value)));
             singer.accompanimentVolume = value;
-            volumeText.textContent = `Vol ${Math.round(value * 100)}%`;
+            volumeText.textContent = t('main.accompanimentVolumeShort', { volume: Math.round(value * 100) });
+            // 播放中即时生效：伴奏改为独立 BufferSource → GainNode 调度，
+            // 这里直接改该轨增益（12ms 斜坡），静音状态下只更新 base 不解除静音。
+            setTrackBaseGain(singer.id, value);
           });
           volumeInput.addEventListener('click', e => e.stopPropagation());
           volumeWrap.append(volumeText, volumeInput);
@@ -1074,6 +1583,17 @@ export function renderSingerList() {
       });
     }
 
+    // 静音 / 独奏：微型开关独占信息区底部一行，不占动作区的横向宽度。
+    // 歌手面板只有 240px（窄屏 200px），动作区每多一个按钮都会直接
+    // 挤掉 flex:1 的信息区；开关并排放回去，轨道名 / 歌手名 / 推理
+    // 后端三行文字又会退化成省略号。行为规则仍由
+    // shared/trackAudibility.js 唯一决定，这里只负责把开关切过去。
+    const flagsDiv = document.createElement('div');
+    flagsDiv.className = 'singer-track-flags';
+    flagsDiv.appendChild(_createTrackFlag(singer, 'mute'));
+    flagsDiv.appendChild(_createTrackFlag(singer, 'solo'));
+    infoDiv.appendChild(flagsDiv);
+
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'singer-item-actions';
 
@@ -1099,6 +1619,10 @@ export function renderSingerList() {
     item.appendChild(avatarDiv);
     item.appendChild(infoDiv);
     item.appendChild(actionsDiv);
+
+    // 静音轨降低整行存在感：M 亮起之外还需要一眼看出"这条现在不响"。
+    if (singer.mute === true) item.classList.add('is-muted');
+    else if (singer.solo === true) item.classList.add('is-soloed');
 
     item.addEventListener('click', (e) => {
       if (e.target.closest('.btn-fragment-add') || e.target.closest('.btn-singer-delete') || e.target.closest('.singer-track-name-input') || e.target.closest('.btn-relocate-singer')) {
@@ -1154,13 +1678,21 @@ export function renderSingerList() {
           e.stopPropagation();
           const singerId = delBtn.dataset.singerId;
           if (await showConfirmDialog(t('main.confirmDeleteSinger', { name: singer.trackName }))) {
-            const singerClone = JSON.parse(JSON.stringify(singer));
+            // structuredClone 保留 ArrayBuffer / Float32Array（wavBuffer、f0Data、
+            // midiNotes、audioChannels），JSON 序列化会把它们变成普通对象导致
+            // undo 后歌手无法合成。
+            const singerClone = structuredClone(singer);
             const singerFragments = trackManager.getFragments().filter(f => f.singerId === singerId);
             const fragmentsClone = singerFragments.map(f => JSON.parse(JSON.stringify(f)));
             trackManager.removeSinger(singerId);
             history.push({
               undo() {
-                const _restoredSinger = trackManager.addSinger(singerClone);
+                const restoredSinger = trackManager.addSinger(singerClone);
+                // createSinger 只收白名单字段；二进制/大字段不在其中，必须显式回填，
+                // 否则 undo 后歌手虽然回来了却缺少参考音频 / F0 / MIDI，无法合成。
+                for (const k of ['wavBuffer', 'midiNotes', 'f0Data', 'audioBuffer', 'audioChannels', 'singerData']) {
+                  if (singerClone[k] !== undefined) restoredSinger[k] = singerClone[k];
+                }
                 for (const fc of fragmentsClone) {
                   trackManager.addFragment(fc);
                 }
@@ -1182,9 +1714,55 @@ export function renderSingerList() {
   });
 }
 
+// 语言切换后动态文案必须重建：清空列表缓存键，让下一次 refreshAll 真正重建 DOM。
+export function invalidateSingerListCache() {
+  renderSingerList._cacheKey = null;
+}
+
 export function refreshAll() {
+  // 声音先变、UI 后重绘：所有 M/S 入口（点击、撤销、重做、工程加载、插件改轨）
+  // 都经这里收敛到同一个 applyAudibility。缓存键未变时不重复写增益。
+  applyAudibility(trackManager.getSingers());
   renderSingerList();
   renderFragmentTimeline();
+  syncExportAvailability();
+  // 插件贡献点的 when 条件（有分片/有选中/是否播放）都跟着这条路径变化。
+  // 在这里统一广播一次，避免每个贡献点模块自己挂一堆状态监听（也避免漏挂）。
+  window.dispatchEvent(new CustomEvent('app:state-changed'));
+}
+
+/**
+ * 没有分片时"导出"其实没有可导的内容，但两个导出按钮此前一直可用，
+ * 用户要等对话框开出来才发现是空的；而直接改成原生 disabled 后，
+ * Chromium 不会为禁用控件弹 title，"为什么不能点"反而更说不清。
+ * 所以用 aria-disabled + 样式类置灰，保留指针事件，让 tooltip 能解释原因。
+ */
+const _exportBtnTitleKeys = new Map();
+
+function syncExportAvailability() {
+  if (!_exportBtnTitleKeys.size) {
+    if (dom.btnExport) _exportBtnTitleKeys.set(dom.btnExport, 'main.export');
+    if (dom.btnExportLrc) _exportBtnTitleKeys.set(dom.btnExportLrc, 'main.exportLrc');
+  }
+  const exportable = trackManager.getFragments().length > 0;
+  for (const [btn, key] of _exportBtnTitleKeys) {
+    btn.classList.toggle('is-unavailable', !exportable);
+    btn.setAttribute('aria-disabled', exportable ? 'false' : 'true');
+    if (exportable) {
+      // 交还给 i18n：localeChanged 时 applyLocale 会按这个属性重新写 title
+      btn.setAttribute('data-i18n-title', key);
+      btn.title = t(key);
+    } else {
+      // 移除属性，否则 applyLocale 会把"为什么不能点"的说明覆盖回按钮名
+      btn.removeAttribute('data-i18n-title');
+      btn.title = t('main.exportDisabledHint');
+    }
+  }
+}
+
+/** 导出按钮当前是否可点（供点击处理器复用同一判定） */
+export function isExportAvailable() {
+  return trackManager.getFragments().length > 0;
 }
 
 // Re-render when theme changes
@@ -1195,4 +1773,50 @@ if (typeof window !== 'undefined') {
     invalidateFragmentNoteSprites();
     refreshAll();
   });
+  // 切语言时导出按钮的 title 需要按新语言重算（禁用态下没有 data-i18n-title 可依赖）
+  document.addEventListener('localeChanged', () => syncExportAvailability());
+}
+
+/**
+ * 分片卡片上的音高状态徽标。
+ *   · 显式 score              → "乐谱"（曲线不参与推理，灰色）
+ *   · 自动开启 + 无手动内容   → "自动"（强调色）
+ *   · 自动开启 + 有手动内容   → "混合"（强调色）
+ *   · 仅手动（含显式 manual） → "手动"（灰色）
+ * 既无自动层也无手绘内容、且不是显式选择时不画（v2.0.2 的旧工程不会多出视觉元素）。
+ *
+ * 判定本身在 shared/pitchControl.js —— 显式 score 必须优先于残留的
+ * anchorPoints，否则从 VPR 导入后切成 score，徽标仍显示"手动"。
+ */
+function _drawPitchCurveBadge(ctx, fragment, x, y, maxWidth, c) {
+  const kind = pitchCurveBadgeKind(fragment);
+  if (!kind) return;
+
+  const label = kind === PITCH_BADGE_MIXED ? t('main.pitchCurveMixed')
+    : kind === 'score' ? t('main.pitchCurveScore')
+      : kind === 'auto' ? t('main.pitchCurveAuto')
+        : t('main.pitchCurveManual');
+  // 自动层与混合是"曲线在工作"，用强调色；纯手动/乐谱是中性状态，用弱色。
+  const useAccent = kind === 'auto' || kind === PITCH_BADGE_MIXED;
+  ctx.font = '9px sans-serif';
+  const w = Math.min(maxWidth, ctx.measureText(label).width + 8);
+  if (w < 16) return;
+  const h = 12;
+  const bx = Math.max(0, x);
+  if (bx + w > maxWidth) return;
+
+  ctx.save();
+  ctx.fillStyle = useAccent ? (c.accent || '#5b8def') : (c.fgMuted || '#8888a8');
+  ctx.globalAlpha = 0.85;
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath();
+    ctx.roundRect(bx, y, w, h, 3);
+    ctx.fill();
+  } else {
+    ctx.fillRect(bx, y, w, h);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(label, bx + 4, y + 9);
+  ctx.restore();
 }

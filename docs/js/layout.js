@@ -59,9 +59,42 @@
     const btn = document.querySelector('[data-menu-btn]');
     const nav = document.querySelector('[data-header-nav]');
     if (!btn || !nav) return;
-    btn.addEventListener('click', function () { nav.classList.toggle('open'); });
+
+    function setOpen(open) {
+      nav.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.setAttribute('aria-label', (window.SXS_i18n && window.SXS_i18n.t(open ? 'menu.close' : 'menu.open')) || (open ? 'Close menu' : 'Open menu'));
+      if (open) {
+        // never stack the doc switcher and the site menu on top of each other
+        document.querySelectorAll('.docs-sidebar.open').forEach(function (sb) {
+          sb.classList.remove('open');
+          const t = sb.previousElementSibling;
+          if (t && t.classList.contains('docnav-toggle')) t.setAttribute('aria-expanded', 'false');
+        });
+      }
+    }
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-controls', 'site-nav');
+    if (!nav.id) nav.id = 'site-nav';
+
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      setOpen(!nav.classList.contains('open'));
+    });
     nav.querySelectorAll('a').forEach(function (a) {
-      a.addEventListener('click', function () { nav.classList.remove('open'); });
+      a.addEventListener('click', function () { setOpen(false); });
+    });
+    // tapping anywhere outside closes the panel
+    document.addEventListener('click', function (e) {
+      if (!nav.classList.contains('open')) return;
+      if (nav.contains(e.target) || btn.contains(e.target)) return;
+      setOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && nav.classList.contains('open')) { setOpen(false); btn.focus(); }
+    });
+    window.addEventListener('resize', function () {
+      if (window.innerWidth > 1024 && nav.classList.contains('open')) setOpen(false);
     });
   }
 
@@ -205,6 +238,86 @@
     }
   }
 
+  /* Figures ship as a pair of screenshots (en / zh), because the app UI
+   * itself is localised. Swap the file when the page language changes. */
+  function applyFigureLang() {
+    var lang = document.documentElement.lang || 'en';
+    var zh = lang.indexOf('zh') === 0;
+    document.querySelectorAll('img[data-en][data-zh]').forEach(function (img) {
+      var src = zh ? img.getAttribute('data-zh') : img.getAttribute('data-en');
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    });
+    document.querySelectorAll('a.fig-zoom[data-en][data-zh]').forEach(function (a) {
+      a.setAttribute('href', zh ? a.getAttribute('data-zh') : a.getAttribute('data-en'));
+    });
+  }
+
+  /* ------------------------------------------------------------------
+   * Figure lightbox: figures are downscaled to the prose column, so let
+   * readers open the full-resolution WebP (and the animated one) in an
+   * overlay. Falls back to a plain link when JS is unavailable.
+   * ------------------------------------------------------------------ */
+  function initFigureZoom() {
+    var links = document.querySelectorAll('.doc-figure .fig-zoom');
+    if (!links.length) return;
+
+    var overlay = null;
+
+    function close() {
+      if (!overlay) return;
+      overlay.classList.remove('open');
+      document.body.style.overflow = '';
+      var img = overlay.querySelector('img');
+      setTimeout(function () { if (img) img.removeAttribute('src'); }, 200);
+    }
+
+    function open(href, alt, captionHTML) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'fig-lightbox';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.innerHTML = '<button class="fig-lb-close" type="button" aria-label="Close">&times;</button>' +
+          '<div class="fig-lb-body"><img alt="" /><p class="fig-lb-cap"></p></div>';
+        overlay.addEventListener('click', function (e) {
+          if (e.target === overlay || e.target.classList.contains('fig-lb-close')) close();
+        });
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') close();
+        });
+      }
+      var img = overlay.querySelector('img');
+      img.src = href;
+      img.alt = alt || '';
+      overlay.querySelector('.fig-lb-cap').innerHTML = captionHTML || '';
+      overlay.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    links.forEach(function (link) {
+      link.addEventListener('click', function (e) {
+        var figure = link.closest('.doc-figure');
+        var img = link.querySelector('img');
+        var cap = figure ? figure.querySelector('figcaption') : null;
+        var visibleCap = null;
+        if (cap) {
+          var spans = cap.querySelectorAll('[data-lang]');
+          if (spans.length) {
+            Array.prototype.forEach.call(spans, function (sp) {
+              if (sp.classList.contains('show')) visibleCap = sp.innerHTML;
+            });
+            if (!visibleCap) visibleCap = cap.innerHTML;
+          } else {
+            visibleCap = cap.innerHTML;
+          }
+        }
+        e.preventDefault();
+        open(link.getAttribute('href'), img ? img.getAttribute('alt') : '', visibleCap);
+      });
+    });
+  }
+
   function boot() {
     initTheme();
     if (window.SXS_i18n) window.SXS_i18n.init();
@@ -216,6 +329,9 @@
     initBackToTop();
     initActiveSidebar();
     initAutoTOC();
+    applyFigureLang();
+    initFigureZoom();
+    document.addEventListener('localeChanged', applyFigureLang);
   }
 
   if (document.readyState === 'loading') {

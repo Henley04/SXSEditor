@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SXSEditor 推理 API 标准 · API Standard</title>
+<style>
+:root{--ink:#e8edf7;--muted:#9fb0cc;--bg:#0d1526;--panel:#131f36;--line:#28395c;--accent:#ffd166;--code:#0a1120}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:36px 24px 96px}
+header{border-bottom:2px solid var(--line);padding-bottom:18px;margin-bottom:28px}
+h1{font-size:30px;margin:0 0 8px}
+h2{font-size:23px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:18px;margin:28px 0 10px;color:var(--accent)}
+p,li{color:var(--ink)}
+a{color:var(--accent)}
+code{background:var(--code);color:#b8e0ff;padding:2px 6px;border-radius:4px;font-size:13.5px}
+pre{background:var(--code);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:16px;overflow:auto}
+pre code{background:none;color:#cfe0ff;padding:0;font-size:13px;line-height:1.6}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14.5px;display:block;overflow:auto}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--panel);color:var(--accent);white-space:nowrap}
+tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+blockquote{margin:18px 0;padding:12px 16px;background:var(--panel);border-left:4px solid var(--accent);border-radius:0 6px 6px 0;color:var(--muted)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:36px 0}
+footer{margin-top:56px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body><div class="wrap">
+<header>
+<h1>SXSEditor 推理 API 标准</h1>
+<div style="color:#9fb0cc">公开接入规范 · v1.1 · <a href="API_STANDARD.md">下载 Markdown 原文</a></div>
+</header>
+<article>
+<h1 id="sxseditor-api-api-standard">SXSEditor 推理 API 标准（API Standard）</h1>
+<p><strong>版本 1.0 · 适用于 SXSEditor 2.x「推理系统 = API」及其兼容服务</strong></p>
+<p>本文是 <strong>公开的接入标准</strong>：任何按本规范实现 HTTP 服务的后端，都可以直接在
+SXSEditor 的「设置 → 推理与硬件 → API」中作为一个 API Provider 使用；任何第三方
+客户端也可以按本规范调用 SXSEditor 内置的免费服务或自建服务。</p>
+<p>规范同时定义了<strong>客户端必须遵守的错误呈现要求</strong>——速率限制与鉴权错误不得静默失败。</p>
+<hr />
+<h2 id="1">1. 术语与范围</h2>
+<table>
+<thead>
+<tr>
+<th>术语</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Base URL</strong></td>
+<td>API 服务根地址，例如 <code>https://your-api.example.com</code>。不带尾斜杠、不带查询串、不带片段。</td>
+</tr>
+<tr>
+<td><strong>Provider</strong></td>
+<td>客户端里保存的一组 <code>{名称, Base URL, 密钥}</code>。密钥可选。</td>
+</tr>
+<tr>
+<td><strong>Key / Token</strong></td>
+<td>用于 <code>Authorization: Bearer &lt;key&gt;</code> 的凭据。免鉴权服务可留空。</td>
+</tr>
+<tr>
+<td><strong>合成请求</strong></td>
+<td><code>POST {Base URL}/v1/synthesize</code>，把一组音符合成为一段单声道音频。</td>
+</tr>
+</tbody>
+</table>
+<p>本规范只约束 HTTP 接口，不约束内部推理实现（ONNX / TensorRT / 自研模型均可）。
+SXSEditor 客户端本身不下载、不加载本地模型，所有计算都在服务端完成。</p>
+<hr />
+<h2 id="2">2. 认证</h2>
+<p>客户端对每个请求发送：</p>
+<pre><code class="language-http">Authorization: Bearer &lt;key&gt;
+Content-Type: application/json
+Accept: audio/wav, application/json
+</code></pre>
+<ul>
+<li><strong>密钥可选</strong>：Provider 未配置密钥时不发送 <code>Authorization</code> 头。</li>
+<li>兼容服务也可接受 <code>X-Api-Key: &lt;key&gt;</code>（参考实现同时支持两种）。</li>
+<li>服务端若要求鉴权而未提供或凭据无效，必须返回 <strong>401</strong>（或 <strong>403</strong>），
+  并在响应体中给出可读原因。</li>
+<li>密钥属于敏感信息。客户端实现应当把它加密存放在系统密钥环中，
+  <strong>不得</strong>写入普通设置文件、日志或随工程文件同步；界面只显示「已设置」，不回显明文。</li>
+</ul>
+<blockquote>
+<p><strong>Free API By SXSEditor</strong>：客户端内置一个指向 ModelScope 创空间<strong>公开访问域名</strong>
+的免费服务，<strong>完全免鉴权</strong>——无需任何密钥或 SDK Token，开箱即用。Provider 的
+「密钥」字段对该服务禁用，客户端也不会发送 <code>Authorization</code> 头。免费不等于无限：
+仍按 IP 限流，见第 7 节。</p>
+<p>说明：ModelScope 另有一个 <code>*.api-inference.modelscope.net</code> 的 API 专用网关，
+它会强制校验调用者自己的 SDK Token（无令牌返回 401）。内置免费服务<strong>不使用</strong>
+该网关，而使用创空间的公开域名 <code>*.ms.show</code>；平台按 <code>User-Agent</code> 区分页面访问
+与程序调用，因此客户端统一带常规浏览器 UA。若把内置服务地址改成专用网关或其他
+需要鉴权的自建服务，则按上表正常填写密钥。</p>
+</blockquote>
+<hr />
+<h2 id="3">3. 端点</h2>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>是否计入配额</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/synthesize</code></td>
+<td>是</td>
+<td>合成推理，返回 WAV 二进制或 JSON</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/v1/synthesize/stream</code></td>
+<td>是</td>
+<td>流式合成（NDJSON）：逐行推送<strong>真实推理进度</strong>，最后一条事件携带 WAV；见 4.5</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/health</code></td>
+<td>否</td>
+<td>健康检查、模型/版本状态；可用 <code>?strict=1</code> 要求模型就绪（否则 503）</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/v1/usage</code></td>
+<td>否</td>
+<td>查询当前 IP 的配额使用情况</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/</code></td>
+<td>否</td>
+<td>服务自描述（版本、模型、限流、端点清单、示例）</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/admin/logs</code></td>
+<td>否</td>
+<td>管理端点，需 <code>X-Admin-Token</code>（可选实现）</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/admin/rate-limit/reset</code></td>
+<td>否</td>
+<td>管理端点，需 <code>X-Admin-Token</code>（可选实现）</td>
+</tr>
+</tbody>
+</table>
+<p><code>GET /health</code> 是客户端「测试连接」按钮使用的端点。任何非 2xx 响应都必须把原因
+显示给用户（见第 8 节）。</p>
+<p>参考实现（v1.3.0 / v3 权重）的 <code>/health</code> 返回示例：</p>
+<pre><code class="language-json">{
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;model_status&quot;: &quot;ready&quot;,
+  &quot;model_dir&quot;: &quot;/app/models/int8&quot;,
+  &quot;model_revision&quot;: &quot;syxppp/SoulX-Singer-onnx-directml-int8@v3@int8&quot;,
+  &quot;model_revision_stamp&quot;: &quot;syxppp/SoulX-Singer-onnx-directml-int8@v3@int8&quot;,
+  &quot;model_revision_match&quot;: true,
+  &quot;model_progress&quot;: {
+    &quot;status&quot;: &quot;ready&quot;, &quot;percent&quot;: 100, &quot;missing_count&quot;: 0,
+    &quot;downloaded_mb&quot;: 881, &quot;total_mb&quot;: 881
+  },
+  &quot;pipeline&quot;: {
+    &quot;initialized&quot;: true,
+    &quot;eps&quot;: { &quot;noteTextEncoder&quot;: &quot;cpu&quot;, &quot;diffStep&quot;: &quot;cpu&quot;, &quot;vocoder&quot;: &quot;cpu&quot; }
+  },
+  &quot;uptime_seconds&quot;: 40,
+  &quot;requests&quot;: 6,
+  &quot;syntheses&quot;: 0,
+  &quot;rate_limit&quot;: { &quot;tracked_ips&quot;: 0, &quot;total_blocked&quot;: 0 }
+}
+</code></pre>
+<hr />
+<h2 id="4-post-v1synthesize">4. <code>POST /v1/synthesize</code></h2>
+<h3 id="41-json">4.1 请求体（JSON）</h3>
+<p>顶层对象<strong>只允许</strong>下列字段（参考实现 <code>additionalProperties: false</code>；多传未知字段返回 400）：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>默认</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>notes</code></td>
+<td>array（必填，1–<code>MAX_NOTES</code> 项，默认 256）</td>
+<td>—</td>
+<td>音符序列，见 4.2；超出上限返回 400，长序列请按 4.4 分段</td>
+</tr>
+<tr>
+<td><code>bpm</code></td>
+<td>number 20–300</td>
+<td><code>120</code></td>
+<td>速度；<code>start</code> / <code>duration</code> 单位为拍（beat）</td>
+</tr>
+<tr>
+<td><code>n_steps</code></td>
+<td>integer 1–32</td>
+<td><code>16</code></td>
+<td>扩散采样步数。越大质量越好、耗时越长（32 步约为 8 步的 3–4 倍）</td>
+</tr>
+<tr>
+<td><code>seed</code></td>
+<td>integer</td>
+<td>随机</td>
+<td>噪声种子，固定后可复现</td>
+</tr>
+<tr>
+<td><code>cfg</code></td>
+<td>number 0–10</td>
+<td><code>3</code></td>
+<td>CFG 强度</td>
+</tr>
+<tr>
+<td><code>cfg_rescale</code></td>
+<td>number 0–1</td>
+<td><code>0.75</code></td>
+<td>CFG rescale</td>
+</tr>
+<tr>
+<td><code>sampler</code></td>
+<td><code>euler</code> | <code>heun</code> | <code>extrap</code> | <code>stork2</code></td>
+<td><code>euler</code></td>
+<td>采样器</td>
+</tr>
+<tr>
+<td><code>cfg_schedule</code></td>
+<td>object</td>
+<td>—</td>
+<td><code>{mode, start, end, keyframes}</code> CFG 调度</td>
+</tr>
+<tr>
+<td><code>dynamic_threshold</code></td>
+<td>object</td>
+<td>—</td>
+<td><code>{enabled, percentile}</code> 动态阈值</td>
+</tr>
+<tr>
+<td><code>pitch_control</code></td>
+<td><code>manual</code> | <code>score</code></td>
+<td><code>manual</code></td>
+<td><strong><code>score</code> 不提供 F0 条件，音高由 note_pitch 决定，F0 曲线由模型生成</strong>（通常更自然）；<code>manual</code> 只提供 F0 条件</td>
+</tr>
+<tr>
+<td><code>pitch_shift</code></td>
+<td>number −24…24</td>
+<td><code>0</code></td>
+<td>手动变调（半音）</td>
+</tr>
+<tr>
+<td><code>auto_shift</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>依据参考音频 F0 中位数自动匹配音域</td>
+</tr>
+<tr>
+<td><code>f0_envelope</code></td>
+<td>object</td>
+<td>—</td>
+<td><code>{keyframes:[{time,value}]}</code>，<code>time</code> 单位拍、<code>value</code> 单位半音</td>
+</tr>
+<tr>
+<td><code>pitch_curve_f0</code></td>
+<td>number[]</td>
+<td>—</td>
+<td>显式 F0 曲线（Hz 或归一化值）</td>
+</tr>
+<tr>
+<td><code>reference_wav_base64</code></td>
+<td>string</td>
+<td>—</td>
+<td>参考音频 WAV 的 Base64，用于音色克隆</td>
+</tr>
+<tr>
+<td><code>ref_singer_data</code></td>
+<td>object</td>
+<td>—</td>
+<td>歌手元数据</td>
+</tr>
+<tr>
+<td><code>ref_midi_notes</code></td>
+<td>array</td>
+<td>—</td>
+<td>参考 MIDI 音符</td>
+</tr>
+<tr>
+<td><code>ref_f0_data</code></td>
+<td>array</td>
+<td>—</td>
+<td>参考 F0 数据</td>
+</tr>
+<tr>
+<td><code>ref_note_pitches</code></td>
+<td>array</td>
+<td>—</td>
+<td>参考音高序列</td>
+</tr>
+<tr>
+<td><code>max_prompt_frames</code></td>
+<td>integer 0–4000</td>
+<td>—</td>
+<td>参考音频最大提示帧数</td>
+</tr>
+<tr>
+<td><code>singer_id</code></td>
+<td>string ≤128</td>
+<td>—</td>
+<td>歌手标识；参与缓存键、不参与推理</td>
+</tr>
+<tr>
+<td><code>mel_postprocess</code></td>
+<td>object</td>
+<td>—</td>
+<td>频谱后处理参数</td>
+</tr>
+<tr>
+<td><code>response_format</code></td>
+<td><code>wav</code> | <code>json</code></td>
+<td><code>wav</code></td>
+<td>返回二进制 WAV 或 JSON（含 <code>audio_base64</code>）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-notes">4.2 <code>notes[]</code> 元素</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>必填</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pitch</code></td>
+<td>integer 0–127</td>
+<td>是</td>
+<td>MIDI 音高；<code>0</code> 表示休止</td>
+</tr>
+<tr>
+<td><code>start</code></td>
+<td>number ≥0</td>
+<td>是</td>
+<td>起始位置（拍）</td>
+</tr>
+<tr>
+<td><code>duration</code></td>
+<td>number &gt;0</td>
+<td>是</td>
+<td>时值（拍）</td>
+</tr>
+<tr>
+<td><code>lyric</code></td>
+<td>string ≤128</td>
+<td>否</td>
+<td>歌词。中文可直接写汉字（整句 G2P 自动转写），也可写音素如 <code>zh_a1</code></td>
+</tr>
+<tr>
+<td><code>note_type</code> / <code>type</code> / <code>noteType</code></td>
+<td>integer 0–8</td>
+<td>否</td>
+<td>音符类型；三种写法等价</td>
+</tr>
+<tr>
+<td><code>is_slur</code> / <code>isSlur</code></td>
+<td>boolean</td>
+<td>否</td>
+<td>连音</td>
+</tr>
+<tr>
+<td><code>is_continuation</code> / <code>isContinuation</code></td>
+<td>boolean</td>
+<td>否</td>
+<td>延音</td>
+</tr>
+<tr>
+<td><code>phoneme_adjustments</code> / <code>phonemeAdjustments</code></td>
+<td>array</td>
+<td>否</td>
+<td>音素级微调</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>中文歌词建议直接用汉字并让服务端做整句 G2P；GTSinger 等数据集的
+<code>l_zh</code> 后缀音素与 SXSEditor 的 <code>zh_*</code> 词表不兼容，需先转成汉字。</p>
+</blockquote>
+<p>最小示例：</p>
+<pre><code class="language-json">{
+  &quot;bpm&quot;: 120,
+  &quot;n_steps&quot;: 32,
+  &quot;pitch_control&quot;: &quot;score&quot;,
+  &quot;notes&quot;: [
+    { &quot;pitch&quot;: 60, &quot;start&quot;: 0, &quot;duration&quot;: 1, &quot;lyric&quot;: &quot;我&quot; },
+    { &quot;pitch&quot;: 62, &quot;start&quot;: 1, &quot;duration&quot;: 1, &quot;lyric&quot;: &quot;没&quot; },
+    { &quot;pitch&quot;: 64, &quot;start&quot;: 2, &quot;duration&quot;: 2, &quot;lyric&quot;: &quot;有&quot; }
+  ]
+}
+</code></pre>
+<h3 id="43">4.3 成功响应</h3>
+<p><strong><code>response_format = wav</code>（默认）</strong>：HTTP <code>200</code>，<code>Content-Type: audio/wav</code>，
+body 为 WAV 二进制。</p>
+<table>
+<thead>
+<tr>
+<th>要求</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>容器</td>
+<td>RIFF / WAVE</td>
+</tr>
+<tr>
+<td>编码</td>
+<td>IEEE float 32-bit（<code>format=3</code>）<strong>或</strong> PCM 16/32-bit（<code>format=1</code>），小端</td>
+</tr>
+<tr>
+<td>采样率</td>
+<td><strong>24000 Hz</strong>（与客户端 <code>SAMPLE_RATE</code> 一致；其它采样率客户端会线性重采样）</td>
+</tr>
+<tr>
+<td>声道</td>
+<td>单声道（多声道客户端会下混）</td>
+</tr>
+<tr>
+<td>建议响应头</td>
+<td><code>X-Inference-Ms</code>、<code>X-Audio-Duration-Sec</code>、<code>X-Request-Id</code>、<code>X-RateLimit-*</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>response_format = json</code></strong>：HTTP <code>200</code>，body：</p>
+<pre><code class="language-json">{
+  &quot;request_id&quot;: &quot;...&quot;,
+  &quot;client_ip&quot;: &quot;...&quot;,
+  &quot;sample_rate&quot;: 24000,
+  &quot;duration_seconds&quot;: 3.0,
+  &quot;inference_ms&quot;: 19807,
+  &quot;format&quot;: &quot;wav&quot;,
+  &quot;audio_base64&quot;: &quot;UklGR...&quot;
+}
+</code></pre>
+<p>客户端两种都支持；<code>audio_base64</code> 内容仍须是可解析的 WAV。</p>
+<h3 id="44">4.4 长序列：单请求上限与客户端分段</h3>
+<p>服务端对 <code>notes</code> 数量有硬上限（参考实现 <code>MAX_NOTES</code>，默认 <strong>256</strong>），
+超出直接返回 <code>400</code>：<code>body/notes must NOT have more than 256 items</code>。
+编辑器里一个分片常有几百个音符，客户端<strong>必须</strong>自行分段，不能假设一条请求能放下整首。</p>
+<p>SXSEditor 内置的 API 后端（<code>src/main/apiInference.js</code>）按以下规则处理，可作为参考实现：</p>
+<ol>
+<li><strong>切点</strong>：每片 ≤ 200 个音符（低于默认上限留余量）；在 <code>[60%·limit, limit]</code>
+   范围内选<strong>相邻音符间隙最大</strong>的位置下刀，并惩罚「下一音符是连音 / 延音」的切点 ——
+   每片独立推理，切在字中间会丢掉前文音素上下文。</li>
+<li><strong>时间轴归零</strong>：片段内所有 <code>start</code> 减去该片首音符的 <code>start</code>。服务端按
+   <code>max(start+duration)</code> 生成音频，不归零会让第 2 片先吐出几十秒静音（等同超时）。</li>
+<li><strong>绝对时间参数同步平移</strong>：<code>pitch_curve_f0</code>（50 fps，索引 0 = beat 0）按帧裁剪；
+   <code>f0_envelope.keyframes[].time</code> 减去片首拍；<code>mel_postprocess</code> 的帧数组按
+   <code>(片首拍 − startBeat) × 60/bpm × 50</code> 平移并把 <code>startBeat</code> 置 0。
+   <code>reference_wav_base64</code> / <code>ref_singer_data</code> 等与时间轴无关，原样透传。</li>
+<li><strong>拼接</strong>：各片音频按 <code>片首拍 × 60/bpm × 24000</code> 的采样偏移叠回一条完整音轨；
+   片尾与下一片重叠时裁剪并做 12ms 淡出，避免双声与爆音。</li>
+<li><strong>上限自适应</strong>：若服务端上限更小（自建服务把 <code>MAX_NOTES</code> 调低），客户端从
+   400 的 <code>message</code> 里读出真实上限并自动重切一次。</li>
+</ol>
+<blockquote>
+<p>参考实现会在日志里打印 <code>[API] &lt;Provider&gt;: 520 notes &gt; 200/request → 3 chunks</code>，
+便于确认是否发生了分段。分段是串行请求，耗时约等于各片之和。</p>
+</blockquote>
+<h3 id="45-post-v1synthesizestream">4.5 流式合成：<code>POST /v1/synthesize/stream</code></h3>
+<p>请求体与 4.1 <strong>完全一致</strong>（同一个 schema），响应改为逐行 NDJSON：</p>
+<pre><code>Content-Type: application/x-ndjson; charset=utf-8
+X-Accel-Buffering: no
+</code></pre>
+<p>每行一个 JSON 事件，按顺序：</p>
+<table>
+<thead>
+<tr>
+<th><code>type</code></th>
+<th>关键字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code></td>
+<td><code>request_id</code> / <code>notes</code> / <code>bpm</code> / <code>n_steps</code></td>
+<td>流开始，可用于确认服务端已受理</td>
+</tr>
+<tr>
+<td><code>progress</code></td>
+<td><code>percent</code>（0–100 整数）/ <code>elapsed_ms</code></td>
+<td><strong>服务端真实推理进度</strong>，来自 <code>pipeline.synthesize(..., {onProgress})</code></td>
+</tr>
+<tr>
+<td><code>ping</code></td>
+<td><code>t</code></td>
+<td>15 秒心跳，防止反代/网关空闲断连；客户端忽略即可</td>
+</tr>
+<tr>
+<td><code>done</code></td>
+<td><code>sample_rate</code> / <code>duration_seconds</code> / <code>inference_ms</code> / <code>format</code> / <code>audio_base64</code></td>
+<td>最后一条，音频为 WAV 的 Base64</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>error</code> / <code>message</code> / <code>request_id</code></td>
+<td>流开始后推理失败；HTTP 状态此时已是 200</td>
+</tr>
+</tbody>
+</table>
+<p>要点：</p>
+<ol>
+<li><strong>进度是真实的</strong>，不是按耗时估算。参考实现的进度覆盖 diffusion 全步数与 vocoder，
+   每 250ms 最多一条（diffusion 每个 step 都会回调，不节流会刷爆连接），100% 必发。</li>
+<li><strong>错误用事件表达</strong>：流一旦开始，HTTP 状态固定 200，失败只能通过 <code>type:error</code>
+   传达。客户端<strong>必须</strong>把 <code>message</code> 展示给用户，不能当成空音频。</li>
+<li><strong>不支持时回退</strong>：服务端没有该端点时返回 404/405；被反代改写成 HTML 时
+   <code>Content-Type</code> 不是 <code>x-ndjson</code>。客户端遇到这两种情况应回退到 <code>/v1/synthesize</code>，
+   其余 4xx/5xx（401/429/500）直接按第 5 节报错，<strong>不得</strong>重试（会重复消耗配额）。</li>
+<li><strong>分段兼容</strong>：4.4 的每片都可以走流式，客户端把 <code>percent</code> 按片区间折算成整体进度。</li>
+</ol>
+<p>最小客户端（Node 18+）：</p>
+<pre><code class="language-js">const resp = await fetch(`${base}/v1/synthesize/stream`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+  body: JSON.stringify({ notes, bpm: 120, n_steps: 32 }),
+});
+if (!resp.ok || !resp.headers.get('content-type')?.includes('ndjson')) {
+  throw new Error(`stream unsupported: ${resp.status}`); // 回退普通端点
+}
+let buf = '';
+for await (const chunk of resp.body) {
+  buf += new TextDecoder().decode(chunk, { stream: true });
+  let i;
+  while ((i = buf.indexOf('
+')) &gt;= 0) {
+    const evt = JSON.parse(buf.slice(0, i));
+    buf = buf.slice(i + 1);
+    if (evt.type === 'progress') onProgress(evt.percent);
+    else if (evt.type === 'error') throw new Error(evt.message);
+    else if (evt.type === 'done') return Buffer.from(evt.audio_base64, 'base64');
+  }
+}
+</code></pre>
+<hr />
+<h2 id="5">5. 错误响应</h2>
+<p>所有错误都返回统一结构（HTTP 状态码 + JSON body）：</p>
+<pre><code class="language-json">{ &quot;error&quot;: &quot;rate_limit_exceeded&quot;, &quot;message&quot;: &quot;每分钟推理次数已达上限（20 次/分钟），请稍后重试&quot;, &quot;request_id&quot;: &quot;...&quot; }
+</code></pre>
+<p><code>error</code> 为<strong>字符串错误码</strong>，<code>message</code> 为可直接展示给人看的说明。部分客户端也兼容
+<code>{"error":{"code":...,"message":...}}</code> 嵌套形式。</p>
+<table>
+<thead>
+<tr>
+<th>HTTP</th>
+<th><code>error</code></th>
+<th>含义</th>
+<th>客户端应如何处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td><code>invalid_request_body</code> / <code>bad_request</code></td>
+<td>请求体校验失败、未知字段、参数越界</td>
+<td><strong>显示</strong>具体字段原因</td>
+</tr>
+<tr>
+<td>401</td>
+<td><code>invalid_api_key</code></td>
+<td>缺少或无效的密钥</td>
+<td><strong>明确提示检查密钥</strong>；若用内置免费服务则提示检查是否被改成需鉴权的地址</td>
+</tr>
+<tr>
+<td>403</td>
+<td><code>ip_denied</code> / <code>ip_not_allowed</code> / <code>admin_forbidden</code></td>
+<td>IP 黑白名单或管理权限拒绝</td>
+<td><strong>显示</strong>原因</td>
+</tr>
+<tr>
+<td>404</td>
+<td><code>not_found</code></td>
+<td>未知端点</td>
+<td>检查 Base URL 是否多写了路径</td>
+</tr>
+<tr>
+<td>429</td>
+<td><code>rate_limit_exceeded</code></td>
+<td>触发每分钟 / 每日限流</td>
+<td><strong>显示</strong>限流范围与重试时间，见下</td>
+</tr>
+<tr>
+<td>429</td>
+<td><code>queue_full</code></td>
+<td>推理队列已满</td>
+<td><strong>显示</strong>，稍后重试</td>
+</tr>
+<tr>
+<td>503</td>
+<td><code>service_unavailable</code></td>
+<td>模型尚未就绪 / 正在下载</td>
+<td><strong>显示</strong>进度，稍后重试</td>
+</tr>
+<tr>
+<td>500</td>
+<td><code>synthesis_failed</code> / <code>internal_error</code></td>
+<td>推理内部错误</td>
+<td><strong>显示</strong>，<code>request_id</code> 用于排查</td>
+</tr>
+</tbody>
+</table>
+<p>429 响应额外字段与响应头：</p>
+<pre><code class="language-json">{
+  &quot;error&quot;: &quot;rate_limit_exceeded&quot;,
+  &quot;message&quot;: &quot;每分钟推理次数已达上限（20 次/分钟），请稍后重试&quot;,
+  &quot;scope&quot;: &quot;minute&quot;,
+  &quot;limit&quot;: { &quot;per_minute&quot;: 20, &quot;per_day&quot;: 500 },
+  &quot;usage&quot;: { &quot;minute_used&quot;: 20, &quot;minute_remaining&quot;: 0, &quot;day_used&quot;: 37 },
+  &quot;retry_after_seconds&quot;: 42,
+  &quot;request_id&quot;: &quot;...&quot;
+}
+</code></pre>
+<pre><code class="language-http">HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+X-RateLimit-Minute-Limit: 20
+X-RateLimit-Minute-Remaining: 0
+X-RateLimit-Day-Limit: 500
+X-RateLimit-Day-Remaining: 463
+</code></pre>
+<p>客户端应优先用 <code>Retry-After</code> 响应头，回退到 <code>retry_after_seconds</code> 字段。</p>
+<hr />
+<h2 id="6">6. 客户端错误处理要求（规范性）</h2>
+<blockquote>
+<p>这一节是<strong>标准的一部分</strong>，不是建议。</p>
+</blockquote>
+<ol>
+<li><strong>禁止静默失败</strong>：任何非 2xx、网络错误、超时、非 WAV 响应都必须把原因呈现给用户
+   （弹窗 / 状态区），不得只写日志、不得返回空音频、不得静默回退到本地推理。</li>
+<li><strong>后台自动推理同样适用</strong>：分片编辑器的后台自动推理默认不打扰用户，但
+   鉴权 / 限流 / 网络类错误必须显式弹出，否则用户只会看到「没有声音」。</li>
+<li><strong>错误要可操作</strong>：401/403 提示检查密钥；429 提示限流范围与重试等待；
+   5xx 附带服务端 <code>message</code> 与 <code>request_id</code>。</li>
+<li><strong>密钥不明文回显</strong>：界面只显示「已设置」，修改时留空表示保持不变。</li>
+<li><strong>超时可取消</strong>：长时间请求必须能被用户「停止」操作中止（AbortController）。</li>
+<li><strong>连接测试</strong>：Provider 管理界面应提供「测试连接」（<code>GET /health</code>），并把结果
+   （含错误原因）显示在界面上。</li>
+</ol>
+<p>SXSEditor 客户端的错误消息统一带 <code>[API ...]</code> 前缀（如 <code>[API 429]</code>、
+<code>[API 401/403]</code>、<code>[API 网络]</code>），语言无关，便于自动化识别与排查。</p>
+<hr />
+<h2 id="7">7. 限流与配额</h2>
+<p>参考实现按 <strong>客户端 IP</strong> 做滑动窗口双限流：</p>
+<table>
+<thead>
+<tr>
+<th>窗口</th>
+<th>上限</th>
+<th>作用域</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>每分钟</td>
+<td>20 次</td>
+<td>仅 <code>POST /v1/synthesize</code> 计入</td>
+</tr>
+<tr>
+<td>每 24 小时</td>
+<td>500 次</td>
+<td>同上</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>/health</code>、<code>/v1/usage</code>、<code>/</code> 与管理端点<strong>不</strong>计入配额。</li>
+<li>部署在反向代理 / ModelScope 创空间后需开启 <code>TRUST_PROXY=1</code>，否则所有请求会被
+  视为同一 IP。</li>
+<li>服务端可通过 <code>IP_ALLOWLIST</code> / <code>IP_DENYLIST</code> / <code>API_KEYS</code> / <code>ADMIN_TOKEN</code> 配置。</li>
+<li><strong>免费共享服务可能被多用户共享同一出口 IP</strong>，因此 429 更常见；客户端应显示
+  <code>Retry-After</code> 而不是立即重试。</li>
+</ul>
+<p><code>GET /v1/usage</code> 返回：</p>
+<pre><code class="language-json">{
+  &quot;client_ip&quot;: &quot;...&quot;,
+  &quot;limits&quot;: { &quot;per_minute&quot;: 20, &quot;per_day&quot;: 500 },
+  &quot;usage&quot;: {
+    &quot;minute_used&quot;: 1, &quot;minute_limit&quot;: 20, &quot;minute_remaining&quot;: 19,
+    &quot;day_used&quot;: 1, &quot;day_limit&quot;: 500, &quot;day_remaining&quot;: 499
+  },
+  &quot;note&quot;: &quot;仅 /v1/synthesize 计入推理配额；此接口与 /health 不计入&quot;
+}
+</code></pre>
+<hr />
+<h2 id="8">8. 内置免费服务</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>名称</td>
+<td><strong>Free API By SXSEditor</strong></td>
+</tr>
+<tr>
+<td>Base URL</td>
+<td><code>https://syxppp-soulx-singer-free.ms.show</code></td>
+</tr>
+<tr>
+<td>承载</td>
+<td>ModelScope 创空间（Docker SDK），ONNX Runtime CPU EP，INT8 权重</td>
+</tr>
+<tr>
+<td>模型</td>
+<td><code>syxppp/SoulX-Singer-onnx-directml-int8@v3@int8</code></td>
+</tr>
+<tr>
+<td>采样率</td>
+<td>24000 Hz</td>
+</tr>
+<tr>
+<td>鉴权</td>
+<td><strong>无</strong>。免密钥、免 SDK Token，客户端不发送 <code>Authorization</code> 头；「密钥」字段禁用</td>
+</tr>
+<tr>
+<td>限流</td>
+<td>20 次/分钟、500 次/24 小时（按 IP）</td>
+</tr>
+<tr>
+<td>内置项</td>
+<td>不可删除；可用「恢复内置默认」还原名称与网址；升级时旧网关地址自动迁移到此公开域名</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>访问要点：使用的是创空间<strong>公开访问域名</strong> <code>*.ms.show</code>，不是平台的
+<code>*.api-inference.modelscope.net</code> API 专用网关（后者强制 SDK Token）。平台按
+<code>User-Agent</code> 区分页面访问与程序调用，客户端统一带常规浏览器 UA；带 SDK Token
+访问公开域名反而会被网关 403 拒绝。Provider 的 Base URL 里<strong>不要</strong>写
+<code>/v1/synthesize</code>，客户端会自动拼接。</p>
+</blockquote>
+<hr />
+<h2 id="9">9. 调用示例</h2>
+<h3 id="curl">curl（免鉴权服务）</h3>
+<pre><code class="language-bash">curl -sS -X POST &quot;https://your-api.example.com/v1/synthesize&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -H &quot;Accept: audio/wav&quot; \
+  -d '{&quot;bpm&quot;:120,&quot;n_steps&quot;:32,&quot;pitch_control&quot;:&quot;score&quot;,&quot;notes&quot;:[{&quot;pitch&quot;:60,&quot;start&quot;:0,&quot;duration&quot;:1,&quot;lyric&quot;:&quot;我&quot;}]}' \
+  -o out.wav
+</code></pre>
+<h3 id="curl_1">curl（带密钥 + 查看配额）</h3>
+<pre><code class="language-bash">curl -sS &quot;https://your-api.example.com/v1/usage&quot; -H &quot;Authorization: Bearer $TOKEN&quot;
+curl -sS &quot;https://your-api.example.com/health?strict=1&quot; -H &quot;Authorization: Bearer $TOKEN&quot;
+</code></pre>
+<h3 id="javascriptnode-18">JavaScript（Node 18+，含错误呈现）</h3>
+<pre><code class="language-js">const res = await fetch(`${baseUrl}/v1/synthesize`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'audio/wav, application/json',
+    ...(key ? { Authorization: `Bearer ${key}` } : {}),
+  },
+  body: JSON.stringify({ notes, bpm: 120, n_steps: 16, response_format: 'wav' }),
+});
+if (!res.ok) {
+  const e = await res.json().catch(() =&gt; ({}));
+  // 必须展示给用户，不要 console.log 了事
+  const retry = res.headers.get('retry-after');
+  throw new Error(`[API ${res.status}] ${e.message || '请求失败'}${retry ? `，请 ${retry}s 后重试` : ''}`);
+}
+const wav = Buffer.from(await res.arrayBuffer());
+</code></pre>
+<h3 id="python">Python</h3>
+<pre><code class="language-python">import requests
+r = requests.post(f&quot;{base}/v1/synthesize&quot;,
+                  headers={&quot;Authorization&quot;: f&quot;Bearer {token}&quot;} if token else {},
+                  json={&quot;bpm&quot;: 120, &quot;n_steps&quot;: 32,
+                        &quot;notes&quot;: [{&quot;pitch&quot;: 60, &quot;start&quot;: 0, &quot;duration&quot;: 1, &quot;lyric&quot;: &quot;我&quot;}]},
+                  timeout=600)
+if r.status_code == 429:
+    raise RuntimeError(f&quot;限流：{r.json().get('message')}，{r.headers.get('Retry-After')}s 后重试&quot;)
+r.raise_for_status()
+open(&quot;out.wav&quot;, &quot;wb&quot;).write(r.content)
+</code></pre>
+<hr />
+<h2 id="10">10. 兼容性与版本</h2>
+<ul>
+<li>本规范版本 <strong>1.0</strong>，对应 SXSEditor 2.x 与参考 API 服务 v1.4.0。</li>
+<li>服务端<strong>可以</strong>增加可选请求字段，但不得删除或改变已有字段语义；未知顶层字段
+  在参考实现中会触发 400，因此客户端只发送本规范列出的字段。</li>
+<li><code>/v1/synthesize/stream</code> 是<strong>可选端点</strong>（v1.4.0 引入）。客户端必须先探测
+  <code>Content-Type</code>，不支持时回退 <code>/v1/synthesize</code>，不得因为缺少该端点而判服务不可用。</li>
+<li>客户端在 <code>GET /</code> 与 <code>GET /health</code> 中读取 <code>model_revision</code> / <code>max_notes</code> 等信息用于
+  展示与分段校准，不依赖它们做功能分流。</li>
+<li>音频采样率若不是 24000 Hz，客户端会做线性重采样到 24000 Hz；为保证音质，
+  服务端仍应输出 24000 Hz。</li>
+</ul>
+<hr />
+<h2 id="11">11. 安全清单</h2>
+<ul>
+<li>密钥加密存储于系统密钥环（Windows DPAPI / macOS Keychain / Linux libsecret），
+  与普通设置文件分离；不可用时必须明确告知用户「密钥以明文存储」。</li>
+<li>桌面客户端的 HTTP 请求一律在<strong>主进程</strong>发起：渲染层 CSP 的 <code>connect-src</code>
+  默认不允许任意外部地址，且密钥不下发到渲染层。</li>
+<li>Base URL 只接受 <code>http://</code> / <code>https://</code> 绝对地址，不含内嵌凭据、查询串或片段。</li>
+<li>日志中记录状态码、<code>request_id</code>、耗时，但<strong>不记录密钥明文</strong>。</li>
+<li>生产环境应使用 HTTPS；<code>http://</code> 仅用于本机 / 内网自建服务。</li>
+</ul>
+<hr />
+<h2 id="_1">相关文件</h2>
+<ul>
+<li>客户端 Provider 管理：<code>src/main/apiProviderStore.js</code>、<code>src/main/apiIpc.js</code></li>
+<li>客户端远程推理：<code>src/main/apiInference.js</code>（含 WAV 解码、错误分类、取消）</li>
+<li>接入点：<code>src/main/svsIpc.js</code>、<code>src/settings.html</code> / <code>settings.js</code> / <code>settings.css</code></li>
+<li>参考服务端：<code>sxseditor-inference-api</code>（Fastify + ONNX Runtime CPU / INT8）</li>
+</ul>
+</article>
+<footer>本文档随 SXSEditor 源码公开，规范正文以 <a href="API_STANDARD.md">docs/API_STANDARD.md</a> 为准。</footer>
+</div></body></html>

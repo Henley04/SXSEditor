@@ -8,6 +8,10 @@ const isDev = !require('electron').app.isPackaged;
 const { safeHandle } = require('./ipcSafe');
 const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
+// 社区入口：Reddit 子版块。用户提问、分享预设与作品主要在这里，
+// 与「项目主页（代码）」并列放在帮助菜单顶部，换地址时只改这一处。
+const REDDIT_COMMUNITY_URL = 'https://www.reddit.com/r/SXSEditor/s/7WK9Nnf7fw';
+
 let mainWindow = null;
 let settingsWindow = null;
 let resourceManagerWindow = null;
@@ -18,8 +22,30 @@ let pendingFragmentData = {};
 let singerCreatorWindow = null;
 let singerMarketWindow = null;
 let audioPreprocessWindow = null;
+let pluginManagerWindow = null;
 let pendingPreprocessData = null;
 let preprocessWavBuffer = null;
+
+const fs = require('node:fs');
+
+/**
+ * 窗口图标路径。
+ *
+ * webpack.main.config.js 的 CopyPlugin 把 assets/SXS.png 复制到
+ * `.webpack/main/SXS.png`（主 bundle 同目录），但此前这里读的是
+ * `path.join(__dirname, '..', 'SXS.png')`——多退了一层，文件根本不存在，
+ * 于是每个窗口都静默落回 Electron 的默认图标。
+ *
+ * 两种布局都要认：构建产物（bundle 同目录）与个别打包布局（上一级）。
+ * 都取不到时返回 undefined，交给 Electron 自己决定，不抛错。
+ */
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, 'SXS.png'),
+    path.join(__dirname, '..', 'SXS.png'),
+  ];
+  return candidates.find((p) => fs.existsSync(p));
+}
 
 let isDirty = false;
 let closePending = false;
@@ -114,6 +140,52 @@ function buildAppMenu() {
             }
           },
         },
+        {
+          label: t('menu.exportMidi'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_EXPORT_MIDI_REQUEST);
+            }
+          },
+        },
+        {
+          // 原来收在横向工具栏 ⋯ 里的两个低频动作，改为原生菜单常驻，
+          // 与「导出项目为 MIDI...」对仗。真正实现仍在渲染层（依赖弹窗、
+          // trackManager 与 electronAPI），主进程只发一个「请执行」信号。
+          label: t('menu.importMidi'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_IMPORT_MIDI_REQUEST);
+            }
+          },
+        },
+        {
+          label: t('menu.audioToMidi'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_AUDIO_TO_MIDI_REQUEST);
+            }
+          },
+        },
+        {
+          label: t('menu.editSinger'),
+          click: () => {
+            // 延迟 require：singerIpc 依赖本模块（getMainWindow / openAudioPreprocess），
+            // 顶层互相 require 会形成循环。
+            const { openSingerFileForEdit } = require('./singerIpc');
+            openSingerFileForEdit().then((res) => {
+              if (res && res.success === false && !res.canceled) {
+                const { dialog } = require('electron');
+                const opts = { type: 'error', message: t('menu.editSinger'), detail: res.error || '' };
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                  dialog.showMessageBox(mainWindow, opts);
+                } else {
+                  dialog.showMessageBox(opts);
+                }
+              }
+            }).catch((err) => console.error('[Menu] open singer editor failed:', err));
+          },
+        },
         { type: 'separator' },
         {
           label: t('menu.aboutSXSEditor'),
@@ -177,6 +249,16 @@ function buildAppMenu() {
           },
         },
         {
+          // 社区入口：放在项目主页旁边，而不是塞进下面的文档组末尾 ——
+          // 否则用户会把它当成"又一个文档链接"而跳过。
+          label: t('menu.reddit'),
+          click: () => {
+            shell.openExternal(REDDIT_COMMUNITY_URL).catch((err) => {
+              console.warn('[Menu] Open Reddit failed:', err && err.message);
+            });
+          },
+        },
+        {
           // 本地文档：随应用分发的 docs/user/quick-start.html，缺失时回退线上
           label: t('menu.userDocs'),
           click: () => {
@@ -201,6 +283,29 @@ function buildAppMenu() {
             openOnlineDoc('').catch((err) => {
               console.warn('[Menu] Open online docs failed:', err && err.message);
             });
+          },
+        },
+        { type: 'separator' },
+        {
+          // 按当前安装的实际目录生成 MCP/skill 安装 prompt，交给渲染层展示。
+          // 主进程只负责探测路径，不拼配置文本（那部分是可单测的纯函数）。
+          label: t('menu.mcpSetup'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_MCP_SETUP_REQUEST);
+            }
+          },
+        },
+        {
+          // 帮助 → 环境检测：把 Windows 版本 / WinML / CPU / GPU / 内存 / 显存
+          // 汇总成一份可直接复制的纯文本，排障时不用再逐项找用户要配置。
+          // id 供自动化验证直接定位（Menu.getMenuItemById('env-check')）。
+          id: 'env-check',
+          label: t('menu.envCheck'),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_ENV_CHECK_REQUEST);
+            }
           },
         },
         { type: 'separator' },
@@ -232,8 +337,33 @@ function buildAppMenu() {
     },
   ];
 
+  // 插件菜单插在 Settings 之后、View 之前（与"文件/设置同级"的产品要求一致）。
+  // 延迟 require：PluginService 会反过来 require 本模块重建菜单，顶层导入会成环。
+  try {
+    const { getPluginService } = require('./plugins/PluginService');
+    const pluginService = getPluginService();
+    if (pluginService.initialized) {
+      const fragment = pluginService.getMenuFragment();
+      if (fragment) menuTemplate.splice(3, 0, fragment);
+    }
+  } catch (err) {
+    console.warn('[Menu] Failed to build plugin menu:', err && err.message);
+  }
+
   const menu = Menu.buildFromTemplate(menuTemplate);
   Menu.setApplicationMenu(menu);
+}
+
+/**
+ * 重建整个应用菜单。插件贡献变化时调用 —— 整体重建而非增量 patch，
+ * 避免"卸载后菜单里还剩一个幽灵项"这类只能靠肉眼发现的问题。
+ */
+function rebuildAppMenu() {
+  try {
+    buildAppMenu();
+  } catch (err) {
+    console.warn('[Menu] Rebuild failed:', err && err.message);
+  }
 }
 
 async function showAboutDialog() {
@@ -261,7 +391,7 @@ function createWindow(opts = {}) {
     width: 1280,
     height: 800,
     title: 'SXSEditor',
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     backgroundColor: '#14141f',
     show,
     webPreferences: {
@@ -301,8 +431,32 @@ function createWindow(opts = {}) {
     }
   });
 
-  buildAppMenu();
+  // 菜单构建从 createWindow() 挪出（见下方 buildAppMenuDeferred 的说明）：
+  // 30+ 个菜单项、每项走 t() 的逐级查表，此前压在主窗口 reveal 的关键路径上。
+  // 调用方（main.js）在窗口显示之后再补上，功能不变。
   return mainWindow;
+}
+
+/**
+ * 延后构建应用菜单。
+ *
+ * 为什么延后：Menu.buildFromTemplate + Menu.setApplicationMenu 要构造 30+ 个菜单
+ * 项，每项再走一次 t() 的 split('.').reduce() 逐级查表。这段同步工作原本在
+ * createWindow() 末尾，也就是在主窗口 show() 之前，直接加在冷启动的关键路径上。
+ * 菜单是用户交互才用到的东西，窗口先出来再补菜单完全无感。
+ *
+ * 幂等：重复调用不会重复 setApplicationMenu。
+ */
+let _appMenuBuilt = false;
+function buildAppMenuDeferred() {
+  if (_appMenuBuilt) return;
+  _appMenuBuilt = true;
+  try {
+    buildAppMenu();
+  } catch (err) {
+    // 菜单失败不能影响主窗口可用性
+    console.warn('[Menu] buildAppMenu failed:', err && err.message);
+  }
 }
 
 function openSettingsWindow() {
@@ -325,7 +479,7 @@ function openSettingsWindow() {
     minWidth: 960,
     minHeight: 720,
     title: t('menu.settings'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: false,
     maximizable: false,
@@ -352,6 +506,65 @@ function openSettingsWindow() {
   });
 }
 
+/**
+ * 插件管理器窗口（独立窗口，菜单 "Manage Plugins…" 打开）。
+ *
+ * 与 settings 不同，这个窗口不带 modal：用户在管理器里删插件时，主窗口该能继续用。
+ * 打开参数（{tab, focus}）通过 hash 传入，窗口已存在时用 executeJavaScript 复用同一个实例。
+ */
+function openPluginManagerWindow(options = {}) {
+  const param = new URLSearchParams();
+  if (options.tab) param.set('tab', options.tab);
+  if (options.focus) param.set('focus', options.focus);
+  const suffix = param.toString() ? `#${param.toString()}` : '';
+
+  if (pluginManagerWindow && !pluginManagerWindow.isDestroyed()) {
+    pluginManagerWindow.show();
+    pluginManagerWindow.focus();
+    try {
+      pluginManagerWindow.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('plugin-manager:params',{detail:${JSON.stringify(options || {})}}))`,
+        true,
+      );
+    } catch (_) { /* 窗口还没加载完，忽略 */ }
+    return;
+  }
+
+  pluginManagerWindow = new BrowserWindow({
+    width: 900,
+    height: 720,
+    minWidth: 760,
+    minHeight: 520,
+    title: t('menu.plugins'),
+    icon: resolveAppIcon(),
+    resizable: true,
+    minimizable: true,
+    maximizable: true,
+    parent: mainWindow || undefined,
+    backgroundColor: '#14141f',
+    show: false,
+    webPreferences: {
+      preload: PLUGIN_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+
+  pluginManagerWindow.loadURL(`${PLUGIN_MANAGER_WINDOW_WEBPACK_ENTRY}${suffix}`);
+  pluginManagerWindow.once('ready-to-show', () => {
+    pluginManagerWindow.show();
+  });
+  pluginManagerWindow.setMenu(null);
+  pluginManagerWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  pluginManagerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  pluginManagerWindow.on('closed', () => {
+    pluginManagerWindow = null;
+  });
+}
+
 function openResourceManagerWindow() {
   if (resourceManagerWindow) {
     resourceManagerWindow.focus();
@@ -362,7 +575,7 @@ function openResourceManagerWindow() {
     width: 700,
     height: 750,
     title: t('resourceManager.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: true,
     maximizable: false,
@@ -404,7 +617,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
     minHeight: 560,
     // W20: use i18n key instead of hardcoded Chinese window title.
     title: t('modelDownload.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: true,
     maximizable: true,
@@ -462,7 +675,7 @@ function openUpdateNotificationWindow(data) {
     minWidth: 420,
     minHeight: 520,
     title: t('update.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     resizable: true,
     minimizable: false,
     maximizable: false,
@@ -494,10 +707,10 @@ function openUpdateNotificationWindow(data) {
   });
 }
 
-function openFragmentEditor(fragment, project, wavBuffer, backend) {
+function openFragmentEditor(fragment, project, wavBuffer, backend, singerAnnotation = null) {
   // backend 缺省按内置后端：老工程 / 内置轨道没有这个字段。
   const trackBackend = backend && typeof backend === 'object' ? backend : { type: 'sxs' };
-  const sendData = { fragment, project, wavBuffer, backend: trackBackend };
+  const sendData = { fragment, project, wavBuffer, backend: trackBackend, singerAnnotation };
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
     fragmentWindows[fragment.id].webContents.send(IPC_CHANNELS.LOAD_FRAGMENT, sendData);
@@ -514,7 +727,7 @@ function openFragmentEditor(fragment, project, wavBuffer, backend) {
     height: 600,
     // W20: use i18n key with name param instead of hardcoded Chinese title.
     title: t('fragment.title', { name: fragment.name }),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     backgroundColor: '#14141f',
     show: false,
     webPreferences: {
@@ -633,7 +846,7 @@ function openSingerCreator() {
     width: 900,
     height: 600,
     title: t('singerCreator.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     minWidth: 700,
     minHeight: 500,
     backgroundColor: '#14141f',
@@ -685,7 +898,7 @@ function openSingerMarket() {
     width: 1200,
     height: 800,
     title: t('singerMarket.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#14141f',
@@ -737,6 +950,9 @@ function openAudioPreprocess(data) {
     singerColor: data.singerColor,
     avatarImageData: data.avatarImageData,
     avatarImageName: data.avatarImageName,
+    // 歌手编辑模式：带上已有音符 / F0 / singerData 与目标文件路径。
+    // 只有从「编辑歌手文件」入口打开时才有值，正常新建流程为 undefined。
+    edit: data.edit || null,
   };
   preprocessWavBuffer = data.wavBuffer;
 
@@ -751,7 +967,7 @@ function openAudioPreprocess(data) {
     height: 800,
     // W20: use i18n key instead of hardcoded Chinese window title.
     title: t('preprocess.title'),
-    icon: path.join(__dirname, '..', 'SXS.png'),
+    icon: resolveAppIcon(),
     minWidth: 800,
     minHeight: 600,
     backgroundColor: '#14141f',
@@ -802,8 +1018,8 @@ function getAllWebContents() {
 }
 
 function registerWindowIpc() {
-  safeHandle(IPC_CHANNELS.OPEN_FRAGMENT_EDITOR, async (event, { fragment, project, wavBuffer, backend }) => {
-    openFragmentEditor(fragment, project, wavBuffer, backend);
+  safeHandle(IPC_CHANNELS.OPEN_FRAGMENT_EDITOR, async (event, { fragment, project, wavBuffer, backend, singerAnnotation }) => {
+    openFragmentEditor(fragment, project, wavBuffer, backend, singerAnnotation || null);
   });
 
   safeHandle(IPC_CHANNELS.GET_FRAGMENT_DATA, async (event, fragmentId) => {
@@ -835,6 +1051,27 @@ function registerWindowIpc() {
     return { success: true };
   });
 
+  // 主窗口 → 已打开的分片编辑器：增量同步（见 IPC_CHANNELS.PUSH_FRAGMENT_PATCH 注释）
+  safeHandle(IPC_CHANNELS.PUSH_FRAGMENT_PATCH, async (event, fragmentId, patch) => {
+    if (!fragmentId || !patch || typeof patch !== 'object') return { pushed: false };
+    // 同步 pendingFragmentData 快照 —— 编辑器重新打开时走 getFragmentData
+    // 兜底，若快照不更新就会把补丁"回退"掉（与 UPDATE_FRAGMENT_BOUNDS 同理）。
+    const snap = pendingFragmentData[fragmentId];
+    if (snap && snap.fragment) {
+      pendingFragmentData[fragmentId] = {
+        ...snap,
+        fragment: { ...snap.fragment, ...patch },
+      };
+    }
+    const win = fragmentWindows[fragmentId];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC_CHANNELS.FRAGMENT_DATA_PATCH, { fragmentId, patch });
+      return { pushed: true };
+    }
+    // 没有打开的编辑器不算失败：快照已更新，下次打开即是最新数据
+    return { pushed: false };
+  });
+
   safeHandle(IPC_CHANNELS.FRAGMENT_CLOSE, async (event, fragmentId) => {
     closeFragmentEditor(fragmentId);
     return { success: true };
@@ -853,6 +1090,12 @@ function registerWindowIpc() {
     if (pending && pending.fragment) {
       if (data.startTime !== undefined) pending.fragment.startTime = data.startTime;
       if (data.duration !== undefined) pending.fragment.duration = data.duration;
+      // 换轨必须同步进快照：否则编辑器关掉再打开时，getFragmentData 兜底会把它
+      // 还原成拖动前那个歌手，用户看到分片"自己跳回去了"。
+      if (data.singerId !== undefined) pending.fragment.singerId = data.singerId;
+      if (data.color !== undefined) pending.fragment.color = data.color;
+      // 音色是轨道级数据，不在 fragment 上；单独存一份供下一次 openFragmentEditor
+      // 复用（openFragmentEditor 会重新按 singerId 取，所以这里只需要不污染快照）。
     }
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_BOUNDS_CHANGED, { fragmentId, ...data });
@@ -914,10 +1157,14 @@ function registerWindowIpc() {
 
 module.exports = {
   createWindow,
+  buildAppMenuDeferred,
   openSettingsWindow,
   notifyRelayout,
   attachRelayoutListeners,
   openResourceManagerWindow,
+  openPluginManagerWindow,
+  rebuildAppMenu,
+  getPluginManagerWindow: () => pluginManagerWindow,
   createModelDownloadWindow,
   setModelDownloadWindow,
   openUpdateNotificationWindow,

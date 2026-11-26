@@ -79,7 +79,7 @@
         <li data-lang="en"><strong>Browse</strong> public singers uploaded by the community, paginated 24 per page.</li>
         <li data-lang="zh"><strong>浏览</strong> 社区用户上传的公开歌手，每页 24 项分页展示。</li>
         <li data-lang="en"><strong>Search</strong> by singer name or description (debounced 350 ms).</li>
-        <li data-lang="zh">按歌手名称或描述 <strong>搜索</strong>（输入防抖 350 毫秒）。</li>
+        <li data-lang="zh">按歌手名称或描述 <strong>搜索</strong>。</li>
         <li data-lang="en"><strong>Filter</strong> by multiple tags using AND semantics to narrow down quickly.</li>
         <li data-lang="zh">按多标签 <strong>筛选</strong>（AND 语义），快速定位目标声音。</li>
         <li data-lang="en"><strong>Upload</strong> your own <code>.sxssinger</code> files to share with the community (login required).</li>
@@ -89,6 +89,47 @@
         <li data-lang="en"><strong>Ownership</strong> — every upload is bound to your account; only you (or an admin) can edit or delete your own files.</li>
         <li data-lang="zh"><strong>所有权</strong>— 每个上传都与你的账号绑定；只有你（或管理员）能修改或删除自己的文件。</li>
       </ul>
+
+      <h2>
+        <span data-lang="en">Featured Singers</span>
+        <span data-lang="zh">精选歌手</span>
+      </h2>
+      <p data-lang="en">Two singers are currently featured — one virtual-singer voice and one AI voice. Both are downloadable from the market and usable in any project right away; the <a href="../index.html#singers">roster on the homepage</a> has the full introduction.</p>
+      <p data-lang="zh">市场目前主推两位歌手——一位虚拟歌手音色、一位 AI 音色。两者都可直接从市场下载并在工程里立即使用；完整介绍见 <a href="../index.html#singers">首页歌手阵容</a>。</p>
+      <table>
+        <thead>
+          <tr>
+            <th><span data-lang="en">Singer</span><span data-lang="zh">歌手</span></th>
+            <th><span data-lang="en">Type</span><span data-lang="zh">类型</span></th>
+            <th><span data-lang="en">Languages</span><span data-lang="zh">语言</span></th>
+            <th><span data-lang="en">Timbre</span><span data-lang="zh">音色</span></th>
+            <th><span data-lang="en">Best for</span><span data-lang="zh">适用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong data-lang="zh">洛天依</strong><strong data-lang="en">Luo Tianyi</strong><br><span data-lang="en">VIRTUAL SINGER</span><span data-lang="zh">LUO TIANYI</span></td>
+            <td><span data-lang="en">Virtual singer</span><span data-lang="zh">虚拟歌手</span></td>
+            <td><span data-lang="en">Chinese · Japanese</span><span data-lang="zh">中文 · 日文</span></td>
+            <td><span data-lang="en">Bright, youthful</span><span data-lang="zh">清亮少女音</span></td>
+            <td><span data-lang="en">Pop / electronic / Chinese style</span><span data-lang="zh">流行 / 电子 / 国风</span></td>
+          </tr>
+          <tr>
+            <td><strong>DeepSeek</strong><br><span data-lang="en">AI VOICE</span><span data-lang="zh">AI 音色</span></td>
+            <td><span data-lang="en">AI voice</span><span data-lang="zh">AI 音色</span></td>
+            <td><span data-lang="en">Chinese · English</span><span data-lang="zh">中文 · 英文</span></td>
+            <td><span data-lang="en">Sweet, young female</span><span data-lang="zh">甜美 · 年轻女声</span></td>
+            <td><span data-lang="en">Pop / folk / light electronic</span><span data-lang="zh">流行 / 民谣 / 轻电子</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">Voice rights belong to the uploader or the original rights holder. Read the <a href="../singer-market-terms-en.html">Singer Market terms of use</a> before downloading someone else's singer — commercial use, redistribution and derivative works may be restricted.</p>
+          <p data-lang="zh">音色权利归上传者或原始权利人所有。下载他人分享的歌手前，请先阅读 <a href="../singer-market-terms-zh.html">歌手市场使用条款</a>——商用、再分发与二次创作可能受到限制。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">Opening the Market</span>
@@ -207,8 +248,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">The server imposes a hard upload size cap (default 100 MB, the Cloudflare Workers free-tier limit). <code>.sxssinger</code> files are typically a few MB, so this is rarely an issue.</p>
-          <p data-lang="zh">服务端对上传大小有硬性上限（默认 100 MB，Cloudflare Workers 免费层限制）。<code>.sxssinger</code> 文件通常仅几 MB，因此基本不会触及上限。</p>
+          <p data-lang="en">The client enforces a hard upload size cap of <strong>512 MB</strong> per <code>.sxssinger</code> file — a safety guard against accidentally streaming a huge file off your machine. <code>.sxssinger</code> files are typically only a few MB, so this is rarely an issue.</p>
+          <p data-lang="zh">客户端对每个 <code>.sxssinger</code> 文件有 <strong>512 MB</strong> 的硬性上传上限——这是防止误选大文件将数据无上限流出的兜底保护。<code>.sxssinger</code> 文件通常仅几 MB，因此基本不会触及上限。</p>
         </div>
       </div>
 

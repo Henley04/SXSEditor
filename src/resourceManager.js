@@ -3,6 +3,7 @@ import './resourceManager.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 import { formatBytes } from './utils/formatBytes.js';
+import { getEPLabel, getEPBadgeClass } from './utils/epLabel.js';
 import { createIcon, hydrateIcons } from './icons/iconHelper.js';
 
 const gpuInfoContent = document.getElementById('gpuInfoContent');
@@ -22,26 +23,6 @@ function getLocalizedName(item) {
 function getLocalizedDesc(item) {
     if (getLocale() === 'en' && item.descriptionEn) return item.descriptionEn;
     return item.description;
-}
-
-function getEPLabel(ep) {
-    if (!ep) return '';
-    const map = {
-        dml: 'DML',
-        cpu: 'CPU',
-        tfjs: 'TFJS',
-    };
-    return map[ep.toLowerCase()] || ep.toUpperCase();
-}
-
-function getEPBadgeClass(ep) {
-    if (!ep) return 'none';
-    const map = {
-        dml: 'dml',
-        cpu: 'cpu',
-        tfjs: 'tfjs',
-    };
-    return map[ep.toLowerCase()] || 'none';
 }
 
 // #2: 设置按钮loading状态
@@ -426,12 +407,38 @@ function renderSummary(groups, gpus) {
 
 // ===== Data Loading =====
 
+// IPC 没有超时语义：主进程侧若卡在驱动枚举（DML 初始化偶发），界面会永远
+// 停在 "加载中..."，用户分不清是慢还是坏了。到点就切失败态，附一个重试按钮。
+const LOAD_TIMEOUT_MS = 10000;
+
+function withLoadTimeout(promise, ms) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('LOAD_TIMEOUT')), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
+}
+
 function showLoadFailed(container) {
     container.textContent = '';
-    const noData = document.createElement('div');
-    noData.className = 'gpu-no-data';
-    noData.textContent = t('resourceManager.loadFailed');
-    container.appendChild(noData);
+    const wrap = document.createElement('div');
+    wrap.className = 'rm-load-failed';
+
+    const text = document.createElement('div');
+    text.className = 'gpu-no-data';
+    text.textContent = t('resourceManager.loadFailed');
+
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'rm-retry-btn';
+    retry.textContent = t('resourceManager.retry');
+    retry.addEventListener('click', () => { loadData(); });
+
+    wrap.appendChild(text);
+    wrap.appendChild(retry);
+    container.appendChild(wrap);
 }
 
 let _loadDataPromise = null;
@@ -442,10 +449,10 @@ async function loadData() {
 
     _loadDataPromise = (async () => {
         try {
-            const [gpuResult, modelResult] = await Promise.all([
+            const [gpuResult, modelResult] = await withLoadTimeout(Promise.all([
                 window.electronAPI.resmgrGetGPUInfo(),
                 window.electronAPI.resmgrGetModelGroups(),
-            ]);
+            ]), LOAD_TIMEOUT_MS);
 
             if (gpuResult.success) {
                 renderGPUInfo(gpuResult.gpus);

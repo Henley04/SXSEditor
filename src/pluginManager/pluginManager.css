@@ -1,0 +1,730 @@
+/* 插件管理器窗口。
+ *
+ * 样式只用主题 token（见 src/themes/themeFallback.css），不写死颜色 ——
+ * 这个窗口和其它 8 个窗口共用同一套主题，切主题时必须一起变。
+ */
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  color: var(--fg-secondary);
+  font-size: var(--font-md, 13px);
+}
+
+/* ------------------------------------------------------------ 顶部 */
+.pm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-default);
+  /* 和其它 8 个窗口一样用纯色头部。原先写的是 start→end 的渐变，但所有内置主题
+     这两个 token 是同一个值，渐变等价于纯色，只是多留了一个"以后会变"的假接口。 */
+  background: var(--bg-header-start);
+  flex: 0 0 auto;
+}
+
+.pm-titlebar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pm-titlebar h1 {
+  margin: 0;
+  font-size: var(--font-xl, 18px);
+  font-weight: 600;
+  color: var(--fg-primary);
+  letter-spacing: 0.01em;
+}
+
+.pm-count {
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-muted);
+}
+
+.pm-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------ 按钮 */
+.pm-btn {
+  appearance: none;
+  border: 1px solid var(--border-default);
+  background: var(--bg-button);
+  color: var(--fg-primary);
+  border-radius: var(--radius-md, 6px);
+  padding: 7px 13px;
+  font-size: var(--font-sm, 12px);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) var(--ease-standard, ease),
+    border-color var(--motion-fast, 120ms) var(--ease-standard, ease);
+  white-space: nowrap;
+}
+
+.pm-btn:hover:not(:disabled) {
+  background: var(--bg-button-hover);
+  border-color: var(--border-strong);
+}
+
+.pm-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.pm-btn:disabled {
+  background: var(--button-disabled-bg);
+  color: var(--fg-disabled);
+  cursor: default;
+}
+
+.pm-btn-primary {
+  background: var(--bg-button-primary);
+  border-color: var(--border-accent);
+  color: var(--button-primary-fg);
+}
+
+.pm-btn-primary:hover:not(:disabled) {
+  background: var(--bg-button-primary-hover);
+}
+
+.pm-btn-danger {
+  background: var(--bg-button-danger);
+  border-color: var(--border-default);
+  /* 原来写的是 var(--danger)，而 --bg-button-danger 与 --danger 是同一个色值 ——
+     文字和背景完全同色，按钮看上去是个空红色方块。危险按钮是实心背景，
+     必须用「实心底上的前景色」。 */
+  color: var(--fg-on-danger);
+}
+
+.pm-btn-danger:hover:not(:disabled) {
+  background: var(--bg-button-danger-hover);
+}
+
+.pm-btn-small {
+  padding: 4px 9px;
+  font-size: var(--font-xs, 11px);
+}
+
+/* ------------------------------------------------------------ 标签页 */
+.pm-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  flex: 0 0 auto;
+}
+
+.pm-tab {
+  appearance: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 10px 14px;
+  font-size: var(--font-sm, 12px);
+  font-family: inherit;
+  cursor: pointer;
+  /* common.css 给所有 button 设了 --radius-lg。这里必须显式归零：
+     圆角会让 2px 下边框在两端向上弯，选中态看起来是一段翘起来的弧形，
+     和"一条直的下划线"完全是两种语气。扁平风格下 tab 是矩阵里的一格，不该有弧。 */
+  border-radius: 0;
+  transition: color var(--motion-fast, 120ms) var(--ease-standard, ease);
+}
+
+.pm-tab:hover {
+  color: var(--fg-primary);
+}
+
+.pm-tab.is-active {
+  color: var(--accent-fg);
+  border-bottom-color: var(--accent);
+}
+
+/* 键盘焦点：用内嵌 outline 而不是外扩阴影 —— tab 紧贴 tablist 上沿，
+   外扩的环会被上方元素压掉一半，看起来像"只有下半截亮"。
+   只在 :focus-visible 出现，鼠标点击不会留下框。 */
+.pm-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  color: var(--fg-primary);
+}
+
+/* 面板本身可聚焦（tabindex=0），是为了让键盘用户能直接滚动内容并让读屏
+   把注意力切到面板；同样只在键盘聚焦时画框。 */
+.pm-pane:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ------------------------------------------------------------ 内容区 */
+.pm-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.pm-pane {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 16px 18px 24px;
+}
+
+.pm-pane-hidden {
+  display: none;
+}
+
+.pm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.pm-empty[hidden] {
+  display: none;
+}
+
+.pm-empty-title {
+  margin: 0;
+  font-size: var(--font-lg, 15px);
+  color: var(--fg-secondary);
+}
+
+.pm-empty-hint {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--font-sm, 12px);
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------ 插件卡片 */
+.pm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pm-card {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--bg-panel);
+  padding: 14px 16px;
+  transition: border-color var(--motion-fast, 120ms) var(--ease-standard, ease);
+}
+
+.pm-card:hover {
+  border-color: var(--border-strong);
+}
+
+/* 停用的插件：不整块降透明度。opacity 会把正文（--fg-primary）与弱化文字
+   （--fg-muted）一起压向背景，"这是哪个插件"恰恰是用户此刻要读的信息。
+   改成凹陷底色 + 虚线边：同样是"不可用"的读法，但文字对比度不变。 */
+.pm-card.is-disabled {
+  background: var(--bg-app);
+  border-style: dashed;
+}
+
+/* 安装/信任成功后滚动到的卡片。之前只 scrollIntoView + 加一个没有样式的类，
+   等于"滚过去了但没告诉你是哪一张"。用 outline 而不是 box-shadow：
+   扁平、不参与布局，也不会像阴影那样在深色主题上糊成一团。 */
+.pm-card.is-focused {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pm-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pm-card-titles {
+  min-width: 0;
+}
+
+.pm-card-name {
+  margin: 0 0 2px;
+  font-size: var(--font-lg, 15px);
+  font-weight: 600;
+  color: var(--fg-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pm-badge {
+  font-size: var(--font-xs, 11px);
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--border-subtle);
+  background: var(--accent-softer);
+  color: var(--fg-secondary);
+}
+
+.pm-badge.is-loaded {
+  color: var(--success-fg);
+  border-color: var(--success-soft);
+  background: var(--success-soft);
+}
+
+.pm-badge.is-disabled {
+  color: var(--fg-muted);
+}
+
+.pm-badge.is-quarantined,
+.pm-badge.is-error {
+  color: var(--danger-fg);
+  border-color: var(--danger-soft);
+  background: var(--danger-soft);
+}
+
+/* 随应用分发的官方插件：与运行状态徽标区分，走强调色而非成功/危险色。 */
+.pm-badge.is-builtin {
+  color: var(--accent-fg);
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+
+.pm-card-meta {
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.pm-card-desc {
+  margin: 8px 0 0;
+  font-size: var(--font-sm, 12px);
+  line-height: 1.6;
+  color: var(--fg-secondary);
+}
+
+.pm-card-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.pm-builtin-note {
+  align-self: center;
+  max-width: 190px;
+  font-size: var(--font-xs, 11px);
+  line-height: 1.5;
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+.pm-card-body {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pm-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: var(--font-sm, 12px);
+}
+
+.pm-row-label {
+  flex: 0 0 92px;
+  color: var(--fg-muted);
+}
+
+.pm-row-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pm-chip {
+  font-size: var(--font-xs, 11px);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-secondary);
+}
+
+.pm-chip.is-warn {
+  color: var(--warning-fg);
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+}
+
+.pm-note {
+  font-size: var(--font-xs, 11px);
+  line-height: 1.65;
+  color: var(--fg-muted);
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-subtle);
+}
+
+.pm-note-error {
+  color: var(--danger-fg);
+  border-color: var(--danger-soft);
+}
+
+/* ------------------------------------------------------------ 日志 */
+.pm-log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pm-log-hint {
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pm-log-wrap {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md, 6px);
+  overflow: hidden;
+}
+
+.pm-log {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-xs, 11px);
+  font-variant-numeric: tabular-nums;
+}
+
+.pm-log thead th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--bg-toolbar-start);
+  color: var(--fg-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.pm-log tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-secondary);
+  vertical-align: top;
+  word-break: break-all;
+}
+
+.pm-log tbody tr:hover td {
+  background: var(--bg-button-hover);
+}
+
+.pm-log tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pm-log-detail {
+  color: var(--fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-xs, 11px);
+}
+
+/* ------------------------------------------------------------ toast */
+.pm-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 40px));
+  padding: 9px 16px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--tooltip-bg);
+  color: var(--tooltip-fg);
+  font-size: var(--font-sm, 12px);
+  box-shadow: var(--shadow-lg);
+  z-index: 20;
+}
+
+.pm-toast[hidden] {
+  display: none;
+}
+
+.pm-toast.is-error {
+  /* 同 .pm-btn-danger：--bg-button-danger 与 --danger 是同一个色值，
+     用 --danger 当文字色 = 一片纯红方块，错误信息一个字也看不见。 */
+  background: var(--bg-button-danger);
+  color: var(--fg-on-danger);
+  /* 边框原来用 --danger，与背景同一个红，等于没画；换成普通描边，
+     浮在列表上时才有边界。 */
+  border: 1px solid var(--border-default);
+}
+
+/* ---------------- 快捷键（M2） ---------------- */
+.pm-kb {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pm-kb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pm-kb-head .pm-row-label {
+  /* 标签列在普通行里是固定 92px（为了两列对齐），搬到这块里会把
+     “External automation”折成两行 */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.pm-kb-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.pm-kb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.pm-kb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  min-width: 0;
+}
+
+.pm-kbd {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+/* 自动化方法行：与快捷键行分开，因为它需要"是代码"的视觉语气（等宽 + 底框），
+   而快捷键行的主角是 <kbd>。 */
+.pm-auto-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 10px;
+}
+
+.pm-auto-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+}
+
+.pm-auto-method {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-auto-status { flex: 0 0 auto; font-size: 11px; }
+.pm-auto-status.is-on { color: var(--success-fg, var(--accent-fg)); }
+.pm-auto-status.is-off { color: var(--fg-muted); }
+
+.pm-kb-status {
+  flex: 0 0 auto;
+}
+
+.pm-kb-status.is-active { color: var(--success-fg, var(--accent-fg)); }
+.pm-kb-status.is-off { color: var(--fg-muted); }
+.pm-kb-status.is-conflict { color: var(--warning-fg); }
+
+.pm-kb-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
+/* ------------------------------------------------------------ 签名与信任 */
+.pm-sig.is-verified {
+  color: var(--success-fg, var(--accent-fg));
+  border-color: var(--success-line, var(--border-subtle));
+}
+
+.pm-sig.is-unsigned {
+  color: var(--warning-fg);
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+}
+
+/* 安装了一个"签名有效、密钥未知"的包时横在列表上方。
+   它是**待决定**状态，不是错误提示：配色用 accent 而不是 danger。 */
+.pm-trust-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 18px 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-line, var(--border-default));
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-elevated);
+  flex: 0 0 auto;
+}
+
+.pm-trust-banner[hidden] {
+  display: none;
+}
+
+.pm-trust-banner-text {
+  min-width: 0;
+}
+
+.pm-trust-banner-title {
+  margin: 0 0 4px;
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-primary);
+}
+
+.pm-trust-banner-sub {
+  margin: 0;
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  /* 指纹与文件名都要能完整读到：换行比省略号强 */
+  overflow-wrap: anywhere;
+}
+
+.pm-security {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+
+.pm-security .pm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.pm-section-title {
+  margin: 12px 0 0;
+  font-size: var(--font-sm, 12px);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: none;
+}
+
+.pm-key-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pm-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-panel);
+}
+
+.pm-key-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pm-key-name {
+  font-size: var(--font-sm, 12px);
+  color: var(--fg-primary);
+}
+
+.pm-key-fp {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+}
+
+.pm-key-empty {
+  padding: 10px 12px;
+  font-size: var(--font-xs, 11px);
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md, 6px);
+}
+
+/* ------------------------------------------------------------ 动效偏好 */
+/* 三个过渡都是颜色渐变、没有位移，但 prefers-reduced-motion 覆盖的不只是
+   "不要动" —— 部分用户对颜色闪烁/渐变同样不适，所以一并关掉。
+   这些规则与上面同特异性、位置更靠后，直接覆盖即可，不必 !important。 */
+@media (prefers-reduced-motion: reduce) {
+  .pm-tab,
+  .pm-btn,
+  .pm-card {
+    transition: none;
+  }
+}
