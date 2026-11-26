@@ -437,8 +437,8 @@ function applySavedSettingsToUI(currentSetting) {
     if (previewDynamicThresholdPercentileValue) previewDynamicThresholdPercentileValue.textContent = parseFloat(pDtPercentile).toFixed(3);
     updateDynamicThresholdVisibility('preview');
 
-    // diffStep 分块推理设置
-    const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled === true;
+    // diffStep 分块推理设置（默认开启：仅显式关闭时才为 false）
+    const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled !== false;
     const pChunkFrames = currentSetting.previewDiffStepChunkFrames ?? 500;
     const pOverlapFrames = currentSetting.previewDiffStepOverlapFrames ?? 50;
     if (previewDiffStepChunkEnabledCheckbox) previewDiffStepChunkEnabledCheckbox.checked = pChunkEnabled;
@@ -591,7 +591,7 @@ function applySavedSettingsToUI(currentSetting) {
     if (releaseDmlVramAfterSynthesisCheckbox) {
         releaseDmlVramAfterSynthesisCheckbox.checked = currentSetting.releaseDmlVramAfterSynthesis === true;
     }
-    // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
+    // Vocoder 推理前释放 diffStep（默认关闭，仅 DML 后端有效）
     if (releaseDiffStepBeforeVocoderCheckbox) {
         releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder === true;
     }
@@ -1862,7 +1862,7 @@ function collectSettings() {
         previewCfgScheduleKeyframes: previewCfgScheduleKeyframesInput ? parseKeyframes(previewCfgScheduleKeyframesInput.value) : null,
         previewDynamicThresholdEnabled: previewDynamicThresholdEnabledCheckbox ? previewDynamicThresholdEnabledCheckbox.checked : false,
         previewDynamicThresholdPercentile: previewDynamicThresholdPercentileSlider ? parseFloat(previewDynamicThresholdPercentileSlider.value) : 0.995,
-        previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
+        previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : true,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
         autoRealtimeInference: autoRealtimeInferenceCheckbox ? autoRealtimeInferenceCheckbox.checked : false,

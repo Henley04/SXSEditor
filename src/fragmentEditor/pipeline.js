@@ -189,7 +189,7 @@ export function getFragmentPreviewInferenceOptions() {
     qdrift: resolveQDriftDefault(settings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
-    diffStepChunk: settings?.previewDiffStepChunkEnabled === true,
+    diffStepChunk: settings?.previewDiffStepChunkEnabled !== false,
     diffStepChunkFrames: settings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: settings?.previewDiffStepOverlapFrames ?? 50,
   };

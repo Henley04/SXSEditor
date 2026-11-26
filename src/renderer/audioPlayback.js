@@ -1445,7 +1445,7 @@ export function getPreviewInferenceOptions() {
     qdrift: resolveQDriftDefault(state.audioSettings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
-    diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
+    diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled !== false,
     diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
     // Task 11: CFG schedule (preview mirrors). Falls back to top-level keys.

@@ -5,6 +5,11 @@ const { setLocale } = require('./locale');
 const DEFAULT_THEME = 'acg';
 const DEFAULT_THEME_PER_WINDOW = {};
 
+// 会话重载/卸载类开关统一默认关闭：diffStep 与 vocoder 保持已加载，不自动重建 session。
+const DEFAULT_SESSION_RELEASE_SETTINGS = Object.freeze({
+  releaseDmlVramAfterSynthesis: false,
+  releaseDiffStepBeforeVocoder: false,
+});
 
 const ENUM_SETTINGS = {
   deviceMode: ['smart', 'manual', 'advanced'],
@@ -157,7 +162,7 @@ function loadSettings() {
 
   // 合成完成后是否释放并重建重型 DML session，强制回收 DirectML 内存池（默认关闭，仅 DML 后端有效）
   if (typeof _settingsCache.releaseDmlVramAfterSynthesis !== 'boolean') {
-    _settingsCache.releaseDmlVramAfterSynthesis = false;
+    _settingsCache.releaseDmlVramAfterSynthesis = DEFAULT_SESSION_RELEASE_SETTINGS.releaseDmlVramAfterSynthesis;
   }
 
   // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
@@ -168,7 +173,7 @@ function loadSettings() {
   // 默认 false：尊重用户显式选择。只有用户开启时，OOM 路径才允许释放并重试。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = false;
+    _settingsCache.releaseDiffStepBeforeVocoder = DEFAULT_SESSION_RELEASE_SETTINGS.releaseDiffStepBeforeVocoder;
   }
 
   // 诊断模式（默认关闭）。开启后输出 [DiffusionDiag] / [VocoderDiag] 统计/采样日志，
@@ -295,8 +300,9 @@ function loadSettings() {
   // 预览时将 diffStep 的目标帧分块推理（每块独立运行完整扩散循环，再交叉淡入淡出拼接）。
   // 注意力复杂度 O(n²)，分块可显著加速长片段预览，代价是块边界可能产生轻微伪影。
   // 仅影响预览路径（getPreviewInferenceOptions 传入），导出始终使用整段推理。
+  // 默认开启：缺失或非布尔值一律按开启处理。
   if (typeof _settingsCache.previewDiffStepChunkEnabled !== 'boolean') {
-    _settingsCache.previewDiffStepChunkEnabled = false;
+    _settingsCache.previewDiffStepChunkEnabled = true;
   }
   if (!Number.isFinite(_settingsCache.previewDiffStepChunkFrames) || _settingsCache.previewDiffStepChunkFrames < 100) {
     _settingsCache.previewDiffStepChunkFrames = 500;
@@ -593,4 +599,5 @@ module.exports = {
   normalizeSettings,
   DEFAULT_THEME,
   DEFAULT_THEME_PER_WINDOW,
+  DEFAULT_SESSION_RELEASE_SETTINGS,
 };
