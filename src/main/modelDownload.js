@@ -467,6 +467,22 @@ function registerModelDownloadIpc() {
     if (!isPrecisionDownloadable(currentPrecision)) {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
+
+    // Issue #44: the precision chosen in the download dialog used to stay local
+    // to that window. Files were downloaded into <modelDir>/<precision>/ while
+    // settings.modelPrecision (and therefore the startup check + svs:init) kept
+    // using the old precision, forcing a multi-GB re-download of a second set.
+    // Persist the selection as soon as a download is really starting so the
+    // check/init paths operate on the same set that is being downloaded.
+    const settings = loadSettings();
+    if (settings.modelPrecision !== currentPrecision) {
+      settings.modelPrecision = currentPrecision;
+      const saved = await saveSettingsFile(settings);
+      if (!saved || saved.success === false) {
+        return { success: false, error: `Failed to save model precision: ${saved && saved.error ? saved.error : 'unknown error'}` };
+      }
+    }
+
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
     if (missing.length === 0) {
       // All files present — just save version with revision
