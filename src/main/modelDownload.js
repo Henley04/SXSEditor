@@ -393,6 +393,46 @@ function getCustomModelDir() {
   return getCustom();
 }
 
+/**
+ * Issue #44: persist the precision selected in the download dialog so that
+ * the startup check, svs:init and every inference session use the same set of
+ * model files that was actually downloaded. Previously the choice stayed local
+ * to the renderer: FP16 files landed in <modelDir>/fp16/ while
+ * settings.modelPrecision stayed FP32, forcing a multi-GB re-download.
+ *
+ * Mirrors the relevant part of settings:saveSettings: writes settings.json and
+ * resets lazily-initialized sessions so a running app switches precision too.
+ * Uses a copy of the settings object so a failed write never pollutes the
+ * in-memory cache. Requires of svsIpc/pitchMidiIpc are lazy to avoid cycles.
+ *
+ * @returns {{success: boolean, changed?: boolean, error?: string}}
+ */
+async function persistDownloadPrecision(precision) {
+  const current = loadSettings();
+  if (current.modelPrecision === precision) return { success: true, changed: false };
+
+  const updated = { ...current, modelPrecision: precision };
+  const saved = await saveSettingsFile(updated);
+  if (!saved || saved.success === false) {
+    return {
+      success: false,
+      error: `Failed to save model precision: ${saved && saved.error ? saved.error : 'unknown error'}`,
+    };
+  }
+
+  // Precision changed — drop cached sessions so they reload from the new set,
+  // matching the RESET_TRIGGER_KEYS behaviour of settings:saveSettings.
+  try { require('./svsIpc').resetSvsPipeline(); } catch (_) {}
+  try {
+    const pitch = require('./pitchMidiIpc');
+    if (typeof pitch.resetRmvpe === 'function') pitch.resetRmvpe();
+    if (typeof pitch.resetBasicPitch === 'function') pitch.resetBasicPitch();
+    if (typeof pitch.resetRosvot === 'function') pitch.resetRosvot();
+  } catch (_) {}
+
+  return { success: true, changed: true };
+}
+
 function registerModelDownloadIpc() {
   // Open an external URL in the system default browser (for model-updates docs link).
   // NOTE: this stays online on purpose — model/app update notes must reflect the
@@ -468,20 +508,8 @@ function registerModelDownloadIpc() {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
 
-    // Issue #44: the precision chosen in the download dialog used to stay local
-    // to that window. Files were downloaded into <modelDir>/<precision>/ while
-    // settings.modelPrecision (and therefore the startup check + svs:init) kept
-    // using the old precision, forcing a multi-GB re-download of a second set.
-    // Persist the selection as soon as a download is really starting so the
-    // check/init paths operate on the same set that is being downloaded.
-    const settings = loadSettings();
-    if (settings.modelPrecision !== currentPrecision) {
-      settings.modelPrecision = currentPrecision;
-      const saved = await saveSettingsFile(settings);
-      if (!saved || saved.success === false) {
-        return { success: false, error: `Failed to save model precision: ${saved && saved.error ? saved.error : 'unknown error'}` };
-      }
-    }
+    const persisted = await persistDownloadPrecision(currentPrecision);
+    if (!persisted.success) return persisted;
 
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
     if (missing.length === 0) {
@@ -612,6 +640,9 @@ function registerModelDownloadIpc() {
 
   safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_START_JP, async (event, precision, revision) => {
     // C39: 实现已抽到 startJpModelDownload，与 MODEL_DOWNLOAD_UPDATE_JP 共用。
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const persisted = await persistDownloadPrecision(currentPrecision);
+    if (!persisted.success) return persisted;
     return startJpModelDownload(precision, revision);
   });
 
@@ -1181,6 +1212,9 @@ function registerModelDownloadIpc() {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
 
+    const persisted = await persistDownloadPrecision(currentPrecision);
+    if (!persisted.success) return persisted;
+
     // Delete existing model files (including version.json) then re-download
     deleteModelFiles(modelDir, currentPrecision);
     // Also delete the version file so it gets re-created on successful download
@@ -1219,6 +1253,8 @@ function registerModelDownloadIpc() {
     const { getJpLocalFilePath, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const persisted = await persistDownloadPrecision(currentPrecision);
+    if (!persisted.success) return persisted;
     // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope
     let currentRevision = revision;
     if (!currentRevision || currentRevision === 'latest') {
