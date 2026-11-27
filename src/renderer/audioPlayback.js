@@ -109,6 +109,19 @@ function _isTrackSegmentAudible(trackId, singersById, audibility) {
 }
 
 /**
+ * 播放侧统一的 bpm 兜底：0 / NaN / 负值一律按 120 处理。
+ *
+ * 为什么需要：`projectManager.loadProject` 用 `obj.project.bpm ?? 120` 赋值，
+ * `??` 只挡 null/undefined，手改过或外部生成的工程文件完全可以把 bpm 写成 0。
+ * 届时节拍→秒换算得到 Infinity/NaN：结束判定 `elapsed >= Infinity` 永不成立，
+ * 播放头走过内容末尾也不收尾（`_finishNaturally` 又会把 Infinity 折成 0）。
+ * 与主进程 svsIpc / apiInference 的 `effectiveBpm` 采用同一约定。
+ */
+function normalizeBpm(bpm) {
+  return Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+}
+
+/**
  * Calculate the maximum end sample across all accompaniment tracks.
  * @param {number} bpm - Project BPM
  * @param {object} [options]
@@ -116,7 +129,7 @@ function _isTrackSegmentAudible(trackId, singersById, audibility) {
  * @returns {number} Maximum end sample position
  */
 function getAccompanimentMaxEndSample(bpm, { includeInaudible = false } = {}) {
-  const safeBpm = Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  const safeBpm = normalizeBpm(bpm);
   let maxEndSample = 0;
   for (const track of getAccompanimentTracks({ includeInaudible })) {
     const startSample = Math.round((track.accompanimentStartTime || 0) / safeBpm * 60 * SAMPLE_RATE);
@@ -390,7 +403,7 @@ function _clearAccompanimentNodes() {
  */
 function _scheduleAccompaniment(ctx, destination, baseCtxTime, offsetSec, maxDurationSec, tracker) {
   _clearAccompanimentNodes();
-  const bpm = state.project.bpm;
+  const bpm = normalizeBpm(state.project?.bpm);
   // 调度所有有音频的伴奏轨（含不可听的），不可听轨由 applyAudibility 把增益设为 0。
   // 这样播放中按 Solo/Mute 时伴奏能即时跟着变，而不用重新调度 source。
   for (const track of getAccompanimentTracks({ includeInaudible: true })) {
@@ -821,6 +834,15 @@ export async function playAll() {
     // "记录下来的签名"与"真正送去推理的输入"是同一时刻的快照。
     const mySignature = computePlaybackSignature();
 
+    // 新一轮合成前先丢弃上一轮的流式前沿。两条路径都要清：_scheduler 只在
+    // _createScheduler() 里被赋值、从不置回 null，而 getPlaybackContentEndSeconds()
+    // 只看 _streamingActive 决定是否计入 bufferEndSec / _streaming*EndSec。
+    // 顺序合成路径不建 scheduler，若这里不清，上一首流式会话的末端会继续参与
+    // 本首的结束判定与 seek 上限。
+    _streamingActive = false;
+    _streamingVocalEndSec = 0;
+    _streamingAccEndSec = 0;
+
     if (inferenceOpts.diffStepChunk) {
       // === 流式合成路径 ===
       // 启用分块时使用 synthesizeMultiStreaming：按全局时间顺序交错推理各分片的 chunk，
@@ -896,7 +918,9 @@ export async function playAll() {
       // 重置 streaming scheduler 状态
       _streamingActive = false;
       _streamingFirstChunkOffsetSec = 0;
-      _streamingVocalEndSec = canStreamPlayback ? (globalLastEnd / state.project.bpm) * 60 : 0;
+      _streamingVocalEndSec = canStreamPlayback
+        ? (globalLastEnd / normalizeBpm(state.project.bpm)) * 60
+        : 0;
       _streamingAccEndSec = 0;
       _streamingStreamEnds = new Map();
       _createScheduler();
@@ -1021,7 +1045,7 @@ export async function playAll() {
                 accSource.connect(accGain).connect(state.gainNode);
                 // 登记给音量滑块 / M-S：流式路径同样支持播放中实时生效。
                 registerTrackGain(accTrack.id, accGain, accBaseGain, accAudible);
-                const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
+                const accStartSec = (accTrack.accompanimentStartTime || 0) / normalizeBpm(state.project.bpm) * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
                 const safeNow = ctx.currentTime + 0.01;
         // 必须先登记 onended / 计数，再 start()：极短 buffer 或已过期的
@@ -1590,13 +1614,14 @@ export async function startAudioPlayback(offset) {
  *   离线渲染一次性混好即可。
  */
 function _buildPlaybackChannels(vocalMono, bpm, includeAccompaniment = true) {
+  const safeBpm = normalizeBpm(bpm);
   const tracks = includeAccompaniment ? getAccompanimentTracks() : [];
   const maxChannels = Math.max(2, ...tracks.map(t => t.audioChannels?.length || 1));
   const result = Array.from({ length: maxChannels }, () => new Float32Array(vocalMono.length));
   for (let ch = 0; ch < maxChannels; ch++) result[ch].set(vocalMono);
   for (const track of tracks) {
     const src = track.audioChannels?.length ? track.audioChannels : [track.audioBuffer];
-    const start = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    const start = Math.round((track.accompanimentStartTime || 0) / safeBpm * 60 * SAMPLE_RATE);
     for (let ch = 0; ch < maxChannels; ch++) {
       const input = src[Math.min(ch, src.length - 1)];
       const srcRate = track.audioSampleRate || SAMPLE_RATE;
@@ -2489,34 +2514,26 @@ export function startPlayheadAnimation() {
     // 窗口最小化时 rAF 会被挂起，由 _ensureStreamingWatchdog 兜底检测。
     if (_enterStreamingWaitIfUnderrun(context, renderedElapsed)) return;
 
-    // 流式播放兜底停止：推理已完成且 playhead 越过播放前沿后，
-    // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
-    // 此时无音频可播，必须停止 rAF，否则 playhead 持续在静音区前进。
-    // 0.5s 容差防止 chunk 边界抖动导致误停。
-    // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
-    // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
-    // 仅在流式调度器存在时访问其字段；非流式路径（_scheduler === null）不进入此分支，
-    // 否则首帧会抛 TypeError 且 playheadRaf 残留，导致后续启动被幂等保护短路。
-    if (_streamingActive && _scheduler) {
-      const totalFrontierSec = getPlaybackContentEndSeconds();
-      if (_scheduler.inferenceDone && renderedElapsed >= totalFrontierSec + 0.5) {
+    // 自然播完的统一兜底：播放头越过"可播内容末尾"（人声分片末端、整段混音、
+    // 伴奏 outro、流式前沿取最大）即收尾，否则 rAF 会持续在静音区前进。
+    const duration = getPlaybackContentEndSeconds();
+    if (duration > 0 && renderedElapsed >= duration) {
+      // 流式会话必须走 _finishStreamingPlayback 收尾：它负责清分轨/伴奏增益表、
+      // 丢弃 streamingSources、复位 _streaming* 前沿并停用 scheduler 看门狗。
+      // 直接调 _finishNaturally 会把 _streamingActive 留在 true —— 而 _scheduler
+      // 只在 _createScheduler() 里赋值、从不置 null，内容末尾只由该标志决定是否
+      // 计入流式前沿。漏掉这一步的下一轮播放会把上一首的 bufferEndSec 当成末尾：
+      // 表现为播放头走过末尾不收尾，或停在上一首歌的时长处。
+      if (_streamingActive) {
         if (!state.streamingFinished) {
-          state.streamingFinished = true;
-          _streamingActive = false;
           for (const src of (state.streamingSources || [])) {
             if (!src) continue;
             safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
           }
-          state.streamingSources = [];
-          // 自然播完：停在末尾（不回 0），播放头保持可见。
-          _finishNaturally(totalFrontierSec);
+          _finishStreamingPlayback();
         }
         return;
       }
-    }
-
-    const duration = getPlaybackContentEndSeconds();
-    if (duration > 0 && renderedElapsed >= duration) {
       // 兜底判定自然结束：停末尾（不回 0），播放头保持可见。
       _finishNaturally(duration);
       return;
