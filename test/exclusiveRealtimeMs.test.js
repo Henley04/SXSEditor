@@ -157,6 +157,28 @@ describe('独占输出：按可听性重建 PCM（4.6）', () => {
     expect(sent[0]).to.be.closeTo(0, 1e-5);
     expect(sent[32], '分片需在 startSample 处开始').to.be.closeTo(0.4, 1e-5);
   });
+
+  it('独占 PCM 长度包含长于人声的伴奏尾奏', async () => {
+    const s1 = trackManager.addSinger({ name: 's1', type: 'singer' });
+    const acc = trackManager.addSinger({ name: 'acc', type: 'accompaniment', accompanimentStartTime: 0, accompanimentVolume: 1 });
+    const accBuf = new Float32Array(24000 * 3).fill(0.1);
+    acc.audioBuffer = accBuf;
+    acc.audioChannels = [accBuf];
+    acc.audioSampleRate = 24000;
+    state.trackSegments = [
+      { trackId: s1.id, startSample: 0, audio: new Float32Array(24000).fill(0.2) },
+    ];
+    state.trackSegmentsReady = true;
+    state.currentAudioData = new Float32Array(24000);
+
+    let sent = null;
+    installMinimalElectronApi(({ data }) => { sent = data; });
+
+    await startExclusivePlayback(0);
+
+    expect(sent.length, '独占 PCM 应保留完整 3s 伴奏尾奏').to.equal(24000 * 3);
+    expect(sent[24000 * 2], '人声结束后伴奏仍应在 PCM 中').to.be.closeTo(0.1, 1e-5);
+  });
 });
 
 describe('独占输出：M/S 变化触发防抖重建（4.6）', () => {

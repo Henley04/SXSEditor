@@ -2,11 +2,10 @@ import { state, dom, trackManager, history, setTimeDisplay } from './state.js';
 import {
   SINGER_ROW_HEIGHT,
   HEADER_HEIGHT,
-  SAMPLE_RATE,
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, resynthesizePlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, resynthesizePlayback, exportAll, getCurrentPlaybackSeconds, getPlaybackContentEndSeconds, startAudioPlayback, hasReusablePlaybackAudio } from './audioPlayback.js';
 import { TRANSPORT, getTransportState } from './transport.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, refreshAll, isExportAvailable, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt, markPlayheadFollowActivity, markPlayheadFollowViewportGesture, setPlayheadFollowPointerDown, clearPlayheadFollowPointerDown, markUserViewActivity, pauseFollow, resetFollowAnchor, getMaxFragmentScrollX } from './timelineRenderer.js';
@@ -166,14 +165,14 @@ function _mouseToCanvasY(e) {
  * 把 canvas 内部 X 坐标转换为可播放的秒数，并截断到 [0, duration - 0.05]。
  * 余量 50ms 防止拖拽到接近末尾时 source.start(0, offset) 几乎立即结束触发 onended
  * 重置位置到 0，导致 playhead 从拖拽位置跳回开头。
+ * duration 取统一可播内容末尾（含长于人声的伴奏尾奏）。
  */
 function _canvasXToClampedSeconds(x) {
   const seconds = xToPlaybackTime(x);
-  const audioData = state.currentAudioData;
-  if (!audioData || audioData.length === 0) {
+  const duration = getPlaybackContentEndSeconds();
+  if (duration <= 0) {
     return Math.max(0, seconds);
   }
-  const duration = audioData.length / SAMPLE_RATE;
   // 短音频 fallback：若音频本身不足 100ms，余量缩减到 duration / 2
   const margin = duration > 0.1 ? 0.05 : duration * 0.5;
   return Math.max(0, Math.min(duration - margin, seconds));

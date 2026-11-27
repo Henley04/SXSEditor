@@ -17,7 +17,7 @@ import { buildProjectLrc, exportProjectLrc } from './lrcExport.js';
 import { resampleForExport } from './exportDialog.js';
 import {
   playAll, pausePlayback, stopPlayback, seekPlayback, exportAll, runExportJob,
-  getCurrentPlaybackSeconds, ensurePipelineInitialized, loadAudioSettings,
+  getCurrentPlaybackSeconds, getPlaybackContentEndSeconds, ensurePipelineInitialized, loadAudioSettings,
   getExportInferenceOptions,
 } from './audioPlayback.js';
 import mcpModel from '../shared/mcpModel.js';
@@ -687,12 +687,13 @@ async function execute(m, p = {}) {
       stopPlayback();
       emit('playback.state', { playing: false, stopped: true });
       return { playing: false };
-    case 'playback.seek':
+    case 'playback.seek': {
       await seekPlayback(Math.max(0, num(p.seconds)));
-      return { seconds: p.seconds };
+      return { seconds: getCurrentPlaybackSeconds() };
+    }
     case 'playback.get': {
       const position = getCurrentPlaybackSeconds();
-      const duration = state.currentAudioData?.length ? state.currentAudioData.length / SAMPLE_RATE : 0;
+      const duration = getPlaybackContentEndSeconds();
       return {
         playing: !!state.isPlaying,
         position: Math.max(0, position),

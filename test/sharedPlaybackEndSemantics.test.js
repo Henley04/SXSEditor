@@ -207,4 +207,58 @@ describe('共享播放末尾语义与自然结束收尾（P1-2 / P1-3）', () =>
     // contentEndSec = max(人声 1s, currentAudioData 1s, 伴奏 2s) = 2s
     expect(state.playbackPauseOffset, '应停在统一内容末尾 2s，不是人声末尾 1s').to.be.closeTo(2, 0.01);
   });
+
+  it('统一内容末尾包含静音伴奏，且 seek 不会被人声长度截断', async () => {
+    const acc = trackManager.addSinger({ name: 'muted-acc', type: 'accompaniment', mute: true });
+    acc.audioChannels = [new Float32Array(24000 * 3)];
+    acc.audioSampleRate = 24000;
+    acc.accompanimentStartTime = 0;
+    acc.accompanimentVolume = 1;
+    state.currentAudioData = new Float32Array(24000); // 1s 人声
+
+    expect(ap.getPlaybackContentEndSeconds(), '静音伴奏也应参与播放边界').to.be.closeTo(3, 0.01);
+
+    await ap.seekPlayback(2.99);
+    expect(state.playbackPauseOffset, 'seek 应钳到伴奏末尾前 50ms').to.be.closeTo(2.95, 0.01);
+    expect(state.isPlaying, 'seek 后应从伴奏内继续播放').to.be.true;
+    expect(created.sources.length, '应只调度仍在播放的伴奏 source').to.equal(1);
+    expect(created.sources[0].startArgs.offset, '伴奏续播偏移应使用统一时间轴').to.be.closeTo(2.95, 0.01);
+  });
+
+  it('无人声缓存时 seek 仍按伴奏统一边界钳制', async () => {
+    const acc = trackManager.addSinger({ name: 'acc', type: 'accompaniment' });
+    acc.audioChannels = [new Float32Array(24000 * 2)];
+    acc.audioSampleRate = 24000;
+    acc.accompanimentStartTime = 0;
+    acc.accompanimentVolume = 1;
+    state.currentAudioData = null;
+
+    await ap.seekPlayback(5);
+    expect(state.playbackPauseOffset).to.be.closeTo(1.95, 0.01);
+  });
+
+  it('fallback 混音已播完但伴奏未结束时只清空人声 buffer，继续调度伴奏', () => {
+    addAccompaniment(3);
+    state.currentAudioData = new Float32Array(24000); // 1s
+    state.currentAudioChannels = null;
+    state.trackSegments = [];
+    state.trackSegmentsReady = false;
+
+    ap.startSharedPlayback(1.5);
+
+    expect(state.currentAudioBuffer, '人声已越过末尾，不得残留旧 buffer').to.equal(null);
+    expect(state.currentAudioSource, '人声已越过末尾，不得残留旧 source').to.equal(null);
+    expect(state.isPlaying, '伴奏仍在内容范围内，应继续播放').to.be.true;
+    expect(created.sources.length, '只应调度伴奏 source').to.equal(1);
+    expect(created.sources[0].startArgs.offset, '应从伴奏 1.5s 处续播').to.be.closeTo(1.5, 0.01);
+  });
+
+  it('getCurrentPlaybackSeconds 不超过统一内容末尾', () => {
+    addAccompaniment(3);
+    state.currentAudioData = new Float32Array(24000);
+    state.isPlaying = false;
+    state.playbackPauseOffset = 5;
+
+    expect(ap.getCurrentPlaybackSeconds()).to.be.closeTo(3, 0.01);
+  });
 });
