@@ -1247,9 +1247,11 @@ export async function playAll() {
 
         if (!streamingStarted) {
           // 流式未启动（offset > 0 或无 chunk 到达）：回退到整段播放。
-          // 必须复位 _streamingActive：否则 startPlayheadAnimation 的流式兜底块
-          // 仍会生效（_scheduler.inferenceDone 已为真、前沿为 0），播放头会在
-          // 0.5s 后被误判为“已播完”而停止，音频却仍在出声。
+          // 必须复位 _streamingActive 与两个流式末端：只要它还是 true，
+          // getPlaybackContentEndSeconds() 就会把本轮 scheduler 的 bufferEndSec /
+          // 计划人声末端继续计入内容末尾，而整段播放真正能播的长度由
+          // currentAudioData 决定 —— 于是播放头在混音结束后仍往前走，靠兜底
+          // 停在错误位置。
           _streamingActive = false;
           _streamingVocalEndSec = 0;
           _streamingAccEndSec = 0;
@@ -2126,6 +2128,15 @@ export function pausePlayback() {
     return;
   }
 
+  // 流式前沿属于"这一轮正在交付的播放"。暂停即打断本轮，必须先无条件丢掉：
+  // 只在 streamingSources.length > 0 的分支里复位的话，"首 chunk 还没发声就暂停"
+  // 会留下 _streamingActive=true，而 getPlaybackContentEndSeconds() 只看这个标志
+  // 决定是否计入流式末端 → 内容末尾被一轮从未真正出声的会话撑住，seek 上限和
+  // 结束判定全都跟着错。
+  _streamingActive = false;
+  _streamingVocalEndSec = 0;
+  _streamingAccEndSec = 0;
+
   // 流式播放暂停：停止所有流式 source，记录当前位置
   if (state.streamingSources && state.streamingSources.length > 0) {
     const context = getAudioContext();
@@ -2133,7 +2144,6 @@ export function pausePlayback() {
     const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
     state.playbackPauseOffset = Math.max(0, elapsed);
     state.streamingFinished = true;
-    _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
@@ -2198,6 +2208,11 @@ export function stopPlayback() {
   // 立即关闭流式 chunk 接收：监听器可能还没撤掉，旧会话的迟到 chunk 不能再
   // 启动播放或重置时间基准（播放头位置错误 + 重复播放的直接来源）。
   state.streamingFinished = true;
+  // 同 pausePlayback：停止一定意味着本轮流式交付结束，复位不能依赖
+  // streamingSources 已经建起来（首 chunk 未发声时按停止就是这种情况）。
+  _streamingActive = false;
+  _streamingVocalEndSec = 0;
+  _streamingAccEndSec = 0;
   // 解除推理等待冻结（等待在途 suspend 落地后再 resume，避免冻结泄漏）
   if (_scheduler) _scheduler.deactivate();
   if (state.isSynthesizing) {
@@ -2215,8 +2230,6 @@ export function stopPlayback() {
   }
   // 停止流式播放
   if (state.streamingSources && state.streamingSources.length > 0) {
-    state.streamingFinished = true;
-    _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
@@ -2364,13 +2377,16 @@ export async function seekPlayback(newOffset) {
     ? Math.max(0, Math.min(duration - margin, newOffset))
     : Math.max(0, newOffset);
 
+  // 边界算完之后立刻丢掉流式前沿（同 pausePlayback）：拖播放头意味着放弃本轮流式
+  // 交付，残留 _streamingActive=true 会让后续 seek 一直沿用这一轮的末端。
+  _streamingActive = false;
+  _streamingVocalEndSec = 0;
+  _streamingAccEndSec = 0;
+
   // 流式播放中拖拽 playhead：停止流式播放，记录位置。
   // 合成仍在后台进行，完成后 state.currentAudioData 会被设置，用户可从该位置按 Play 继续播放。
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
-    _streamingActive = false;
-    _streamingVocalEndSec = 0;
-    _streamingAccEndSec = 0;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });

@@ -146,6 +146,47 @@ function installStreamingElectronApi(vocalSamples) {
   return calls;
 }
 
+/**
+ * 可延迟收尾的流式假 IPC：`emit()` 手动推一个 chunk，`resolve()` 才让推理返回。
+ * 用来构造"推理还没完成、只交付了一部分"的中间态。
+ */
+function installDeferredStreamingApi(vocalSamples) {
+  let handler = null;
+  let resolveSynth = null;
+  const synth = new Promise((r) => { resolveSynth = r; });
+  global.window.electronAPI = {
+    getSettings: async () => ({}),
+    audioStop: async () => ({ success: true }),
+    cancelSVSSynthesis: async () => ({ success: true }),
+    initSVSPipeline: async () => ({ success: true }),
+    onSVSProgress: () => () => {},
+    onSVSLoadProgress: () => () => {},
+    onSVSChunkAudio: (cb) => { handler = cb; return () => {}; },
+    synthesizeMultiStreaming: () => synth,
+  };
+  let cursor = 0;
+  return {
+    handlerReady: () => !!handler,
+    emit: async (samples, isLast = false) => {
+      for (let i = 0; i < 500 && !handler; i++) await new Promise((r) => setTimeout(r, 1));
+      await handler({
+        audio: new Float32Array(samples).fill(0.1),
+        sampleOffset: cursor,
+        sampleEnd: cursor + samples,
+        trackId: 's-end',
+        streamKey: 'default',
+        streamLast: isLast,
+        isLast,
+      });
+      cursor += samples;
+    },
+    resolve: () => resolveSynth({
+      audio: new Float32Array(vocalSamples),
+      segments: [{ trackId: 's-end', startSample: 0, audio: new Float32Array(vocalSamples) }],
+    }),
+  };
+}
+
 function resetState() {
   trackManager.clearAll();
   state.isSynthesizing = false;
@@ -169,6 +210,8 @@ function resetState() {
   state.audioContext = null;
   state.gainNode = null;
   state.useExclusiveMode = false;
+  // P2 用例会把 bpm 改成 0：这里必须复位，否则用例之间互相污染（顺序依赖）。
+  state.project = { bpm: 120, timeSignature: [4, 4] };
   dom.autoShiftCheck = { checked: false };
 }
 
@@ -242,6 +285,100 @@ describe('流式播放自然结束的收尾与 bpm 兜底', () => {
     state.currentAudioData = new Float32Array(SR * 2);
     expect(ap.getPlaybackContentEndSeconds(), '伴奏改短后边界必须跟着缩短')
       .to.be.closeTo(3, 0.01);
+  });
+
+  it('P1: 推理未完成时，"已交付前沿"不是播放末尾——只有越过计划末端才收尾', async () => {
+    // 40 拍 @120bpm = 20s 人声，但只交付前 2s，推理仍未返回。
+    const singer = trackManager.addSinger({ id: 's-end', name: 's-end', type: 'singer' });
+    trackManager.addFragment({
+      id: 'f-end',
+      singerId: singer.id,
+      startTime: 0,
+      duration: 40,
+      notes: [{ id: 'n-end', start: 0, duration: 40, pitch: 60, lyric: 'a' }],
+    });
+    const api = installDeferredStreamingApi(SR * 20);
+    const running = ap.playAll();
+    await api.emit(SR * 2, false);
+    expect(state.isPlaying, '流式播放已启动').to.be.true;
+
+    // 越过已交付前沿（2s）但仍在计划末端（20s）之前：必须走 underrun 等待，
+    // 绝不能收尾——否则推理一慢，播放在中途就"结束"了（删掉那条 +0.5s 容差之后，
+    // 这条不变量全靠"内容末尾取计划末端"来保证）。
+    ctx.currentTime = 3.0;
+    queue[queue.length - 1]();
+    expect(state.streamingFinished, '已交付前沿不是播放末尾').to.be.false;
+    expect(state.isPlaying, '越过已交付前沿仍在播放').to.be.true;
+    expect(ap.getPlaybackContentEndSeconds(), '内容末尾 = 计划人声末端 20s').to.be.closeTo(20, 0.05);
+
+    api.resolve();
+    await running;
+  });
+
+  it('P1: Stop 必须丢掉尚未成形的流式前沿', async () => {
+    // 40 拍 = 20s 人声，流式会话刚建立、首 chunk 还没发声。pause/stop/seek 的
+    // 清理块原本都写在 `streamingSources.length > 0` 里面，于是 _streamingActive
+    // 与 _streamingVocalEndSec 原样残留；而 getPlaybackContentEndSeconds() 只看
+    // _streamingActive 决定是否计入流式末端，内容末尾会被一轮从未出声的会话抬到
+    // 20s —— seek 上限、结束判定、MCP playback.get 的 duration 全都跟着错。
+    const singer = trackManager.addSinger({ id: 's-end', name: 's-end', type: 'singer' });
+    trackManager.addFragment({
+      id: 'f-end',
+      singerId: singer.id,
+      startTime: 0,
+      duration: 40,
+      notes: [{ id: 'n-end', start: 0, duration: 40, pitch: 60, lyric: 'a' }],
+    });
+    const api = installDeferredStreamingApi(SR * 20);
+    const running = ap.playAll();
+    for (let i = 0; i < 1500 && !api.handlerReady(); i++) await new Promise((r) => setTimeout(r, 1));
+    expect(ap.getPlaybackContentEndSeconds(), '停止前应已计入本轮计划末端').to.be.closeTo(20, 0.05);
+
+    ap.stopPlayback();
+    expect(ap.getPlaybackContentEndSeconds(), 'Stop 必须丢掉未成形的流式前沿')
+      .to.be.closeTo(0, 0.01);
+
+    api.resolve();
+    await running;
+    expect(ap.getPlaybackContentEndSeconds(), '被取消的会话不得把前沿捡回来')
+      .to.be.closeTo(0, 0.01);
+  });
+
+  it('P1: 顺序合成路径不得继承上一轮流式会话的前沿（playAll 起点的复位）', async () => {
+    // 完整走一遍用户路径：长工程流式播放 → Stop → 换成 2 拍（=1s）的短工程、
+    // 关闭分块重播。顺序合成路径自己不建 scheduler，只能靠 playAll 起点的复位
+    // 丢弃上一轮的流式末端。
+    const singer = trackManager.addSinger({ id: 's-end', name: 's-end', type: 'singer' });
+    trackManager.addFragment({
+      id: 'f-end',
+      singerId: singer.id,
+      startTime: 0,
+      duration: 40,
+      notes: [{ id: 'n-end', start: 0, duration: 40, pitch: 60, lyric: 'a' }],
+    });
+    const api = installDeferredStreamingApi(SR * 20);
+    const first = ap.playAll();
+    await api.emit(SR * 2, false);
+    expect(ap.getPlaybackContentEndSeconds(), '第一轮内容末尾 20s').to.be.closeTo(20, 0.05);
+    ap.stopPlayback();
+    api.resolve();
+    await first;
+
+    trackManager.clearAll();
+    const s2 = trackManager.addSinger({ id: 's-seq', name: 's-seq', type: 'singer' });
+    trackManager.addFragment({
+      id: 'f-seq',
+      singerId: s2.id,
+      startTime: 0,
+      duration: 2,
+      notes: [{ id: 'n-seq', start: 0, duration: 2, pitch: 60, lyric: 'a' }],
+    });
+    global.window.electronAPI.getSettings = async () => ({ previewDiffStepChunkEnabled: false });
+    global.window.electronAPI.synthesizeSVS = async () => new Float32Array(SR * 1).fill(0.1);
+    state.playbackPauseOffset = 0;
+    await ap.playAll();
+    expect(ap.getPlaybackContentEndSeconds(), '顺序路径必须丢弃上一首的流式前沿')
+      .to.be.closeTo(1, 0.05);
   });
 
   it('P2: bpm=0 的工程（文件可写入）内容末尾仍为有限值且能正常收尾', async () => {
